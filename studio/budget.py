@@ -33,18 +33,17 @@ reservation, bad number); an unexpected crash exits 1, so it is never mistaken f
 
 from __future__ import annotations
 
-import json
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Literal, NoReturn
+from typing import Annotated, Any, Literal
 
 import typer
 
-from studio.config import LONDON, load, now_london
+from studio.cli_support import emit, fail, open_store
+from studio.config import LONDON, now_london
 from studio.models import LedgerEntry
-from studio.pgstore import PostgresStore
 from studio.store import Store, require_aware
 
 RefusalReason = Literal["kill_switch", "over_cap"]
@@ -217,32 +216,12 @@ def release(store: Store, clip_id: str, now: datetime) -> LedgerEntry:
 # ---- CLI -----------------------------------------------------------------------------------
 
 EXIT_REFUSED = 3
-EXIT_USAGE = 2
 
 app = typer.Typer(
     help="Credit budget: reserve, settle, release, cap, kill switch. "
     "Prints JSON; exit 3 = refused (cap / kill switch), 2 = caller error.",
     no_args_is_help=True,
 )
-
-
-def _fail(message: str) -> NoReturn:
-    typer.echo(f"error: {message}", err=True)
-    raise typer.Exit(EXIT_USAGE)
-
-
-def _open_store() -> Store:
-    url = load().database_url
-    if not url:
-        _fail(
-            "DATABASE_URL is not set. Run through bin/studio (it reads the Keychain item "
-            "cs-database-url) or export DATABASE_URL."
-        )
-    return PostgresStore(url)
-
-
-def _emit(payload: dict[str, Any]) -> None:
-    typer.echo(json.dumps(payload, indent=2))
 
 
 def _entry_json(e: LedgerEntry) -> dict[str, Any]:
@@ -265,11 +244,11 @@ def status_command(
     """Cap, committed credits (settled + reserved) and kill switch for a month."""
     if month is not None and not _MONTH.fullmatch(month):
         raise typer.BadParameter(f"expected YYYY-MM, got {month!r}", param_hint="--month")
-    store = _open_store()
+    store = open_store()
     month = month or month_key(now_london())
     settings = store.get_settings()
     held = spend(store, month)
-    _emit(
+    emit(
         {
             "month": month,
             "cap": settings.monthly_cap_credits,
@@ -288,13 +267,13 @@ def reserve_command(
     clip: Annotated[str, typer.Option("--clip", help="Clip id.")],
 ) -> None:
     """Hold credits for a clip before generating. Exit 3 if the cap or kill switch refuses."""
-    store = _open_store()
+    store = open_store()
     if store.get_clip(clip) is None:
-        _fail(f"unknown clip {clip}")
+        fail(f"unknown clip {clip}")
     try:
         entry = reserve(store, clip, credits, now_london())
     except BudgetRefused as e:
-        _emit(
+        emit(
             {
                 "ok": False,
                 "refused": e.reason,
@@ -306,7 +285,7 @@ def reserve_command(
             }
         )
         raise typer.Exit(EXIT_REFUSED) from e
-    _emit(_entry_json(entry))
+    emit(_entry_json(entry))
 
 
 @app.command("settle")
@@ -316,17 +295,17 @@ def settle_command(
 ) -> None:
     """Replace the clip's reservation with the real cost."""
     try:
-        entry = settle(_open_store(), clip, actual, now_london())
+        entry = settle(open_store(), clip, actual, now_london())
     except NoOpenReservation as e:
-        _fail(str(e))
-    _emit(_entry_json(entry))
+        fail(str(e))
+    emit(_entry_json(entry))
 
 
 @app.command("release")
 def release_command(clip: Annotated[str, typer.Argument(help="Clip id.")]) -> None:
     """Free the clip's reservation (generation failed; nothing was spent)."""
     try:
-        entry = release(_open_store(), clip, now_london())
+        entry = release(open_store(), clip, now_london())
     except NoOpenReservation as e:
-        _fail(str(e))
-    _emit(_entry_json(entry))
+        fail(str(e))
+    emit(_entry_json(entry))

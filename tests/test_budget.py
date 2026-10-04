@@ -326,7 +326,7 @@ def test_a_refused_reserve_writes_nothing_inside_its_transaction():
 def cli_store(monkeypatch):
     store = make_store(cap=300)
     clip = store.add_clip(Clip(character_slug="biscuit", mode=Mode.recreate))
-    monkeypatch.setattr(budget, "_open_store", lambda: store)
+    monkeypatch.setattr(budget, "open_store", lambda: store)
     monkeypatch.setattr(budget, "now_london", lambda: NOW)
     store.clip_id = clip.id  # type: ignore[attr-defined]
     return store
