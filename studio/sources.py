@@ -17,27 +17,46 @@ We never scrape or download from TikTok or Instagram: a platform page URL is not
 ``rank_sources`` orders the usable sources by how well the clips made from them performed
 (median ``features['outlier_x']``, best first, never-measured last), newest source first on ties.
 
+**Owner inbox.** ``ingest_inbox`` takes every video the owner dropped in ``inbox/`` (mp4, mov,
+webm; other files, dotfiles and the ``done/`` folder are ignored), uploads it to the ``sources``
+bucket as ``owner_inbox/<uuid><ext>``, catalogues it as an ``owner_inbox`` source and moves the
+file to ``inbox/done/`` (never overwriting a file already there). The source's ``url`` and
+``storage_path`` both hold that bucket path (never a platform URL). It is ``biped``, one body and
+unchecked, so it is not Drop-in eligible until Claude has looked at it and run ``source check``.
+A file that cannot be ingested (not a readable video, or the upload failed) stays in ``inbox/``;
+the others still go through and ``IngestError`` reports both.
+
 CLI (``studio source ...``) prints JSON on stdout; exit 2 for anything the caller must fix.
-``ingest-inbox`` arrives with Storage (Task 9).
 """
 
 from __future__ import annotations
 
 import dataclasses
 import math
+import shutil
 import statistics
+import uuid
 from enum import Enum
+from pathlib import Path
 from typing import Annotated, Any, TypeVar
 from urllib.parse import urlsplit
 
 import typer
 
-from studio.cli_support import emit, fail, open_store
+from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store
+from studio.media.qa import QAError, probe
 from studio.models import Body, Character, Mode, Source, SourceKind
+from studio.storage import Storage, StorageError
 from studio.store import Store
 
 # Hosts we never take a source from; subdomains count (www., m., vm., vt., ...).
 PLATFORM_DOMAINS = frozenset({"tiktok.com", "instagram.com", "vm.tiktok.com", "instagr.am"})
+
+# The owner's drop folder: resolved from the package location, never from the working directory.
+DEFAULT_INBOX = Path(__file__).resolve().parents[1] / "inbox"
+INBOX_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".webm"})
+SOURCES_BUCKET = "sources"
+INBOX_PREFIX = "owner_inbox"
 
 _E = TypeVar("_E", bound=Enum)
 
@@ -82,6 +101,7 @@ def add_source(
     preset_id: str | None = None,
     trend: str | None = None,
     credit_handle: str | None = None,
+    storage_path: str | None = None,
 ) -> Source:
     """Catalogue a new source, unchecked (so not Drop-in eligible until ``record_checks``)."""
     kind = _enum(SourceKind, kind, "kind")
@@ -103,6 +123,7 @@ def add_source(
             duration_s=float(duration_s),
             trend=trend,
             credit_handle=credit_handle,
+            storage_path=storage_path,
         )
     )
 
@@ -181,6 +202,81 @@ def rank_sources(
     with no measured clip last), then ``created_at`` descending.
     """
     return [s for s, _ in _rank(store, character, mode, exclude_ids)]
+
+
+# ---- owner inbox -------------------------------------------------------------------------------
+
+
+class IngestError(RuntimeError):
+    """Some inbox files could not be ingested. ``ingested`` is what did go through, ``problems`` says
+    which files stayed in the inbox and why (one ``"<file>: <reason>"`` line each)."""
+
+    def __init__(self, problems: list[str], ingested: list[Source]) -> None:
+        super().__init__("; ".join(problems))
+        self.problems = problems
+        self.ingested = ingested
+
+
+def _is_inbox_video(path: Path) -> bool:
+    return (
+        path.is_file()
+        and not path.name.startswith(".")  # .DS_Store, macOS ._sidecars
+        and path.suffix.lower() in INBOX_VIDEO_SUFFIXES
+    )
+
+
+def _move_to_done(path: Path) -> None:
+    done = path.parent / "done"
+    done.mkdir(exist_ok=True)
+    dest, n = done / path.name, 1
+    while dest.exists():  # the same file name dropped twice: keep both
+        n += 1
+        dest = done / f"{path.stem}-{n}{path.suffix}"
+    shutil.move(path, dest)
+
+
+def ingest_inbox(store: Store, storage: Storage, inbox_dir: Path | str) -> list[Source]:
+    """Upload, catalogue and file away every video in ``inbox_dir``; the new sources, name order.
+
+    Each file is probed (``studio.media.qa.probe``) before anything is uploaded, uploaded to
+    bucket ``sources`` at ``owner_inbox/<uuid4><ext>``, recorded as an ``owner_inbox`` source
+    (``biped``, 1 body, checks left ``None``) and only then moved to ``done/``. A missing folder
+    holds nothing. Raises ``IngestError`` after the whole folder was handled if any file stayed.
+    """
+    inbox = Path(inbox_dir)
+    if not inbox.is_dir():
+        return []
+    ingested: list[Source] = []
+    problems: list[str] = []
+    for path in sorted(p for p in inbox.iterdir() if _is_inbox_video(p)):
+        try:
+            duration = probe(path, loudness=False).duration_s
+        except QAError as e:
+            problems.append(f"{path.name}: {e}")
+            continue
+        if not duration > 0:
+            problems.append(f"{path.name}: the video has no readable duration")
+            continue
+        key = f"{INBOX_PREFIX}/{uuid.uuid4()}{path.suffix.lower()}"
+        try:
+            storage.upload(SOURCES_BUCKET, key, path)
+        except StorageError as e:
+            problems.append(f"{path.name}: {e}")
+            continue
+        source = add_source(
+            store, SourceKind.owner_inbox, key, Body.biped, 1, duration, storage_path=key
+        )
+        ingested.append(source)
+        try:
+            _move_to_done(path)
+        except OSError as e:
+            problems.append(
+                f"{path.name}: ingested as source {source.id} but could not be moved to done/ ({e}); "
+                "move it by hand or the next run ingests it again"
+            )
+    if problems:
+        raise IngestError(problems, ingested)
+    return ingested
 
 
 # ---- CLI -----------------------------------------------------------------------------------
@@ -293,3 +389,25 @@ def list_command(
         if not dropin_only or dropin_eligible(s)
     ]
     emit(out)
+
+
+@app.command("ingest-inbox")
+def ingest_inbox_command(
+    inbox: Annotated[
+        Path | None,
+        typer.Option(help="Folder to ingest (default: the repo's inbox/, whatever the cwd)."),
+    ] = None,
+) -> None:
+    """Upload the videos in the owner inbox as unchecked `owner_inbox` sources, then file them in done/."""
+    store = open_store()
+    storage = open_storage()
+    if inbox is not None and not inbox.is_dir():
+        fail(f"no such folder: {inbox}")
+    try:
+        made = ingest_inbox(store, storage, DEFAULT_INBOX if inbox is None else inbox)
+    except IngestError as e:
+        emit([_source_json(s) for s in e.ingested])
+        for problem in e.problems:
+            typer.echo(f"error: {problem}", err=True)
+        raise typer.Exit(EXIT_USAGE) from None
+    emit([_source_json(s) for s in made])

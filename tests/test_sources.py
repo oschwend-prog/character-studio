@@ -1,5 +1,7 @@
 import json
+import shutil
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -8,13 +10,17 @@ from studio import sources
 from studio.cli import app
 from studio.models import Body, Character, Clip, Mode, Source, SourceKind
 from studio.sources import (
+    DEFAULT_INBOX,
+    IngestError,
     add_source,
     dropin_eligible,
     flag_dirty,
+    ingest_inbox,
     median_outlier_x,
     rank_sources,
     record_checks,
 )
+from studio.storage import LocalStorage, StorageError
 from studio.store import MemoryStore
 
 T0 = datetime(2026, 10, 1, 12, 0, tzinfo=timezone.utc)
@@ -471,3 +477,261 @@ def test_cli_source_group_is_the_modules_own_app():
     assert r.exit_code == 0
     for cmd in ("add", "check", "flag", "list"):
         assert cmd in r.output
+
+
+# ---- inbox ingest ------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def clip_file(synth_video):
+    """A small real 5 s video (the session-cached synthetic one: copy it, never edit it)."""
+    return synth_video(w=320, h=568, dur=5, audio=False)
+
+
+def drop(inbox: Path, clip: Path, name: str) -> Path:
+    inbox.mkdir(exist_ok=True)
+    return Path(shutil.copyfile(clip, inbox / name))
+
+
+def fetch(storage: LocalStorage, tmp_path: Path, path: str) -> bytes:
+    return storage.download("sources", path, tmp_path / "fetched.bin").read_bytes()
+
+
+def test_add_source_can_carry_a_storage_path():
+    store = make_store()
+    s = add_source(store, "owner_inbox", "owner_inbox/x.mp4", "biped", 1, 8.0, storage_path="owner_inbox/x.mp4")
+    assert (s.url, s.storage_path) == ("owner_inbox/x.mp4", "owner_inbox/x.mp4")
+    assert new_source(store).storage_path is None  # default unchanged
+
+
+def test_ingest_inbox_uploads_records_and_moves(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    inbox = tmp_path / "inbox"
+    drop(inbox, clip_file, "dance.mp4")
+
+    made = ingest_inbox(store, storage, inbox)
+
+    assert len(made) == 1
+    s = made[0]
+    assert s.id and store.list_sources() == [s]
+    assert s.kind is SourceKind.owner_inbox
+    assert s.body is Body.biped and s.bodies == 1
+    assert s.duration_s == pytest.approx(5.0, abs=0.1)
+    # url is the storage path, never a platform URL; storage_path says the same for the downloader
+    assert s.url == s.storage_path
+    assert s.url.startswith("owner_inbox/") and s.url.endswith(".mp4")
+    assert Path(s.url).stem and "://" not in s.url
+    # unchecked: not Drop-in eligible until Claude has looked at it
+    assert (s.has_watermark, s.has_overlay, s.other_people) == (None, None, None)
+    assert dropin_eligible(s) is False
+    # the object is in the bucket, byte for byte
+    assert fetch(storage, tmp_path, s.url) == clip_file.read_bytes()
+    # the file left the inbox for done/
+    assert not (inbox / "dance.mp4").exists()
+    assert (inbox / "done" / "dance.mp4").read_bytes() == clip_file.read_bytes()
+
+
+def test_ingest_gives_every_file_its_own_storage_name(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    inbox = tmp_path / "inbox"
+    drop(inbox, clip_file, "a.mp4")
+    drop(inbox, clip_file, "b.MOV")
+    drop(inbox, clip_file, "c.webm")
+
+    made = ingest_inbox(store, storage, inbox)
+
+    assert len(made) == 3 and len({s.url for s in made}) == 3
+    assert sorted(Path(s.url).suffix for s in made) == [".mov", ".mp4", ".webm"]  # lower-cased
+    assert sorted(p.name for p in (inbox / "done").iterdir()) == ["a.mp4", "b.MOV", "c.webm"]
+    assert len(store.list_sources()) == 3
+
+
+def test_ingest_ignores_non_video_and_done(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    inbox = tmp_path / "inbox"
+    (inbox / "done").mkdir(parents=True)
+    drop(inbox / "done", clip_file, "old.mp4")  # already ingested earlier
+    (inbox / "notes.txt").write_text("not a video")
+    (inbox / "cover.png").write_bytes(b"\x89PNG")
+    (inbox / ".DS_Store").write_bytes(b"x")
+    (inbox / "._dance.mp4").write_bytes(b"AppleDouble sidecar, not a video")
+    (inbox / "folder.mp4").mkdir()  # a directory with a video-looking name
+    kept = drop(inbox, clip_file, "keep.mp4")
+    for ignored in ("notes.txt", "cover.png", ".DS_Store", "._dance.mp4"):
+        assert (inbox / ignored).exists()
+
+    made = ingest_inbox(store, storage, inbox)
+
+    assert len(made) == 1 and len(store.list_sources()) == 1
+    assert not kept.exists() and (inbox / "done" / "keep.mp4").exists()
+    assert (inbox / "done" / "old.mp4").exists()  # untouched
+    for ignored in ("notes.txt", "cover.png", ".DS_Store", "._dance.mp4", "folder.mp4"):
+        assert (inbox / ignored).exists(), ignored
+    assert [p.name for p in (tmp_path / "store" / "sources" / "owner_inbox").iterdir()] == [
+        Path(made[0].url).name
+    ]
+
+
+def test_ingest_is_idempotent(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    inbox = tmp_path / "inbox"
+    drop(inbox, clip_file, "dance.mp4")
+    assert len(ingest_inbox(store, storage, inbox)) == 1
+    assert ingest_inbox(store, storage, inbox) == []
+    assert len(store.list_sources()) == 1
+
+
+def test_ingest_missing_or_empty_inbox_is_a_no_op(tmp_path):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    assert ingest_inbox(store, storage, tmp_path / "no-such-inbox") == []
+    (tmp_path / "inbox").mkdir()
+    assert ingest_inbox(store, storage, tmp_path / "inbox") == []
+    assert store.list_sources() == []
+
+
+def test_ingest_never_overwrites_a_file_already_in_done(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    inbox = tmp_path / "inbox"
+    for _ in range(3):  # the owner drops "dance.mp4" again and again
+        drop(inbox, clip_file, "dance.mp4")
+        assert len(ingest_inbox(store, storage, inbox)) == 1
+    done = sorted(p.name for p in (inbox / "done").iterdir())
+    assert done == ["dance-2.mp4", "dance-3.mp4", "dance.mp4"]
+    assert len(store.list_sources()) == 3
+
+
+def test_ingest_leaves_an_unreadable_video_in_place_and_reports_it(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    inbox = tmp_path / "inbox"
+    drop(inbox, clip_file, "a_good.mp4")
+    (inbox / "b_corrupt.mp4").write_bytes(b"this is not a video at all")
+    drop(inbox, clip_file, "c_good.mp4")
+
+    with pytest.raises(IngestError) as exc:
+        ingest_inbox(store, storage, inbox)
+
+    err = exc.value
+    assert [Path(s.url).suffix for s in err.ingested] == [".mp4", ".mp4"]  # the good ones went through
+    assert len(store.list_sources()) == 2
+    assert len(err.problems) == 1 and err.problems[0].startswith("b_corrupt.mp4:")
+    assert "b_corrupt.mp4" in str(err)
+    assert (inbox / "b_corrupt.mp4").exists()  # the owner sees what is left to fix
+    assert not (inbox / "a_good.mp4").exists() and not (inbox / "c_good.mp4").exists()
+    assert len(list((tmp_path / "store" / "sources" / "owner_inbox").iterdir())) == 2  # nothing orphaned
+
+
+def test_ingest_storage_failure_leaves_file_and_creates_no_source(tmp_path, clip_file):
+    class Refusing(LocalStorage):
+        def upload(self, bucket, path, file):
+            raise StorageError("storage POST sources/x failed: HTTP 413: too big", 413)
+
+    store = make_store()
+    inbox = tmp_path / "inbox"
+    drop(inbox, clip_file, "big.mp4")
+
+    with pytest.raises(IngestError) as exc:
+        ingest_inbox(store, Refusing(tmp_path / "store"), inbox)
+
+    assert exc.value.ingested == [] and "413" in exc.value.problems[0]
+    assert store.list_sources() == []  # no row pointing at nothing
+    assert (inbox / "big.mp4").exists() and not (inbox / "done").exists()
+
+
+def test_ingest_probes_before_uploading(tmp_path):
+    class Spy(LocalStorage):
+        calls = 0
+
+        def upload(self, bucket, path, file):
+            Spy.calls += 1
+            return super().upload(bucket, path, file)
+
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "fake.mov").write_bytes(b"nope")
+    with pytest.raises(IngestError):
+        ingest_inbox(make_store(), Spy(tmp_path / "store"), inbox)
+    assert Spy.calls == 0
+
+
+# ---- CLI: source ingest-inbox ------------------------------------------------------------------
+
+
+@pytest.fixture
+def cli_storage(monkeypatch, tmp_path):
+    storage = LocalStorage(tmp_path / "store")
+    monkeypatch.setattr(sources, "open_storage", lambda: storage)
+    return storage
+
+
+def test_cli_ingest_inbox_prints_the_new_sources_as_json(cli_store, cli_storage, tmp_path, clip_file):
+    inbox = tmp_path / "inbox"
+    drop(inbox, clip_file, "dance.mp4")
+
+    r = run("ingest-inbox", "--inbox", str(inbox))
+
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert len(out) == 1
+    assert out[0]["kind"] == "owner_inbox" and out[0]["dropin_eligible"] is False
+    assert out[0]["url"] == out[0]["storage_path"] and out[0]["url"].startswith("owner_inbox/")
+    assert [s.id for s in cli_store.list_sources()] == [out[0]["id"]]
+    assert (inbox / "done" / "dance.mp4").exists()
+    assert json.loads(run("ingest-inbox", "--inbox", str(inbox)).stdout) == []  # nothing left
+
+
+def test_cli_ingest_inbox_reports_problems_on_stderr_and_exits_2(cli_store, cli_storage, tmp_path, clip_file):
+    inbox = tmp_path / "inbox"
+    drop(inbox, clip_file, "good.mp4")
+    (inbox / "bad.mp4").write_bytes(b"junk")
+
+    r = run("ingest-inbox", "--inbox", str(inbox))
+
+    assert r.exit_code == 2
+    assert len(json.loads(r.stdout)) == 1  # stdout is still the list of what did go in
+    assert "error: bad.mp4" in r.stderr
+    assert (inbox / "bad.mp4").exists()
+
+
+def test_cli_ingest_inbox_default_folder_is_the_repo_inbox_not_cwd(
+    cli_store, cli_storage, tmp_path, monkeypatch, clip_file
+):
+    assert Path(sources.__file__).resolve().parents[1] / "inbox" == DEFAULT_INBOX
+    assert DEFAULT_INBOX.name == "inbox" and (DEFAULT_INBOX.parent / "pyproject.toml").is_file()
+    seen = []
+    monkeypatch.setattr(sources, "ingest_inbox", lambda store, storage, folder: seen.append(folder) or [])
+    cwd = tmp_path / "elsewhere"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    r = run("ingest-inbox")
+    assert r.exit_code == 0, r.output
+    assert seen == [DEFAULT_INBOX]
+    assert json.loads(r.stdout) == []
+
+
+def test_cli_ingest_inbox_explicit_missing_folder_exits_2(cli_store, cli_storage, tmp_path):
+    r = run("ingest-inbox", "--inbox", str(tmp_path / "typo"))
+    assert r.exit_code == 2 and "no such folder" in r.output
+
+
+def test_cli_ingest_inbox_without_supabase_env_exits_2_and_names_the_variables(
+    cli_store, monkeypatch, tmp_path
+):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "sb-service-key-DO-NOT-LEAK")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    r = run("ingest-inbox", "--inbox", str(inbox))
+    assert r.exit_code == 2
+    assert "SUPABASE_URL" in r.output
+    assert "DO-NOT-LEAK" not in r.output
+
+
+def test_cli_ingest_inbox_without_database_url_exits_2(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    r = run("ingest-inbox")
+    assert r.exit_code == 2 and "DATABASE_URL" in r.output
+
+
+def test_cli_source_help_lists_ingest_inbox():
+    r = CliRunner().invoke(app, ["source", "--help"])
+    assert r.exit_code == 0 and "ingest-inbox" in r.output
