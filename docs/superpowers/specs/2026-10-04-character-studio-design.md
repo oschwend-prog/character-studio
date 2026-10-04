@@ -199,6 +199,8 @@ Shares are per-account settings in the terminal. Drop-in guardrails (enforced by
 
 **Source library (owner decision 2026-10-04):** every driving/source clip — Higgsfield library imports, owner inbox clips and our synthetic drivers — is stored in Supabase Storage (`sources` bucket) and catalogued in `studio.sources` with its checks (watermark, overlay, other people, number of bodies, body type), trend tag, credit handle and the **performance of every clip made from it** (median outlier_x). The daily run picks the best eligible source automatically; GitHub holds code and config only, never media.
 
+**Viral Picks approval (owner decision 2026-10-04):** the daily scan does **not** generate straight away. Every viral candidate (vidIQ outliers, Higgsfield trending motions) lands in a **Viral Picks** list in the terminal with its URL, platform, views, outlier ×, matched character and the proposed version (mode, hook, prop). The owner approves or skips (optionally re-assigning the character). Production order per daily run: approved picks first (oldest first), then — only if none are approved — the concept plan in `docs/launch/channel-strategy.md`, so cadence never stalls. A deep breakdown (vidIQ `watch_shortform_content`, 10 credits) runs only after approval. The finished clip still goes through the normal approve-before-post queue.
+
 ### 4.5 Audio
 
 Posting through an API means the sound must be in the file. TikTok's trending sounds cannot be attached by API.
