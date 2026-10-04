@@ -1,3 +1,15 @@
 renders/
 .env
 .DS_Store
+inbox/
+*.mp4
+*.mov
+*.wav
+*.png
+!assets/**/*.png
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+terminal/node_modules/
+terminal/dist/

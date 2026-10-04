@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Run the studio CLI. Secrets come from the macOS Keychain, only when the env var is
+# unset, and a missing Keychain item never fails the command (it just stays unset).
+set -euo pipefail
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+export_from_keychain() {
+  local var="$1" item="$2" value
+  if [ -z "${!var:-}" ] && command -v security >/dev/null 2>&1; then
+    value="$(security find-generic-password -s "$item" -w 2>/dev/null || true)"
+    if [ -n "$value" ]; then
+      export "$var=$value"
+    fi
+  fi
+}
+
+export_from_keychain DATABASE_URL cs-database-url
+export_from_keychain SUPABASE_URL cs-supabase-url
+export_from_keychain SUPABASE_SERVICE_KEY cs-supabase-service-key
+export_from_keychain POSTIZ_API_KEY cs-postiz-api-key
+
+exec uv run --project "$root" studio "$@"

@@ -1,0 +1,34 @@
+[project]
+name = "character-studio"
+version = "0.1.0"
+description = "ODD EYES Character Studio: the studio CLI that owns all pipeline state"
+authors = [
+    { name = "Olivier Schwend", email = "235861700+oschwend-prog@users.noreply.github.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "pillow>=12.3.0",
+    "psycopg[binary]>=3.3.6",
+    "pydantic>=2.13.5",
+    "typer>=0.27.2",
+]
+
+[project.scripts]
+studio = "studio.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.11.16,<0.12.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "studio"
+module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
