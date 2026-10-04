@@ -201,6 +201,13 @@ Shares are per-account settings in the terminal. Drop-in guardrails (enforced by
 
 **Viral Picks approval (owner decision 2026-10-04):** the daily scan does **not** generate straight away. Every viral candidate (vidIQ outliers, Higgsfield trending motions) lands in a **Viral Picks** list in the terminal with its URL, platform, views, outlier ×, matched character and the proposed version (mode, hook, prop). The owner approves or skips (optionally re-assigning the character). Production order per daily run: approved picks first (oldest first), then — only if none are approved — the concept plan in `docs/launch/channel-strategy.md`, so cadence never stalls. A deep breakdown (vidIQ `watch_shortform_content`, 10 credits) runs only after approval. The finished clip still goes through the normal approve-before-post queue.
 
+**Pick scoring (owner decision 2026-10-04: "rate according to sub-scores, I'll approve later"):** every Viral Pick is stored with six sub-scores (0–10) and a total (0–100), and the terminal sorts by total.
+- Computed by code: **virality** = log10(outlier ×)/3 × 10 (capped), **reach** = log10(views/100K)/log10(500) × 10 (capped).
+- Judged by Claude in the daily run against a fixed rubric: **freshness** (10 = rising now, 6 = evergreen, 3 = past peak), **fit** with the character's premise, **feasibility** for our pipeline (10 = solo, full body, static camera; 6 = 2 bodies; 4 = 3+ bodies until the multi-body test passes; 3 = needs the talking lane), **saturation** (10 = fresh, 5 = template everywhere).
+- **Brand safety** is a pass/fail gate (fails are never stored).
+- Weights v1: virality 0.25 · reach 0.10 · freshness 0.15 · fit 0.20 · feasibility 0.20 · saturation 0.10.
+- Calibration: once ≥ 20 approved picks have been produced and measured, the weekly review compares each sub-score with the clip's real outlier_x and may propose new weights — a proposal the owner approves, never an automatic change.
+
 ### 4.5 Audio
 
 Posting through an API means the sound must be in the file. TikTok's trending sounds cannot be attached by API.

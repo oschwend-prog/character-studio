@@ -35,3 +35,27 @@ Status of every pick: `new` (awaiting owner approval). Outlier × = views ÷ tha
 | O5 | https://www.instagram.com/reel/Dc1ZM7LIKMg/ (@fruitgram.tv, numbered "Previously…") | 4.3M · 236.3× | Origin episode: wakes on the steps of Trafalgar Square, filming himself on a phone he found | `Day 1 in 2026. Send help.` | "Episode 1. I appear to be in the future." |
 
 Name for the Outsider (owner to pick): Sir Ambrose Pinch · Mr. Cornelius Vane · Sir Percival Hatch.
+
+## Scores (rubric v1)
+
+Total = 10 × (0.25·virality + 0.10·reach + 0.15·freshness + 0.20·fit + 0.20·feasibility + 0.10·saturation), each sub-score 0–10. Virality = log10(outlier ×)/3 × 10 · reach = log10(views/100K)/log10(500) × 10 (code). Freshness, fit, feasibility, saturation = Claude's judgement against the rubric in the spec. Brand-safety is a pass/fail gate (all 17 pass).
+
+| Rank | ID | Character | **Total** | Virality | Reach | Fresh | Fit | Feasible | Unsaturated | Note |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | B1 | reginald | **92** | 10 | 9.8 | 8 | 10 | 9 | 7 | biggest outlier in all scans |
+| 2 | B2 | reginald | **88** | 10 | 6.5 | 8 | 9 | 9 | 8 | POV premise, solo |
+| 3 | D2 | biscuit | **85** | 10 | 6.9 | 7 | 9 | 9 | 7 | solo, gesture-heavy — ideal for Genjutsu |
+| 4 | D6 | biscuit | **80** | 9.1 | 7.8 | 6 | 8 | 8 | 8 | dachshund ego-caption format |
+| 5 | D4 | biscuit | **79** | 7.1 | 4.2 | 6 | 10 | 10 | 8 | cheapest clip; ODD EYES signature |
+| 6 | D1 | biscuit | **76** | 10.0 | 4.8 | 9 | 10 | 4 | 5 | 3 bodies untested; CapCut template saturating; post by ~12 Oct |
+| 7 | B3 | reginald | **76** | 8.8 | 6.4 | 6 | 8 | 8 | 7 | possible Drop-in (single performer) if a clean copy exists |
+| 8 | D5 | biscuit | **74** | 7.8 | 5.4 | 6 | 9 | 7 | 8 | quadruped→biped transition, both masters |
+| 9 | O1 | outsider | **72** | 8.7 | 6.5 | 6 | 10 | 3 | 9 | talking lane not built yet (Slice 3) |
+| 10 | O5 | outsider | **70** | 7.9 | 6.1 | 6 | 10 | 3 | 9 | origin episode — pin it |
+| 11 | D3 | biscuit | **68** | 5.5 | 8.3 | 8 | 8 | 6 | 6 | 2 bodies (twin) untested; Genjutsu-native format |
+| 12 | B4 | reginald | **64** | 3.9 | 8.7 | 8 | 8 | 6 | 6 | crossover, 2 bodies untested; 'Be OK' trend live |
+| 13 | B5 | reginald | **63** | 4.2 | 5.4 | 6 | 9 | 6 | 8 | crossover, 2 bodies untested |
+| 14 | B6 | reginald | **62** | 8.2 | 2.0 | 5 | 8 | 4 | 8 | 4–5 bodies untested |
+| 15 | O3 | outsider | **56** | 4.2 | 6.4 | 6 | 8 | 3 | 8 | talking lane; UK audience |
+| 16 | O2 | outsider | **53** | 3.9 | 3.9 | 6 | 8 | 3 | 8 | talking lane not built yet |
+| 17 | O4 | outsider | **48** | 1.9 | 3.9 | 6 | 8 | 3 | 8 | talking lane |
