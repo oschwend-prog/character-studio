@@ -182,6 +182,21 @@ Each task's prompt is one line that invokes the project skill (`/daily-run`, `/w
 
 Hard limits per run: maximum clips = the day's plan; maximum one re-roll per clip; stop on any budget refusal.
 
+### 4.4b Viral modes — Drop-in and Recreate (owner decision 2026-10-04: "hybrid but more drop-in")
+
+| Mode | What | Genjutsu op | Default share |
+|---|---|---|---|
+| **Drop-in** | Our character swapped into the actual viral clip (original setting, camera, timing) | `hf_mult_replace_object` | TikTok ~70%, Instagram ~40% |
+| **Recreate** | The viral clip's moves performed by our character in our own scene | `hf_mult_motion_control` | the rest |
+
+Shares are per-account settings in the terminal. Drop-in guardrails (enforced by QA/CLI):
+1. Our character replaces the **main subject**; the output may contain **no other identifiable real people** (else replace them too, or use Recreate).
+2. **Clean source only:** no platform watermark, creator handle or UI overlay in the frame (TikTok-saved files carry a watermark → not usable for Drop-in; use for Recreate).
+3. **Original audio always stripped**; our beat or a sound added in-app.
+4. Caption **credits the trend source** ("trend: @creator") when known; takedown request → remove within 24 h.
+5. **Instagram originality guard:** since 30 Apr 2026 Instagram stops recommending accounts that mostly repost others' content. The weekly review tracks non-follower reach per account; on a drop or an "unoriginal content" notice the account's Drop-in share is cut automatically to ≤ 20%.
+6. Sources: Higgsfield Genjutsu Trending/New library clips (skip any with overlays) or clean clips supplied by the owner into `inbox/`. No scraping, no downloading from TikTok/Instagram.
+
 ### 4.5 Audio
 
 Posting through an API means the sound must be in the file. TikTok's trending sounds cannot be attached by API.
@@ -259,7 +274,7 @@ Video files: Supabase Storage bucket `clips` (private; signed URLs for the termi
 ## 7. Safeguards (enforced in code)
 
 1. **Hard credit cap** — `studio budget reserve` refuses over-cap spend; kill switch stops generation and posting.
-2. **Motion-source whitelist** — DB CHECK constraint + CLI validation: Higgsfield library or owner inbox only. No downloading of other creators' videos.
+2. **Source whitelist** — DB CHECK constraint + CLI validation: Higgsfield library, owner inbox, or our own synthetic drivers. No downloading/scraping of other creators' videos. Drop-in guardrails per §4.4b.
 3. **AI label always on**; AI disclosure in every bio.
 4. **No real people, no famous IP** in character design or prompts (never-do list in each bible).
 5. **Posting limits** — ≤ 2 posts/account/day; publish job is idempotent.
