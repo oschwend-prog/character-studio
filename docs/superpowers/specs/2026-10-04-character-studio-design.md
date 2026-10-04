@@ -197,6 +197,8 @@ Shares are per-account settings in the terminal. Drop-in guardrails (enforced by
 5. **Instagram originality guard:** since 30 Apr 2026 Instagram stops recommending accounts that mostly repost others' content. The weekly review tracks non-follower reach per account; on a drop or an "unoriginal content" notice the account's Drop-in share is cut automatically to ≤ 20%.
 6. Sources: Higgsfield Genjutsu Trending/New library clips (skip any with overlays) or clean clips supplied by the owner into `inbox/`. No scraping, no downloading from TikTok/Instagram.
 
+**Source library (owner decision 2026-10-04):** every driving/source clip — Higgsfield library imports, owner inbox clips and our synthetic drivers — is stored in Supabase Storage (`sources` bucket) and catalogued in `studio.sources` with its checks (watermark, overlay, other people, number of bodies, body type), trend tag, credit handle and the **performance of every clip made from it** (median outlier_x). The daily run picks the best eligible source automatically; GitHub holds code and config only, never media.
+
 ### 4.5 Audio
 
 Posting through an API means the sound must be in the file. TikTok's trending sounds cannot be attached by API.

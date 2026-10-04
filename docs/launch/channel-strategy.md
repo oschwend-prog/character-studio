@@ -1,6 +1,6 @@
 # ODD EYES — channel strategy, KPIs and the first two weeks
 
-Session 2026-10-04 (evening). Built on `docs/research/2026-10-04-niche-playbook.md` (evidence-labelled) and the owner's Spotify taste. Status: **draft for owner approval** — KPI bars become binding once approved (pre-registered, never renegotiated after data).
+Session 2026-10-04 (evening). Built on `docs/research/2026-10-04-niche-playbook.md` (evidence-labelled) and the owner's Spotify taste. Status: **APPROVED by the owner 2026-10-04** — the KPI bars in §3.3 are now binding (pre-registered, never renegotiated after data).
 
 ---
 
@@ -24,6 +24,11 @@ Session 2026-10-04 (evening). Built on `docs/research/2026-10-04-niche-playbook.
 **Every clip:** move or premise on frame 0 · 10–15 s (eye loops 6–8 s, Outsider 15–25 s) · seamless loop · ODD EYES close-up end beat · AI label on · 5 hashtags max · one natural comment prompt.
 
 **Music (owner's Spotify):** our own AI beats in an **afro house / melodic house** style — 118–124 BPM, organic percussion (congas, shakers), deep rolling bass, warm pads, hypnotic vocal chops (the &ME / Bedouin / Badbwoy / Mano Le Tough lane). Named trends use the trend's **in-app sound** instead. For posts the owner wants to push, the daily run suggests a song from the owner's library to add in-app (e.g. *De Soweto*, *Keep Workin'*) — subject to availability in TikTok/Instagram's licensed libraries. Reginald's R1 premises use spy/tension music for the setup, then the drop.
+
+**Owner's "Escape" playlist (48 tracks) = the reference sound.** Two halves: cinematic scores (Tiersen *Comptine*, Zimmer/Gerrard *Elysium*, *White Lotus* "Aloha!", Thomas Newman, Göransson, Howard Shore) and Keinemusik afro house (&ME, Rampa, Adam Port, Black Coffee — *Muyè*, *Thandaza*, *The Rapture Pt.III*, *Discoteca*, *Feeling*), plus classics (Joe Smooth *Promised Land*, EBTG, Mazzy Star). Per character:
+- **Biscuit:** Keinemusik-style afro-house grooves (own AI beats in that style; in-app suggestions from the playlist's Keinemusik tracks).
+- **Reginald:** **epic orchestral setup → afro-house drop** (gravitas in the style of *Elysium* / *White Lotus*, then the groove) — deadpan in audio form.
+- **Outsider:** whimsical piano/orchestral underscore in the Tiersen / Thomas Newman vein.
 
 ## 3. KPIs
 
