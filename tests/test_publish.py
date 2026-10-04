@@ -1,0 +1,945 @@
+"""Publishing: ``publish_due`` (claim, cap, retry, stale), the Postiz adapter and ``studio publish due``.
+
+Everything runs on ``MemoryStore`` + ``LocalStorage``; the Postiz CLI is a fake ``run`` that records
+argv, so no ``postiz`` binary, network or account is involved.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from datetime import datetime, timedelta, timezone
+from functools import partial
+from pathlib import Path
+from typing import Any
+
+import httpx
+import pytest
+from typer.testing import CliRunner
+
+from studio import publish
+from studio.cli import app
+from studio.config import LONDON
+from studio.models import Account, Character, Clip, ClipState, Platform, Post, PostStatus
+from studio.publish import base, postiz
+from studio.publish.base import PublishResult, Publisher, UncertainPublish, preview_due, publish_due
+from studio.publish.postiz import (
+    INSTAGRAM_SETTINGS,
+    TIKTOK_SETTINGS,
+    PostizError,
+    PostizPublisher,
+    compose_content,
+    download_media,
+)
+from studio.storage import LocalStorage
+from studio.store import MemoryStore
+
+# 2026-10-06 is a Tuesday, London on BST (UTC+1). Biscuit's slot is 19:00, Reginald's 19:30.
+SLOT = datetime(2026, 10, 6, 19, 0, tzinfo=LONDON)
+NOW = datetime(2026, 10, 6, 20, 0, tzinfo=LONDON)
+MASTER = b"\x00\x00\x00 ftypmp42 pretend-master-bytes"
+
+
+# ---- helpers -----------------------------------------------------------------------------------
+
+
+class FakePublisher:
+    """Records every call; raises ``fail`` when set; ids are ``pz-1``, ``pz-2``..."""
+
+    def __init__(self, fail: Exception | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.fail = fail
+
+    def publish(
+        self,
+        *,
+        platform: Platform,
+        integration_id: str,
+        media_url: str,
+        caption: str,
+        hashtags: list[str],
+        ai_label: bool,
+    ) -> PublishResult:
+        self.calls.append(
+            dict(
+                platform=platform,
+                integration_id=integration_id,
+                media_url=media_url,
+                caption=caption,
+                hashtags=hashtags,
+                ai_label=ai_label,
+            )
+        )
+        if self.fail is not None:
+            raise self.fail
+        n = len(self.calls)
+        return PublishResult(platform_post_id=f"pz-{n}", url=f"https://example.test/v/{n}")
+
+
+class Rig:
+    """A store with both characters and their accounts, a LocalStorage and a counter of clips."""
+
+    def __init__(self, tmp_path: Path, *, instagram: bool = False) -> None:
+        accounts = [
+            Account(character_slug="biscuit", platform="tiktok", handle="@biscuit.tt",
+                    postiz_integration_id="int-bis-tt"),
+            Account(character_slug="reginald", platform="tiktok", handle="@reginald.tt",
+                    postiz_integration_id="int-reg-tt"),
+        ]  # fmt: skip
+        if instagram:
+            accounts.append(
+                Account(character_slug="biscuit", platform="instagram", handle="@biscuit.ig",
+                        postiz_integration_id="int-bis-ig")
+            )  # fmt: skip
+        self.store = MemoryStore(
+            characters=[Character(slug="biscuit", name="Biscuit"),
+                        Character(slug="reginald", name="Reginald")],
+            accounts=accounts,
+        )  # fmt: skip
+        self.storage = LocalStorage(tmp_path / "store")
+        self.tmp = tmp_path
+        self.n = 0
+
+    def account(self, handle: str) -> Account:
+        return next(a for a in self.store.accounts() if a.handle == handle)
+
+    def clip(self, character: str = "biscuit", state: ClipState = ClipState.scheduled) -> Clip:
+        self.n += 1
+        local = self.tmp / f"master-{self.n}.mp4"
+        local.write_bytes(MASTER)
+        key = self.storage.upload("clips", f"masters/m{self.n}.mp4", local)
+        return self.store.add_clip(
+            Clip(character_slug=character, mode="recreate", state=state, master_path=key,
+                 caption=f"caption {self.n}", hashtags=["oddeyes", "#ai"])
+        )  # fmt: skip
+
+    def post(
+        self,
+        handle: str = "@biscuit.tt",
+        *,
+        when: datetime = SLOT,
+        clip: Clip | None = None,
+        **fields: Any,
+    ) -> Post:
+        account = self.account(handle)
+        clip = clip or self.clip(account.character_slug)
+        return self.store.add_post(
+            Post(clip_id=clip.id, account_id=account.id, scheduled_for=when, **fields)
+        )
+
+    def get(self, post: Post) -> Post:
+        return self.store.list_posts(id=post.id)[0]
+
+    def run(self, publisher: Publisher, now: datetime = NOW) -> dict[str, Any]:
+        return publish_due(self.store, self.storage, publisher, now)
+
+
+@pytest.fixture
+def rig(tmp_path) -> Rig:
+    return Rig(tmp_path)
+
+
+def test_fake_publisher_is_a_publisher():
+    assert isinstance(FakePublisher(), Publisher)
+
+
+# ---- publish_due: the happy path ---------------------------------------------------------------
+
+
+def test_posts_due_and_marks_posted(rig):
+    p = rig.post()
+    pub = FakePublisher()
+
+    summary = rig.run(pub)
+
+    [call] = pub.calls
+    clip = rig.store.get_clip(p.clip_id)
+    assert call["platform"] is Platform.tiktok
+    assert call["integration_id"] == "int-bis-tt"
+    assert call["caption"] == "caption 1"
+    assert call["hashtags"] == ["oddeyes", "#ai"]
+    assert call["ai_label"] is True  # never without the AI label
+    assert call["media_url"] == rig.storage.signed_url("clips", clip.master_path)
+    done = rig.get(p)
+    assert done.status is PostStatus.posted
+    assert (done.platform_post_id, done.url) == ("pz-1", "https://example.test/v/1")
+    assert done.error is None
+    assert clip.state is ClipState.posted
+    assert [x["post_id"] for x in summary["posted"]] == [p.id]
+    assert summary["errors"] == []
+
+
+def test_future_posts_are_left_alone(rig):
+    p = rig.post(when=NOW + timedelta(minutes=1))
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert pub.calls == []
+    assert rig.get(p).status is PostStatus.scheduled
+    assert summary["posted"] == []
+
+
+def test_second_run_posts_nothing_again(rig):
+    rig.post()
+    pub = FakePublisher()
+    rig.run(pub)
+    rig.run(pub, NOW + timedelta(minutes=15))
+    assert len(pub.calls) == 1  # idempotent: a posted post is never picked up again
+
+
+def test_clip_is_posted_only_when_all_its_posts_are_posted(tmp_path):
+    rig = Rig(tmp_path, instagram=True)
+    clip = rig.clip()
+    tt = rig.post("@biscuit.tt", clip=clip)
+    ig = rig.post("@biscuit.ig", clip=clip, when=NOW + timedelta(hours=2))
+    pub = FakePublisher()
+
+    rig.run(pub)
+    assert rig.get(tt).status is PostStatus.posted
+    assert rig.store.get_clip(clip.id).state is ClipState.scheduled  # Instagram still pending
+
+    rig.run(pub, NOW + timedelta(hours=3))
+    assert rig.get(ig).status is PostStatus.posted
+    assert rig.store.get_clip(clip.id).state is ClipState.posted
+    assert [c["platform"] for c in pub.calls] == [Platform.tiktok, Platform.instagram]
+
+
+def test_a_failed_sibling_keeps_the_clip_scheduled(tmp_path):
+    rig = Rig(tmp_path, instagram=True)
+    clip = rig.clip()
+    rig.post("@biscuit.tt", clip=clip)
+    rig.post("@biscuit.ig", clip=clip, status="failed", attempts=3)
+    rig.run(FakePublisher())
+    assert rig.store.get_clip(clip.id).state is ClipState.scheduled
+
+
+def test_posts_go_out_in_due_order(tmp_path):
+    rig = Rig(tmp_path)
+    late = rig.post("@reginald.tt", when=SLOT + timedelta(minutes=30))
+    early = rig.post("@biscuit.tt", when=SLOT)
+    pub = FakePublisher()
+    rig.run(pub)
+    assert [c["integration_id"] for c in pub.calls] == ["int-bis-tt", "int-reg-tt"]
+    assert rig.get(early).platform_post_id == "pz-1" and rig.get(late).platform_post_id == "pz-2"
+
+
+# ---- publish_due: failures and retries ---------------------------------------------------------
+
+
+def test_failure_retries_then_fails_after_3(rig):
+    p = rig.post()
+    pub = FakePublisher(fail=RuntimeError("postiz exploded"))
+
+    s1 = rig.run(pub)
+    first = rig.get(p)
+    assert (first.status, first.attempts, first.claimed_at) == (PostStatus.scheduled, 1, None)
+    assert "postiz exploded" in first.error
+    assert [x["post_id"] for x in s1["retry"]] == [p.id]
+
+    rig.run(pub, NOW + timedelta(minutes=15))
+    second = rig.get(p)
+    assert (second.status, second.attempts, second.claimed_at) == (PostStatus.scheduled, 2, None)
+
+    s3 = rig.run(pub, NOW + timedelta(minutes=30))
+    third = rig.get(p)
+    assert (third.status, third.attempts) == (PostStatus.failed, 3)
+    assert "postiz exploded" in third.error
+    assert [x["post_id"] for x in s3["failed"]] == [p.id]
+
+    rig.run(pub, NOW + timedelta(minutes=45))
+    assert len(pub.calls) == 3  # a failed post is never retried automatically
+    assert rig.store.get_clip(p.clip_id).state is ClipState.scheduled
+
+
+def test_a_retry_that_succeeds_clears_the_error(rig):
+    p = rig.post()
+    pub = FakePublisher(fail=RuntimeError("blip"))
+    rig.run(pub)
+    pub.fail = None
+    rig.run(pub, NOW + timedelta(minutes=15))
+    done = rig.get(p)
+    assert done.status is PostStatus.posted and done.attempts == 1 and done.error is None
+
+
+def test_error_text_is_kept_short(rig):
+    p = rig.post()
+    rig.run(FakePublisher(fail=RuntimeError("x" * 5000)))
+    assert len(rig.get(p).error) <= 520
+
+
+def test_a_missing_master_counts_as_a_failed_attempt(rig):
+    clip = rig.clip()
+    rig.store.update_clip(clip.id, master_path=None)
+    p = rig.post(clip=clip)
+    pub = FakePublisher()
+    rig.run(pub)
+    got = rig.get(p)
+    assert (got.status, got.attempts) == (PostStatus.scheduled, 1) and got.error
+    assert pub.calls == []
+
+
+def test_an_unconnected_account_counts_as_a_failed_attempt(rig):
+    acct = rig.account("@biscuit.tt")
+    rig.store._accounts[acct.id].postiz_integration_id = None
+    p = rig.post()
+    pub = FakePublisher()
+    rig.run(pub)
+    assert rig.get(p).attempts == 1 and pub.calls == []
+
+
+def test_a_clip_that_is_not_scheduled_is_never_published(rig):
+    # e.g. rejected after its posts were created: failed at once, no attempt wasted, no retry
+    p = rig.post(clip=rig.clip(state=ClipState.rejected))
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    got = rig.get(p)
+    assert pub.calls == []
+    assert (got.status, got.attempts) == (PostStatus.failed, 0)
+    assert "rejected" in got.error
+    assert [x["post_id"] for x in summary["failed"]] == [p.id]
+
+
+def test_an_unknown_clip_or_account_fails_the_post(rig):
+    rig.store._clips.clear()
+    p = rig.post(clip=Clip(id="ghost", character_slug="biscuit", mode="recreate"))
+    rig.run(FakePublisher())
+    assert rig.get(p).status is PostStatus.failed and "clip" in rig.get(p).error
+
+
+# ---- publish_due: a post whose outcome is unknown is never retried ------------------------------
+
+
+def test_an_uncertain_publish_goes_to_needs_check_not_retry(rig):
+    p = rig.post()
+    pub = FakePublisher(fail=UncertainPublish("posts:create timed out"))
+    summary = rig.run(pub)
+    got = rig.get(p)
+    assert (got.status, got.attempts) == (PostStatus.needs_check, 0)
+    assert "timed out" in got.error
+    assert [x["post_id"] for x in summary["needs_check"]] == [p.id]
+    rig.run(pub, NOW + timedelta(minutes=15))
+    assert len(pub.calls) == 1
+
+
+def test_stale_posting_becomes_needs_check_not_retried(rig):
+    stale = rig.post(status="posting", claimed_at=NOW - timedelta(minutes=31))
+    pub = FakePublisher()
+
+    summary = rig.run(pub)
+    got = rig.get(stale)
+    assert got.status is PostStatus.needs_check
+    assert got.error and "check" in got.error.lower()
+    assert [x["post_id"] for x in summary["stale"]] == [stale.id]
+    assert pub.calls == []
+
+    rig.run(pub, NOW + timedelta(hours=2))  # still not retried, however long it sits
+    assert rig.get(stale).status is PostStatus.needs_check
+    assert pub.calls == []
+    assert rig.store.get_clip(stale.clip_id).state is ClipState.scheduled
+
+
+def test_a_fresh_posting_is_left_to_its_owner(rig):
+    inflight = rig.post(status="posting", claimed_at=NOW - timedelta(minutes=29))
+    exactly = rig.post("@reginald.tt", status="posting", claimed_at=NOW - timedelta(minutes=30))
+    pub = FakePublisher()
+    rig.run(pub)
+    assert rig.get(inflight).status is PostStatus.posting
+    assert rig.get(exactly).status is PostStatus.posting  # strictly older than 30 min is stale
+    assert pub.calls == []
+
+
+class FlakyStore(MemoryStore):
+    """Loses the write that records a successful post, as a crash right after Postiz would."""
+
+    fail_posted_write = True
+    only_ids: set[str] | None = None  # None: every post
+
+    def update_post(self, id, /, **kw):
+        lost = self.only_ids is None or id in self.only_ids
+        if self.fail_posted_write and lost and kw.get("status") == "posted":
+            raise RuntimeError("db went away")
+        return super().update_post(id, **kw)
+
+
+def test_a_lost_success_write_is_never_posted_twice(tmp_path):
+    rig = Rig(tmp_path)
+    flaky = FlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    rig.store = flaky
+    p = rig.post()
+    pub = FakePublisher()
+
+    summary = rig.run(pub)  # Postiz said yes; our write of "posted" failed
+    assert len(pub.calls) == 1
+    assert [e["post_id"] for e in summary["errors"]] == [p.id]
+    assert "db went away" in summary["errors"][0]["error"]
+    assert rig.get(p).status is PostStatus.posting  # NOT sent back to scheduled
+
+    flaky.fail_posted_write = False
+    rig.run(pub, NOW + timedelta(minutes=15))  # not yet stale, not retried
+    assert len(pub.calls) == 1
+    rig.run(pub, NOW + timedelta(minutes=31))
+    assert rig.get(p).status is PostStatus.needs_check
+    assert len(pub.calls) == 1
+
+
+def test_one_bad_post_does_not_stop_the_others(tmp_path):
+    rig = Rig(tmp_path)
+    rig.store = FlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    first = rig.post("@biscuit.tt", when=SLOT)
+    second = rig.post("@reginald.tt", when=SLOT + timedelta(minutes=30))
+    rig.store.only_ids = {first.id}
+    pub = FakePublisher()
+    summary = rig.run(pub, NOW + timedelta(hours=1))
+    assert len(pub.calls) == 2  # the second still went out
+    assert [e["post_id"] for e in summary["errors"]] == [first.id]
+    assert [x["post_id"] for x in summary["posted"]] == [second.id]
+    assert rig.get(first).status is PostStatus.posting
+    assert rig.get(second).status is PostStatus.posted
+
+
+# ---- publish_due: at most 2 posted per account per London day -----------------------------------
+
+
+def test_daily_cap_two_per_account(rig):
+    posts = [rig.post(when=SLOT + timedelta(minutes=i)) for i in range(3)]
+    pub = FakePublisher()
+
+    summary = rig.run(pub)
+
+    assert len(pub.calls) == 2
+    assert [rig.get(p).status for p in posts] == [
+        PostStatus.posted, PostStatus.posted, PostStatus.scheduled,
+    ]  # fmt: skip
+    third = rig.get(posts[2])
+    wed_slot = datetime(2026, 10, 7, 19, 0, tzinfo=LONDON)  # biscuit's next cadence day
+    assert third.scheduled_for == wed_slot
+    assert (third.claimed_at, third.attempts, third.error) == (None, 0, None)
+    assert [x["post_id"] for x in summary["rescheduled"]] == [posts[2].id]
+    assert summary["rescheduled"][0]["to"] == wed_slot
+    assert rig.store.get_clip(posts[2].clip_id).state is ClipState.scheduled
+
+    rig.run(pub, NOW + timedelta(minutes=15))  # same day again: the deferred post waits for Wednesday
+    assert len(pub.calls) == 2
+    rig.run(pub, wed_slot + timedelta(minutes=5))
+    assert len(pub.calls) == 3 and rig.get(posts[2]).status is PostStatus.posted
+
+
+def test_the_cap_counts_posts_from_earlier_runs_today(rig):
+    for minutes in (0, 5):
+        rig.post(status="posted", claimed_at=SLOT + timedelta(minutes=minutes),
+                 platform_post_id="old", when=SLOT)  # fmt: skip
+    extra = rig.post(when=SLOT + timedelta(minutes=10))
+    pub = FakePublisher()
+    rig.run(pub)
+    assert pub.calls == []
+    assert rig.get(extra).status is PostStatus.scheduled
+    assert rig.get(extra).scheduled_for > NOW
+
+
+def test_the_cap_is_per_account(rig):
+    for i in range(2):
+        rig.post("@biscuit.tt", status="posted", claimed_at=SLOT, platform_post_id=f"b{i}")
+    other = rig.post("@reginald.tt", when=SLOT + timedelta(minutes=30))
+    pub = FakePublisher()
+    rig.run(pub)
+    assert rig.get(other).status is PostStatus.posted
+
+
+def test_the_cap_counts_a_possibly_live_needs_check_post(rig):
+    rig.post(status="posted", claimed_at=SLOT, platform_post_id="a")
+    rig.post(status="needs_check", claimed_at=SLOT)  # may well be live: counts
+    extra = rig.post()
+    pub = FakePublisher()
+    rig.run(pub)
+    assert pub.calls == [] and rig.get(extra).status is PostStatus.scheduled
+
+
+def test_failed_and_yesterdays_posts_do_not_count(rig):
+    yesterday = SLOT - timedelta(days=1)
+    rig.post(status="posted", claimed_at=yesterday, platform_post_id="y1")
+    rig.post(status="posted", claimed_at=yesterday, platform_post_id="y2")
+    rig.post(status="failed", claimed_at=SLOT, attempts=3)
+    rig.post(status="failed", claimed_at=SLOT, attempts=3)
+    due = rig.post()
+    rig.run(FakePublisher())
+    assert rig.get(due).status is PostStatus.posted
+
+
+def test_the_cap_day_is_the_london_day_not_the_utc_day(rig):
+    # 00:30 BST on the 7th is 23:30 UTC on the 6th: still "the 7th" in London.
+    after_midnight = datetime(2026, 10, 7, 0, 30, tzinfo=LONDON)
+    assert after_midnight.astimezone(timezone.utc).day == 6
+    for i in range(2):
+        rig.post(status="posted", claimed_at=after_midnight + timedelta(minutes=i),
+                 platform_post_id=f"n{i}")  # fmt: skip
+    morning = datetime(2026, 10, 7, 10, 0, tzinfo=LONDON)
+    extra = rig.post(when=morning - timedelta(hours=1))
+    pub = FakePublisher()
+    rig.run(pub, morning)
+    assert pub.calls == [] and rig.get(extra).status is PostStatus.scheduled
+
+
+def test_next_slot_skips_to_the_next_cadence_day(rig):
+    # Thursday evening: the next biscuit day is Tuesday (cadence tue/wed/thu), 19:00 London.
+    thu = datetime(2026, 10, 8, 20, 0, tzinfo=LONDON)
+    for i in range(2):
+        rig.post(status="posted", claimed_at=thu - timedelta(hours=1), platform_post_id=f"t{i}")
+    extra = rig.post(when=thu - timedelta(hours=1))
+    rig.run(FakePublisher(), thu)
+    assert rig.get(extra).scheduled_for == datetime(2026, 10, 13, 19, 0, tzinfo=LONDON)
+
+
+def test_next_slot_uses_the_real_cadence_and_the_characters_slot(rig):
+    rig.store.set_settings(cadence={
+        "biscuit": {"days": ["mon", "fri"], "slot": "18:15"},
+        "reginald": {"days": ["tue"], "slot": "19:30"},
+    })  # fmt: skip
+    for i in range(2):
+        rig.post(status="posted", claimed_at=SLOT, platform_post_id=f"c{i}")
+    extra = rig.post(when=SLOT)
+    rig.run(FakePublisher())
+    assert rig.get(extra).scheduled_for == datetime(2026, 10, 9, 18, 15, tzinfo=LONDON)  # Friday
+
+
+def test_a_character_without_cadence_days_is_pushed_to_the_next_day(rig):
+    rig.store.set_settings(cadence={"biscuit": {"days": [], "slot": "19:00"}})
+    for i in range(2):
+        rig.post(status="posted", claimed_at=SLOT, platform_post_id=f"d{i}")
+    extra = rig.post(when=SLOT)
+    rig.run(FakePublisher())
+    assert rig.get(extra).scheduled_for == datetime(2026, 10, 7, 19, 0, tzinfo=LONDON)
+
+
+def test_next_slot_helper_handles_the_clock_change():
+    cadence = {"biscuit": {"days": ["mon"], "slot": "19:00"}}
+    sat = datetime(2026, 10, 24, 12, 0, tzinfo=LONDON).date()
+    slot = base.next_slot("biscuit", sat, cadence)  # Monday 26th: GMT again
+    assert slot == datetime(2026, 10, 26, 19, 0, tzinfo=LONDON)
+    assert slot.utcoffset() == timedelta(0)
+    with pytest.raises(ValueError):
+        base.next_slot("nobody", sat, cadence)
+
+
+# ---- dry run -----------------------------------------------------------------------------------
+
+
+def test_preview_claims_and_changes_nothing(tmp_path):
+    rig = Rig(tmp_path)
+    due = [rig.post(when=SLOT + timedelta(minutes=i)) for i in range(3)]
+    stale = rig.post("@reginald.tt", status="posting", claimed_at=NOW - timedelta(hours=2))
+    future = rig.post("@reginald.tt", when=NOW + timedelta(hours=1))
+    before = [p for p in rig.store.list_posts()]
+
+    out = preview_due(rig.store, NOW)
+
+    assert rig.store.list_posts() == before  # nothing claimed, nothing moved
+    assert [x["post_id"] for x in out["would_post"]] == [due[0].id, due[1].id]
+    assert [x["post_id"] for x in out["would_reschedule"]] == [due[2].id]
+    assert out["would_reschedule"][0]["to"] == datetime(2026, 10, 7, 19, 0, tzinfo=LONDON)
+    assert [x["post_id"] for x in out["would_flag_needs_check"]] == [stale.id]
+    assert future.id not in json.dumps(out, default=str)
+    first = out["would_post"][0]
+    assert (first["handle"], first["platform"], first["integration_id"]) == (
+        "@biscuit.tt", "tiktok", "int-bis-tt",
+    )  # fmt: skip
+
+
+def test_preview_flags_what_a_real_run_would_refuse(rig):
+    p = rig.post(clip=rig.clip(state=ClipState.dropped))
+    out = preview_due(rig.store, NOW)
+    assert [x["post_id"] for x in out["would_fail"]] == [p.id]
+    assert out["would_post"] == []
+
+
+# ---- the Postiz adapter ------------------------------------------------------------------------
+
+UPLOAD_OUT = '✅ File uploaded successfully!\n{"id": "m1", "path": "https://uploads.postiz.test/abc.mp4"}\n'
+CREATE_OUT = '✅ Post created successfully!\n[{"postId": "pz-post-9", "integration": "int-bis-tt"}]\n'
+
+
+class FakeRun:
+    """A stand-in for ``subprocess.run`` that records argv and answers per subcommand."""
+
+    def __init__(self, upload=(0, UPLOAD_OUT, ""), create=(0, CREATE_OUT, ""), raises=None):
+        self.answers = {"upload": upload, "posts:create": create}
+        self.raises = raises or {}
+        self.calls: list[list[str]] = []
+        self.kwargs: list[dict[str, Any]] = []
+        self.uploaded_path: Path | None = None
+        self.uploaded_bytes: bytes | None = None
+        self.path_existed_at_create: bool | None = None
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        self.kwargs.append(kw)
+        sub = argv[1]
+        if sub == "upload":
+            self.uploaded_path = Path(argv[2])
+            self.uploaded_bytes = self.uploaded_path.read_bytes()  # must exist right now
+        if sub == "posts:create" and self.uploaded_path is not None:
+            self.path_existed_at_create = self.uploaded_path.exists()
+        if sub in self.raises:
+            raise self.raises[sub]
+        rc, out, err = self.answers[sub]
+        return subprocess.CompletedProcess(argv, rc, stdout=out, stderr=err)
+
+    def option(self, sub: str, flag: str) -> str:
+        argv = next(c for c in self.calls if c[1] == sub)
+        return argv[argv.index(flag) + 1]
+
+
+def stored_master(tmp_path: Path) -> tuple[LocalStorage, str]:
+    storage = LocalStorage(tmp_path / "pz-store")
+    local = tmp_path / "pz-master.mp4"
+    local.write_bytes(MASTER)
+    storage.upload("clips", "masters/pz.mp4", local)
+    return storage, storage.signed_url("clips", "masters/pz.mp4")
+
+
+def publish_via_postiz(tmp_path, run, platform=Platform.tiktok, integration="int-bis-tt", **kw):
+    _, url = stored_master(tmp_path)
+    clock = lambda: datetime(2026, 10, 6, 18, 5, 9, tzinfo=timezone.utc)  # noqa: E731
+    publisher = PostizPublisher(run, clock=clock, **kw)
+    return publisher.publish(
+        platform=platform, integration_id=integration, media_url=url,
+        caption="the right eye is ice-blue", hashtags=["oddeyes", "#biscuit"], ai_label=True,
+    )  # fmt: skip
+
+
+def test_postiz_publisher_is_a_publisher():
+    assert isinstance(PostizPublisher(FakeRun()), Publisher)
+
+
+def test_postiz_tiktok_uses_direct_post(tmp_path):
+    run = FakeRun()
+
+    result = publish_via_postiz(tmp_path, run)
+
+    assert [c[1] for c in run.calls] == ["upload", "posts:create"]  # upload first (Rule 2)
+    settings = json.loads(run.option("posts:create", "--settings"))
+    assert settings["content_posting_method"] == "DIRECT_POST"  # Rule 3
+    assert settings["video_made_with_ai"] is True
+    assert settings["privacy_level"] == "PUBLIC_TO_EVERYONE"
+    assert settings == TIKTOK_SETTINGS
+    assert run.option("posts:create", "-i") == "int-bis-tt"
+    # the media is the path Postiz returned from the upload, never a local file or the signed URL
+    assert run.option("posts:create", "-m") == "https://uploads.postiz.test/abc.mp4"
+    content = run.option("posts:create", "-c")
+    assert content == "the right eye is ice-blue\n\n#oddeyes #biscuit"
+    assert run.option("posts:create", "-s") == "2026-10-06T18:05:09Z"
+    assert result == PublishResult(platform_post_id="pz-post-9", url=None)
+
+
+def test_postiz_downloads_the_master_to_a_temp_file_and_cleans_up(tmp_path):
+    run = FakeRun()
+    publish_via_postiz(tmp_path, run)
+    assert run.uploaded_bytes == MASTER  # the real master was handed to `postiz upload`
+    assert run.uploaded_path.suffix == ".mp4"
+    assert not run.uploaded_path.exists()  # temp file gone
+    assert run.path_existed_at_create is False  # and gone before posts:create even runs
+    assert not run.uploaded_path.parent.exists()
+
+
+def test_postiz_cleans_up_when_the_upload_fails(tmp_path):
+    run = FakeRun(upload=(1, "", "❌ Failed to upload file: 413"))
+    with pytest.raises(PostizError, match="413"):
+        publish_via_postiz(tmp_path, run)
+    assert [c[1] for c in run.calls] == ["upload"]  # nothing was posted
+    assert not run.uploaded_path.exists()
+
+
+def test_postiz_instagram_is_a_reel(tmp_path):
+    run = FakeRun(create=(0, '[{"postId": "pz-ig"}]', ""))
+    result = publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig")
+    assert json.loads(run.option("posts:create", "--settings")) == INSTAGRAM_SETTINGS
+    assert INSTAGRAM_SETTINGS == {"post_type": "post"}  # a single video post is published as a Reel
+    assert run.option("posts:create", "-i") == "int-bis-ig"
+    assert result.platform_post_id == "pz-ig"
+
+
+def test_the_settings_constants_are_marked_for_the_go_live_check():
+    source = Path(postiz.__file__).read_text()
+    assert source.count("# VERIFY at go-live (Task 16): postiz integrations:settings <id>") >= 2
+
+
+def test_postiz_upload_result_may_come_without_a_status_line(tmp_path):
+    run = FakeRun(upload=(0, '{"path": "https://uploads.postiz.test/plain.mp4"}', ""))
+    publish_via_postiz(tmp_path, run)
+    assert run.option("posts:create", "-m") == "https://uploads.postiz.test/plain.mp4"
+
+
+def test_postiz_upload_without_a_path_is_a_plain_error(tmp_path):
+    run = FakeRun(upload=(0, '✅ File uploaded successfully!\n{"id": "m1"}', ""))
+    with pytest.raises(PostizError, match="path"):
+        publish_via_postiz(tmp_path, run)
+    assert [c[1] for c in run.calls] == ["upload"]
+
+
+def test_postiz_rejection_is_a_plain_retriable_error(tmp_path):
+    run = FakeRun(create=(1, "", "❌ Failed to create post: 400 invalid privacy"))
+    with pytest.raises(PostizError, match="invalid privacy") as e:
+        publish_via_postiz(tmp_path, run)
+    assert not isinstance(e.value, UncertainPublish)
+
+
+def test_postiz_success_without_a_post_id_is_uncertain(tmp_path):
+    run = FakeRun(create=(0, "✅ Post created successfully!\n[]", ""))
+    with pytest.raises(UncertainPublish):
+        publish_via_postiz(tmp_path, run)
+
+
+def test_postiz_unparseable_success_output_is_uncertain(tmp_path):
+    run = FakeRun(create=(0, "✅ Post created successfully!", ""))
+    with pytest.raises(UncertainPublish):
+        publish_via_postiz(tmp_path, run)
+
+
+def test_postiz_create_timeout_is_uncertain_but_upload_timeout_is_not(tmp_path):
+    slow_create = FakeRun(raises={"posts:create": subprocess.TimeoutExpired(["postiz"], 180)})
+    with pytest.raises(UncertainPublish):
+        publish_via_postiz(tmp_path, slow_create)
+    slow_upload = FakeRun(raises={"upload": subprocess.TimeoutExpired(["postiz"], 900)})
+    with pytest.raises(PostizError, match="timed out") as e:
+        publish_via_postiz(tmp_path, slow_upload)
+    assert not isinstance(e.value, UncertainPublish)  # nothing was posted yet: safe to retry
+    assert [c[1] for c in slow_upload.calls] == ["upload"]
+
+
+def test_postiz_passes_a_timeout_and_captures_output(tmp_path):
+    run = FakeRun()
+    publish_via_postiz(tmp_path, run)
+    for kw in run.kwargs:
+        assert kw["capture_output"] is True
+        assert kw["encoding"] == "utf-8" and kw["errors"] == "replace"  # emoji-safe, never raises
+        assert kw["timeout"] > 0
+        assert kw["stdin"] is subprocess.DEVNULL
+
+
+def test_postiz_with_a_real_subprocess(tmp_path):
+    """The real ``subprocess.run``: argv with spaces and newlines, emoji on stdout, JSON parsing."""
+    log = tmp_path / "argv.json"
+    script = tmp_path / "postiz"
+    script.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        f"log = {str(log)!r}\n"
+        "calls = json.load(open(log)) if __import__('os').path.exists(log) else []\n"
+        "calls.append(sys.argv[1:])\n"
+        "json.dump(calls, open(log, 'w'))\n"
+        "if sys.argv[1] == 'upload':\n"
+        "    print('✅ File uploaded successfully!')\n"
+        "    print(json.dumps({'path': 'https://uploads.postiz.test/real.mp4'}))\n"
+        "else:\n"
+        "    print('✅ Post created successfully!')\n"
+        "    print(json.dumps([{'postId': 'pz-real', 'integration': sys.argv[sys.argv.index('-i') + 1]}]))\n"
+    )
+    script.chmod(0o755)
+    _, url = stored_master(tmp_path)
+
+    result = PostizPublisher(executable=str(script)).publish(
+        platform=Platform.tiktok, integration_id="int-bis-tt", media_url=url,
+        caption="two words,\nthree lines\n\"quoted\"", hashtags=["oddeyes"], ai_label=True,
+    )  # fmt: skip
+
+    assert result.platform_post_id == "pz-real"
+    upload, create = json.loads(log.read_text())
+    assert upload[0] == "upload" and upload[1].endswith(".mp4")
+    assert create[create.index("-c") + 1] == 'two words,\nthree lines\n"quoted"\n\n#oddeyes'
+    assert create[create.index("-m") + 1] == "https://uploads.postiz.test/real.mp4"
+    assert json.loads(create[create.index("--settings") + 1])["content_posting_method"] == "DIRECT_POST"
+
+
+def test_postiz_refuses_to_post_without_the_ai_label(tmp_path):
+    run = FakeRun()
+    _, url = stored_master(tmp_path)
+    with pytest.raises(ValueError, match="AI label"):
+        PostizPublisher(run).publish(
+            platform=Platform.tiktok, integration_id="x", media_url=url,
+            caption="c", hashtags=[], ai_label=False,
+        )  # fmt: skip
+    assert run.calls == []
+
+
+def test_postiz_rejects_an_empty_post_or_integration(tmp_path):
+    _, url = stored_master(tmp_path)
+    pub = PostizPublisher(FakeRun())
+    with pytest.raises(ValueError, match="integration"):
+        pub.publish(platform=Platform.tiktok, integration_id="", media_url=url,
+                    caption="c", hashtags=[], ai_label=True)  # fmt: skip
+    with pytest.raises(ValueError, match="empty"):
+        pub.publish(platform=Platform.tiktok, integration_id="x", media_url=url,
+                    caption="  ", hashtags=[" ", "#"], ai_label=True)  # fmt: skip
+
+
+def test_postiz_fetch_failure_names_no_url_and_posts_nothing(tmp_path):
+    run = FakeRun()
+    handler = lambda request: httpx.Response(403, text="forbidden")  # noqa: E731
+    fetch = partial(download_media, transport=httpx.MockTransport(handler))
+    secret = "https://proj.supabase.co/storage/v1/object/sign/clips/m.mp4?token=SECRET-TOKEN"
+    with pytest.raises(PostizError) as e:
+        PostizPublisher(run, fetch=fetch).publish(
+            platform=Platform.tiktok, integration_id="x", media_url=secret,
+            caption="c", hashtags=[], ai_label=True,
+        )  # fmt: skip
+    assert "403" in str(e.value) and "SECRET-TOKEN" not in str(e.value)
+    assert run.calls == []
+
+
+def test_a_transport_error_while_fetching_never_leaks_the_url(tmp_path):
+    secret = "https://proj.supabase.co/storage/v1/object/sign/clips/m.mp4?token=SECRET-TOKEN"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"cannot reach {secret}")
+
+    with pytest.raises(PostizError) as e:
+        download_media(secret, tmp_path / "x.mp4", transport=httpx.MockTransport(handler))
+    assert "ConnectError" in str(e.value) and "SECRET-TOKEN" not in str(e.value)
+
+
+def test_download_media_streams_an_https_signed_url(tmp_path):
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url)
+        return httpx.Response(200, content=MASTER)
+
+    dest = tmp_path / "out.mp4"
+    download_media("https://proj.supabase.co/sign/m.mp4?token=t", dest,
+                   transport=httpx.MockTransport(handler))  # fmt: skip
+    assert dest.read_bytes() == MASTER and len(seen) == 1
+
+
+def test_download_media_reads_file_uris_and_refuses_other_schemes(tmp_path):
+    _, url = stored_master(tmp_path)
+    dest = tmp_path / "copy.mp4"
+    download_media(url, dest)
+    assert dest.read_bytes() == MASTER
+    with pytest.raises(ValueError, match="scheme"):
+        download_media("ftp://example.test/m.mp4", dest)
+
+
+@pytest.mark.parametrize(
+    ("caption", "tags", "expected"),
+    [
+        ("hello", ["a", "#b"], "hello\n\n#a #b"),
+        ("hello", [], "hello"),
+        ("", ["a"], "#a"),
+        ("hello", ["A", "a", "#A", " b ", ""], "hello\n\n#A #b"),  # trimmed, de-duplicated
+        ("  hello  ", ["#"], "hello"),
+    ],
+)
+def test_compose_content(caption, tags, expected):
+    assert compose_content(caption, tags) == expected
+
+
+# ---- publish_due + the Postiz adapter together --------------------------------------------------
+
+
+def test_publish_due_through_the_postiz_adapter(tmp_path):
+    rig = Rig(tmp_path)
+    p = rig.post()
+    run = FakeRun()
+    publisher = PostizPublisher(run)
+
+    summary = rig.run(publisher)
+
+    got = rig.get(p)
+    assert got.status is PostStatus.posted and got.platform_post_id == "pz-post-9"
+    assert summary["errors"] == []
+    assert json.loads(run.option("posts:create", "--settings"))["content_posting_method"] == "DIRECT_POST"
+    assert run.uploaded_bytes == MASTER
+
+
+def test_a_posts_create_timeout_ends_in_needs_check_end_to_end(tmp_path):
+    rig = Rig(tmp_path)
+    p = rig.post()
+    run = FakeRun(raises={"posts:create": subprocess.TimeoutExpired(["postiz"], 180)})
+    publisher = PostizPublisher(run)
+    rig.run(publisher)
+    rig.run(publisher, NOW + timedelta(minutes=15))
+    assert rig.get(p).status is PostStatus.needs_check
+    assert [c[1] for c in run.calls].count("posts:create") == 1
+
+
+# ---- CLI ---------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cli(tmp_path, monkeypatch):
+    rig = Rig(tmp_path)
+    monkeypatch.setattr(publish, "open_store", lambda: rig.store)
+    monkeypatch.setattr(publish, "open_storage", lambda: rig.storage)
+    monkeypatch.setattr(publish, "now_london", lambda: NOW)
+    monkeypatch.setenv("POSTIZ_API_KEY", "pz-key-DO-NOT-LEAK")
+    monkeypatch.setattr(publish, "which", lambda name: f"/usr/local/bin/{name}")
+    return rig
+
+
+def invoke(*args: str):
+    return CliRunner().invoke(app, ["publish", *args])
+
+
+def test_cli_lists_due_and_dry_run():
+    r = invoke("due", "--help")
+    assert r.exit_code == 0 and "--dry-run" in r.output
+    assert "due" in invoke("--help").output
+
+
+def test_cli_dry_run_needs_neither_storage_nor_postiz(cli, monkeypatch):
+    p = cli.post()
+    monkeypatch.delenv("POSTIZ_API_KEY")
+    monkeypatch.setattr(publish, "which", lambda name: None)
+    monkeypatch.setattr(publish, "open_storage", lambda: pytest.fail("dry-run opened storage"))
+    r = invoke("due", "--dry-run")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert [x["post_id"] for x in out["would_post"]] == [p.id]
+    assert cli.get(p).status is PostStatus.scheduled
+
+
+def test_cli_due_publishes_and_prints_the_summary(cli, monkeypatch):
+    p = cli.post()
+    pub = FakePublisher()
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: pub)
+    r = invoke("due")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert [x["post_id"] for x in out["posted"]] == [p.id]
+    assert cli.get(p).status is PostStatus.posted
+    assert "pz-key-DO-NOT-LEAK" not in r.output
+
+
+def test_cli_due_exits_1_when_an_outcome_could_not_be_recorded(tmp_path, monkeypatch):
+    rig = Rig(tmp_path)
+    flaky = FlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    rig.store = flaky
+    rig.post()
+    monkeypatch.setattr(publish, "open_store", lambda: flaky)
+    monkeypatch.setattr(publish, "open_storage", lambda: rig.storage)
+    monkeypatch.setattr(publish, "now_london", lambda: NOW)
+    monkeypatch.setenv("POSTIZ_API_KEY", "k")
+    monkeypatch.setattr(publish, "which", lambda name: "/bin/postiz")
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: FakePublisher())
+    r = invoke("due")
+    assert r.exit_code == 1
+    assert json.loads(r.stdout)["errors"]
+
+
+def test_cli_due_without_postiz_key_is_a_caller_error(cli, monkeypatch):
+    monkeypatch.delenv("POSTIZ_API_KEY")
+    r = invoke("due")
+    assert r.exit_code == 2
+    assert "POSTIZ_API_KEY" in r.stderr
+
+
+def test_cli_due_without_the_postiz_binary_is_a_caller_error(cli, monkeypatch):
+    monkeypatch.setattr(publish, "which", lambda name: None)
+    r = invoke("due")
+    assert r.exit_code == 2
+    assert "postiz" in r.stderr and "npm" in r.stderr
+
+
+def test_cli_due_without_database_url_is_a_caller_error(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    r = invoke("due")
+    assert r.exit_code == 2 and "DATABASE_URL" in r.stderr
