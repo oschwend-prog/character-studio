@@ -20,6 +20,8 @@ Build a machine that runs AI-character channels on **TikTok and Instagram Reels*
 
 Goal: **go live fast** while AI-character content is hot, with high quality and low token cost.
 
+**Overall goal (owner, 2026-10-04):** create **viral, automatic, AI-researched and AI-created content** that attracts and hooks viewers, and **monetise** the audience. Every design choice is judged against that: research finds what hooks, the pipeline makes it automatically, the learning loop sharpens the hook, and the audience is built to be monetised. Monetisation track (later slices, gated on the promote bar): brand deals and TikTok One / creator-marketplace campaigns (the main route — TikTok has flagged openly-AI accounts like Granny Spills as "unoriginal" and closed creator-fund payouts to them), Instagram creator programmes where eligible, sponsored character integrations, licensing the characters, merch.
+
 ### What the owner said vs what is assumed
 
 | Owner decided | Assumed (correct me) |
@@ -42,7 +44,7 @@ Goal: **go live fast** while AI-character content is hot, with high quality and 
 ### Non-goals (not in this project, or not yet)
 
 - Characters B (Nana — talking clips) and D (Artist — music) → **Slice 3**.
-- Comment / DM replies, brand deals, monetisation, YouTube.
+- Comment / DM replies and YouTube. Monetisation is the overall goal but is built in a later slice, once a character hits the promote bar (see §1).
 - Creating social accounts (owner does this), scraping or downloading other creators' videos, famous IP or real people, meme coins.
 
 ---
