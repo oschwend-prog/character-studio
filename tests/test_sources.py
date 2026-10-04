@@ -290,6 +290,39 @@ def test_rank_excludes_given_ids():
     assert [s.id for s in got] == [b.id]
 
 
+def test_rank_reads_everything_inside_one_transaction():
+    # PostgresStore opens a connection per call outside transaction(); ranking makes one clip read
+    # per candidate source, so it must share a single connection.
+    events: list[str] = []
+
+    class Spy(MemoryStore):
+        def transaction(self):
+            events.append("begin")
+            outer = super().transaction()
+
+            class Ctx:
+                def __enter__(_self):
+                    return outer.__enter__()
+
+                def __exit__(_self, *exc):
+                    events.append("end")
+                    return outer.__exit__(*exc)
+
+            return Ctx()
+
+        def list_clips(self, **filters):
+            events.append("list_clips")
+            return super().list_clips(**filters)
+
+    store = Spy()
+    store.add_character(Character(slug="reginald", name="Reginald", bodies=[Body.biped]))
+    for _ in range(3):
+        clean_source(store)
+    events.clear()
+    rank_sources(store, character(store, "reginald"), Mode.dropin, set())
+    assert events == ["begin", "list_clips", "list_clips", "list_clips", "end"]
+
+
 def test_rank_returns_nothing_for_a_character_without_bodies():
     store = make_store()
     clean_source(store)

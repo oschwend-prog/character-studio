@@ -158,14 +158,15 @@ def _rank(
 ) -> list[tuple[Source, float | None]]:
     mode = _enum(Mode, mode, "mode")
     bodies = set(character.bodies)
-    pool = [
-        s
-        for s in store.list_sources()
-        if s.id not in exclude_ids
-        and s.body in bodies
-        and (mode is Mode.recreate or dropin_eligible(s))
-    ]
-    scored = [(s, median_outlier_x(store, s.id)) for s in pool]
+    with store.transaction():  # one connection for the source list and every per-source clip read
+        pool = [
+            s
+            for s in store.list_sources()
+            if s.id not in exclude_ids
+            and s.body in bodies
+            and (mode is Mode.recreate or dropin_eligible(s))
+        ]
+        scored = [(s, median_outlier_x(store, s.id)) for s in pool]
     scored.sort(key=lambda p: (p[1] is None, -(p[1] or 0.0), -_created_ts(p[0])))
     return scored
 

@@ -14,7 +14,7 @@ def test_all_subapps_registered():
     r = CliRunner().invoke(app, ["--help"])
     assert r.exit_code == 0
     for name in (
-        "budget", "source", "clip", "plan", "qa", "master",
+        "budget", "source", "fav", "clip", "plan", "qa", "master",
         "publish", "metrics", "review", "db", "version",
     ):
         assert name in r.output, name

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from studio import __version__, budget, sources
+from studio import __version__, budget, favorites, sources
 
 app = typer.Typer(
     name="studio",
@@ -28,6 +28,7 @@ SUBAPPS: dict[str, str] = {
 
 app.add_typer(budget.app, name="budget")
 app.add_typer(sources.app, name="source")
+app.add_typer(favorites.app, name="fav")
 
 for _name, _help in SUBAPPS.items():
     app.add_typer(typer.Typer(help=_help, no_args_is_help=True), name=_name)
