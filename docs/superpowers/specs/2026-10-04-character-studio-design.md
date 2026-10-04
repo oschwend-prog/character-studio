@@ -195,14 +195,14 @@ Dark, dense style consistent with the owner's other terminals. Pages:
 
 ### 4.7 Publishing (GitHub Action, every 15 min)
 
-- Picks `scheduled` posts whose time has come → **Upload-Post** API → TikTok + Instagram Reels (one clip, both platforms, no extra generation cost).
+- Picks `scheduled` posts whose time has come → **Postiz** (`postiz upload` → `postiz posts:create`, TikTok `content_posting_method: DIRECT_POST`, honouring `postiz integrations:settings` rules) → TikTok + Instagram Reels (one clip, both platforms, no extra generation cost). Upload-Post API is the fallback adapter behind the same `Publisher` interface.
 - AI-generated label set on TikTok (`is_aigc`); on Instagram via the API flag if available, otherwise "AI-generated character" in caption and bio.
 - Idempotent: a post row is claimed before the API call and stores the platform post ID; a retry never double-posts (operator-approval-loop pattern: durable claim + receipt).
 - Maximum 2 posts per account per day; default post times 12:00 and 19:00 UK, then learned per character.
 
 ### 4.8 Stats and learning
 
-- **Stats Action (every 6 h)**: views, likes, comments, shares, saves, follower count per post/account → `metric_snapshots`.
+- **Stats Action (every 6 h)**: `postiz analytics:post` / `analytics:platform` → views, likes, comments, shares, saves, follower count per post/account → `metric_snapshots`.
 - Each clip is tagged with features: motion preset, motion category, hook type, text overlay yes/no, audio arm, duration, post hour, platform.
 - **Weekly review (Opus, Monday)**: per character, per feature, compares median views against the character's own baseline. A rule enters the playbook only if it shows up across **≥ 5 posts** (no single-viral-post overfitting). Rewrites `playbook.md`, commits it, posts a report to the terminal and by email.
 
@@ -313,7 +313,7 @@ Optional in Slice 2: Higgsfield **Virality Predictor** scores each clip before p
 | Item | Monthly |
 |---|---|
 | Higgsfield: 2 characters × 3 posts/week ≈ 26 clips × ~144 credits incl. re-rolls ≈ 3,700 credits | ≈ $185 |
-| Upload-Post (TikTok needs a paid plan) | ≈ $24 |
+| Postiz Cloud (Standard) | ≈ $29 |
 | vidIQ (existing plan, ≤ 30 scans) | $0 extra |
 | Vercel / Supabase / GitHub Actions (existing accounts) | $0 extra |
 | **Total** | **≈ $210** |
