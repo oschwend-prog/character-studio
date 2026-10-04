@@ -7,14 +7,15 @@
 - Cream long-haired miniature dachshund, long silky feathered coat, long flowing ears, long body on short legs, tail visible.
 - **ODD EYES (studio DNA):** right eye (viewer's left) vivid ice-blue, left eye (viewer's right) warm amber.
 - **Signature outfit:** one-piece pale baby-blue velour tracksuit (hex `#A7C7E7`), white side stripes, front zip, no waist gap.
-- **Moves:** super slick, smooth, highly skilled — never clumsy. The joke is that he is better than you.
+- **Look:** adorable, puppy-like — round face, huge sparkly eyes, fluffy cream coat, happy tongue blep (owner: "make the dog adorable and cute").
+- **Moves:** super slick, smooth, highly skilled — never clumsy. The joke: adorable, but somehow dances better than you.
 - **Signature closing beat:** ends every clip with a slow, knowing look straight down the lens (eyes are the brand).
 
 ## Wardrobe system (changes per video, chosen to fit the trend)
 Gold chain (hip-hop) · shades (summer / "cool" trends) · DJ headphones (party, house) · tiny crown (king / "main character" trends) · bucket hat (90s) · sweatband (workout trends) · bow tie (formal / crossovers with Reginald) · Santa hat (Christmas) · sleep mask on forehead ("good morning" loops). One prop per clip, max. The tracksuit stays on.
 
 ## Pose masters
-- `biped`: upright master — job `ccfb5edd-35b0-4559-b8f7-00a8c603e96a` (ODD EYES, one-piece baby-blue onesie)
+- `biped`: **upright master — job `42f579b9-3da3-42ff-af47-98d758112743` (owner pick 2026-10-04: "puppy-ish" — round head, huge sparkly ODD EYES, tongue blep, pastel sunlit room)**; previous cool-look master `ccfb5edd-35b0-4559-b8f7-00a8c603e96a` (used in the debut)
 - `quadruped`: four-legged master — job `d863df81-54f8-45df-9676-cf44338d07fa` (GPT Image 2, dark dance studio)
 - Profile picture: job `57870be0-bd09-4bca-9193-853f46e26d1f` → `assets/avatars/biscuit.png`
 
