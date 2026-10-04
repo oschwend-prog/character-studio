@@ -120,10 +120,19 @@ character-studio/
 ### 4.2 Characters (Slice 1: A and E)
 
 - **A — the Mascot: a cream long-haired miniature dachshund.** Stands upright (human dance motion only transfers cleanly onto an upright body — every winning animal in the scan was upright and dressed) with **one signature accessory** that never changes. The long body on short legs is the built-in joke; the cream long coat flows on every move. Audience: broad, cute, highly shareable, strongest on Instagram. Competition: AI dachshund dance clips are already a TikTok template — we win by being a named, recurring character with a locked identity, not one-off template clips. Also suits pet trends in the Genjutsu library (e.g. "Pet Zoom Montage").
-- **E — The Butler (deadpan funny dancer).** Stone-faced English butler in tails and white gloves who nails every trend perfectly and never breaks character — stately homes, London streets, carrying a silver tray. Comedy by contrast (the Jean Phil / Granny Spills mechanic), deliberately unlike Jean Phil (no houndstooth, no bob, no moustache). White gloves and coat-tails make motion read clearly. Never speaks in Slice 1. Audience: Gen Z comedy, strongest on TikTok. Can later "release his own tracks" and become the Artist (concept D) without a new account.
+- **E — The Butler (deadpan funny dancer), "the Quiff" (owner pick 2026-10-04 over the 70s version).** Round, mid-40s English butler with a towering rigid black pompadour (running gag: the quiff never moves), tiny round glasses, thin curled pencil moustache, tails and white gloves; nails every trend perfectly and never breaks character — stately homes, London streets, carrying a silver tray. Comedy by contrast (the Jean Phil / Granny Spills mechanic), deliberately unlike Jean Phil (no houndstooth, no bob, no moustache). White gloves and coat-tails make motion read clearly. Never speaks in Slice 1. Audience: Gen Z comedy, strongest on TikTok. Can later "release his own tracks" and become the Artist (concept D) without a new account.
 - The two characters reach different audiences, so the head-to-head is informative.
 - Design flow (`design-character` skill): bible draft → Higgsfield **character-sheet** workflow, 4K reference renders (Nano Banana Pro) → owner picks 1 of 3–4 looks per character → saved as a Higgsfield reference element (identity lock) → `refs.json`.
 - Final names, the dachshund's signature accessory, and exact looks are decided in that step.
+
+### 4.2a Studio DNA — ODD EYES (owner decision 2026-10-04)
+
+The studio is called **ODD EYES**. Every character, on every channel, shares one signature:
+- **Heterochromia, always the same sides:** the character's RIGHT eye (viewer's left) is vivid ice-blue, the LEFT eye (viewer's right) is warm amber. Natural-looking, vivid, never glowing (no uncanny/creepy look).
+- **End beat on every clip:** the last ~0.5 s is a look straight down the lens with a catch-light glint in the two-tone eyes, plus a short sound sting (the same across all channels — cross-channel recognition).
+- **Mark:** two dots, ice-blue and amber, as a small corner bug and as the future studio avatar.
+- **Lore:** characters share one world and cross over (Biscuit is the house dog where the Butler works). Running line for future characters: everyone with the eyes "isn't quite from here".
+- Visual QA checks eye colours and sides on every clip; identity references always show both eyes clearly.
 
 ### 4.3 `studio` CLI (Python)
 

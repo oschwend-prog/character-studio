@@ -5,7 +5,7 @@
 
 ## Identity (never changes)
 - Cream long-haired miniature dachshund, long silky feathered coat, long flowing ears, long body on short legs, tail visible.
-- **Special eyes:** heterochromia — left eye vivid ice-blue, right eye warm amber (owner to confirm vs both ice-blue).
+- **ODD EYES (studio DNA):** right eye (viewer's left) vivid ice-blue, left eye (viewer's right) warm amber.
 - **Signature outfit:** one-piece pale baby-blue velour tracksuit (hex `#A7C7E7`), white side stripes, front zip, no waist gap.
 - **Moves:** super slick, smooth, highly skilled — never clumsy. The joke is that he is better than you.
 - **Signature closing beat:** ends every clip with a slow, knowing look straight down the lens (eyes are the brand).
@@ -14,8 +14,9 @@
 Gold chain (hip-hop) · shades (summer / "cool" trends) · DJ headphones (party, house) · tiny crown (king / "main character" trends) · bucket hat (90s) · sweatband (workout trends) · bow tie (formal / crossovers with Reginald) · Santa hat (Christmas) · sleep mask on forehead ("good morning" loops). One prop per clip, max. The tracksuit stays on.
 
 ## Pose masters
-- `biped`: upright master — job `8ab41747-82b3-456f-84fe-e945c4ebaf00` (pre-eyes; superseded once the eyes variant is approved)
-- `quadruped`: four-legged master — pending
+- `biped`: upright master — job `ccfb5edd-35b0-4559-b8f7-00a8c603e96a` (ODD EYES, one-piece baby-blue onesie)
+- `quadruped`: four-legged master — job `d863df81-54f8-45df-9676-cf44338d07fa` (GPT Image 2, dark dance studio)
+- Profile picture: job `57870be0-bd09-4bca-9193-853f46e26d1f` → `assets/avatars/biscuit.png`
 
 ## Voice (captions)
 Lowercase, playful, confident, short. Never barks, never explains the joke. Emoji palette: 💙 🌭 ✨ 🫡.

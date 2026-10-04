@@ -1,4 +1,4 @@
-# Social pages kit (paste-ready)
+# Social pages kit (paste-ready) — ODD EYES studio
 
 Owner creates the accounts (Claude cannot create accounts). Everything else below is ready to paste.
 
@@ -18,19 +18,19 @@ Owner creates the accounts (Claude cannot create accounts). Everything else belo
   The smoothest sausage on the internet 🌭💙
   Mismatched eyes. Perfect timing.
   New moves every week · AI-generated character 🤖
-- **Profile picture:** avatar job `3e8b9984-4c7d-47cf-83ed-b9091bb5d586` (regenerate with the approved special eyes before upload)
+- **Profile picture:** `assets/avatars/biscuit.png` (job `57870be0-bd09-4bca-9193-853f46e26d1f`, ODD EYES)
 - **Pinned (first 3 posts):** 1) intro — "they said sausages can't dance" 2) "my eyes don't match. my moves do." 3) best performer after week 2
 
 ## Reginald 🎩
 - **Display name:** Reginald 🎩
 - **Handles (try in order):** `reginald.thebutler` · `thedancingbutler` · `butlerreginald`
-- **TikTok bio (≤80):** Butler since 1971. Dancer since Tuesday. 🎩 · AI character
+- **TikTok bio (≤80):** Head butler. The quiff never moves. 🎩 · AI character
 - **Instagram bio (≤150):**
-  Butler since 1971. Dancer since Tuesday. 🎩
+  Head butler. The quiff never moves. 🎩
   The household is unaware.
   AI-generated character 🤖
-- **Profile picture:** avatar job `a5c4de8b-82ff-460c-a792-64c408326ce7` (crop to the green circle before upload)
-- **Pinned:** 1) intro — "He's 74. He's never rehearsed." 2) "Not a single drop spilled." 3) best performer after week 2
+- **Profile picture:** Quiff avatar job `ecaf6a89-77ff-4d5a-bf92-24beb2b20c93` → `assets/avatars/reginald.png`
+- **Pinned:** 1) intro — "The quiff never moves." 2) "Not a single drop spilled." 3) best performer after week 2
 
 ## Crossover
 Biscuit is the house dog at Reginald's stately home. Crossover clips (both characters in one video) post to both accounts and cross-tag — the cheapest follower transfer between the two.

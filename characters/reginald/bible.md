@@ -1,11 +1,14 @@
 # Reginald — character bible
 
 **Status:** designing (name proposed 2026-10-04, owner to confirm)
-**Concept:** E (Deadpan Icon). Butler since 1971. Dancer since Tuesday.
+**Concept:** E (Deadpan Icon). Head butler. The quiff never moves.
 
 ## Identity (never changes)
-- Original fictional English butler, mid-70s ("74"), bald on top with neat white hair at the sides, small round gold-rimmed spectacles, clean-shaven.
-- Black tailcoat with long tails, dove-grey waistcoat, white shirt, white bow tie, **spotless white gloves**, polished black shoes.
+- Original fictional English butler, mid-40s, short, stocky and round, rosy cheeks.
+- **Towering, immaculately sculpted, glossy black pompadour quiff — perfectly rigid. Running gag: it never moves, however hard he dances.**
+- Tiny round black spectacles; very thin pencil moustache with tiny curled tips.
+- **ODD EYES:** right eye (viewer's left) ice-blue, left eye (viewer's right) amber.
+- Black tailcoat with long tails, black waistcoat over a round belly, white shirt, white bow tie, **spotless white gloves**, polished black shoes. Big man, light feet.
 - **Never smiles. Never acknowledges the dancing.** Dances every trend perfectly, then resumes service as if nothing happened.
 - **Signature closing beat:** straightens his gloves, small formal bow, deadpan stare.
 
@@ -16,7 +19,7 @@ Silver tray with a full teacup (never spills) · feather duster · candelabra (n
 Grand stately-home drawing room (master), grand hall staircase, wine cellar, kitchen below stairs, rainy London street at dawn, Rolls-Royce in the driveway.
 
 ## Pose masters
-- `biped`: stately drawing room — job `97e2dd6b-3a40-4952-9bb4-f59f98a0f355`; identity source (studio) `6baa7e70-30db-4f55-8bb2-a7a729330540`
+- `biped`: stately drawing room — Quiff master job `6b1625b1-b2e3-4292-ba35-4aac86e6b6e4` (ODD EYES); design source `7bd00c43-b74b-41d4-81e4-26dce99e8cd7`. Retired: the 70s butler (`6baa7e70…`, `97e2dd6b…`).
 
 ## Voice (captions)
 Formal, dry, British, full sentences, never mentions dancing directly. Emoji palette: 🎩 🫖 🕯️.
@@ -32,4 +35,4 @@ Colours: racing green `#0B3D2E`, gold `#C9A227`, ivory `#F6F1E7`. Hook-text font
 - Motion types: biped dance drivers only
 
 ## Never
-Never smiles, never speaks in Slice 1, never resembles a real actor or a famous TV butler, no famous IP, no unlabelled AI, no third-party footage or audio in the output.
+Never smiles, never speaks in Slice 1, the quiff never moves, never resembles a real actor or a famous TV butler, no famous IP, no unlabelled AI, no third-party footage or audio in the output.

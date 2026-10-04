@@ -23,7 +23,7 @@ Cadence (Lean): Biscuit Mon/Wed/Fri, Reginald Tue/Thu/Sat, 18:00–19:00 UK; the
 
 | # | On-screen hook | Clip | Prop | Caption (first line) | Pattern |
 |---|---|---|---|---|---|
-| 1 | He's 74. He's never rehearsed. | Perfect hip-hop routine in the drawing room, stone-faced | none | The household is unaware. 🎩 | Achievement with constraint |
+| 1 | The quiff never moves. | Hardest hip-hop routine in the drawing room, stone-faced; the quiff stays perfectly rigid | none | The household is unaware. 🎩 | Signature gag + amplifier |
 | 2 | Not a single drop spilled. | Full routine holding a silver tray with a full teacup | silver tray + teacup | Tea is served. 🫖 | Amplifier ("not a single") |
 | 3 | The family left for the weekend. | Dances down the grand staircase | none | Nothing to report. | Setup → payoff |
 | 4 | He secretly does this every night. | Candlelit routine in the wine cellar | candelabra | Kindly do not inform the Duchess. 🕯️ | Insider word "secretly" |
