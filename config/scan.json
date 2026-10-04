@@ -1,0 +1,53 @@
+{
+  "_doc": "Daily Viral Picks scan settings (owner request 2026-10-04). Used by /daily-run. vidIQ tool: vidiq_instagram_tiktok_outlier_search (5 credits/call). Dates are relative: posted_within_days -> datePostedAfter = today - N days.",
+  "defaults": {
+    "posted_within_days": 14,
+    "viewsMin": 200000,
+    "outlierScoreMin": 5,
+    "durationMax": 30,
+    "descriptionLanguage": ["en"],
+    "collapseByCreator": true,
+    "resultsPerPlatform": 10,
+    "exclude_already_seen": true
+  },
+  "budget": {
+    "vidiq_monthly_credits": 150,
+    "scans_per_week": 4,
+    "breakdowns_per_week": 4,
+    "_note": "4 scans (20) + 4 approved-pick breakdowns (40) = 60/week = more than the 150/month plan; raise the vidIQ plan or cut breakdowns to 2/week."
+  },
+  "characters": {
+    "biscuit": {
+      "audienceQuery": "Culture/Region: US/UK English-speaking; Global: true; Demographics: dog lovers and Gen Z/millennials 16-40 who watch cute pet and dance content;",
+      "rotation": [
+        {"embeddingType": "format", "query": "clothed animal standing upright doing a skilled trend dance, seamless loop, music only"},
+        {"embeddingType": "concept", "query": "small dog front and centre leading human backup dancers in a trending dance"},
+        {"embeddingType": "hook", "query": "small dog in an outfit stares into the camera, then hits every beat of a high-energy track"},
+        {"embeddingType": "concept", "query": "pet with a human job or an ego caption doing a viral trend"}
+      ],
+      "fit_rules": ["one animal or one dancer as the subject (up to 3 if the multi-body test passes)", "full body visible", "mostly static camera", "music-driven (no dialogue needed)", "upright/biped motion for the biped master; four-legged head-bob for the quadruped master"]
+    },
+    "reginald": {
+      "audienceQuery": "Culture/Region: UK/US English-speaking; Global: true; Demographics: Gen Z and millennials 16-34 who watch comedy, memes and dance trends;",
+      "rotation": [
+        {"embeddingType": "concept", "query": "stone-faced person in a work uniform performs a trend dance perfectly at work, then calmly resumes the task"},
+        {"embeddingType": "hook", "query": "on-screen premise like 'first day as' then a mundane task done with total seriousness, then the beat drops into a dance"},
+        {"embeddingType": "format", "query": "deadpan costumed character, one repeatable action, changing locations"},
+        {"embeddingType": "concept", "query": "older or formally dressed person steps in and out-dances young people"}
+      ],
+      "fit_rules": ["one performer (others only as background that we replace or recreate)", "full body visible", "deadpan-compatible (the joke must survive a straight face)", "no real-person likeness, masks or impersonations as the joke"]
+    },
+    "outsider": {
+      "_status": "inactive until the voice lane (Slice 3)",
+      "audienceQuery": "Culture/Region: UK/US English-speaking; Global: true; Demographics: millennials and Gen Z 18-40 who watch character comedy and history content;",
+      "rotation": [
+        {"embeddingType": "concept", "query": "naive confident character from another era baffled by a modern everyday object"},
+        {"embeddingType": "format", "query": "openly AI recurring character talks to a handheld camera, numbered episode"},
+        {"embeddingType": "hook", "query": "over-formal verbose speaker reacts to modern slang"}
+      ]
+    }
+  },
+  "free_sources_daily": ["Higgsfield Genjutsu Trending + New galleries (get_presets source=genjutsu)", "TikTok trending commercial sounds (tiktok_music_trending, country GB and US, 7DAY)"],
+  "global_reject_rules": ["famous IP, celebrities or real-person likeness as the joke", "brand ads / sponsored posts", "trend more than 7 days past its peak", "already picked or produced", "sexualised or minors-centred content", "national/ethnic/religious stereotypes"],
+  "pick_card_fields": ["url", "platform", "creator_handle", "views", "outlier_x", "age_days", "matched_character", "fit_grade A/B/C", "proposed_mode", "proposed_hook", "proposed_prop", "why_it_works"]
+}
