@@ -59,3 +59,21 @@ Total = 10 × (0.25·virality + 0.10·reach + 0.15·freshness + 0.20·fit + 0.20
 | 15 | O3 | outsider | **56** | 4.2 | 6.4 | 6 | 8 | 3 | 8 | talking lane; UK audience |
 | 16 | O2 | outsider | **53** | 3.9 | 3.9 | 6 | 8 | 3 | 8 | talking lane not built yet |
 | 17 | O4 | outsider | **48** | 1.9 | 3.9 | 6 | 8 | 3 | 8 | talking lane |
+
+## Approval — by Claude as analyst (delegated by the owner, 2026-10-04)
+
+Rule applied (now standing, spec §4.4b): **auto-approve** total ≥ 80 and feasibility ≥ 7 · **analyst decides** 65–79 with a written reason · **hold** anything blocked by an untested capability (multi-body, talking lane) · **skip** < 65. The owner can skip any approved pick in the terminal before it is produced.
+
+| ID | Decision | Order | Why | Our enhancement (what makes ours better than the original) |
+|---|---|---|---|---|
+| B1 | ✅ approved (auto) | Reginald #1, pin | Biggest outlier in every scan (1,393×); the premise structure is deadpan by design | Epic orchestral swell → afro-house drop on the cut; **slow-mo on the hardest hit** with the quiff perfectly rigid; resumes pouring without spilling; ODD EYES glint on the final look |
+| B2 | ✅ approved (auto) | Reginald #2 | 3,475× — the strongest per-creator outlier we have; solo, cheap | **Bell counter text** ("bell rung: 3… 7… 12 times") while he dances serenely; serves the tea exactly on the last beat |
+| D2 | ✅ approved (auto) | Biscuit #2 (after the debut) | 1,177×, solo gesture choreography — the ideal Genjutsu input | **Impact SFX + micro-zoom on every paw hit**, slow-mo on the final hit, caption "find one he missed. you can't 🌭" (rewatch bait) |
+| D6 | ✅ approved (auto) | Biscuit #3 | Dachshund ego-caption format at 550× — our exact breed and voice | Tastes the croissant, **stamps a tiny "APPROVED" card**, then the victory routine; crumbs on the onesie |
+| D4 | ✅ approved (analyst) | Biscuit eye loop, week 2 | 79 — cheapest clip and the ODD EYES signature; loops drive watch time > 100% | Beat-synced head-snap, catch-light glint on the blue eye, **perfect loop seam** |
+| B3 | ✅ approved (analyst) | Reginald #3 — "Tea Tuesday" series opener | 76 — weekday series converts viewers to followers; Drop-in if a clean copy appears | Recurring title card "Tuesday. 4pm. Tea." in the serif brand style |
+| D5 | ✅ approved (analyst) | Biscuit week 2 | 74 — uses both pose masters; strong caption pattern (221.8×) | The stand-up happens exactly **on the drop**, ears flip, text pop "professional mode" |
+| D1 | ⏸ hold → approve if the multi-body test passes by 10 Oct | — | 997× and the trend is live, but 3 bodies are untested; deadline ~12 Oct | Backup dancers are **two more baby-blue dachshund silhouettes**, Biscuit out-dances them |
+| D3, B4, B5, B6 | ⏸ hold (multi-body) | after the test | Strong crossovers, blocked on 2–5 bodies | B5 first (best story), then B4 |
+| O5, O1 | ⏸ pre-approved for the Outsider launch | Slice 3 | Origin episode (pin) + strongest talking outlier (421×) | — |
+| O2, O3, O4 | ⏸ hold | Slice 3 | Talking lane not built | — |

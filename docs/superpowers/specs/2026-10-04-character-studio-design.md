@@ -208,6 +208,10 @@ Shares are per-account settings in the terminal. Drop-in guardrails (enforced by
 - Weights v1: virality 0.25 · reach 0.10 · freshness 0.15 · fit 0.20 · feasibility 0.20 · saturation 0.10.
 - Calibration: once ≥ 20 approved picks have been produced and measured, the weekly review compares each sub-score with the clip's real outlier_x and may propose new weights — a proposal the owner approves, never an automatic change.
 
+**Delegated approval (owner, 2026-10-04: "you are the social media analyst — approve for me"):** the daily run applies a standing rule to new picks: **auto-approve** when total ≥ 80 and feasibility ≥ 7; **analyst decision** (Claude, with a one-line written reason stored on the pick) for totals 65–79; **hold** when blocked by an untested capability (multi-body, talking lane), re-checked when the capability lands; **skip** below 65. Every decision is shown in the terminal with its reason, and the owner can skip any approved pick before it is produced or reject the finished clip as before.
+
+**Enhancement toolkit (owner: "we could even enhance certain features"):** each approved pick carries 1–3 enhancements that make our version better than the original, chosen from: slow-motion on the key hit, micro-zoom/impact SFX on accented beats, text pops/counters (e.g. "bell rung: 12 times"), prop gags (stamped "APPROVED" card), title cards for series, speed-ramp into the drop, and the ODD EYES glint on the final look.
+
 ### 4.5 Audio
 
 Posting through an API means the sound must be in the file. TikTok's trending sounds cannot be attached by API.
