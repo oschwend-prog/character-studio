@@ -6,11 +6,16 @@ calibrated to a known loudness), so media tests need no files in the repo.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
 
 import pytest
+
+# Typer forces ANSI-styled (rich) --help output on GitHub Actions, which breaks the tests that read
+# the help text. Typer reads this once at import, so it must be set before ``studio.cli`` loads.
+os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
 
 # lavfi ``sine`` peaks at 1/8 (-18 dBFS) before any gain.
 _SINE_PEAK = 0.125
