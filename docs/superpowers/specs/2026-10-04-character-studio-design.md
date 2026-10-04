@@ -60,7 +60,7 @@ Goal: **go live fast** while AI-character content is hot, with high quality and 
 ## 3. Architecture
 
 ```
-            ┌──────────── daily Claude routine (Sonnet, cloud, ~08:00 UK) ────────────┐
+            ┌──────── daily Claude scheduled task (Sonnet, ~08:00 UK) ────────────────┐
  vidIQ ──────┤ 1 plan    → studio CLI: who needs a clip today, credits left             │
  TikTok      │ 2 trends  → 1 vidIQ scan + TikTok trending sounds + Genjutsu Trending    │
  music chart │ 3 pick    → best motion clip per character (playbook, explore/exploit)   │
@@ -153,7 +153,14 @@ scheduled → posting → posted | post_failed (retried 3x, then surfaced in ter
 
 ### 4.4 Daily routine (`daily-run` skill)
 
-Runs as a **Claude Code cloud routine** on Sonnet at ~08:00 UK, repo checked out from GitHub. Steps:
+Runs as a **Claude scheduled task** (owner decision 2026-10-04: all automation lives in Claude's own scheduled tasks, so the terminal stays a thin display-and-approve layer). Tasks are created from the `character-studio` project folder so they appear under that project in the sidebar:
+
+| Task | When | Model | Does |
+|---|---|---|---|
+| `studio-daily-run` | daily ~08:00 UK | Sonnet | the 8 steps below |
+| `studio-weekly-review` | Monday ~09:00 UK | Opus | §4.8 review + `last30days` deep trend read + bar check |
+
+Each task's prompt is one line that invokes the project skill (`/daily-run`, `/weekly-review`), so the instructions live in the repo, version-controlled. The project's `.claude/settings.json` ships **prefix-form allow rules** (`Bash(studio:*)`, `Bash(ffmpeg:*)`, `Bash(ffprobe:*)`, the Higgsfield and vidIQ MCP tools) so an unattended run never stalls on a permission prompt. Steps:
 
 1. `studio plan today`; stop if nothing is due or the kill switch is on.
 2. **Trends (every day)**: one vidIQ outlier scan (rotating query per character niche; 5 vidIQ credits, the plan's 150/month covers one a day), TikTok trending sounds (`tiktok_music_trending`, free), Higgsfield Genjutsu *Trending* + *New* galleries (free). Store via `studio trends add`. Daily because dance trends peak and fade within 1–2 weeks — a week-2 clip loses to a week-1 clip. The deeper Reddit/X/web read (`last30days`) runs weekly inside the review.
@@ -314,7 +321,7 @@ Moving both characters to daily posting ≈ $420/month — only after a promote 
 
 ## 12. Risks to verify first (Slice 1, task 0 — before building on them)
 
-1. **Cloud routine + connectors:** can a scheduled cloud routine use the Higgsfield and vidIQ connectors unattended? Fallback: local Claude desktop scheduled task (needs the Mac awake; prefix-form permission rules so it never stalls on a prompt).
+1. **Scheduled tasks + connectors:** does a Claude scheduled task reach the Higgsfield and vidIQ connectors and run end-to-end with no prompt? Does it fire reliably (Mac awake / keep-awake setting)? Fallback: a Claude Code cloud routine on the same skill files.
 2. **Genjutsu reality check:** real 1080p credit cost, quality on our two characters, and how well human motion transfers to the anthropomorphic animal.
 3. **Upload-Post:** TikTok direct post, TikTok upload-to-drafts (needed for the audio experiment, §4.5), AI-label support on both platforms, analytics endpoint, media-by-URL.
 4. **Higgsfield output URL lifetime** (decides how soon we must copy masters to storage).
