@@ -24,7 +24,8 @@ Goal: **go live fast** while AI-character content is hot, with high quality and 
 
 | Owner decided | Assumed (correct me) |
 |---|---|
-| Concepts A (Animal), B (Nana), D (Artist), E (Deadpan Icon); start with **A + E** | "Claude studio" = Claude Code + its scheduled routines |
+| Concepts A (Animal), B (Nana), D (Artist), E (Deadpan Icon); start with **A = cream long-haired miniature dachshund mascot** and **E = The Butler** (deadpan funny dancer) | "Claude studio" = Claude Code + its scheduled routines |
+| Trend check **every day** (plus a deeper weekly read) | |
 | Platforms: TikTok + Instagram Reels (no YouTube) | Lean budget cap ≈ $210/mo for Slice 1 (owner can change in the terminal) |
 | Posting: approve first, then auto per channel | Supabase: new `studio` schema inside the existing `faceless-youtube` project |
 | Architecture: thin agent, thick code (approach 1) | Posting service: Upload-Post (Postiz as fallback) |
@@ -118,10 +119,11 @@ character-studio/
 
 ### 4.2 Characters (Slice 1: A and E)
 
-- **A — the Animal** (working concept: a capybara in a velour tracksuit and gold chain). Anthropomorphic, upright, so human dance motion transfers cleanly.
-- **E — the Deadpan Icon** (candidates: "Sir Reginald" — stiff English aristocrat in tweed with a monocle; "Herr Direktor" — stern Swiss banker in a grey three-piece with briefcase). Never smiles, never speaks; aggressive or athletic trends in mundane places.
-- Design flow (`design-character` skill): bible draft → Higgsfield **character-sheet** workflow, 4K reference renders (Nano Banana Pro) → owner picks 1 of 3–4 looks → saved as a Higgsfield reference element (identity lock) → `refs.json`.
-- Final names, looks and voices are decided in that step, not in this spec.
+- **A — the Mascot: a cream long-haired miniature dachshund.** Stands upright (human dance motion only transfers cleanly onto an upright body — every winning animal in the scan was upright and dressed) with **one signature accessory** that never changes. The long body on short legs is the built-in joke; the cream long coat flows on every move. Audience: broad, cute, highly shareable, strongest on Instagram. Competition: AI dachshund dance clips are already a TikTok template — we win by being a named, recurring character with a locked identity, not one-off template clips. Also suits pet trends in the Genjutsu library (e.g. "Pet Zoom Montage").
+- **E — The Butler (deadpan funny dancer).** Stone-faced English butler in tails and white gloves who nails every trend perfectly and never breaks character — stately homes, London streets, carrying a silver tray. Comedy by contrast (the Jean Phil / Granny Spills mechanic), deliberately unlike Jean Phil (no houndstooth, no bob, no moustache). White gloves and coat-tails make motion read clearly. Never speaks in Slice 1. Audience: Gen Z comedy, strongest on TikTok. Can later "release his own tracks" and become the Artist (concept D) without a new account.
+- The two characters reach different audiences, so the head-to-head is informative.
+- Design flow (`design-character` skill): bible draft → Higgsfield **character-sheet** workflow, 4K reference renders (Nano Banana Pro) → owner picks 1 of 3–4 looks per character → saved as a Higgsfield reference element (identity lock) → `refs.json`.
+- Final names, the dachshund's signature accessory, and exact looks are decided in that step.
 
 ### 4.3 `studio` CLI (Python)
 
@@ -154,7 +156,7 @@ scheduled → posting → posted | post_failed (retried 3x, then surfaced in ter
 Runs as a **Claude Code cloud routine** on Sonnet at ~08:00 UK, repo checked out from GitHub. Steps:
 
 1. `studio plan today`; stop if nothing is due or the kill switch is on.
-2. **Trends**: one vidIQ outlier scan (rotating query per character niche), TikTok trending sounds (`tiktok_music_trending`, free), Higgsfield Genjutsu *Trending* + *New* galleries (free). Store via `studio trends add`.
+2. **Trends (every day)**: one vidIQ outlier scan (rotating query per character niche; 5 vidIQ credits, the plan's 150/month covers one a day), TikTok trending sounds (`tiktok_music_trending`, free), Higgsfield Genjutsu *Trending* + *New* galleries (free). Store via `studio trends add`. Daily because dance trends peak and fade within 1–2 weeks — a week-2 clip loses to a week-1 clip. The deeper Reddit/X/web read (`last30days`) runs weekly inside the review.
 3. **Pick** one motion per due clip: matches the character's playbook and the day's trends; never repeats a motion for that character within 30 days. **Explore/exploit**: ~70% from proven playbook patterns, ~30% new motions/hooks, so learning never stalls.
 4. **Generate**: `studio budget reserve` → `generate_video` with `hf_mult_motion_control`, character reference + driving video, 1080p → `jobs_wait` → `studio budget settle`.
 5. **QA**: `studio qa tech` (resolution ≥ 1080×1920, 23–60 fps, duration 7–15 s, bitrate floor, audio present) → extract 6 frames → Claude checks identity vs reference, hands, face, flicker, melting, extra limbs. Fail → one re-roll; second fail → dropped and logged.
@@ -291,7 +293,7 @@ Optional in Slice 2: Higgsfield **Virality Predictor** scores each clip before p
 
 **Slice 3 — new lanes**
 - B (Nana): talking clips (voice + lip-sync) alongside trend clips.
-- D (Artist): music generation + performance clips.
+- D (Artist): music generation + performance clips — preferably as The Butler releasing his own tracks (reuses his audience) rather than a new account.
 - Season-two series format for whichever character wins.
 
 ---
