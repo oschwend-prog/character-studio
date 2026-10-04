@@ -23,6 +23,9 @@ Gold chain (hip-hop) · shades (summer / "cool" trends) · DJ headphones (party,
 Lowercase, playful, confident, short. Never barks, never explains the joke. Emoji palette: 💙 🌭 ✨ 🫡.
 Examples: "tracksuit on. worries off. 💙" · "one blue eye, one gold eye, zero missed beats 🌭"
 
+## Music brief (owner's Spotify, 2026-10-04)
+Own AI beats in the owner's lane: **afro house / melodic house**, 118–124 BPM, organic percussion (congas, shakers), deep rolling bass, warm pads, hypnotic vocal chops (&ME, Bedouin, Badbwoy, Mano Le Tough, Samm). Named trends use the in-app trend sound instead.
+
 ## Brand
 Colours: baby blue `#A7C7E7`, cream `#F3E5C8`, gold `#C9A227`. Hook-text font: a rounded heavy sans (e.g. Fredoka Bold), white with soft shadow.
 

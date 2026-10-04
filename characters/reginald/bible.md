@@ -25,6 +25,9 @@ Grand stately-home drawing room (master), grand hall staircase, wine cellar, kit
 Formal, dry, British, full sentences, never mentions dancing directly. Emoji palette: 🎩 🫖 🕯️.
 Examples: "The household is unaware. 🎩" · "Breakfast will be served at eight. As usual." · "Kindly do not inform the Duchess."
 
+## Music brief (owner's Spotify, 2026-10-04)
+Drops use the owner's **afro house / melodic house** lane (118–124 BPM, organic percussion, deep bass). Premise setups (R1) use spy/tension music before the drop. Named trends use the in-app trend sound.
+
 ## Brand
 Colours: racing green `#0B3D2E`, gold `#C9A227`, ivory `#F6F1E7`. Hook-text font: a classic serif in small caps (e.g. Playfair Display SC), ivory on a thin dark band.
 
