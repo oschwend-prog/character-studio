@@ -18,6 +18,7 @@ import typer
 
 from studio.config import load
 from studio.pgstore import PostgresStore
+from studio.storage import Storage, SupabaseStorage
 from studio.store import Store
 
 EXIT_USAGE = 2
@@ -38,6 +39,22 @@ def open_store() -> Store:
             "cs-database-url) or export DATABASE_URL."
         )
     return PostgresStore(url)
+
+
+def open_storage() -> Storage:
+    """Supabase Storage, or a clear error + exit 2 when ``SUPABASE_URL`` / ``SUPABASE_SERVICE_KEY`` is unset.
+
+    The error names the variables, never their values (the service key is a secret).
+    """
+    settings = load()
+    url, key = settings.supabase_url, settings.supabase_service_key
+    if not url or not key:
+        missing = [n for n, v in (("SUPABASE_URL", url), ("SUPABASE_SERVICE_KEY", key)) if not v]
+        fail(
+            f"{' and '.join(missing)} not set. Run through bin/studio (it reads the Keychain items "
+            "cs-supabase-url and cs-supabase-service-key) or export them."
+        )
+    return SupabaseStorage(url, key)
 
 
 def _json_default(value: Any) -> Any:
