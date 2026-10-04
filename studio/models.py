@@ -242,7 +242,7 @@ class Favorite:
 class LedgerEntry:
     id: str | None = None
     clip_id: str
-    month: str  # 'YYYY-MM' (London month of the entry)
+    month: str  # 'YYYY-MM' (London month; a settle/release carries the month of its reservation)
     kind: LedgerKind
     credits: int
     created_at: datetime | None = None
