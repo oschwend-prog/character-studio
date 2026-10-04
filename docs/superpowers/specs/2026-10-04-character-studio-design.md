@@ -177,8 +177,11 @@ Hard limits per run: maximum clips = the day's plan; maximum one re-roll per cli
 
 Posting through an API means the sound must be in the file. TikTok's trending sounds cannot be attached by API.
 
-- **Default (fully automatic):** a royalty-free / licensed track matched to the motion's beat, mixed at −14 LUFS.
-- **Slice 1 experiment:** a few clips go to the owner's **TikTok drafts** instead; the owner adds the trending sound in the app (~30 s each). The weekly review compares the two arms. The data decides whether trending sounds justify the manual step.
+- **Default (fully automatic): original AI-generated music we own**, in the style of the owner's Spotify playlist (owner decision 2026-10-04). The synthetic driving video already carries its own AI beat (Seedance `generate_audio`); otherwise a dedicated AI track. Mixed at −14 LUFS. Never muted, never struck.
+- **Owner's songs, legally (manual arm):** the clip goes to the owner's **TikTok drafts** / Instagram; the owner attaches the song from the platform's own licensed music library (~30 s each). The daily run suggests a song from the owner's playlist that fits the clip's tempo and vibe. The same arm covers trending sounds.
+- **Never** extract audio from Spotify (DRM + Spotify terms) and never bake a commercial song into an uploaded file (muting / copyright strikes).
+- **Accounts stay Creator, not Business:** TikTok and Instagram Business accounts only get a reduced commercial music library.
+- The weekly review compares the arms; the data decides whether real songs justify the manual step.
 
 ### 4.6 Terminal (Vite + React on Vercel, Supabase magic-link auth, owner only)
 
