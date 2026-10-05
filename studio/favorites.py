@@ -33,6 +33,19 @@ and leaves the status ``new`` so it is re-checked when the capability lands. ``a
 list with a bad item), and a malformed one that is stored anyway holds the pick (``_needs``) rather than
 approving it or breaking ``fav list``.
 
+**The pick card** (owner decisions 2026-10-05) rides in ``proposal`` (no migration; the terminal reads it through
+``v_picks``, migration 0008): ``tier`` (``iconic`` "Broke the internet", ``viral_now`` "Viral now", ``rising``
+"Up and coming", ``gallery`` "Ready to drop in"), ``theme`` (which of the character's scan themes it matched),
+``posted_at`` (an ISO date or time, from the tool result: what the tier rule reads), ``thumbnail_url`` and
+``preview_url`` (https URLs a tool already returned: vidIQ's thumbnail, a Genjutsu preset's thumbnail and
+preview, ``https://i.ytimg.com/vi/<id>/hqdefault.jpg`` for a YouTube clip; never fetched or rehosted here) and
+what the owner says in the Make-it sheet (``owner_props``, ``owner_music``). ``add_pick`` / ``mark_favorite``
+refuse a malformed one (``validate_card``). A pick with no ``tier`` gets one derived by ``default_tier`` (the
+same rule as the terminal's ``defaultTier``): a Genjutsu gallery clip is ``gallery``; an outlier of 100 or more
+posted within 14 days is ``viral_now``; posted within 4 days with an outlier of 5 or more is ``rising``; older
+than 90 days is ``iconic``; anything else ``viral_now``. ``fav list`` prints ``tier``, ``tier_label`` and
+``tier_derived`` next to the stored proposal.
+
 CLI (``studio fav ...``) prints JSON on stdout. Exit codes: 0 ok, 2 anything the caller must fix,
 4 ``fav decide`` found the pick needs an analyst decision (JSON on stdout says so).
 """
@@ -43,6 +56,8 @@ import dataclasses
 import json
 import math
 import re
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal, cast, get_args
 from urllib.parse import urlsplit
@@ -50,7 +65,8 @@ from urllib.parse import urlsplit
 import typer
 
 from studio.cli_support import emit, fail, open_store, text_option
-from studio.models import Favorite, FavoriteOrigin, FavoriteStatus
+from studio.config import now_london
+from studio.models import MUSIC_ARMS, Favorite, FavoriteOrigin, FavoriteStatus
 from studio.store import Store
 
 Decision = Literal["approve", "skip", "hold"]
@@ -136,6 +152,27 @@ def parse_video_url(url: str) -> tuple[str, str]:
     raise ValueError(f"not a supported video URL: expected {_FULL_URL_HELP}, got {raw!r}")
 
 
+# ---- Genjutsu gallery picks ---------------------------------------------------------------
+
+GALLERY_PLATFORM = "higgsfield"
+_PRESET_ID = re.compile(r"[\w.\-]{1,80}")
+
+
+def gallery_key(proposal: Mapping[str, Any], url: str | None) -> str:
+    """The key of a Higgsfield Genjutsu gallery pick: ``higgsfield-preset:<preset id>``.
+
+    A gallery clip has no TikTok / Instagram / YouTube page, so its ``proposal['preset_id']`` is its identity (one
+    preset is one pick, deduped like a URL). A made-up URL is refused: the key is derived, never given.
+    """
+    preset = proposal.get("preset_id")
+    if not isinstance(preset, str) or not _PRESET_ID.fullmatch(preset.strip()):
+        raise ValueError(f"a gallery pick needs proposal.preset_id (letters, digits, - _ .), got {preset!r}")
+    key = f"higgsfield-preset:{preset.strip()}"
+    if url and url != key:
+        raise ValueError(f"a gallery pick is keyed by its preset ({key}), not by a URL: got {url!r:.60}")
+    return key
+
+
 # ---- helpers ---------------------------------------------------------------------------
 
 
@@ -183,6 +220,115 @@ def validate_needs(proposal: dict[str, Any]) -> None:
     items = [needs] if isinstance(needs, str) else needs
     if not isinstance(items, (list, tuple)) or not all(isinstance(n, str) and n in HOLD_NEEDS for n in items):
         raise ValueError(f"proposal.needs must be one of or a list of {{{allowed}}}, got {needs!r}")
+
+
+# ---- the pick card: tier, theme, thumbnails, owner choices -----------------------------------------------
+
+TIERS = ("iconic", "viral_now", "rising", "gallery")  # the order the terminal groups them in
+TIER_LABELS = {
+    "iconic": "Broke the internet",
+    "viral_now": "Viral now",
+    "rising": "Up and coming",
+    "gallery": "Ready to drop in",
+}
+VIRAL_NOW_MIN_OUTLIER = 100.0
+VIRAL_NOW_MAX_AGE_DAYS = 14.0
+RISING_MIN_OUTLIER = 5.0
+RISING_MAX_AGE_DAYS = 4.0
+ICONIC_MIN_AGE_DAYS = 90.0  # strictly older than this
+THEME_MAX_CHARS = 60
+URL_MAX_CHARS = 2048
+PREVIEW_SUFFIXES = (".mp4", ".webm", ".mov", ".m4v")
+OWNER_PROPS_MAX = 3
+OWNER_PROP_MAX_CHARS = 40
+
+
+def is_gallery(proposal: Mapping[str, Any]) -> bool:
+    """A Higgsfield Genjutsu gallery clip: its source kind or a preset id says so."""
+    preset = proposal.get("preset_id")
+    return proposal.get("source_kind") == "higgsfield_library" or (isinstance(preset, str) and bool(preset.strip()))
+
+
+def _moment(raw: Any) -> datetime | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        moment = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        return None
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def posted_age_days(proposal: Mapping[str, Any], now: datetime) -> float | None:
+    """Days since the video was posted: ``proposal['posted_at']`` (ISO), else the scan's ``age_days``; None if unknown."""
+    if (moment := _moment(proposal.get("posted_at"))) is not None:
+        return (now - moment).total_seconds() / 86400
+    age = proposal.get("age_days")
+    if isinstance(age, (int, float)) and not isinstance(age, bool) and math.isfinite(age) and age >= 0:
+        return float(age)
+    return None
+
+
+def default_tier(proposal: Mapping[str, Any], outlier_x: float | None, now: datetime) -> str:
+    """The tier of a pick the analyst did not tier (mirrored by ``defaultTier`` in terminal/src/lib/rules.ts).
+
+    In this order: a gallery clip is ``gallery``; ``outlier_x >= 100`` and posted <= 14 days ago is ``viral_now``;
+    posted <= 4 days ago with ``outlier_x >= 5`` is ``rising``; posted > 90 days ago is ``iconic``; else ``viral_now``.
+    """
+    if is_gallery(proposal):
+        return "gallery"
+    age = posted_age_days(proposal, now)
+    x = outlier_x if isinstance(outlier_x, (int, float)) and math.isfinite(outlier_x) else None
+    if age is not None and x is not None:
+        if x >= VIRAL_NOW_MIN_OUTLIER and age <= VIRAL_NOW_MAX_AGE_DAYS:
+            return "viral_now"
+        if x >= RISING_MIN_OUTLIER and age <= RISING_MAX_AGE_DAYS:
+            return "rising"
+    if age is not None and age > ICONIC_MIN_AGE_DAYS:
+        return "iconic"
+    return "viral_now"
+
+
+def _https_url(value: Any, key: str, suffixes: tuple[str, ...] | None = None) -> None:
+    if not isinstance(value, str) or not value or len(value) > URL_MAX_CHARS or re.search(r"\s", value):
+        raise ValueError(f"proposal.{key} must be an https URL (no spaces, at most {URL_MAX_CHARS} characters), got {value!r:.80}")
+    parts = urlsplit(value)
+    if parts.scheme != "https" or not parts.hostname:
+        raise ValueError(f"proposal.{key} must be an https URL, got {value!r:.80}")
+    if suffixes is not None and not parts.path.lower().endswith(suffixes):
+        raise ValueError(f"proposal.{key} must be an https video URL ending {'/'.join(suffixes)}, got {value!r:.80}")
+
+
+def validate_card(proposal: Mapping[str, Any]) -> None:
+    """Refuse a malformed pick-card field of ``proposal`` (see the module doc). Absent and ``None`` are fine.
+
+    The URLs are only ever stored, never fetched: they must be the https URL a tool returned.
+    """
+    if (tier := proposal.get("tier")) is not None and tier not in TIERS:
+        raise ValueError(f"proposal.tier must be one of {', '.join(TIERS)}, got {tier!r}")
+    if (theme := proposal.get("theme")) is not None and not (
+        isinstance(theme, str) and 0 < len(theme.strip()) <= THEME_MAX_CHARS
+    ):
+        raise ValueError(f"proposal.theme must be a short label (1-{THEME_MAX_CHARS} characters), got {theme!r:.80}")
+    if (raw := proposal.get("posted_at")) is not None and _moment(raw) is None:
+        raise ValueError(f"proposal.posted_at must be an ISO date or time (2026-10-01), got {raw!r:.40}")
+    if (url := proposal.get("thumbnail_url")) is not None:
+        _https_url(url, "thumbnail_url")
+    if (url := proposal.get("preview_url")) is not None:
+        _https_url(url, "preview_url", PREVIEW_SUFFIXES)
+    if (music := proposal.get("owner_music")) is not None and music not in MUSIC_ARMS:
+        raise ValueError(f"proposal.owner_music must be one of {', '.join(MUSIC_ARMS)}, got {music!r}")
+    if (props := proposal.get("owner_props")) is not None:
+        ok = (
+            isinstance(props, list)
+            and len(props) <= OWNER_PROPS_MAX
+            and all(isinstance(p, str) and 0 < len(p.strip()) <= OWNER_PROP_MAX_CHARS for p in props)
+        )
+        if not ok:
+            raise ValueError(
+                f"proposal.owner_props must be a list of at most {OWNER_PROPS_MAX} items of 1-{OWNER_PROP_MAX_CHARS} "
+                f"characters, got {props!r:.80}"
+            )
 
 
 # ---- scoring ---------------------------------------------------------------------------
@@ -271,12 +417,16 @@ def _add_pick(
 ) -> tuple[Favorite, bool]:
     """``(favourite, created)``: ``created`` is False when the URL was already in the list."""
     _one_of(origin, get_args(FavoriteOrigin), "origin")
-    found_platform, canonical = parse_video_url(url)
-    if platform != found_platform:
-        raise ValueError(f"platform {platform!r} does not match the URL ({found_platform})")
+    if platform == GALLERY_PLATFORM:
+        found_platform, canonical = GALLERY_PLATFORM, gallery_key(proposal, url)
+    else:
+        found_platform, canonical = parse_video_url(url)
+        if platform != found_platform:
+            raise ValueError(f"platform {platform!r} does not match the URL ({found_platform})")
     if character_slug is not None:  # None = not matched to a seeded character yet
         _require_character(store, character_slug)
     validate_needs(proposal)
+    validate_card(proposal)
     scores = score_pick(outlier_x, views, **judged)
     existing = store.list_favorites(url=canonical)
     if existing:
@@ -468,7 +618,7 @@ def seen_ids(store: Store, limit: int) -> list[str]:
     rows = store.list_favorites()
     rows.sort(key=lambda f: f.created_at.timestamp() if f.created_at else 0.0, reverse=True)
     # one video can be two rows (the terminal's "Both" files a sibling for the other character): name it once
-    ids = list(dict.fromkeys(content_id(f.url) for f in rows))
+    ids = list(dict.fromkeys(content_id(f.url) for f in rows if f.platform != GALLERY_PLATFORM))  # no platform id to exclude
     return ids[:limit]
 
 
@@ -485,6 +635,7 @@ def mark_favorite(store: Store, id: str, status: str, **fields: Any) -> Favorite
         _require_character(store, fields["character_slug"])
     if fields.get("proposal") is not None:
         validate_needs(fields["proposal"])  # the same door as add_pick: needs can never be written malformed
+        validate_card(fields["proposal"])
     if status in PRODUCTION_STATUSES:
         f = store.get_favorite(id)
         if f is None:
@@ -509,6 +660,9 @@ def _fav_json(f: Favorite, **extra: Any) -> dict[str, Any]:
     out = dataclasses.asdict(f)
     if f.status == "new":
         out["auto_decision"] = auto_decision(f)
+    stored = f.proposal.get("tier")
+    tier = stored if stored in TIERS else default_tier(f.proposal, f.outlier_x, now_london())
+    out.update(tier=tier, tier_label=TIER_LABELS[tier], tier_derived=stored not in TIERS)
     return {**out, **extra}
 
 
@@ -543,7 +697,7 @@ def _from_file_or_flag(proposal: dict[str, Any], key: str, flag: str | None) -> 
 
 @app.command("pick")
 def pick_command(
-    platform: Annotated[str, typer.Option(help="tiktok | instagram | youtube.")],
+    platform: Annotated[str, typer.Option(help="tiktok | instagram | youtube | higgsfield (a Genjutsu gallery clip: proposal.preset_id).")],
     views: Annotated[int, typer.Option(min=0)],
     outlier_x: Annotated[float, typer.Option(min=0, help="Views divided by the creator's median.")],
     character: Annotated[str, typer.Option(help="Matched character slug.")],
@@ -570,7 +724,7 @@ def pick_command(
     ] = None,
     origin: Annotated[str, typer.Option(help="scan (default) or owner.")] = "scan",
 ) -> None:
-    """File a scored Viral Pick (status new). A URL already in the list is returned as is."""
+    """File a scored Viral Pick (status new). A URL (or gallery preset) already in the list is returned as is."""
     proposal = text_option(proposal, proposal_file, "proposal") or "{}"
     try:
         proposal_obj = json.loads(proposal)
@@ -581,12 +735,12 @@ def pick_command(
     proposal_obj = dict(proposal_obj)
     url = _from_file_or_flag(proposal_obj, "url", url)
     creator = _from_file_or_flag(proposal_obj, "creator", creator)
-    if url is None:
+    if url is None and platform != GALLERY_PLATFORM:  # a gallery clip is keyed by its preset_id instead
         fail('a pick needs its URL: pass --url or put "url" in the --proposal-file JSON')
     store = open_store()
     try:
         f, created = _add_pick(
-            store, url, platform, creator, views, outlier_x, character, proposal_obj,
+            store, url or "", platform, creator, views, outlier_x, character, proposal_obj,
             cast(FavoriteOrigin, origin),
             {"freshness": freshness, "fit": fit, "feasibility": feasibility, "saturation": saturation},
         )
