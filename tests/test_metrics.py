@@ -63,6 +63,11 @@ def test_outlier_x_the_16th_from_last_is_outside_the_window():
     assert outlier_x(3000, priors) == 3.0
 
 
+def test_outlier_x_the_15th_from_last_is_inside_the_window():
+    # 8 x 100 and 7 x 1000: median 100; dropping the 15th would give 550
+    assert outlier_x(300, [100] * 8 + [1000] * 7) == 3.0
+
+
 def test_outlier_x_is_a_median_not_a_mean():
     assert outlier_x(300, [100, 100, 1000]) == 3.0
 
@@ -232,28 +237,104 @@ def test_pull_covers_the_four_windows(rig, age, window):
     assert len(rig.snaps(post)) == 1
 
 
+MIN = timedelta(minutes=1)
+
+
 @pytest.mark.parametrize(
-    ("age", "due"),
+    ("age", "window"),
     [
-        (45 * timedelta(minutes=1), True),    # 1 h - 15 min, inclusive
-        (44 * timedelta(minutes=1), False),
-        (75 * timedelta(minutes=1), True),    # 1 h + 15 min, inclusive
-        (76 * timedelta(minutes=1), False),
-        (3 * H, False),
-        (23 * H + 45 * timedelta(minutes=1), True),
-        (24 * H + 16 * timedelta(minutes=1), False),
-        (5 * D, False),
-        (7 * D + 15 * timedelta(minutes=1), True),
-        (7 * D + 16 * timedelta(minutes=1), False),
-        (30 * D, False),
-        (timedelta(minutes=5), False),        # just posted
+        (5 * MIN, None),                   # just posted
+        (59 * MIN, None),                  # a minute short of the first window
+        (1 * H, "1h"),                     # a window starts exactly at its age
+        (3 * H, "1h"),                     # ... and stays open until the next one starts
+        (24 * H - MIN, "1h"),
+        (24 * H, "24h"),
+        (72 * H - MIN, "24h"),
+        (72 * H, "72h"),
+        (5 * D, "72h"),
+        (7 * D - MIN, "72h"),
+        (7 * D, "7d"),
+        (7 * D + 5 * H, "7d"),             # catch-up: late is still in time
+        (30 * D, "7d"),                    # the 7 d window has no upper bound
     ],
 )
-def test_pull_window_edges_are_plus_minus_15_minutes(rig, age, due):
+def test_pull_windows_start_at_their_age_and_have_no_upper_bound(rig, age, window):
     rig.post(age=age)
     fake = FakePostiz(default=analytics(views=1))
-    pull(rig.store, fake, NOW)
-    assert bool(fake.calls) is due
+    out = pull(rig.store, fake, NOW)
+    assert [r["window"] for r in out["pulled"]] == ([window] if window else [])
+    assert len(fake.calls) == (1 if window else 0)
+
+
+@pytest.mark.parametrize(
+    ("age", "window"),
+    [(-1 * H, None), (59 * MIN, None), (1 * H, "1h"), (23 * H, "1h"), (24 * H, "24h"),
+     (71 * H, "24h"), (72 * H, "72h"), (7 * D - MIN, "72h"), (7 * D, "7d"), (400 * D, "7d")],
+)  # fmt: skip
+def test_every_age_falls_in_at_most_one_window(age, window):
+    assert metrics.window_at(age) == window
+
+
+def test_a_snapshot_belongs_to_the_window_its_own_age_falls_in(rig):
+    post = rig.post(age=10 * D)
+    at = post.claimed_at
+    for age in (30 * MIN, 1 * H, 25 * H, 80 * H, 7 * D, 9 * D):
+        rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=at + age, views=1))
+    counts = {w: len(metrics._snapshots_in_window(rig.store, post, w)) for w, _ in metrics.WINDOWS}
+    # the 30-minute snapshot is younger than the first window and belongs to none
+    assert counts == {"1h": 1, "24h": 1, "72h": 1, "7d": 2}
+
+
+def test_a_pull_at_day_7_plus_5h_writes_the_7d_snapshot_and_outlier_x(rig):
+    clip, post, fake = seven_day_rig(rig, age=7 * D + 5 * H)
+    out = pull(rig.store, fake, NOW)
+    assert out["pulled"] == [{"post_id": post.id, "window": "7d"}]
+    assert rig.snaps(post)[0].views == 600
+    assert rig.features(clip)["outlier_x"] == 3.0
+
+
+def test_a_6_hourly_job_never_loses_the_1h_window(rig):
+    posted = datetime(2026, 10, 20, 12, 30, tzinfo=timezone.utc)
+    post = rig.post(age=timedelta(0), now=posted)
+    fake = FakePostiz(default=analytics(views=5))
+    # the job runs at 00:00, 06:00, 12:00 and 18:00 for ten days; the first run after 12:30 is 18:00
+    for k in range(0, 10 * 4):
+        t = datetime(2026, 10, 20, 0, 0, tzinfo=timezone.utc) + 6 * H * k
+        if t >= posted:
+            pull(rig.store, fake, t)
+    ages = [s.captured_at - posted for s in rig.snaps(post)]
+    assert ages[0] == 5 * H + 30 * MIN  # the first pull, 5.5 h after posting, is the 1 h window
+    assert [metrics.window_at(a) for a in ages] == ["1h", "24h", "72h", "7d"]
+    assert len(fake.calls) == 4
+
+
+def test_the_first_pull_at_6h_writes_the_1h_window(rig):
+    post = rig.post(age=6 * H)
+    fake = FakePostiz(default=analytics(views=5))
+    out = pull(rig.store, fake, NOW)
+    assert out["pulled"] == [{"post_id": post.id, "window": "1h"}]
+    assert len(rig.snaps(post)) == 1
+
+
+def test_a_post_first_met_late_pulls_only_the_current_window(rig):
+    """At 30 h the 1 h window can no longer be honest: one 24 h snapshot, and nothing more, ever."""
+    post = rig.post(age=30 * H)
+    fake = FakePostiz(default=analytics(views=5))
+    first = pull(rig.store, fake, NOW)
+    assert first["pulled"] == [{"post_id": post.id, "window": "24h"}]
+    for k in range(1, 12):
+        pull(rig.store, fake, NOW + k * H)
+    assert len(fake.calls) == 1 and len(rig.snaps(post)) == 1
+
+
+def test_a_window_is_never_written_twice(rig):
+    post = rig.post(age=1 * H)
+    fake = FakePostiz(default=analytics(views=5))
+    for k in range(0, 9 * 24 * 60 // 37):  # an irregular 37-minute job over nine days
+        pull(rig.store, fake, NOW + k * 37 * MIN)
+    windows = [metrics.window_at(s.captured_at - post.claimed_at) for s in rig.snaps(post)]
+    assert sorted(windows) == ["1h", "24h", "72h", "7d"]
+    assert len(fake.calls) == 4
 
 
 def test_pull_is_idempotent_per_post_and_window(rig):
@@ -454,10 +535,12 @@ def test_pull_works_with_a_real_subprocess(rig, tmp_path):
 # ---- pull: outlier_x at 7 days ---------------------------------------------------------------------
 
 
-def seven_day_rig(rig: Rig, *, handle="@biscuit.tt", priors=(100, 200, 300), views=600, **features):
+def seven_day_rig(
+    rig: Rig, *, handle="@biscuit.tt", priors=(100, 200, 300), views=600, age=7 * D, **features
+):
     clip = rig.clip(**features)
-    post = rig.post(handle, age=7 * D, clip=clip)
-    rig.history(handle, list(priors), target_at=NOW - 7 * D)
+    post = rig.post(handle, age=age, clip=clip)
+    rig.history(handle, list(priors), target_at=NOW - age)
     fake = FakePostiz({post.platform_post_id: analytics(views=views)})
     return clip, post, fake
 
@@ -496,7 +579,7 @@ def test_priors_are_this_accounts_earlier_posts_only(rig):
     clip, post, fake = seven_day_rig(rig, priors=(100, 200, 300))
     # another account's history (huge) and this account's later post (huge) must not count
     rig.history("@reginald.tt", [10_000] * 5, target_at=NOW - 7 * D)
-    later = rig.post("@biscuit.tt", age=2 * D)
+    later = rig.post("@biscuit.tt", age=2 * D, platform_post_id=None)
     rig.seven_day_views(later, 50_000)
     pull(rig.store, fake, NOW)
     assert rig.features(clip)["outlier_x"] == 3.0
@@ -510,16 +593,16 @@ def test_a_prior_without_seven_day_views_is_left_out_not_counted_as_zero(rig):
     # with a fourth usable prior the None is simply skipped: median of [100, 300, 200] = 200
     rig2 = Rig()
     clip2, _, fake2 = seven_day_rig(rig2, priors=(100, None, 300, 200))
-    rig2.post("@biscuit.tt", age=20 * D)  # an old post with no snapshot at all: also skipped
+    rig2.post("@biscuit.tt", age=20 * D, platform_post_id=None)  # no snapshot at all: also skipped
     pull(rig2.store, fake2, NOW)
     assert rig2.features(clip2)["outlier_x"] == 3.0
 
 
-def test_a_priors_views_are_read_at_its_seven_day_mark_not_earlier(rig):
+def test_a_priors_views_are_its_first_reading_from_day_7_not_an_earlier_or_later_one(rig):
     clip = rig.clip()
     post = rig.post(age=7 * D, clip=clip)
     posts = rig.history("@biscuit.tt", [100, 200, 300], target_at=NOW - 7 * D)
-    for p in posts:  # readings at 24 h and at day 9 are not the 7-day figure
+    for p in posts:  # a reading at 24 h is too early and a reading at day 9 comes after the first
         for age in (24 * H, 9 * D):
             rig.store.add_snapshot(
                 Snapshot(post_id=p.id, captured_at=p.claimed_at + age, views=9_999 if age > D else 1)
@@ -569,8 +652,8 @@ def test_the_clip_value_is_the_max_even_when_the_best_account_has_no_baseline(ri
 
 def test_a_clip_is_refreshed_when_the_seven_day_snapshot_already_exists(rig):
     """Crash recovery: the snapshot was written but the clip update was not."""
-    clip, post, fake = seven_day_rig(rig)
-    rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=NOW - timedelta(minutes=5), views=600))
+    clip, post, fake = seven_day_rig(rig, age=7 * D + 1 * H)
+    rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=NOW - 10 * MIN, views=600))
     pull(rig.store, fake, NOW)
     assert fake.calls == []  # idempotent: nothing is fetched again
     assert rig.features(clip)["outlier_x"] == 3.0
@@ -586,22 +669,72 @@ def test_a_rerun_does_not_change_or_duplicate_anything(rig):
     assert len(fake.calls) == 1
 
 
-def test_views_at_7d_is_the_latest_reading_in_the_window(rig):
-    post = rig.post(age=7 * D)
-    mark = post.claimed_at + 7 * D
-    for offset, views in [(-10, 500), (5, 600), (10, None), (-14, 100)]:
-        rig.store.add_snapshot(
-            Snapshot(post_id=post.id, captured_at=mark + timedelta(minutes=offset), views=views)
-        )
-    assert metrics.views_at_7d(rig.store, post) == 600  # the newest *reading*; None is not a reading
+def test_views_at_7d_is_the_first_reading_from_day_7_on(rig):
+    post = rig.post(age=8 * D)
+    at = post.claimed_at
+    for age, views in [(7 * D - 10 * MIN, 500), (7 * D + 5 * MIN, None), (7 * D + 30 * MIN, 600),
+                       (7 * D + 3 * H, 700), (9 * D, 800)]:  # fmt: skip
+        rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=at + age, views=views))
+    # 500 is too early, None is not a reading, 600 is the first one: later readings never move it
+    assert metrics.views_at_7d(rig.store, post) == 600
 
 
-def test_views_at_7d_ignores_snapshots_outside_the_window(rig):
-    post = rig.post(age=7 * D)
-    mark = post.claimed_at + 7 * D
-    for offset in (-16 * timedelta(minutes=1), 16 * timedelta(minutes=1), 2 * D):
-        rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=mark + offset, views=9_999))
+def test_views_at_7d_counts_a_late_reading_and_ignores_early_ones(rig):
+    post = rig.post(age=12 * D)
+    at = post.claimed_at
+    for age in (1 * H, 24 * H, 3 * D, 7 * D - MIN):
+        rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=at + age, views=9_999))
     assert metrics.views_at_7d(rig.store, post) is None
+    rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=at + 9 * D, views=1_234))
+    assert metrics.views_at_7d(rig.store, post) == 1_234
+
+
+def test_a_late_seven_day_reading_serves_as_a_prior(rig):
+    clip = rig.clip()
+    post = rig.post(age=7 * D, clip=clip)
+    priors = rig.history("@biscuit.tt", [100, 200], target_at=NOW - 7 * D)
+    late = rig.post("@biscuit.tt", age=7 * D + 1 * D + 2 * H)  # between the others in time, read late
+    rig.store.add_snapshot(Snapshot(post_id=late.id, captured_at=late.claimed_at + 9 * D, views=300))
+    assert [p.id for p in priors] and late.claimed_at < post.claimed_at
+    pull(rig.store, FakePostiz({post.platform_post_id: analytics(views=600)}), NOW)
+    assert rig.features(clip)["outlier_x"] == 3.0
+
+
+def test_an_old_clip_without_outlier_x_gets_it_from_an_existing_figure(rig):
+    """A figure that exists (say, from an ingest long ago) fills a clip that has no outlier_x yet."""
+    clip = rig.clip(hook_type="x")
+    post = rig.post(age=10 * D, clip=clip)
+    rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=post.claimed_at + 8 * D, views=600))
+    rig.history("@biscuit.tt", [100, 200, 300], target_at=NOW - 10 * D)
+    pull(rig.store, FakePostiz(), NOW)
+    assert rig.features(clip) == {"hook_type": "x", "outlier_x": 3.0}
+
+
+def test_a_later_accounts_seven_day_pull_raises_the_clip_value(rig):
+    clip = rig.clip()
+    tt = rig.post("@biscuit.tt", age=7 * D, clip=clip)
+    ig = rig.post("@biscuit.ig", age=7 * D, clip=clip)
+    rig.history("@biscuit.tt", [100, 200, 300], target_at=NOW - 7 * D)
+    rig.history("@biscuit.ig", [50, 100, 150], target_at=NOW - 7 * D)
+    # run 1: TikTok answers (400 / 200 = 2.0), Instagram has no provider id yet
+    first = pull(rig.store, FakePostiz({tt.platform_post_id: analytics(views=400),
+                                        ig.platform_post_id: {"missing": True}}), NOW)  # fmt: skip
+    assert rig.features(clip)["outlier_x"] == 2.0 and len(first["missing"]) == 1
+    # run 2, an hour later: Instagram answers (500 / 100 = 5.0) and the clip moves up to it
+    second = pull(rig.store, FakePostiz({ig.platform_post_id: analytics(views=500)}), NOW + 1 * H)
+    assert second["pulled"] == [{"post_id": ig.id, "window": "7d"}]
+    assert rig.features(clip)["outlier_x"] == 5.0
+    assert second["outlier_x"] == [{"clip_id": clip.id, "outlier_x": 5.0}]
+
+
+def test_refreshing_an_unchanged_clip_writes_nothing(rig, monkeypatch):
+    clip, post, fake = seven_day_rig(rig)
+    pull(rig.store, fake, NOW)
+    writes = []
+    real = rig.store.update_clip
+    monkeypatch.setattr(rig.store, "update_clip", lambda *a, **k: writes.append(a) or real(*a, **k))
+    assert metrics.refresh_clip_outlier_x(rig.store, clip.id) == 3.0
+    assert writes == []
 
 
 def test_a_rerun_does_not_rewrite_an_unchanged_clip(rig, monkeypatch):
@@ -726,6 +859,91 @@ def test_an_ingested_snapshot_feeds_the_seven_day_views(rig):
     ingest_ig_insights(rig.store, [ig_row(post, views=600)], now=NOW)
     pull(rig.store, FakePostiz(), NOW)
     assert rig.features(clip)["outlier_x"] == 3.0
+
+
+def test_ingest_refreshes_the_clip_when_it_brings_a_seven_day_figure(rig):
+    clip = rig.clip(hook_type="x")
+    ig = rig.post("@biscuit.ig", age=8 * D, clip=clip)
+    rig.history("@biscuit.ig", [100, 200, 300], target_at=NOW - 8 * D)
+    out = ingest_ig_insights(rig.store, [ig_row(ig, views=600)], now=ig.claimed_at + 7 * D + 2 * H)
+    assert rig.features(clip) == {"hook_type": "x", "outlier_x": 3.0}
+    assert out["outlier_x"] == [{"clip_id": clip.id, "outlier_x": 3.0}]
+
+
+def test_ingest_takes_the_clip_to_the_best_of_its_accounts(rig):
+    clip = rig.clip()
+    tt = rig.post("@biscuit.tt", age=8 * D, clip=clip)
+    ig = rig.post("@biscuit.ig", age=8 * D, clip=clip)
+    rig.history("@biscuit.tt", [100, 200, 300], target_at=NOW - 8 * D)
+    rig.history("@biscuit.ig", [100, 100, 100], target_at=NOW - 8 * D)
+    rig.store.add_snapshot(Snapshot(post_id=tt.id, captured_at=tt.claimed_at + 7 * D, views=400))
+    rig.store.update_clip(clip.id, features={"outlier_x": 2.0})
+    ingest_ig_insights(rig.store, [ig_row(ig, views=500)], now=ig.claimed_at + 7 * D + 1 * H)
+    assert rig.features(clip)["outlier_x"] == 5.0
+
+
+def test_ingest_of_an_early_reading_does_not_touch_the_clip(rig):
+    clip = rig.clip()
+    ig = rig.post("@biscuit.ig", age=2 * D, clip=clip)
+    out = ingest_ig_insights(rig.store, [ig_row(ig, views=600)], now=NOW)
+    assert "outlier_x" not in rig.features(clip) and out["outlier_x"] == []
+
+
+# ---- Postiz series aggregation -------------------------------------------------------------------
+
+SERIES = [
+    {
+        "label": "Views",
+        "data": [
+            {"total": "10", "date": "2026-10-19"},
+            {"total": "120", "date": "2026-10-20"},
+            {"total": "30", "date": "2026-10-18"},
+            {"total": "n/a", "date": "2026-10-21"},
+        ],
+    },
+    {"label": "Likes", "data": [{"total": "4", "date": "2026-10-20"}]},
+]
+
+
+def test_series_mode_is_an_explicit_named_constant_defaulting_to_latest():
+    assert metrics.POSTIZ_SERIES_MODE == "latest"
+
+
+def test_series_mode_latest_takes_the_newest_data_point(monkeypatch):
+    monkeypatch.setattr(metrics, "POSTIZ_SERIES_MODE", "latest")
+    assert metrics.parse_post_analytics(SERIES) == {"views": 120, "likes": 4}
+
+
+def test_series_mode_sum_adds_the_usable_data_points(monkeypatch):
+    monkeypatch.setattr(metrics, "POSTIZ_SERIES_MODE", "sum")
+    assert metrics.parse_post_analytics(SERIES) == {"views": 160, "likes": 4}
+
+
+@pytest.mark.parametrize("mode", ["latest", "sum"])
+def test_series_mode_with_nothing_usable_is_none(monkeypatch, mode):
+    monkeypatch.setattr(metrics, "POSTIZ_SERIES_MODE", mode)
+    payload = [{"label": "Views", "data": [{"total": "n/a", "date": "2026-10-20"}]}]
+    assert metrics.parse_post_analytics(payload) == {}
+
+
+def test_series_mode_reaches_the_snapshot(rig, monkeypatch):
+    post = rig.post(age=24 * H)
+    monkeypatch.setattr(metrics, "POSTIZ_SERIES_MODE", "sum")
+    pull(rig.store, FakePostiz({post.platform_post_id: SERIES}), NOW)
+    assert rig.snaps(post)[0].views == 160
+
+
+def test_an_unknown_series_mode_is_an_error_not_a_silent_default(monkeypatch):
+    monkeypatch.setattr(metrics, "POSTIZ_SERIES_MODE", "mean")
+    with pytest.raises(ValueError, match="POSTIZ_SERIES_MODE"):
+        metrics.parse_post_analytics(SERIES)
+
+
+def test_an_unknown_series_mode_is_reported_by_the_pull_not_swallowed(rig, monkeypatch):
+    post = rig.post(age=24 * H)
+    monkeypatch.setattr(metrics, "POSTIZ_SERIES_MODE", "mean")
+    out = pull(rig.store, FakePostiz({post.platform_post_id: SERIES}), NOW)
+    assert rig.snaps(post) == [] and "POSTIZ_SERIES_MODE" in out["errors"][0]["error"]
 
 
 # ---- CLI -----------------------------------------------------------------------------------------

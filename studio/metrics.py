@@ -1,26 +1,36 @@
 """Metrics: pull post analytics from Postiz, ingest vidIQ Instagram insights, compute ``outlier_x``.
 
-**Pull** (``studio metrics pull``, run every few minutes by the metrics workflow). For every post that
-is ``posted`` and has a Postiz id, a pull is due when the post's age is within 15 minutes of
-1 h / 24 h / 72 h / 7 d (``WINDOWS``). The post's age runs from ``claimed_at`` (the posts table has no
-``posted_at``; ``claimed_at`` is when ``publish_due`` claimed it, ``scheduled_for`` is the fallback).
-A pull runs ``postiz analytics:post <postiz-post-id> -d 7`` and writes one ``Snapshot`` with
-``captured_at = now``. **Idempotent per (post, window):** a window that already holds a snapshot of
-the post (from any source) is not pulled again, so a job that runs every 5 minutes writes one
-snapshot per window, not twelve. ``{"missing": true}`` (Postiz has the post but no provider id yet;
-``postiz posts:missing`` / ``posts:connect`` resolves it by hand) writes no snapshot, is logged and
-is listed under ``missing`` in the summary; the window stays open, so the next run asks again. A
-reply with none of the metrics we know writes nothing either (``empty``). A metric the platform did
-not report is ``None``, never 0, and the numbers are never guessed.
+**Pull** (``studio metrics pull``, run by the metrics workflow at whatever cadence it likes: every
+15 minutes or every 6 hours, a missed run loses nothing). For every post that is ``posted`` and has a
+Postiz id, the post's age (from ``claimed_at``; the posts table has no ``posted_at``, ``claimed_at`` is
+when ``publish_due`` claimed it, ``scheduled_for`` is the fallback) puts it in one **catch-up window**:
+the latest of 1 h / 24 h / 72 h / 7 d (``WINDOWS``, the window *starts*) whose start has passed. The
+windows tile a post's life (1 h = [1 h, 24 h), 24 h = [24 h, 72 h), 72 h = [72 h, 7 d), 7 d = [7 d, for
+ever)), and a snapshot belongs to the window its own age falls in, so every snapshot maps to exactly
+one window (a snapshot younger than 1 h belongs to none). A window is due when the post has reached it
+and holds no snapshot of it yet; a due window is pulled as soon as a run sees it, however late: the 7 d
+window has no upper bound. (A run that first meets a post at 30 h pulls the 24 h window; the 1 h window
+is gone for good, a snapshot taken at 30 h can only honestly be a 24 h one.) A pull runs
+``postiz analytics:post <postiz-post-id> -d 7`` and writes one ``Snapshot`` with ``captured_at = now``.
+**Idempotent per (post, window):** a window that already holds a snapshot of the post (from any
+source) is never pulled again, so a job that runs every 5 minutes writes one snapshot per window, not
+twelve. ``{"missing": true}`` (Postiz has the post but no provider id yet; ``postiz posts:missing`` /
+``posts:connect`` resolves it by hand) writes no snapshot, is logged and is listed under ``missing`` in
+the summary; the window stays due, so the next run asks again. A reply with none of the metrics we know
+writes nothing either (``empty``). A metric the platform did not report is ``None``, never 0, and the
+numbers are never guessed.
 
 **outlier_x** = the post's views at 7 days / the median of the account's last 15 earlier posts' 7-day
-views. A post's "7-day views" is the latest non-``None`` ``views`` among its snapshots inside the 7 d
-window, whoever wrote it (Postiz pull or vidIQ ingest). Posts without one are left out of the median,
-never counted as 0; fewer than 3 usable priors, or no views for this post, means ``None`` and nothing
-is written. The clip's ``features['outlier_x']`` is the max over its accounts' values (a clip has at
-most one post per account). It is recomputed from the stored snapshots whenever a post sits in its 7 d
-window, so a crash between the snapshot write and the clip write heals on the next run. The other
-keys of ``features`` are never touched.
+views. A post's "7-day views" is the FIRST snapshot taken at or after day 7 that has ``views``, whoever
+wrote it (Postiz pull or vidIQ ingest): first, so the figure never moves once it exists, and a late pull
+(day 7 + 5 h, or day 9) still counts. Posts without one are left out of the median, never counted as 0;
+fewer than 3 usable priors, or no views for this post, means ``None`` and nothing is written. The
+clip's ``features['outlier_x']`` is the max over its accounts' values (a clip has at most one post per
+account). It is (re)computed whenever a 7-day figure exists or changes: for every clip that has a
+post with a new 7 d snapshot (a pull or an ingest just wrote it) and for every clip aged 7 d or more
+that has no ``outlier_x`` yet, so a crash between the snapshot write and the clip write heals on the
+next run. A value, once written, is only recomputed when one of its posts gets a new 7 d snapshot. The
+other keys of ``features`` are never touched.
 
 **Instagram insights.** ``ingest_ig_insights(store, rows)`` takes the rows of vidIQ's
 ``instagram_owner_insights`` (the weekly-review skill fetches them; ``studio metrics ingest-ig`` feeds
@@ -31,7 +41,7 @@ trial flag, ...) are ignored: the snapshot table has no column for them. Nullabl
 nothing.
 
 CLI (``studio metrics ...``) prints JSON on stdout; exit 0 normally, exit 1 when a pull failed (the
-Action goes red; the next run inside the window tries again), exit 2 for anything the caller must fix
+Action goes red; the window stays due, so the next run tries again), exit 2 for anything the caller must fix
 (no ``DATABASE_URL``, ``POSTIZ_API_KEY`` or ``postiz`` binary, unreadable input).
 """
 
@@ -61,13 +71,14 @@ log = logging.getLogger("studio.metrics")
 
 # ---- pull windows ---------------------------------------------------------------------------------
 
+# Catch-up windows: each entry is the post age at which the window STARTS; a window ends where the
+# next one starts, and the last one never ends (see the module docstring).
 WINDOWS: tuple[tuple[str, timedelta], ...] = (
     ("1h", timedelta(hours=1)),
     ("24h", timedelta(hours=24)),
     ("72h", timedelta(hours=72)),
     ("7d", timedelta(days=7)),
 )
-TOLERANCE = timedelta(minutes=15)  # a pull is due when |age - window| <= this
 SEVEN_DAYS = dict(WINDOWS)["7d"]
 
 MIN_PRIORS = 3  # fewer non-None prior 7-day views than this: no baseline, outlier_x is None
@@ -91,6 +102,13 @@ POSTIZ_METRIC_LABELS: dict[str, tuple[str, ...]] = {
     "shares": ("shares",),
     "saves": ("saves",),
 }
+
+# How a metric's data points (one per day) combine into the snapshot value:
+#   "latest": the point with the newest date (the points are cumulative totals, as TikTok and Instagram
+#             report per-post counters),
+#   "sum":    the sum of all points (the points are per-day increments).
+# VERIFY at go-live (Task 16): cumulative totals vs per-day increments, on a real post of each platform.
+POSTIZ_SERIES_MODE = "latest"
 
 # ---- vidIQ ``instagram_owner_insights`` field mapping ---------------------------------------------
 # Key names tried per snapshot field, most preferred first. The tool reports "views/plays, shares,
@@ -146,16 +164,29 @@ def posted_at(post: Post) -> datetime:
     return post.claimed_at or post.scheduled_for
 
 
-def _snapshots_in_window(store: Store, post: Post, span: timedelta) -> list[Snapshot]:
-    centre = posted_at(post) + span
-    lo, hi = centre - TOLERANCE, centre + TOLERANCE
-    return [s for s in store.snapshots_for(post.id) if s.captured_at and lo <= s.captured_at <= hi]
+def window_at(age: timedelta) -> str | None:
+    """The window an age falls in: the latest whose start has passed; ``None`` before the first."""
+    found = None
+    for name, start in WINDOWS:
+        if age >= start:
+            found = name
+    return found
+
+
+def _snapshots_in_window(store: Store, post: Post, window: str) -> list[Snapshot]:
+    """The post's snapshots whose own age falls in ``window`` (oldest first)."""
+    at = posted_at(post)
+    return [
+        s for s in store.snapshots_for(post.id)
+        if s.captured_at and window_at(s.captured_at - at) == window
+    ]  # fmt: skip
 
 
 def views_at_7d(store: Store, post: Post) -> int | None:
-    """The latest non-``None`` ``views`` among the post's snapshots in its 7-day window, else ``None``."""
-    for snap in reversed(_snapshots_in_window(store, post, SEVEN_DAYS)):
-        if snap.views is not None:
+    """``views`` of the FIRST snapshot taken at or after day 7 that has any, else ``None``."""
+    at = posted_at(post)
+    for snap in sorted(store.snapshots_for(post.id), key=lambda s: s.captured_at):
+        if snap.views is not None and snap.captured_at - at >= SEVEN_DAYS:
             return snap.views
     return None
 
@@ -171,7 +202,33 @@ def post_outlier_x(store: Store, post: Post) -> float | None:
          if p.id != post.id and posted_at(p) < me),
         key=posted_at,
     )  # fmt: skip
-    return outlier_x(views, [views_at_7d(store, p) for p in earlier])
+    priors: list[int] = []  # newest first, until the last MAX_PRIORS usable ones are in hand
+    for p in reversed(earlier):
+        if (v := views_at_7d(store, p)) is not None:
+            priors.append(v)
+            if len(priors) == MAX_PRIORS:
+                break
+    return outlier_x(views, priors[::-1])
+
+
+def _refresh_clip(store: Store, clip_id: str) -> tuple[float | None, bool]:
+    """(the clip's outlier_x, whether it was written). ``(None, False)`` when no post has one yet."""
+    with store.transaction():
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            return None, False
+        values = [
+            x
+            for p in store.list_posts(clip_id=clip_id, status=PostStatus.posted)
+            if (x := post_outlier_x(store, p)) is not None
+        ]
+        if not values:
+            return None, False
+        best = max(values)
+        if clip.features.get("outlier_x") == best:
+            return best, False
+        store.update_clip(clip_id, features={**clip.features, "outlier_x": best})
+        return best, True
 
 
 def refresh_clip_outlier_x(store: Store, clip_id: str) -> float | None:
@@ -179,21 +236,7 @@ def refresh_clip_outlier_x(store: Store, clip_id: str) -> float | None:
 
     ``None`` (and nothing written) when no post has an ``outlier_x`` yet. Other feature keys are kept.
     """
-    with store.transaction():
-        clip = store.get_clip(clip_id)
-        if clip is None:
-            return None
-        values = [
-            x
-            for p in store.list_posts(clip_id=clip_id, status=PostStatus.posted)
-            if (x := post_outlier_x(store, p)) is not None
-        ]
-        if not values:
-            return None
-        best = max(values)
-        if clip.features.get("outlier_x") != best:
-            store.update_clip(clip_id, features={**clip.features, "outlier_x": best})
-        return best
+    return _refresh_clip(store, clip_id)[0]
 
 
 # ---- parsing --------------------------------------------------------------------------------------
@@ -218,19 +261,31 @@ def _count(value: Any) -> int | None:
     return int(n) if n is not None and n.is_integer() else None
 
 
-def _latest_total(data: Any) -> Any:
-    """The value of the newest data point of a Postiz metric (or the scalar itself)."""
+def _series_total(data: Any) -> Any:
+    """A Postiz metric's value: the scalar itself, or its data points combined per ``POSTIZ_SERIES_MODE``.
+
+    ``"latest"``: the total of the point with the newest date (ties and missing dates: the later one
+    in the list). ``"sum"``: the sum of every usable point. Points without a usable number are skipped;
+    ``None`` when none is usable. Any other mode is a ``ValueError`` (a typo must not pick one silently).
+    """
+    if POSTIZ_SERIES_MODE not in ("latest", "sum"):
+        raise ValueError(f"POSTIZ_SERIES_MODE must be 'latest' or 'sum', got {POSTIZ_SERIES_MODE!r}")
     if not isinstance(data, list):
         return data
-    best: Any = None
-    best_date = ""
+    points: list[tuple[str, float, Any]] = []
     for point in data:
         total, date = (point.get("total", point.get("value")), str(point.get("date") or "")) \
             if isinstance(point, dict) else (point, "")  # fmt: skip
-        if _number(total) is None:
-            continue
-        if best is None or date >= best_date:
-            best, best_date = total, date
+        if (n := _number(total)) is not None:
+            points.append((date, n, total))
+    if not points:
+        return None
+    if POSTIZ_SERIES_MODE == "sum":
+        return sum(n for _, n, _ in points)
+    best_date, _, best = points[0]
+    for date, _, total in points[1:]:
+        if date >= best_date:
+            best_date, best = date, total
     return best
 
 
@@ -255,7 +310,7 @@ def parse_post_analytics(payload: Any) -> dict[str, int | None]:
     out: dict[str, int | None] = {}
     for field, labels in POSTIZ_METRIC_LABELS.items():
         for label in labels:
-            if label in found and (n := _count(_latest_total(found[label]))) is not None:
+            if label in found and (n := _count(_series_total(found[label]))) is not None:
                 out[field] = n
                 break
     return out
@@ -287,18 +342,15 @@ def _fetch(postiz_run: Callable[..., Any], executable: str, postiz_post_id: str)
         raise AnalyticsError(f"postiz analytics:post printed no JSON: {_tail(proc)}") from None
 
 
-def _due(now: datetime, at: datetime, span: timedelta) -> bool:
-    return abs((now - at) - span) <= TOLERANCE
-
-
 def _pull_window(
     store: Store, postiz_run: Callable[..., Any], executable: str, post: Post, window: str,
-    span: timedelta, now: datetime, out: dict[str, Any],
-) -> None:  # fmt: skip
+    now: datetime, out: dict[str, Any],
+) -> bool:  # fmt: skip
+    """Pull ``window`` of ``post`` unless it holds a snapshot already. True when a snapshot was written."""
     where = {"post_id": post.id, "window": window}
-    if _snapshots_in_window(store, post, span):
+    if _snapshots_in_window(store, post, window):
         out["already_pulled"].append(where)
-        return
+        return False
     payload = _fetch(postiz_run, executable, post.platform_post_id)
     if isinstance(payload, dict) and payload.get("missing") is True:
         log.warning(
@@ -307,14 +359,15 @@ def _pull_window(
             post.id, post.platform_post_id, window,
         )  # fmt: skip
         out["missing"].append({**where, "platform_post_id": post.platform_post_id})
-        return
+        return False
     values = parse_post_analytics(payload)
     if not values:
         log.warning("analytics for post %s (%s) held no known metric", post.id, window)
         out["empty"].append(where)
-        return
+        return False
     store.add_snapshot(Snapshot(post_id=post.id, captured_at=now, **values))
     out["pulled"].append(where)
+    return True
 
 
 def pull(
@@ -333,30 +386,37 @@ def pull(
     out: dict[str, Any] = {
         "pulled": [], "already_pulled": [], "missing": [], "empty": [], "errors": [], "outlier_x": [],
     }  # fmt: skip
-    seven_day_clips: dict[str, None] = {}  # insertion-ordered set
+    fresh: dict[str, None] = {}  # clips whose post just got a 7 d snapshot (insertion-ordered set)
+    aged: dict[str, None] = {}  # clips with a post aged 7 d or more
 
     for post in store.list_posts(status=PostStatus.posted):
         if not post.platform_post_id:
             continue
-        at = posted_at(post)
-        for window, span in WINDOWS:
-            if not _due(now, at, span):
-                continue
-            try:
-                _pull_window(store, postiz_run, executable, post, window, span, now, out)
-            except Exception as e:  # noqa: BLE001 - one post must never stop the rest
-                out["errors"].append({"post_id": post.id, "window": window, "error": _short(e)})
-                continue
-            if window == "7d":
-                seven_day_clips[post.clip_id] = None
-
-    for clip_id in seven_day_clips:
+        window = window_at(now - posted_at(post))
+        if window is None:
+            continue
+        if window == "7d":
+            aged[post.clip_id] = None
         try:
-            value = refresh_clip_outlier_x(store, clip_id)
+            wrote = _pull_window(store, postiz_run, executable, post, window, now, out)
+        except Exception as e:  # noqa: BLE001 - one post must never stop the rest
+            out["errors"].append({"post_id": post.id, "window": window, "error": _short(e)})
+            continue
+        if wrote and window == "7d":
+            fresh[post.clip_id] = None
+
+    try:
+        unmeasured = {c.id for c in store.list_clips() if "outlier_x" not in c.features} if aged else set()
+    except Exception as e:  # noqa: BLE001
+        out["errors"].append({"error": _short(e)})
+        unmeasured = set()
+    for clip_id in [*fresh, *(c for c in aged if c in unmeasured and c not in fresh)]:
+        try:
+            value, written = _refresh_clip(store, clip_id)
         except Exception as e:  # noqa: BLE001
             out["errors"].append({"clip_id": clip_id, "error": _short(e)})
             continue
-        if value is not None:
+        if written:
             out["outlier_x"].append({"clip_id": clip_id, "outlier_x": value})
     return out
 
@@ -399,11 +459,15 @@ def ingest_ig_insights(
     A row matches on ``platform_post_id``. Unknown fields are ignored and nullable values stay
     ``None``. A row is not ingested when it matches no post (``unmatched``), holds no usable metric
     (``empty``) or repeats the post's latest snapshot (``unchanged``); ``skipped`` counts rows that
-    are not objects or carry no id.
+    are not objects or carry no id. Each clip whose post got a snapshot has its ``outlier_x``
+    recomputed (``outlier_x`` lists the ones written).
     """
     now = now or datetime.now(timezone.utc)
     require_aware(now, "ingest_ig_insights(now)")
-    out: dict[str, Any] = {"ingested": [], "unchanged": [], "unmatched": [], "empty": [], "skipped": 0}
+    out: dict[str, Any] = {
+        "ingested": [], "unchanged": [], "unmatched": [], "empty": [], "skipped": 0, "outlier_x": [],
+    }  # fmt: skip
+    clips: dict[str, None] = {}  # clips of the posts that got a snapshot (insertion-ordered set)
     for row in rows:
         pid = _row_id(row) if isinstance(row, dict) else None
         if pid is None:
@@ -425,6 +489,11 @@ def ingest_ig_insights(
                 continue
             store.add_snapshot(Snapshot(post_id=post.id, captured_at=now, **values))
             out["ingested"].append(where)
+            clips[post.clip_id] = None
+    for clip_id in clips:  # a new reading may be (or change) a 7-day figure
+        value, written = _refresh_clip(store, clip_id)
+        if written:
+            out["outlier_x"].append({"clip_id": clip_id, "outlier_x": value})
     return out
 
 
@@ -439,7 +508,7 @@ app = typer.Typer(
 
 @app.command("pull")
 def pull_command() -> None:
-    """Pull analytics for every post at 1 h / 24 h / 72 h / 7 d of age (once per post and window)."""
+    """Pull analytics for every post that reached a window (1 h / 24 h / 72 h / 7 d) and holds no snapshot of it."""
     store = open_store()
     if not load().postiz_api_key:
         fail("POSTIZ_API_KEY is not set. Run through bin/studio (Keychain item cs-postiz-api-key).")
