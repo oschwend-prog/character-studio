@@ -364,6 +364,32 @@ def test_a_rejected_key_and_other_http_errors_fail(world):
     assert c.status == "fail" and "503" in c.detail
 
 
+def test_exposed_schema_without_a_service_role_grant_passes(world):
+    """403 / 42501 comes from the role check, which PostgREST runs only after the schema was found."""
+    world.http_reply = (403, '{"code":"42501","message":"permission denied for schema studio"}')
+    c = world.run()["dataapi"]
+    assert c.status == "pass"
+    assert "schema exposed" in c.detail and "authenticated" in c.detail
+    world.http_reply = (403, "permission denied for schema studio")  # no JSON code, same meaning
+    assert world.run()["dataapi"].status == "pass"
+
+
+def test_only_a_401_blames_the_key_and_another_403_does_not(world):
+    world.http_reply = (401, '{"message":"Invalid API key"}')
+    c = world.run()["dataapi"]
+    assert c.status == "fail" and "rejected" in c.detail and "cs-supabase-service-key" in c.fix
+    world.http_reply = (403, '{"message":"Forbidden by a network restriction"}')
+    c = world.run()["dataapi"]
+    assert c.status == "fail" and "403" in c.detail
+    assert "rejected" not in c.detail and "cs-supabase-service-key" not in c.fix
+
+
+def test_not_exposed_wins_over_a_status_that_looks_like_auth(world):
+    world.http_reply = (403, '{"code":"PGRST106","message":"The schema must be one of the following: public"}')
+    c = world.run()["dataapi"]
+    assert c.status == "fail" and "not exposed" in c.detail
+
+
 def test_a_network_error_fails_and_is_scrubbed(world):
     world.http_reply = httpx.ConnectError(f"cannot reach {SB_URL} with {SB_KEY}")
     c = world.run()["dataapi"]
@@ -601,6 +627,28 @@ def test_a_missing_settings_file_fails(world, which):
     (world.root / ".claude" / which).unlink()
     c = world.run()["permissions"]
     assert c.status == "fail" and which in c.detail
+
+
+def test_settings_without_permissions_fail_listing_the_missing_rules(world):
+    write_settings(world, {})
+    c = world.run()["permissions"]
+    assert c.status == "fail" and PROPOSED["permissions"]["deny"][0] in c.detail
+
+
+@pytest.mark.parametrize("bad", [{"permissions": ["deny"]}, {"permissions": {"deny": "x"}}, ["not", "an", "object"]])
+def test_a_settings_file_of_the_wrong_shape_fails_with_a_clear_message(world, bad):
+    write_settings(world, bad)
+    c = world.run()["permissions"]  # no AttributeError
+    assert c.status == "fail"
+    assert "settings.json" in c.detail and ("not an object" in c.detail or "not a list" in c.detail)
+
+
+@pytest.mark.parametrize("proposal", [{"permissions": {"deny": []}}, {"permissions": {"allow": ["Bash(ls:*)"]}}, {}])
+def test_a_proposal_with_no_deny_rules_fails_instead_of_passing_vacuously(world, proposal):
+    (world.root / ".claude" / "settings.json.proposed").write_text(json.dumps(proposal))
+    c = world.run()["permissions"]
+    assert c.status == "fail"
+    assert "no deny rules" in c.detail and "git checkout -- .claude/settings.json.proposed" in c.fix
 
 
 def test_unreadable_settings_json_fails(world):

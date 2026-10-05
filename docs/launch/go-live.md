@@ -40,7 +40,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - Turns ✅: `data api: schema studio exposed`.
 
 ## 6. GitHub secrets and workflows
-- [ ] Set the 4 secrets, piped from the Keychain so no value is typed or shown:
+- [ ] Set the 4 secrets, piped from the Keychain so no value is typed or shown. Run them inside the repo checkout (`cd ~/Claude/Projects/character-studio`): `gh` takes the repo from its git remote.
   - `printf %s "$(security find-generic-password -s cs-database-url -w)" | gh secret set DATABASE_URL`
   - `printf %s "$(security find-generic-password -s cs-supabase-url -w)" | gh secret set SUPABASE_URL`
   - `printf %s "$(security find-generic-password -s cs-supabase-service-key -w)" | gh secret set SUPABASE_SERVICE_KEY`

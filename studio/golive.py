@@ -360,7 +360,14 @@ def check_data_api(env: Env) -> Check:
             cid, title, "fail", f"HTTP {status}: schema studio is not exposed by the Data API",
             "Supabase dashboard > Settings > API > Exposed schemas: add studio and save (go-live step 5)",
         )  # fmt: skip
-    if status in (401, 403):
+    if status == 403 and ("42501" in body or "permission denied" in body.lower()):
+        # PostgREST resolves the schema (PGRST106 when it is not exposed) before the role's privileges, so a
+        # privilege error proves the schema is exposed. The migrations grant studio to `authenticated` only.
+        return Check(
+            cid, title, "pass",
+            "schema exposed (service_role has no table grant, which is fine: the app uses authenticated)",
+        )  # fmt: skip
+    if status == 401:
         return Check(
             cid, title, "fail", f"HTTP {status}: the service key was rejected",
             "re-store cs-supabase-service-key from Supabase > Settings > API (the service_role key, not anon)",
@@ -527,10 +534,28 @@ def check_postiz(env: Env) -> Check:
 # ---- (g) .claude/settings.json ---------------------------------------------------------------------
 
 
+class _BadShape(ValueError):
+    """A settings file that parses as JSON but is not shaped like Claude Code settings."""
+
+
 def _deny_rules(path: Path) -> list[str]:
+    """The ``permissions.deny`` strings of a settings file; [] when it has no ``permissions`` at all.
+
+    ``_BadShape`` (with a one-line reason) for a file that is not an object, a ``permissions`` that is not
+    an object, or a ``deny`` that is not a list.
+    """
     data = json.loads(path.read_text(encoding="utf-8"))
-    rules = data.get("permissions", {}).get("deny", []) if isinstance(data, dict) else []
-    return [r for r in rules if isinstance(r, str)] if isinstance(rules, list) else []
+    if not isinstance(data, dict):
+        raise _BadShape(f"{path.name} is not an object")
+    perms = data.get("permissions")
+    if perms is None:
+        return []
+    if not isinstance(perms, dict):
+        raise _BadShape(f"{path.name}: permissions is not an object")
+    rules = perms.get("deny", [])
+    if not isinstance(rules, list):
+        raise _BadShape(f"{path.name}: permissions.deny is not a list")
+    return [r for r in rules if isinstance(r, str)]
 
 
 def check_permissions(env: Env) -> Check:
@@ -548,10 +573,17 @@ def check_permissions(env: Env) -> Check:
     try:
         wanted = _deny_rules(proposed_path)
         have = set(_deny_rules(settings_path))
+    except _BadShape as e:
+        return Check(cid, title, "fail", str(e), "repair the file (the proposal is in git), then " + cp)
     except (OSError, ValueError) as e:
         return Check(
             cid, title, "fail", f"settings.json or its proposal is not valid JSON ({type(e).__name__})",
             "repair the file (the proposal is in git), then " + cp,
+        )  # fmt: skip
+    if not wanted:
+        return Check(
+            cid, title, "fail", ".claude/settings.json.proposed lists no deny rules (nothing to check against)",
+            "restore it: git checkout -- .claude/settings.json.proposed",
         )  # fmt: skip
     missing = [r for r in wanted if r not in have]
     if missing:
