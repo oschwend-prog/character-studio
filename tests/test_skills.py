@@ -240,7 +240,8 @@ def test_the_character_sheet_goes_to_genjutsu_with_the_master_and_the_scan_is_da
     assert '"tier": "gallery"' in part_b and '"preset_id"' in part_b and '"thumbnail_url"' in part_b and '"preview_url"' in part_b
     assert "--platform higgsfield" in part_b and "stored, never downloaded here" in part_b
     scan = body.split("## 2. Scan", 1)[1].split("Part B", 1)[0]
-    assert '"tier": "viral_now"' in scan and '"theme"' in scan and '"posted_at"' in scan and '"thumbnail_url"' in scan
+    assert '"theme"' in scan and '"posted_at"' in scan and '"thumbnail_url"' in scan
+    assert '"tier": "viral_now"' not in scan and "leave `tier` OUT of the file" in scan  # a tier set on every pick would hide the rule
     assert "name the matching traits" in scan and "score against `traits`" in scan
     assert "no media is downloaded or rehosted" in scan
 
@@ -298,7 +299,8 @@ def test_the_card_json_the_skill_shows_is_accepted_by_the_door():
         validate_card(proposal)
         assert isinstance(proposal["trait_matches"], list) and isinstance(proposal["why"], str)
     scan_card = json_span("daily-run", '"url": "<video URL>"')
-    assert {"engagement", "saturation_count", "trait_matches", "why", "tier", "theme", "posted_at"} <= set(scan_card)
+    assert {"engagement", "saturation_count", "trait_matches", "why", "theme", "posted_at"} <= set(scan_card)
+    assert "tier" not in scan_card  # the category is worked out from the numbers, never copied from an example
     analysis = json_span("daily-run", '"people_count"')
     validate_analysis(analysis)
     assert set(analysis) == {"people_count", "main_subject", "camera", "watermark", "overlay", "minors", "best_window", "bpm", "notes"}
