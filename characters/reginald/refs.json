@@ -14,6 +14,6 @@
   "avatar": "assets/avatars/reginald.png",
   "accounts": [
     {"platform": "tiktok", "handle": null, "planned_handle": "@reginald.thebutler", "postiz_integration_id": null, "dropin_share": 0.70},
-    {"platform": "instagram", "handle": null, "planned_handle": "reginald.thebutler", "postiz_integration_id": null, "dropin_share": 0.40}
+    {"platform": "instagram", "handle": "reginald.thebutler", "planned_handle": "reginald.thebutler", "postiz_integration_id": "cmuv2mx9s00kxql0y8k92piif", "dropin_share": 0.40}
   ]
 }
