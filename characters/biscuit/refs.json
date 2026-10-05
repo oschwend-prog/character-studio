@@ -5,12 +5,12 @@
   "status": "designing",
   "bodies": ["biped", "quadruped"],
   "masters": {
-    "biped": "42f579b9-3da3-42ff-af47-98d758112743",
+    "biped": "e07675a2-38a5-4325-8326-1de2e0d326ba",
     "quadruped": "d863df81-54f8-45df-9676-cf44338d07fa"
   },
-  "closeup": "7798e2bc-d0bd-492d-8d7f-a96063150c4f",
-  "closeup_center": [536, 732],
-  "blue_eye_xy": [301, 960],
+  "closeup": "4f7fc954-4dca-491a-bb72-d1781a063c06",
+  "closeup_center": [584, 738],
+  "blue_eye_xy": [251, 559],
   "avatar": "assets/avatars/biscuit.png",
   "sheets": {"biped": "a81a474c-4c7f-4bcd-9b23-43a822c7c004", "quadruped": "aad0f3d0-9694-4148-acbe-eb1f4bf34891"},
   "traits": {
