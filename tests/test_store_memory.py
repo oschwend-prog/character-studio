@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 import pytest
 
@@ -15,6 +15,8 @@ from studio.models import (
     Platform,
     Post,
     PostStatus,
+    Review,
+    Run,
     Settings,
     Snapshot,
     Source,
@@ -364,3 +366,81 @@ def test_upsert_account_keeps_other_platforms_and_characters_apart():
     for slug, platform in (("biscuit", "tiktok"), ("biscuit", "instagram"), ("reginald", "tiktok")):
         store.upsert_account(Account(character_slug=slug, platform=platform, handle=f"{slug}.{platform}"))
     assert len(store.accounts()) == 3
+
+
+# ---- runs and reviews -----------------------------------------------------------------------------
+
+
+def test_add_run_assigns_id_and_started_at_and_lists_oldest_first():
+    store = MemoryStore()
+    late = store.add_run(
+        Run(kind="daily", status="ok", started_at=NOW, finished_at=NOW + timedelta(minutes=5), summary="2 clips")
+    )
+    early = store.add_run(Run(kind="weekly", status="error", started_at=NOW - timedelta(days=1)))
+    auto = store.add_run(Run(kind="publish", status="ok"))  # no started_at: the store stamps it
+    assert late.id and auto.started_at is not None and auto.started_at.tzinfo is not None
+    assert early.finished_at is None and early.summary is None
+    assert abs(datetime.now(LONDON) - auto.started_at) < timedelta(minutes=1)
+    assert [r.id for r in store.list_runs()] == [r.id for r in sorted(
+        (early, late, auto), key=lambda r: r.started_at
+    )]
+    assert [r.id for r in store.list_runs(status="ok", kind="daily")] == [late.id]
+    assert [r.id for r in store.list_runs(kind="daily")] == [late.id]
+    assert [r.id for r in store.list_runs(status="error")] == [early.id]
+    assert store.list_runs(kind="metrics") == []
+
+
+def test_run_coerces_kind_and_status_and_refuses_bad_values():
+    from studio.models import RunKind, RunStatus
+
+    run = Run(kind="daily", status="budget_stop")
+    assert (run.kind, run.status) == (RunKind.daily, RunStatus.budget_stop)
+    with pytest.raises(ValueError, match="kind"):
+        Run(kind="hourly", status="ok")
+    with pytest.raises(ValueError, match="status"):
+        Run(kind="daily", status="fine")
+
+
+def test_add_run_refuses_a_naive_time_and_returns_copies():
+    store = MemoryStore()
+    with pytest.raises(ValueError, match="timezone-aware"):
+        store.add_run(Run(kind="daily", status="ok", finished_at=datetime(2026, 10, 6, 12, 0)))
+    stored = store.add_run(Run(kind="daily", status="ok", summary="a"))
+    stored.summary = "mutated"
+    assert store.list_runs()[0].summary == "a"
+    with pytest.raises(TypeError):
+        store.list_runs(nope=1)
+
+
+WEEK = date(2026, 10, 5)
+
+
+def test_upsert_review_inserts_then_replaces_per_week_and_character():
+    store = MemoryStore()
+    first = store.upsert_review(
+        Review(week=WEEK, character_slug="biscuit", report_md="v1", bar_status="not_yet")
+    )
+    assert first.id and first.created_at is not None
+    again = store.upsert_review(
+        Review(week=WEEK, character_slug="biscuit", report_md="v2", bar_status="continue")
+    )
+    assert again.id == first.id and again.created_at == first.created_at  # same row, rewritten
+    assert (again.report_md, again.bar_status) == ("v2", "continue")
+    other_char = store.upsert_review(Review(week=WEEK, character_slug="reginald", report_md="r"))
+    other_week = store.upsert_review(
+        Review(week=WEEK + timedelta(days=7), character_slug="biscuit", report_md="w")
+    )
+    assert len({first.id, other_char.id, other_week.id}) == 3
+    assert [(r.character_slug, r.week, r.report_md) for r in store.list_reviews()] == [
+        ("biscuit", WEEK, "v2"), ("reginald", WEEK, "r"), ("biscuit", WEEK + timedelta(days=7), "w"),
+    ]
+    assert [r.id for r in store.list_reviews(character_slug="reginald")] == [other_char.id]
+    assert store.list_reviews(week=date(2030, 1, 7)) == []
+
+
+def test_review_week_must_be_a_date_and_bar_status_is_optional():
+    assert Review(week=WEEK, character_slug="biscuit", report_md="x").bar_status is None
+    with pytest.raises(ValueError, match="week"):
+        Review(week=datetime(2026, 10, 5, 12, 0, tzinfo=LONDON), character_slug="biscuit", report_md="x")
+    with pytest.raises(ValueError, match="week"):
+        Review(week="2026-10-05", character_slug="biscuit", report_md="x")

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from typing import Any, Literal, get_args
 
@@ -67,6 +67,19 @@ class PostStatus(StrEnum):
     needs_check = "needs_check"
 
 
+class RunKind(StrEnum):
+    daily = "daily"
+    weekly = "weekly"
+    publish = "publish"
+    metrics = "metrics"
+
+
+class RunStatus(StrEnum):
+    ok = "ok"
+    budget_stop = "budget_stop"
+    error = "error"
+
+
 AccountMode = Literal["approval", "auto"]
 LedgerKind = Literal["reserve", "settle", "release"]
 FavoriteOrigin = Literal["scan", "owner"]
@@ -87,6 +100,13 @@ def _one_of(value: str, literal: Any, what: str) -> str:
     if value not in allowed:
         raise ValueError(f"{what} must be one of {allowed}, got {value!r}")
     return value
+
+
+def _enum[E: StrEnum](cls: type[E], value: Any, what: str) -> E:
+    try:
+        return cls(value)
+    except ValueError:
+        raise ValueError(f"{what} must be one of {[m.value for m in cls]}, got {value!r}") from None
 
 
 def _aware(value: datetime, what: str) -> datetime:
@@ -251,3 +271,39 @@ class LedgerEntry:
 
     def __post_init__(self) -> None:
         _one_of(self.kind, LedgerKind, "LedgerEntry.kind")
+
+
+@dataclass(kw_only=True)
+class Run:
+    """One line of the scheduled-run log (``studio run log``); ``studio health`` reads it.
+
+    ``started_at=None`` lets the store stamp the time. ``finished_at=None`` means the run never
+    reported an end.
+    """
+
+    id: str | None = None
+    kind: RunKind
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    status: RunStatus
+    summary: str | None = None
+
+    def __post_init__(self) -> None:
+        self.kind = _enum(RunKind, self.kind, "Run.kind")
+        self.status = _enum(RunStatus, self.status, "Run.status")
+
+
+@dataclass(kw_only=True)
+class Review:
+    """One weekly review of one character; ``week`` is the Monday of its ISO week."""
+
+    id: str | None = None
+    week: date
+    character_slug: str
+    report_md: str
+    bar_status: str | None = None
+    created_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.week, datetime) or not isinstance(self.week, date):
+            raise ValueError(f"Review.week must be a date (the Monday of the week), got {self.week!r}")

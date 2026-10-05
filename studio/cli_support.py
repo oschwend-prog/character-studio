@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
@@ -17,7 +17,7 @@ from typing import Any, NoReturn
 
 import typer
 
-from studio.config import load
+from studio.config import LONDON, load
 from studio.pgstore import PostgresStore
 from studio.storage import Storage, SupabaseStorage
 from studio.store import Store
@@ -52,6 +52,19 @@ def text_option(value: str | None, file: Path | None, name: str) -> str | None:
     return text[:-1] if text.endswith("\n") else text
 
 
+def parse_when(value: str, option: str) -> datetime:
+    """``value`` (an ISO 8601 date-time) as an aware datetime; exit 2 naming ``option`` when it is not one.
+
+    A time with an offset or ``Z`` is taken as given. One without is the owner's wall clock and is
+    read as Europe/London (BST or GMT as of that date), so no naive datetime ever reaches a store.
+    """
+    try:
+        moment = datetime.fromisoformat(value.strip())
+    except ValueError:
+        fail(f"{option} must be an ISO 8601 date-time like 2026-10-06T19:00 or 2026-10-06T19:00:00+01:00, got {value!r}")
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=LONDON)
+
+
 def open_store() -> Store:
     """The production store, or a clear error + exit 2 when ``DATABASE_URL`` is not set."""
     url = load().database_url
@@ -80,7 +93,7 @@ def open_storage() -> Storage:
 
 
 def _json_default(value: Any) -> Any:
-    if isinstance(value, datetime):
+    if isinstance(value, (datetime, date)):  # a datetime is a date: both end up as ISO text
         return value.isoformat()
     if isinstance(value, Decimal):
         return float(value)

@@ -18,6 +18,11 @@ talks to a ``Store``. ``studio.pgstore.PostgresStore`` is the production impleme
   its identity refreshed (``handle``, ``postiz_integration_id``). Its ``mode`` and ``dropin_share`` are
   operational state (the terminal's autopilot toggle, the weekly review's Instagram guard) and a
   re-seed must not undo them, so they are kept.
+* ``add_run(r)`` appends a line to the scheduled-run log (``started_at`` defaults to now);
+  ``list_runs`` is ordered by ``started_at``. ``upsert_review(r)`` matches a review on
+  ``(week, character_slug)``: a new one is inserted, an existing one gets the new ``report_md`` and
+  ``bar_status`` and keeps its ``id`` and ``created_at``, so saving a week's report twice leaves one row.
+  ``list_reviews`` is ordered by ``week``, then ``character_slug``.
 * One post per ``(clip_id, account_id)``: a second ``add_post`` raises ``DuplicatePost``.
 * ``claim_due_posts(now)`` atomically flips due ``scheduled`` posts to ``posting``; a
   post is handed out at most once. ``now`` must be timezone-aware.
@@ -42,6 +47,8 @@ from studio.models import (
     LedgerEntry,
     Post,
     PostStatus,
+    Review,
+    Run,
     Settings,
     Snapshot,
     Source,
@@ -117,6 +124,12 @@ class Store(Protocol):
     def update_favorite(self, id: str, /, **kw: Any) -> Favorite: ...
     def list_favorites(self, **filters: Any) -> list[Favorite]: ...
 
+    # scheduled-run log and weekly reviews
+    def add_run(self, r: Run) -> Run: ...
+    def list_runs(self, **filters: Any) -> list[Run]: ...
+    def upsert_review(self, r: Review) -> Review: ...
+    def list_reviews(self, **filters: Any) -> list[Review]: ...
+
     def transaction(self) -> AbstractContextManager[Any]: ...
 
 
@@ -142,6 +155,8 @@ class MemoryStore:
         self._clips: dict[str, Clip] = {}
         self._posts: dict[str, Post] = {}
         self._favorites: dict[str, Favorite] = {}
+        self._runs: dict[str, Run] = {}
+        self._reviews: dict[str, Review] = {}
         self._ledger: list[LedgerEntry] = []
         self._snapshots: list[Snapshot] = []
         for c in characters:
@@ -359,6 +374,41 @@ class MemoryStore:
         with self._lock:
             return self._select(
                 self._favorites.values(), filters, Favorite, lambda f: f.created_at
+            )
+
+    # ---- runs and reviews --------------------------------------------------
+
+    def add_run(self, r: Run) -> Run:
+        with self._lock:
+            stored = copy.deepcopy(r)
+            if stored.started_at is None:
+                stored.started_at = _now()
+            return self._insert(self._runs, stored)
+
+    def list_runs(self, **filters: Any) -> list[Run]:
+        with self._lock:
+            return self._select(self._runs.values(), filters, Run, lambda r: r.started_at)
+
+    def upsert_review(self, r: Review) -> Review:
+        with self._lock:
+            old = next(
+                (
+                    x
+                    for x in self._reviews.values()
+                    if x.week == r.week and x.character_slug == r.character_slug
+                ),
+                None,
+            )
+            if old is None:
+                return self._insert(self._reviews, r)
+            return self._update(
+                self._reviews, old.id, {"report_md": r.report_md, "bar_status": r.bar_status}
+            )
+
+    def list_reviews(self, **filters: Any) -> list[Review]:
+        with self._lock:
+            return self._select(
+                self._reviews.values(), filters, Review, lambda r: (r.week, r.character_slug)
             )
 
     # ---- transactions ------------------------------------------------------

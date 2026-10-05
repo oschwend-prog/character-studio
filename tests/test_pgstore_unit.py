@@ -8,7 +8,7 @@ store has the same surface as the Store protocol and MemoryStore.
 
 import inspect
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import psycopg
@@ -16,7 +16,21 @@ import pytest
 from psycopg.types.json import Jsonb
 
 from studio.config import LONDON
-from studio.models import Account, Character, Clip, ClipState, Favorite, Mode, Post, PostStatus, Snapshot
+from studio.models import (
+    Account,
+    Character,
+    Clip,
+    ClipState,
+    Favorite,
+    Mode,
+    Post,
+    PostStatus,
+    Review,
+    Run,
+    RunKind,
+    RunStatus,
+    Snapshot,
+)
 from studio.pgstore import PostgresStore
 from studio.store import MemoryStore, Store
 
@@ -327,7 +341,7 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
     proto_methods = [
         n for n, v in inspect.getmembers(Store, inspect.isfunction) if not n.startswith("_")
     ]
-    assert len(proto_methods) == 27  # 26 data methods + transaction()
+    assert len(proto_methods) == 31  # 30 data methods + transaction()
     for name in proto_methods:
         expected = inspect.signature(getattr(Store, name))
         for impl in (MemoryStore, PostgresStore):
@@ -401,3 +415,107 @@ def test_upsert_account_turns_a_taken_handle_into_a_value_error(db, monkeypatch)
     monkeypatch.setattr(FakeCursor, "execute", boom)
     with pytest.raises(ValueError, match="duplicate key"):
         PostgresStore(DSN).upsert_account(Account(character_slug="reginald", platform="tiktok", handle="@biscuit"))
+
+
+# ---- runs and reviews ---------------------------------------------------------------------------
+
+WEEK = date(2026, 10, 5)
+
+
+def run_row(**over):
+    row = {
+        "id": uuid.uuid4(), "kind": "daily", "started_at": NOW, "finished_at": NOW,
+        "status": "ok", "summary": None,
+    }
+    return row | over
+
+
+def review_row(**over):
+    row = {
+        "id": uuid.uuid4(), "week": WEEK, "character_slug": "biscuit", "report_md": "report",
+        "bar_status": "continue", "created_at": NOW,
+    }
+    return row | over
+
+
+def test_add_run_binds_enums_and_leaves_id_and_started_at_to_the_database(db):
+    db.queue([run_row(status="budget_stop", summary="stopped")])
+    got = PostgresStore(DSN).add_run(Run(kind="daily", status="budget_stop", finished_at=NOW, summary="stopped"))
+    query, params = db.statements[0]
+    assert query.startswith('insert into "studio"."runs" ("kind", "finished_at", "status", "summary") values')
+    assert "returning" in query
+    assert params == ["daily", NOW, "budget_stop", "stopped"]
+    assert (got.kind, got.status, got.summary) == (RunKind.daily, RunStatus.budget_stop, "stopped")
+    assert isinstance(got.id, str) and got.started_at == NOW
+
+
+def test_add_run_sends_started_at_when_given_and_refuses_a_naive_time(db):
+    db.queue([run_row()])
+    PostgresStore(DSN).add_run(Run(kind="weekly", status="ok", started_at=NOW))
+    assert '"started_at"' in db.statements[0][0].split("values")[0]
+    with pytest.raises(ValueError, match="timezone-aware"):
+        PostgresStore(DSN).add_run(Run(kind="weekly", status="ok", finished_at=datetime(2026, 10, 6, 1, 0)))
+    assert len(db.statements) == 1
+
+
+def test_list_runs_filters_by_bound_enum_values_oldest_first(db):
+    db.queue([run_row(), run_row()])
+    runs = PostgresStore(DSN).list_runs(kind=RunKind.daily, finished_at=None)
+    query, params = db.statements[0]
+    assert '"kind" = %s' in query and '"finished_at" is null' in query and params == ["daily"]
+    assert query.endswith('order by "started_at", "id"')
+    assert [r.kind for r in runs] == [RunKind.daily] * 2
+
+
+def test_upsert_review_inserts_when_there_is_none_in_one_transaction(db):
+    db.queue([], [review_row()])
+    got = PostgresStore(DSN).upsert_review(
+        Review(week=WEEK, character_slug="biscuit", report_md="report", bar_status="continue")
+    )
+    assert len(db.connections) == 1 and db.connections[0].events == ["begin", "commit"]
+    (find, find_params), (insert, insert_params) = db.statements
+    assert find.startswith('select id from "studio"."reviews" where week = %s and character_slug = %s')
+    assert find.endswith("limit 1 for update") and find_params == [WEEK, "biscuit"]
+    head = insert.split("values")[0]
+    assert insert.startswith('insert into "studio"."reviews" (') and '"id"' not in head and '"created_at"' not in head
+    assert insert_params == [WEEK, "biscuit", "report", "continue"]
+    assert (got.week, got.report_md, got.bar_status) == (WEEK, "report", "continue")
+
+
+def test_upsert_review_rewrites_the_existing_row_keeping_its_id(db):
+    uid = uuid.uuid4()
+    db.queue([{"id": uid}], [review_row(id=uid, report_md="v2", bar_status="promote")])
+    got = PostgresStore(DSN).upsert_review(
+        Review(week=WEEK, character_slug="biscuit", report_md="v2", bar_status="promote")
+    )
+    assert len(db.connections) == 1  # the lookup and the write share one connection
+    update, params = db.statements[1]
+    assert update.startswith('update "studio"."reviews" set "report_md" = %s, "bar_status" = %s where id = %s')
+    assert params == ["v2", "promote", uid]
+    assert "insert" not in update and got.id == str(uid) and got.report_md == "v2"
+
+
+def test_upsert_review_turns_an_unknown_character_into_a_value_error(db, monkeypatch):
+    from psycopg.errors import ForeignKeyViolation
+
+    real = FakeCursor.execute
+
+    def boom(self, query, params=()):
+        if query.as_string().startswith("insert"):
+            raise ForeignKeyViolation('violates foreign key constraint "reviews_character_slug_fkey"')
+        return real(self, query, params)
+
+    monkeypatch.setattr(FakeCursor, "execute", boom)
+    db.queue([])
+    with pytest.raises(ValueError, match="foreign key"):
+        PostgresStore(DSN).upsert_review(Review(week=WEEK, character_slug="nobody", report_md="x"))
+    assert db.connections[0].events == ["begin", "rollback"]
+
+
+def test_list_reviews_orders_by_week_then_character(db):
+    db.queue([review_row()])
+    got = PostgresStore(DSN).list_reviews(character_slug="biscuit")
+    query, params = db.statements[0]
+    assert '"character_slug" = %s' in query and params == ["biscuit"]
+    assert query.endswith('order by "week", "character_slug", "id"')
+    assert got[0].week == WEEK and isinstance(got[0].id, str)

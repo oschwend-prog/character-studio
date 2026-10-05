@@ -28,6 +28,10 @@ from studio.models import (
     Platform,
     Post,
     PostStatus,
+    Review,
+    Run,
+    RunKind,
+    RunStatus,
     Settings,
     Snapshot,
     Source,
@@ -50,8 +54,10 @@ TABLES = {
     "snapshots": Snapshot,
     "ledger": LedgerEntry,
     "favorites": Favorite,
+    "runs": Run,
+    "reviews": Review,
 }
-ALL_TABLES = [*TABLES, "runs", "reviews"]
+ALL_TABLES = list(TABLES)
 
 
 def table_body(name: str) -> str:
@@ -193,3 +199,10 @@ def test_0003_makes_character_and_platform_unique_for_the_account_upsert():
         "create unique index if not exists accounts_character_platform_key "
         "on studio.accounts (character_slug, platform)"
     ]  # the ON CONFLICT target of PostgresStore.upsert_account
+
+
+def test_run_kinds_and_statuses_are_the_ones_the_log_and_health_know():
+    # studio.runs has no CHECK on kind/status: the enums are the only gate, so pin them.
+    assert {str(k) for k in RunKind} == {"daily", "weekly", "publish", "metrics"}
+    assert {str(s) for s in RunStatus} == {"ok", "budget_stop", "error"}
+    assert "check" not in table_body("runs")  # if a CHECK is ever added it must match the enums

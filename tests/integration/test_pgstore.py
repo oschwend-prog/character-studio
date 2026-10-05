@@ -13,7 +13,7 @@ schema renamed to ``studio_test`` (it never touches ``studio``) and drops it aft
 import os
 import re
 import threading
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -28,6 +28,8 @@ from studio.models import (
     Mode,
     Post,
     PostStatus,
+    Review,
+    Run,
     Snapshot,
     Source,
     SourceKind,
@@ -189,6 +191,18 @@ def test_roundtrip_every_table(store):
     assert store.get_favorite(fav.id) == fav and fav.total_score == 92.5 and fav.outlier_x == 4.5
     assert store.update_favorite(fav.id, status="approved").status == "approved"
     assert store.list_favorites(status="new") == []
+
+    run = store.add_run(Run(kind="daily", status="budget_stop", finished_at=now, summary="stopped"))
+    assert run.started_at is not None and store.list_runs(kind="daily")[0].id == run.id
+    assert store.list_runs(kind="weekly") == [] and store.list_runs(finished_at=None) == []
+
+    monday = date(2026, 10, 5)
+    first = store.upsert_review(Review(week=monday, character_slug="biscuit", report_md="v1", bar_status="not_yet"))
+    again = store.upsert_review(Review(week=monday, character_slug="biscuit", report_md="v2", bar_status="continue"))
+    assert again.id == first.id and again.created_at == first.created_at and again.report_md == "v2"
+    assert [r.report_md for r in store.list_reviews(week=monday)] == ["v2"]
+    with pytest.raises(ValueError):
+        store.upsert_review(Review(week=monday, character_slug="nobody", report_md="x"))  # FK -> ValueError
 
 
 def test_settings_row_is_locked_inside_a_transaction(store):

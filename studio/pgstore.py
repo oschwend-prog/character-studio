@@ -30,7 +30,7 @@ from typing import Any
 
 import psycopg
 from psycopg import sql
-from psycopg.errors import CheckViolation, UniqueViolation
+from psycopg.errors import CheckViolation, ForeignKeyViolation, UniqueViolation
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
@@ -41,6 +41,8 @@ from studio.models import (
     Favorite,
     LedgerEntry,
     Post,
+    Review,
+    Run,
     Settings,
     Snapshot,
     Source,
@@ -72,6 +74,8 @@ _POSTS = _Table("posts", Post)
 _SNAPSHOTS = _Table("snapshots", Snapshot, db_default=frozenset({"captured_at"}))
 _LEDGER = _Table("ledger", LedgerEntry)
 _FAVORITES = _Table("favorites", Favorite, json_cols=frozenset({"proposal", "scores"}))
+_RUNS = _Table("runs", Run, db_default=frozenset({"id", "started_at"}))
+_REVIEWS = _Table("reviews", Review)
 
 
 def _as_uuid(value: str) -> uuid.UUID | None:
@@ -413,3 +417,34 @@ class PostgresStore:
 
     def list_favorites(self, **filters: Any) -> list[Favorite]:
         return self._list(_FAVORITES, filters, ["created_at", "id"])
+
+    # ---- scheduled-run log and weekly reviews ------------------------------
+
+    def add_run(self, r: Run) -> Run:
+        return self._insert(_RUNS, r)
+
+    def list_runs(self, **filters: Any) -> list[Run]:
+        return self._list(_RUNS, filters, ["started_at", "id"])
+
+    def upsert_review(self, r: Review) -> Review:
+        # The schema has no unique key on (week, character_slug), so the lookup and the write share
+        # one transaction and the matching row is locked: two saves of the same week queue up.
+        with self.transaction():
+            query = sql.SQL(
+                "select id from {t} where week = %s and character_slug = %s "
+                "order by created_at, id limit 1 for update"
+            ).format(t=self._tbl(_REVIEWS))
+            found = self._execute(query, [r.week, r.character_slug])
+            try:
+                if found:
+                    return self._update(
+                        _REVIEWS,
+                        str(found[0]["id"]),
+                        {"report_md": r.report_md, "bar_status": r.bar_status},
+                    )
+                return self._insert(_REVIEWS, r)
+            except ForeignKeyViolation as e:  # an unknown character
+                raise ValueError(str(e)) from e
+
+    def list_reviews(self, **filters: Any) -> list[Review]:
+        return self._list(_REVIEWS, filters, ["week", "character_slug", "id"])

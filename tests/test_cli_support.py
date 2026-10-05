@@ -1,5 +1,5 @@
 import json
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 import typer
@@ -80,3 +80,29 @@ def test_text_option_refuses_both_and_missing_files(tmp_path, capsys):
     with pytest.raises(typer.Exit) as e:
         cli_support.text_option(None, tmp_path / "nope.txt", "caption")
     assert e.value.exit_code == 2 and "no such file" in capsys.readouterr().err
+
+
+def test_emit_writes_a_plain_date_as_iso(capsys):
+    emit({"week": date(2026, 10, 5), "at": datetime(2026, 10, 5, 7, 0, tzinfo=timezone.utc)})
+    assert json.loads(capsys.readouterr().out) == {"week": "2026-10-05", "at": "2026-10-05T07:00:00+00:00"}
+
+
+def test_parse_when_returns_an_aware_datetime_and_reads_naive_as_london():
+    from studio.config import LONDON
+
+    aware = cli_support.parse_when("2026-10-06T19:00:00+01:00", "--at")
+    assert aware.utcoffset() == timedelta(hours=1) and aware == datetime(2026, 10, 6, 18, 0, tzinfo=timezone.utc)
+    assert cli_support.parse_when("2026-10-06T18:00:00Z", "--at") == datetime(2026, 10, 6, 18, tzinfo=timezone.utc)
+    naive = cli_support.parse_when("2026-10-06T19:00", "--at")  # the owner's wall clock
+    assert naive.tzinfo is not None and naive == datetime(2026, 10, 6, 19, tzinfo=LONDON)
+    winter = cli_support.parse_when("2026-12-01T19:00", "--at")
+    assert winter.utcoffset() == timedelta(0)  # GMT in December, BST in October: zoneinfo, not a fixed offset
+    assert naive.utcoffset() == timedelta(hours=1)
+
+
+def test_parse_when_refuses_junk_with_the_option_name(capsys):
+    for bad in ("tomorrow", "2026-13-40T10:00", ""):
+        with pytest.raises(typer.Exit) as e:
+            cli_support.parse_when(bad, "--finished-at")
+        assert e.value.exit_code == 2
+    assert "--finished-at" in capsys.readouterr().err
