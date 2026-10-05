@@ -4,6 +4,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+
+from studio.media.qa import probe
 from typer.testing import CliRunner
 
 from studio import sources
@@ -1149,6 +1151,31 @@ def test_cli_trim_prints_the_child_source(cli_store, cli_storage, clip_file):
     assert out["parent_id"] == parent.id and out["id"] != parent.id and out["credit_handle"] == "@eatfryhaven"
     assert out["duration_s"] == pytest.approx(3.0, abs=0.25) and out["kind"] == "owner_inbox"
     assert len(cli_store.list_sources()) == 2
+
+
+def test_trim_source_can_crop_a_landscape_parent_to_a_vertical_window(tmp_path, synth_video):
+    # owner 2026-10-05: an iconic clip is often landscape; --crop-x keeps its sound and makes it a 9:16 source
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    wide = synth_video(w=640, h=360, dur=5, audio=False)
+    key = "owner_inbox/aaaaaaaa-0000-4000-8000-000000000009.mp4"
+    storage.upload("sources", key, wide)
+    parent = add_source(store, "owner_inbox", key, "biped", 1, 5.0, storage_path=key)
+    child = sources.trim_source(store, storage, parent.id, 1.0, 3.0, crop_x=0.5)
+    out = tmp_path / "child.mp4"
+    out.write_bytes(fetch(storage, tmp_path, child.storage_path))
+    report = probe(out, loudness=False)
+    assert (report.width, report.height) == (202, 360)
+    with pytest.raises(ValueError, match="already 9:16"):
+        sources.trim_source(store, storage, child.id, 0.0, 2.0, crop_x=0.5)
+
+
+def test_cli_trim_takes_crop_x(cli_store, cli_storage, synth_video):
+    wide = synth_video(w=640, h=360, dur=5, audio=False)
+    key = "owner_inbox/aaaaaaaa-0000-4000-8000-00000000000a.mp4"
+    cli_storage.upload("sources", key, wide)
+    parent = add_source(cli_store, "owner_inbox", key, "biped", 1, 5.0, storage_path=key)
+    assert run("trim", parent.id, "--start", "0", "--duration", "2", "--crop-x", "0.3").exit_code == 0
+    assert run("trim", parent.id, "--start", "0", "--duration", "2", "--crop-x", "1.5").exit_code == 2
 
 
 def test_cli_trim_exit_codes(cli_store, cli_storage, clip_file):

@@ -386,7 +386,14 @@ def ingest_owner_clip(
 
 
 def trim_source(
-    store: Store, storage: Storage, source_id: str, start_s: float, duration_s: float, *, file: Path | str | None = None
+    store: Store,
+    storage: Storage,
+    source_id: str,
+    start_s: float,
+    duration_s: float,
+    *,
+    file: Path | str | None = None,
+    crop_x: float | None = None,
 ) -> Source:
     """Cut a window out of a source and catalogue it as a new ``owner_inbox`` source (see the module doc).
 
@@ -410,7 +417,7 @@ def trim_source(
                 f"source {source_id} is not in Storage (a library source is used through its own url): "
                 "download its preview and pass it with --file"
             )
-        trimmed = trim_clip(local, work / "window.mp4", start_s, duration_s)
+        trimmed = trim_clip(local, work / "window.mp4", start_s, duration_s, crop_x=crop_x)
         seconds = probe(trimmed, loudness=False).duration_s
         key = f"{INBOX_PREFIX}/{uuid.uuid4()}.mp4"
         storage.upload(SOURCES_BUCKET, key, trimmed)
@@ -658,17 +665,28 @@ def ingest_owner_command(
 def trim_command(
     id: Annotated[str, typer.Argument(help="Source id to cut a window from.")],
     start: Annotated[float, typer.Option("--start", help="Where the window begins, in seconds.")],
-    duration: Annotated[float, typer.Option("--duration", help="Window length in seconds (6-9 s is the target, 16 s the maximum).")],
+    duration: Annotated[
+        float,
+        typer.Option("--duration", help="Window length in seconds (classics 12-14 s, other clips 7-9 s, 16 s the maximum)."),
+    ],
     file: Annotated[
         Path | None,
         typer.Option("--file", help="The clip to cut, for a source that is not in Storage (a downloaded library preview)."),
+    ] = None,
+    crop_x: Annotated[
+        float | None,
+        typer.Option(
+            "--crop-x",
+            help="For a landscape clip: cut the full-height 9:16 window centred at this fraction of the width "
+            "(0 = left edge, 0.5 = middle, 1 = right edge), around the star.",
+        ),
     ] = None,
 ) -> None:
     """Cut the best window out of a source (audio kept) as a new `owner_inbox` source: what Genjutsu is given."""
     store = open_store()
     storage = open_storage()
     try:
-        child = trim_source(store, storage, id, start, duration, file=file)
+        child = trim_source(store, storage, id, start, duration, file=file, crop_x=crop_x)
     except KeyError:
         fail(f"unknown source {id}")
     except (ValueError, QAError, ClipworkError, StorageError) as e:

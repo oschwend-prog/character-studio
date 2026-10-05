@@ -86,6 +86,50 @@ def test_trim_refuses_a_window_that_makes_no_sense(tmp_path, source, start, dura
     assert not (tmp_path / "t.mp4").exists()
 
 
+@pytest.fixture
+def landscape_source(tmp_path) -> Path:
+    """A 640x360 landscape clip with a tone: what an iconic YouTube source usually looks like."""
+    out = tmp_path / "landscape.mp4"
+    ffmpeg(
+        "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=30:duration=6",
+        "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=6",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(out),
+    )  # fmt: skip
+    return out
+
+
+def test_trim_can_cut_a_vertical_9_16_window_out_of_a_landscape_clip(tmp_path, landscape_source):
+    # owner 2026-10-05: iconic clips are often landscape; a 9:16 window around the star keeps the clip and its sound
+    out = trim_clip(landscape_source, tmp_path / "v.mp4", 1.0, 3.0, crop_x=0.5)
+    report = probe(out)
+    assert (report.width, report.height) == (202, 360)  # 360 x 9/16 = 202.5, rounded down to an even width
+    assert report.has_audio and report.duration_s == pytest.approx(3.0, abs=0.25)
+
+
+@pytest.mark.parametrize("crop_x", [0.0, 1.0, 0.1, 0.95])
+def test_a_crop_window_near_an_edge_is_clamped_inside_the_frame(tmp_path, landscape_source, crop_x):
+    report = probe(trim_clip(landscape_source, tmp_path / "v.mp4", 0.0, 2.0, crop_x=crop_x))
+    assert (report.width, report.height) == (202, 360)
+
+
+def test_crop_offsets_follow_the_centre_and_stay_even():
+    assert clipwork.crop_window(640, 360, 0.5) == (202, 360, 218)
+    assert clipwork.crop_window(640, 360, 0.0) == (202, 360, 0)
+    assert clipwork.crop_window(640, 360, 1.0) == (202, 360, 438)
+    assert clipwork.crop_window(1920, 1080, 0.5) == (606, 1080, 656)
+
+
+@pytest.mark.parametrize(("crop_x", "message"), [(-0.1, "between 0 and 1"), (1.5, "between 0 and 1"), (float("nan"), "crop_x")])
+def test_trim_refuses_a_crop_centre_outside_the_frame(tmp_path, landscape_source, crop_x, message):
+    with pytest.raises(ValueError, match=message):
+        trim_clip(landscape_source, tmp_path / "v.mp4", 0.0, 2.0, crop_x=crop_x)
+
+
+def test_trim_refuses_to_crop_a_clip_that_is_already_vertical(tmp_path, source):
+    with pytest.raises(ValueError, match="already 9:16 or narrower"):
+        trim_clip(source, tmp_path / "v.mp4", 0.0, 2.0, crop_x=0.5)
+
+
 def test_trim_of_a_missing_or_unreadable_file_is_a_qa_error(tmp_path):
     with pytest.raises(QAError):
         trim_clip(tmp_path / "nope.mp4", tmp_path / "t.mp4", 0, 3)
