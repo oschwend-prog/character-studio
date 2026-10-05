@@ -56,8 +56,12 @@ from studio.models import Body, Character, Mode, Source, SourceKind
 from studio.storage import Storage, StorageError
 from studio.store import Store
 
-# Hosts we never take a source from; subdomains count (www., m., vm., vt., ...).
-PLATFORM_DOMAINS = frozenset({"tiktok.com", "instagram.com", "vm.tiktok.com", "instagr.am"})
+# Hosts we never take a source from; subdomains count (www., m., vm., vt., ...). Includes the platforms'
+# video CDNs: a file served from one is a download from the platform, with its watermark and soundtrack.
+PLATFORM_DOMAINS = frozenset({
+    "tiktok.com", "instagram.com", "vm.tiktok.com", "instagr.am",
+    "tiktokcdn.com", "tiktokv.com", "cdninstagram.com", "fbcdn.net",
+})  # fmt: skip
 
 # The owner's drop folder: resolved from the package location, never from the working directory.
 DEFAULT_INBOX = Path(__file__).resolve().parents[1] / "inbox"
@@ -331,12 +335,17 @@ def add_command(
         str | None, typer.Option(help="Where it was found (never a TikTok/Instagram page).")
     ] = None,
     preset_id: Annotated[str | None, typer.Option(help="Higgsfield preset id, if any.")] = None,
-    trend: Annotated[str | None, typer.Option(help="Trend tag.")] = None,
+    trend: Annotated[str | None, typer.Option(help="Trend tag (a short token; free text: --trend-file).")] = None,
+    trend_file: Annotated[
+        Path | None,
+        typer.Option("--trend-file", help="The trend tag, read from a file (use for any text from a creator or a tool)."),
+    ] = None,
     credit_handle: Annotated[
         str | None, typer.Option(help="Creator handle to credit in the caption.")
     ] = None,
 ) -> None:
     """Catalogue a source (unchecked: not Drop-in eligible until `source check`)."""
+    trend = text_option(trend, trend_file, "trend")
     store = open_store()
     try:
         s = add_source(store, kind, url, body, bodies, duration, preset_id, trend, credit_handle)

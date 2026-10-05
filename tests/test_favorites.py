@@ -595,6 +595,52 @@ def test_cli_pick_scores_and_dedupes(cli_store):
     assert len(cli_store.list_favorites()) == 1
 
 
+def pick_args_in_file(tmp_path, spec=B1, *, keep_flags=(), **proposal_extra):
+    """The pick CLI line with url and creator moved out of the shell and into the proposal JSON file."""
+    proposal = {**spec["proposal"], "url": spec["url"], "creator": spec["creator_handle"], **proposal_extra}
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps(proposal), encoding="utf-8")
+    args = pick_args(spec)
+    for flag in ("--url", "--creator", "--proposal"):
+        if flag not in keep_flags:
+            i = args.index(flag)
+            del args[i : i + 2]
+    return [*args, "--proposal-file", str(f)]
+
+
+def test_cli_pick_takes_url_and_creator_from_the_proposal_file(cli_store, tmp_path):
+    r = run("pick", *pick_args_in_file(tmp_path))
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert out["url"] == B1["url"] and out["creator_handle"] == B1["creator_handle"]
+    assert "url" not in out["proposal"] and "creator" not in out["proposal"]  # identity, not proposal
+    assert out["proposal"]["hook"] == B1["proposal"]["hook"]
+    assert (out["status"], out["total_score"]) == ("new", 92)
+    assert "--url" in run("pick", "--help").output  # the flags still exist
+
+
+def test_cli_pick_flags_still_work_and_agree_with_the_file(cli_store, tmp_path):
+    same = run("pick", *pick_args_in_file(tmp_path, keep_flags=("--url", "--creator")))
+    assert same.exit_code == 0, same.output
+    other = run("pick", *pick_args_in_file(tmp_path, B2, keep_flags=("--url",)), "--creator", "@someone_else")
+    assert other.exit_code == 2 and "creator" in other.output  # file and flag disagree
+
+
+def test_cli_pick_url_must_come_from_somewhere(cli_store, tmp_path):
+    args = pick_args_in_file(tmp_path)
+    f = tmp_path / "p.json"
+    f.write_text(json.dumps(B1["proposal"]), encoding="utf-8")  # no url in the file either
+    r = run("pick", *args)
+    assert r.exit_code == 2 and "url" in r.output and cli_store.list_favorites() == []
+
+
+def test_cli_pick_third_party_text_in_the_file_is_stored_verbatim(cli_store, tmp_path):
+    nasty = "tea $(touch /tmp/pwned) `id` \"q\" 'x'"
+    r = run("pick", *pick_args_in_file(tmp_path, hook=nasty))
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["proposal"]["hook"] == nasty
+
+
 def test_cli_pick_rejects_bad_input(cli_store):
     assert run("pick", *pick_args(**{"--freshness": "11"})).exit_code == 2
     assert run("pick", *pick_args(**{"--proposal": "not json"})).exit_code == 2

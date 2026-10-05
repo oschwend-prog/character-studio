@@ -397,6 +397,55 @@ def test_cli_add_check_flag_roundtrip(cli_store):
     assert cli_store.list_sources()[0].has_watermark is True
 
 
+def test_cli_add_reads_the_trend_from_a_file_never_inline(cli_store, tmp_path):
+    """Trend names come from a third-party creator: free text goes in a file, not on the shell line."""
+    nasty = "tea $(rm -rf ~) `id` \"quoted\" 'single'; & | > x"
+    f = tmp_path / "trend.txt"
+    f.write_text(nasty + "\n", encoding="utf-8")
+    r = run("add", *add_args(**{"--trend-file": str(f)}))
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["trend"] == nasty  # exactly one trailing newline dropped
+    assert cli_store.list_sources()[0].trend == nasty
+    assert "--trend-file" in run("add", "--help").output
+
+
+def test_cli_add_trend_and_trend_file_together_is_an_error(cli_store, tmp_path):
+    f = tmp_path / "t.txt"
+    f.write_text("x", encoding="utf-8")
+    r = run("add", *add_args(**{"--trend": "a", "--trend-file": str(f)}))
+    assert r.exit_code == 2 and "not both" in r.output and cli_store.list_sources() == []
+
+
+def test_cli_add_trend_file_missing_is_a_caller_error(cli_store, tmp_path):
+    r = run("add", *add_args(**{"--trend-file": str(tmp_path / "nope.txt")}))
+    assert r.exit_code == 2 and "no such file" in r.output and cli_store.list_sources() == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://v16-webapp.tiktokcdn.com/abc/video.mp4",
+        "https://v19.tiktokv.com/abc/video.mp4",
+        "https://scontent.cdninstagram.com/v/t50/clip.mp4",
+        "https://video-lhr8-1.xx.fbcdn.net/o1/v/t2/clip.mp4",
+        "https://tiktokcdn.com/x.mp4",
+        "scontent-lhr.cdninstagram.com/clip.mp4",
+    ],
+)
+def test_the_platform_cdn_hosts_are_platform_pages_too(url):
+    assert sources.is_platform_page(url) is True
+
+
+def test_a_host_that_only_ends_like_a_platform_domain_is_not_one():
+    assert sources.is_platform_page("https://notfbcdn.net/x.mp4") is False
+    assert sources.is_platform_page("https://cdn.example.com/a.mp4") is False
+
+
+def test_cli_add_refuses_a_platform_cdn_url(cli_store):
+    r = run("add", *add_args(**{"--url": "https://v16-webapp.tiktokcdn.com/abc/video.mp4"}))
+    assert r.exit_code == 2 and cli_store.list_sources() == []
+
+
 def test_cli_check_needs_all_three_checks(cli_store):
     sid = json.loads(run("add", *add_args()).stdout)["id"]
     assert run("check", sid, "--no-watermark", "--no-overlay").exit_code == 2

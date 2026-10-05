@@ -525,9 +525,22 @@ def add_command(
     emit(_fav_json(f))
 
 
+def _from_file_or_flag(proposal: dict[str, Any], key: str, flag: str | None) -> str | None:
+    """``proposal[key]`` (removed from the proposal: it is the pick's identity) or the ``--<key>`` flag.
+
+    Text that came from a creator or a tool belongs in the JSON file, never inline in the shell; both given
+    must agree. ``None`` when neither is given.
+    """
+    in_file = proposal.pop(key, None)
+    if in_file is not None and not isinstance(in_file, str):
+        fail(f'"{key}" in the proposal must be a string, got {in_file!r}')
+    if flag is not None and in_file is not None and flag.strip() != in_file.strip():
+        fail(f'--{key} ({flag!r}) and "{key}" in the proposal ({in_file!r}) disagree: give it once')
+    return flag if flag is not None else in_file
+
+
 @app.command("pick")
 def pick_command(
-    url: Annotated[str, typer.Option(help="Full video URL.")],
     platform: Annotated[str, typer.Option(help="tiktok | instagram | youtube.")],
     views: Annotated[int, typer.Option(min=0)],
     outlier_x: Annotated[float, typer.Option(min=0, help="Views divided by the creator's median.")],
@@ -536,11 +549,18 @@ def pick_command(
     fit: Annotated[float, typer.Option(min=0, max=10, help="Judged: fit with the character's premise.")],
     feasibility: Annotated[float, typer.Option(min=0, max=10, help="Judged: how easy for our pipeline.")],
     saturation: Annotated[float, typer.Option(min=0, max=10, help="Judged: 10 fresh, 5 template everywhere.")],
-    creator: Annotated[str | None, typer.Option(help="Creator handle.")] = None,
+    url: Annotated[
+        str | None,
+        typer.Option(help='Full video URL (or "url" in the --proposal-file JSON: text from a scan goes in a file).'),
+    ] = None,
+    creator: Annotated[
+        str | None, typer.Option(help='Creator handle (or "creator" in the --proposal-file JSON).')
+    ] = None,
     proposal: Annotated[
         str | None,
         typer.Option(
-            help='JSON: {"mode", "hook", "prop", "concept", "needs"?}; needs is multi_body and/or talking_lane.'
+            help='JSON: {"mode", "hook", "prop", "concept", "needs"?, "url"?, "creator"?}; needs is multi_body '
+            "and/or talking_lane; url and creator are pick identity, not stored in the proposal."
         ),
     ] = None,
     proposal_file: Annotated[
@@ -556,6 +576,11 @@ def pick_command(
         fail(f"--proposal is not valid JSON: {e}")
     if not isinstance(proposal_obj, dict):
         fail("--proposal must be a JSON object")
+    proposal_obj = dict(proposal_obj)
+    url = _from_file_or_flag(proposal_obj, "url", url)
+    creator = _from_file_or_flag(proposal_obj, "creator", creator)
+    if url is None:
+        fail('a pick needs its URL: pass --url or put "url" in the --proposal-file JSON')
     store = open_store()
     try:
         f, created = _add_pick(
