@@ -1,5 +1,5 @@
 {
-  "_doc": "Cases both implementations must agree on: studio/favorites.py (default_tier, velocity_per_day, engagement_rates, saturation_score) and studio/planning.py (estimate_credits), pinned in tests/test_favorites.py, tests/test_analyst.py and tests/test_planning.py, and the terminal's defaultTier, velocityPerDay, engagementRates, saturationScore and estimateCredits (terminal/src/lib/picks.test.ts, analyst.test.ts). `days_ago` is relative to `now`; null = the post date is unknown. `views` null = unknown. `velocity` (optional) is the views per day the scan stored when it filed the pick: it wins over views / age. The tier rule itself is documented once, in config/scan.json `tier_rules`.",
+  "_doc": "Cases both implementations must agree on: studio/favorites.py (default_tier, velocity_per_day, engagement_rates, saturation_score) and studio/planning.py (estimate_credits), pinned in tests/test_favorites.py, tests/test_analyst.py and tests/test_planning.py, and the terminal's defaultTier, velocityPerDay, engagementRates, saturationScore and estimateCredits (terminal/src/lib/picks.test.ts, analyst.test.ts). `days_ago` is relative to `now`; null = the post date is unknown. `views` null = unknown. `velocity` (optional) is the views per day the scan stored when it filed the pick: it wins over views / age. The tier rule itself is documented once, in config/scan.json `tier_rules`. `captions`: studio.captions.compose_content and the terminal's composeContent (tests/test_captions.py, captions.test.ts): the exact post text (`expect`), its UTF-16 length (`expect_length`) or an error containing `error`; `repeat` repeats the caption that many times.",
   "now": "2026-10-05T09:00:00Z",
   "tier": [
     {"gallery": true, "outlier_x": 900, "views": 3000000, "days_ago": 2, "expect": "gallery"},
@@ -70,5 +70,22 @@
     {"mode": "dropin", "seconds": 7.2, "music": "ai_beat", "expect": 113},
     {"mode": "recreate", "seconds": 8, "music": "in_app", "expect": 160},
     {"mode": "recreate", "seconds": 3, "music": "ai_beat", "expect": 160}
+  ],
+  "captions": [
+    {"caption": "Single Ladies · dachshund edition\nlead dancer. obviously. 💙\nwhich eye did you notice first? 🌭\n🎵 Single Ladies – Beyoncé · trend: @muduronline", "hashtags": ["#singleladies", "#dachshund", "#dogdance", "#sausagedog", "#oddeyes"], "expect": "Single Ladies · dachshund edition\nlead dancer. obviously. 💙\nwhich eye did you notice first? 🌭\n🎵 Single Ladies – Beyoncé · trend: @muduronline\n\nAI-generated character 🤖\n\n#singleladies #dachshund #dogdance #sausagedog #oddeyes"},
+    {"caption": "  The household is unaware. 🎩  ", "hashtags": [], "expect": "The household is unaware. 🎩\n\nAI-generated character 🤖"},
+    {"caption": "", "hashtags": ["oddeyes"], "expect": "AI-generated character 🤖\n\n#oddeyes"},
+    {"caption": "the right eye is ice-blue\nAI-generated character 🤖", "hashtags": ["#a", "#A", " a ", "", "#"], "expect": "the right eye is ice-blue\nAI-generated character 🤖\n\n#a"},
+    {"caption": "AI-generated character", "hashtags": ["a"], "expect": "AI-generated character\n\nAI-generated character 🤖\n\n#a"},
+    {"caption": "x", "hashtags": ["a", "b", "c", "d", "e", "#E"], "expect": "x\n\nAI-generated character 🤖\n\n#a #b #c #d #e"},
+    {"caption": "x", "hashtags": ["a", "b", "c", "d", "e", "f"], "error": "6 hashtags, over the limit of 5"},
+    {"caption": "x", "hashtags": ["#dachshund", "#FYP"], "error": "hashtag #FYP is refused"},
+    {"caption": "x", "hashtags": ["ForYouPage"], "error": "hashtag #ForYouPage is refused"},
+    {"caption": "x", "hashtags": ["#viral", "a", "b", "c", "d", "e"], "error": "hashtag #viral is refused"},
+    {"caption": "x", "hashtags": ["#explorer"], "expect": "x\n\nAI-generated character 🤖\n\n#explorer"},
+    {"caption": "z", "repeat": 2169, "hashtags": ["a"], "expect_length": 2200},
+    {"caption": "z", "repeat": 2170, "hashtags": ["a"], "error": "the post text is 2201 characters"},
+    {"caption": "🌭", "repeat": 1084, "hashtags": ["a"], "expect_length": 2199},
+    {"caption": "🌭", "repeat": 1085, "hashtags": ["a"], "error": "the post text is 2201 characters"}
   ]
 }

@@ -109,9 +109,13 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
     # 0009 (the analyst's data): only the two picks views, with six columns appended. The last of them, `analysis`, is the
     # marker that tells 0009 from 0008 (the probe reads it from the view's own columns).
     "0009": (("view", "v_picks"), ("view", "v_pick_history"), ("column", "analysis")),
-    # 0010 (the long list and "In the works"): the picks views with nine more columns, the last of them
-    # `source_candidates` (read from v_picks' own columns), and the new tracker view.
-    "0010": (("view", "v_picks"), ("view", "v_pick_history"), ("view", "v_tracker"), ("column", "source_candidates")),
+    # 0010 (the long list, "In the works" and the first comment): the picks views with nine more columns, the last of them
+    # `source_candidates` (read from v_picks' own columns), the new tracker view and v_queue with `first_comment` appended
+    # (read from v_queue's own columns).
+    "0010": (
+        ("view", "v_picks"), ("view", "v_pick_history"), ("view", "v_tracker"), ("view", "v_queue"),
+        ("column", "source_candidates"), ("column", "first_comment"),
+    ),
 }
 
 PROBE_SQL = """
@@ -126,7 +130,8 @@ join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'studio' and a.attnum > 0 and not a.attisdropped
   and ((c.relname = 'snapshots') or (c.relname = 'characters' and a.attname = 'setup')
        or (c.relname = 'runs' and a.attname = 'details') or (c.relname = 'sources' and a.attname = 'has_minors')
-       or (c.relname = 'v_picks' and a.attname in ('analysis', 'source_candidates')))
+       or (c.relname = 'v_picks' and a.attname in ('analysis', 'source_candidates'))
+       or (c.relname = 'v_queue' and a.attname = 'first_comment'))
 union all
 select 'index', indexname::text from pg_indexes where schemaname = 'studio'
 union all

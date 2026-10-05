@@ -11,6 +11,12 @@ exceed ``CAPTION_LIMIT`` characters (TikTok and Instagram both stop at 2,200): l
 ``ValueError``, it is never silently trimmed, so the disclosure and the hashtags can never be the part
 that gets cut. Length is counted in UTF-16 code units (an emoji is 2), the stricter of the two ways a
 platform may count.
+
+Hashtags (owner's caption playbook, 2026-10-05): at most ``HASHTAG_LIMIT`` (5, Instagram's cap) after ``clean_tags``,
+and never one of ``BANNED_HASHTAGS`` (#fyp, #foryou, #foryoupage, #viral, #explore: they reach nobody, case-insensitive).
+Both raise ``ValueError`` naming the limit or the tag; ``clip set`` turns it into exit 2 like the length. The terminal
+mirrors this rule (``composeContent`` in terminal/src/lib/captions.ts; terminal/src/lib/parity-cases.json ``captions`` holds
+the cases both sides must agree on).
 """
 
 from __future__ import annotations
@@ -20,6 +26,8 @@ from __future__ import annotations
 AI_DISCLOSURE = "AI-generated character 🤖"
 
 CAPTION_LIMIT = 2200
+HASHTAG_LIMIT = 5  # Instagram's cap
+BANNED_HASHTAGS = frozenset({"fyp", "foryou", "foryoupage", "viral", "explore"})
 
 
 def caption_length(text: str) -> int:
@@ -40,11 +48,23 @@ def clean_tags(hashtags: list[str]) -> list[str]:
 
 
 def compose_content(caption: str, hashtags: list[str]) -> str:
-    """The post text (see the module docstring). ``ValueError`` when it is over ``CAPTION_LIMIT``."""
+    """The post text (see the module docstring). ``ValueError`` when it is over ``CAPTION_LIMIT``, has more than
+    ``HASHTAG_LIMIT`` hashtags or one of ``BANNED_HASHTAGS``."""
     text = caption.strip()
     if AI_DISCLOSURE not in text:
         text = f"{text}\n\n{AI_DISCLOSURE}" if text else AI_DISCLOSURE
     tags = clean_tags(hashtags)
+    for tag in tags:
+        if tag[1:].lower() in BANNED_HASHTAGS:
+            raise ValueError(
+                f"hashtag {tag} is refused: {', '.join('#' + t for t in sorted(BANNED_HASHTAGS))} reach nobody "
+                f"(use the moment, the niche, the format and #oddeyes)"
+            )
+    if len(tags) > HASHTAG_LIMIT:
+        raise ValueError(
+            f"{len(tags)} hashtags, over the limit of {HASHTAG_LIMIT} (Instagram's cap): keep the moment, the niche, "
+            f"the format and #oddeyes"
+        )
     content = f"{text}\n\n{' '.join(tags)}" if tags else text
     if (n := caption_length(content)) > CAPTION_LIMIT:
         raise ValueError(

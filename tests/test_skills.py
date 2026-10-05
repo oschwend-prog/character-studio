@@ -374,3 +374,21 @@ def test_the_fetch_never_runs_outside_the_cli_and_the_skill_never_names_a_social
 def test_the_breakdown_bought_before_filing_is_not_bought_twice():
     body = text("daily-run")
     assert "(watched before filing, step 2), has its breakdown: no second purchase" in body
+
+
+def test_the_caption_follows_the_owners_formula_with_a_rotating_engagement_line_and_a_first_comment():
+    """Owner 2026-10-05: title, joke, ONE rotating engagement line, credit; the disclosure is automatic; 3-5 clean hashtags."""
+    master = text("daily-run").split("## 9. Master", 1)[1].split("## 10.", 1)[0]
+    for part in (
+        "searchable title of at most 40 characters", "`<famous moment or format> · dachshund edition`", "`· butler edition`",
+        "`## Search keywords`", "a label, not the character speaking", "never mention dancing",
+        "ONE engagement line, rotating per character", "a send trigger", "a question", "a series tease",
+        "Read the character's last 2 captions (`bin/studio clip list --character X`", "never use the kind of the last post again",
+        "`🎵 <song> – <artist>`", "` · dance: @<creator>`", "` · trend: <credit_handle>`", "` · original: <creator>`", "no handle known, no credit line",
+        "Publishing adds the AI disclosure line", "never write it", "3-5", "#oddeyes", "never #fyp, #foryou, #foryoupage, #viral or #explore",
+        "`humanizer` skill", "must fit 2,200 characters", "**First comment**", "at most 300 characters", "the owner pins it",
+        "--first-comment-file renders/<id>/first_comment.txt", "Wednesday dance · butler edition", "Single Ladies · dachshund edition",
+    ):  # fmt: skip
+        assert part in master, part
+    assert "at most 5 hashtags, the caption passed" not in master  # the old one-line rule is gone
+    assert "`--first-comment-file`" in text("daily-run").split("## Drop-in playbook", 1)[0]  # free text goes through a file

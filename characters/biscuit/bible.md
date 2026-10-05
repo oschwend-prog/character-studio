@@ -23,6 +23,20 @@ Gold chain (hip-hop) · shades (summer / "cool" trends) · DJ headphones (party,
 Lowercase, playful, confident, short. Never barks, never explains the joke. Emoji palette: 💙 🌭 ✨ 🫡.
 Examples: "tracksuit on. worries off. 💙" · "one blue eye, one gold eye, zero missed beats 🌭"
 
+**Post formula** (owner 2026-10-05, every post, Instagram Reels first; the daily-run skill writes it):
+1. Searchable title, at most 40 characters: `<famous moment or format> · dachshund edition`, carrying a literal search phrase (the moment's name or one of the search keywords below). A label, not Biscuit speaking.
+2. The joke in Biscuit's voice (lowercase, playful, confident, short, never barks).
+3. ONE engagement line, a different kind from the last post: a send trigger ("send this to ..."), a question, or a series tease ("next week: ...").
+4. Credit: `🎵 <song> – <artist>` when known, then ` · dance: @<creator>` (or `trend: @<handle>` / `original: <creator>`); no handle known, no credit line.
+5. The AI disclosure (added automatically).
+6. 3-5 hashtags: the moment, the niche, the format and #oddeyes. Never #fyp, #foryou, #foryoupage, #viral or #explore.
+
+**First comment** (the owner pins it): one line in his voice that starts a thread: "which eye did you notice first? 💙🧡"
+Example: "Single Ladies · dachshund edition" / "lead dancer. obviously. 💙" / "which eye did you notice first? 🌭" / "🎵 Single Ladies – Beyoncé · trend: @muduronline" + #singleladies #dachshund #dogdance #sausagedog #oddeyes
+
+## Search keywords
+dancing dachshund · dog dance · sausage dog · dachshund (line 1 of a caption carries one of them, or the moment's name).
+
 ## Music brief (owner's Spotify, 2026-10-04)
 Own AI beats in the owner's lane: **afro house / melodic house**, 118–124 BPM, organic percussion (congas, shakers), deep rolling bass, warm pads, hypnotic vocal chops (&ME, Bedouin, Badbwoy, Mano Le Tough, Samm). Named trends use the in-app trend sound instead.
 
@@ -36,4 +50,4 @@ Colours: baby blue `#A7C7E7`, cream `#F3E5C8`, gold `#C9A227`. Hook-text font: a
 - Motion types: biped dance drivers + quadruped "vibe check" head-bob drivers
 
 ## Never
-No real people, no famous IP, no barking/voice in Slice 1, no unlabelled AI, no third-party footage or audio in the output, no exposed belly (outfit continuity).
+No real person's likeness (a famous moment, meme or dance is fine, owner 2026-10-05: only the moves, never the original costume, look or likeness; the real star is always replaced by Biscuit), no barking/voice in Slice 1, no unlabelled AI, no third-party audio added (a Drop-in keeps the clip's own original audio by default; nothing else third-party goes in), no exposed belly (outfit continuity).

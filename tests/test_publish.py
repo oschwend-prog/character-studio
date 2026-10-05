@@ -1262,8 +1262,8 @@ def test_one_char_over_the_limit_raises_with_the_composed_length_never_trims():
 
 
 def test_the_limit_counts_hashtags_too():
-    with pytest.raises(ValueError, match="2200"):
-        compose_content("hello", [f"tag{i:03d}" + "z" * 30 for i in range(100)])
+    with pytest.raises(ValueError, match="2200"):  # five long tags (the most allowed) still count toward the length
+        compose_content("hello", [f"tag{i}" + "z" * 440 for i in range(5)])
 
 
 def test_emoji_count_as_two_units_so_the_limit_holds_in_utf16_too():

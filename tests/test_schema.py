@@ -735,7 +735,8 @@ TRACKER_COLUMNS = [
     "concept", "hook", "thumbnail_url", "preview_url", "gallery", "posted_at", "velocity", "proposed_mode", "owner_mode",
     "owner_presence", "owner_music", "owner_clip_path", "status", "decision", "approved_at", "note", "source_id", "analysis",
     "fetch_failed", "clip_id", "clip_state", "clip_mode", "clip_state_since", "clip_failure", "credits_spent", "post_id",
-    "post_status", "post_scheduled_for", "post_posted_at", "post_url", "post_error", "latest_views",
+    "post_status", "post_scheduled_for", "post_posted_at", "post_url", "post_error", "latest_views", "caption", "hashtags",
+    "first_comment",
 ]  # fmt: skip
 
 
@@ -780,8 +781,10 @@ def test_0010_is_views_and_grants_only():
     statements = [s.strip() for s in TRACKER_CODE.split(";") if s.strip()]
     kinds = sorted(re.match(r"(create or replace view studio\.\w+|grant select on studio\.\w+)", s).group(1) for s in statements)
     assert kinds == [
-        "create or replace view studio.v_pick_history", "create or replace view studio.v_picks", "create or replace view studio.v_tracker",
-        "grant select on studio.v_pick_history", "grant select on studio.v_picks", "grant select on studio.v_tracker",
+        "create or replace view studio.v_pick_history", "create or replace view studio.v_picks", "create or replace view studio.v_queue",
+        "create or replace view studio.v_tracker",
+        "grant select on studio.v_pick_history", "grant select on studio.v_picks", "grant select on studio.v_queue",
+        "grant select on studio.v_tracker",
     ]  # fmt: skip
     assert not re.search(r"\b(drop|truncate|delete|insert|update|alter|create table|create function)\b", TRACKER_CODE, re.I)
     assert not re.search(r"\banon\b", TRACKER_CODE)
@@ -833,3 +836,23 @@ def test_0010_tracker_joins_the_newest_clip_its_credits_its_post_and_the_latest_
     assert "coalesce(nullif(btrim(c.reject_reason), ''), qp.problems, nullif(btrim(c.qa ->> 'error'), '')) as clip_failure" in tail
     assert "greatest(c.created_at, cl.last_entry, cp.last_claim) as clip_state_since" in tail
     assert "f.created_at as approved_at" in tail  # no decision time is stored (decide / decide_pick record none)
+
+
+def test_0010_v_queue_keeps_every_column_of_0006_and_appends_the_first_comment():
+    cols = lambda text: re.findall(r"\bas (\w+),?\s*$|^  \w+\.(\w+),?\s*$", text, re.M)  # noqa: E731
+    view = lambda sql: re.search(r"create or replace view studio\.v_queue .*?where c\.state = 'awaiting_approval';", sql, re.S).group(0)  # noqa: E731
+    old_sql = (MIGRATIONS / "0006_slot_and_reviews.sql").read_text()
+    new, old = view(TRACKER_SQL), view(old_sql)
+    names = lambda text: [a or b for a, b in cols(text)]  # noqa: E731
+    assert names(new)[: len(names(old))] == names(old), "create or replace view may only append columns"
+    assert names(new)[len(names(old)) :] == ["first_comment"]
+    assert "c.features ->> 'first_comment' as first_comment" in new
+    # everything else of 0006's view is unchanged: the source joins, the pick, the free slot, the block reason, the filter
+    assert new.replace(",\n  c.features ->> 'first_comment' as first_comment", "") == old
+    assert "grant select on studio.v_queue to authenticated;" in TRACKER_SQL
+
+
+def test_0010_tracker_carries_the_post_text_and_the_first_comment_of_its_clip():
+    tail = TRACKER_CODE.split("create or replace view studio.v_tracker", 1)[1]
+    assert "select x.id, x.state, x.mode, x.created_at, x.reject_reason, x.qa, x.caption, x.hashtags, x.features" in tail
+    assert "c.features ->> 'first_comment' as first_comment" in tail

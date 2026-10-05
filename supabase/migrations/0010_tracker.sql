@@ -1,6 +1,6 @@
 -- ODD EYES Character Studio, migration 0010: the long list and the "In the works" tracker (owner request 2026-10-05).
 --
--- Views only: additive / replacing, schema studio only. To be applied to Supabase project hkcafvzjwkeibbmvskko
+-- Views only: additive / replacing, schema studio only (v_picks, v_pick_history, v_queue re-created; v_tracker new). To be applied to Supabase project hkcafvzjwkeibbmvskko
 -- ("faceless-youtube") as migration `studio_0010_tracker`; the controller applies it, it is never run from the studio CLI.
 -- Apply it BEFORE the terminal that reads it is deployed (that terminal selects v_tracker and the new columns of v_picks on
 -- every load; the CLI needs nothing from it: the data rides in favorites.proposal, checked by studio.favorites.validate_card).
@@ -26,7 +26,11 @@
 --      - credits_spent: every settled ledger entry of every clip of the pick (a re-roll and a remake included);
 --      - its post: the clip's latest post (by scheduled_for; for the two posts of one slot the least advanced, so a failed
 --        or needs_check post shows), with its status, slot, posted time (claimed_at, else the slot), URL, error, and the
---        views of its latest metric snapshot.
+--        views of its latest metric snapshot;
+--      - the post text of its clip (caption and hashtags: the terminal composes the exact text like studio.captions) and
+--        its first comment (features.first_comment), appended last.
+-- 3. v_queue is re-created with every column of 0006, in the same order, and `first_comment` appended (the clip's
+--    features.first_comment, written by `studio clip set --first-comment-file`: the line the owner pins under the post).
 
 create or replace view studio.v_picks with (security_invoker = true) as
 select
@@ -185,11 +189,14 @@ select
   case when p.status = 'posted' then coalesce(p.claimed_at, p.scheduled_for) end as post_posted_at,
   p.url as post_url,
   p.error as post_error,
-  sn.views as latest_views
+  sn.views as latest_views,
+  c.caption,
+  c.hashtags,
+  c.features ->> 'first_comment' as first_comment
 from studio.favorites f
 left join studio.characters ch on ch.slug = f.character_slug
 left join lateral (
-  select x.id, x.state, x.mode, x.created_at, x.reject_reason, x.qa
+  select x.id, x.state, x.mode, x.created_at, x.reject_reason, x.qa, x.caption, x.hashtags, x.features
   from studio.clips x
   where x.id = f.clip_id or x.features ->> 'fav_id' = f.id::text
   order by x.created_at desc, x.id desc
@@ -229,8 +236,49 @@ where f.status in ('approved', 'analysed', 'queued')
    or (f.status = 'made'
        and not coalesce(p.status = 'posted' and coalesce(p.claimed_at, p.scheduled_for) < now() - interval '7 days', false));
 
+-- The Queue card shows the first comment next to the post text (0006's columns, then first_comment).
+create or replace view studio.v_queue with (security_invoker = true) as
+select
+  c.id,
+  c.character_slug,
+  ch.name as character_name,
+  c.mode,
+  c.state,
+  c.master_path,
+  c.hook,
+  c.caption,
+  c.hashtags,
+  coalesce(c.credits_actual, c.credits_reserved) as cost_credits,
+  c.qa,
+  c.features,
+  c.created_at,
+  s.kind as source_kind,
+  s.url as source_url,
+  s.credit_handle as source_credit,
+  s.trend as source_trend,
+  coalesce((
+    select jsonb_agg(jsonb_build_object('account_id', t.id, 'platform', t.platform, 'handle', t.handle, 'mode', t.mode)
+                     order by t.platform)
+    from studio.accounts_for_clip(c.id) t
+  ), '[]'::jsonb) as targets,
+  studio.next_free_slot(c.id, now()) as next_slot,
+  fp.id as pick_id,
+  fp.url as pick_url,
+  studio.queue_block_reason(c.id) as blocked_reason,
+  c.features ->> 'first_comment' as first_comment
+from studio.clips c
+join studio.characters ch on ch.slug = c.character_slug
+left join studio.sources s on s.id = c.source_id
+left join lateral (
+  select f.id, f.url from studio.favorites f
+  where f.clip_id = c.id or f.id::text = c.features ->> 'fav_id'
+  order by f.created_at limit 1
+) fp on true
+where c.state = 'awaiting_approval';
+
 -- ---- grants ---------------------------------------------------------------------------------------
 
 grant select on studio.v_picks to authenticated;
 grant select on studio.v_pick_history to authenticated;
 grant select on studio.v_tracker to authenticated;
+grant select on studio.v_queue to authenticated;

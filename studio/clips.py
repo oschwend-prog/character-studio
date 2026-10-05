@@ -54,11 +54,17 @@ count (not an unconnected one, not one a Drop-in skips).
 (and the clip) unchanged, exit 0, writing nothing and checking nothing: ``--at`` is ignored then, the
 existing posts keep their times. A ``scheduled`` clip with no posts at all is refused (it is inconsistent).
 
+**The first comment** (owner's caption playbook, 2026-10-05): one line in the character's voice that seeds a thread under the
+post; the owner pins it. ``set_first_comment`` / ``clip set --first-comment-file F`` stores it as ``features['first_comment']``
+(one line, 1-300 characters; the clip's JSON field, no new column), the terminal shows it next to the post text with a Copy
+button (v_queue and v_tracker, migration 0010).
+
 CLI (``studio clip ...``) prints JSON on stdout; exit 2 for anything the caller must fix
 (unknown id, illegal transition, missing tags, bad value). ``clip set --state`` goes through
 ``transition``, so the table cannot be bypassed from the command line either. ``clip set --caption`` /
 ``--hashtag`` refuse (exit 2, nothing written) a caption that, composed with the AI disclosure and the
-hashtags (``studio.captions``), would be over the 2,200-character post limit.
+hashtags (``studio.captions``), would be over the 2,200-character post limit, carry more than 5 hashtags or a refused one
+(#fyp, #foryou, #foryoupage, #viral, #explore).
 """
 
 from __future__ import annotations
@@ -72,7 +78,7 @@ from typing import Annotated, Any
 
 import typer
 
-from studio.captions import compose_content
+from studio.captions import caption_length, compose_content
 from studio.cli_support import emit, fail, open_store, parse_when, text_option
 from studio.config import now_london
 from studio.models import MUSIC_ARMS, Clip, ClipState, Mode, Post
@@ -111,6 +117,7 @@ REQUIRED_FEATURES = frozenset(
 )
 
 MAX_REROLLS = 1
+FIRST_COMMENT_MAX_CHARS = 300
 
 # What ``transition`` / ``set_fields`` may write besides the state. Everything else on a clip
 # (id, character, source, mode, features, created_at) is fixed at creation or owned by another step.
@@ -190,6 +197,28 @@ def set_fields(store: Store, clip_id: str, **fields: Any) -> Clip:
     """Write non-state fields (``SETTABLE_FIELDS``) directly. ``KeyError`` for an unknown clip."""
     _check_settable(fields)
     return store.update_clip(clip_id, **fields)
+
+
+def validate_first_comment(text: str) -> str:
+    """The first comment, trimmed: one line of 1-300 characters (UTF-16, like the caption limit), else ``ValueError``."""
+    clean = (text or "").strip()
+    if not clean:
+        raise ValueError("the first comment is empty: one line in the character's voice")
+    if "\n" in clean or "\r" in clean:
+        raise ValueError("the first comment is one line: no line breaks")
+    if (n := caption_length(clean)) > FIRST_COMMENT_MAX_CHARS:
+        raise ValueError(f"the first comment is {n} characters, over the {FIRST_COMMENT_MAX_CHARS} limit")
+    return clean
+
+
+def set_first_comment(store: Store, clip_id: str, text: str) -> Clip:
+    """Store the post's first comment as ``features['first_comment']`` (the owner pins it). ``KeyError`` for an unknown clip,
+    ``ValueError`` (nothing written) for a comment that is not one line of 1-300 characters. Any state: it is post text."""
+    clean = validate_first_comment(text)
+    clip = store.get_clip(clip_id)
+    if clip is None:
+        raise KeyError(clip_id)
+    return store.update_clip(clip_id, features={**clip.features, "first_comment": clean})
 
 
 def set_source(store: Store, clip_id: str, source_id: str) -> Clip:
@@ -398,11 +427,23 @@ def set_command(
     credits_reserved: Annotated[int | None, typer.Option(min=0, help="Credits reserved.")] = None,
     credits_actual: Annotated[int | None, typer.Option(min=0, help="Credits really spent.")] = None,
     reject_reason: Annotated[str | None, typer.Option(help="Why it was rejected.")] = None,
+    first_comment: Annotated[
+        str | None, typer.Option("--first-comment", help="The post's first comment (one line, the owner pins it).")
+    ] = None,
+    first_comment_file: Annotated[
+        Path | None, typer.Option("--first-comment-file", help="The first comment from a file (use for free text).")
+    ] = None,
 ) -> None:
     """Set a clip's state and/or fields; the state only moves along the allowed transitions."""
     hook = text_option(hook, hook_file, "hook")
     caption = text_option(caption, caption_file, "caption")
     qa = text_option(qa, qa_file, "qa")
+    first_comment = text_option(first_comment, first_comment_file, "first-comment")
+    if first_comment is not None:
+        try:
+            first_comment = validate_first_comment(first_comment)
+        except ValueError as e:
+            fail(str(e))
     fields: dict[str, Any] = {
         "hook": hook,
         "caption": caption,
@@ -419,7 +460,7 @@ def set_command(
     except ValueError as e:
         fail(str(e))
     fields = {k: v for k, v in fields.items() if v is not None}
-    if state is None and source_id is None and not fields:
+    if state is None and source_id is None and not fields and first_comment is None:
         fail("nothing to set: pass --state, --source-id and/or at least one field")
     store = open_store()
     try:
@@ -437,6 +478,8 @@ def set_command(
                 c = transition(store, id, state, **fields)
             elif fields:
                 c = set_fields(store, id, **fields)
+            if first_comment is not None:
+                c = set_first_comment(store, id, first_comment)
     except KeyError:
         fail(f"unknown clip {id}")
     except IllegalTransition as e:

@@ -154,3 +154,18 @@ def test_the_tracker_says_why_a_clip_failed_and_when_its_state_last_moved(db):
     p = tracker(db)[plain]
     assert (p["clip_id"], p["clip_failure"], p["credits_spent"], p["owner_mode"], p["owner_music"]) == (None, None, 0, "recreate", "ai_beat")
     assert p["approved_at"] is not None
+
+
+def test_the_queue_and_the_tracker_carry_the_post_text_and_the_first_comment(db):
+    waiting = add_clip(db, state="awaiting_approval", features={"first_comment": "which eye did you notice first? 💙🧡"})
+    db.execute(f"update {SCHEMA}.clips set caption = 'lead dancer. obviously. 💙', hashtags = '{{#dachshund,#oddeyes}}' where id = %s", [waiting])
+    pick = add_pick(db, status="made", url=URL + "c", clip_id=waiting)
+    (q,) = db.execute(f"select first_comment, blocked_reason from {SCHEMA}.v_queue where id = %s", [waiting]).fetchall()
+    assert q["first_comment"] == "which eye did you notice first? 💙🧡"
+    row = tracker(db)[pick]
+    assert (row["caption"], row["hashtags"], row["first_comment"]) == (
+        "lead dancer. obviously. 💙", ["#dachshund", "#oddeyes"], "which eye did you notice first? 💙🧡",
+    )
+    plain = add_clip(db, state="awaiting_approval")
+    (none,) = db.execute(f"select first_comment from {SCHEMA}.v_queue where id = %s", [plain]).fetchall()
+    assert none["first_comment"] is None

@@ -294,6 +294,7 @@ def test_a_missing_table_fails_the_schema_check_naming_it(world):
         (("column", "analysis"), "0009"),
         (("view", "v_tracker"), "0010"),
         (("column", "source_candidates"), "0010"),
+        (("column", "first_comment"), "0010"),
     ],
 )
 def test_each_migration_is_detected_by_its_own_objects(world, missing, migration):
