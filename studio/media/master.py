@@ -40,6 +40,11 @@ master. The hook windows and the bug are already on the finished timeline.
 
 CLI: ``studio master build --spec <json>`` builds, runs the master QA and prints JSON; it exits 1
 when the master has QA problems (the JSON says which) and 2 for anything the caller must fix.
+
+``studio master upload <clip> <file>`` is the last step: it re-checks the file against the master spec
+(``--loop`` for an eye loop), uploads it to bucket ``clips`` at ``<character>/<clip id>.mp4`` (what
+publishing and the terminal sign) and sets ``clip.master_path``. A file that misses the spec is not
+uploaded (exit 1, the JSON lists the problems); the clip's state is left to ``clip set --state``.
 """
 
 from __future__ import annotations
@@ -58,10 +63,15 @@ from typing import Annotated, Any
 import typer
 from PIL import Image
 
-from studio.cli_support import emit, fail
+from studio.cli_support import emit, fail, open_storage, open_store
+from studio.clips import set_fields
 from studio.media import overlays
 from studio.media.qa import QAError, check_master, probe
+from studio.models import Clip
+from studio.storage import Storage, StorageError
+from studio.store import Store
 
+MASTER_BUCKET = "clips"  # the bucket studio.publish.base signs masters from
 WIDTH, HEIGHT = 1080, 1920
 FPS = 30
 ZOOM_HIT_SECONDS = 0.25
@@ -81,6 +91,14 @@ _EPS = 1e-6
 
 class MasterError(RuntimeError):
     """ffmpeg failed, or the audio could not be measured."""
+
+
+class MasterRejected(Exception):
+    """The file does not meet the master spec, so it was not uploaded. ``problems`` says why."""
+
+    def __init__(self, problems: list[str]) -> None:
+        super().__init__("; ".join(problems))
+        self.problems = problems
 
 
 @dataclass
@@ -602,6 +620,25 @@ app = typer.Typer(
 )
 
 
+def upload_master(
+    store: Store, storage: Storage, clip_id: str, file: Path | str, *, loop: bool = False
+) -> Clip:
+    """Check ``file`` against the master spec, upload it to ``clips/<character>/<clip id>.mp4``, set the path.
+
+    ``KeyError`` for an unknown clip, ``QAError`` for an unreadable file, ``MasterRejected`` (nothing
+    uploaded) when it misses the spec, ``StorageError`` when the upload fails.
+    """
+    clip = store.get_clip(clip_id)
+    if clip is None:
+        raise KeyError(clip_id)
+    problems = check_master(probe(file), loop=loop)
+    if problems:
+        raise MasterRejected(problems)
+    key = f"{clip.character_slug}/{clip.id}.mp4"
+    storage.upload(MASTER_BUCKET, key, file)
+    return set_fields(store, clip_id, master_path=key)
+
+
 @app.command("build")
 def build_command(
     spec: Annotated[Path, typer.Option("--spec", help="JSON file of MasterSpec fields (see master.py).")],
@@ -624,3 +661,24 @@ def build_command(
     emit({"out": str(out), **dataclasses.asdict(report), "ok": report.ok})
     if problems:
         raise typer.Exit(1)
+
+
+@app.command("upload")
+def upload_command(
+    clip: Annotated[str, typer.Argument(help="Clip id.")],
+    file: Annotated[Path, typer.Argument(help="The finished master (output of `master build`).")],
+    loop: Annotated[bool, typer.Option("--loop", help="Judge it as an eye loop (6-8 s).")] = False,
+) -> None:
+    """Upload a spec-checked master to the clips bucket and set the clip's master_path."""
+    store = open_store()
+    storage = open_storage()
+    try:
+        done = upload_master(store, storage, clip, file, loop=loop)
+    except KeyError:
+        fail(f"unknown clip {clip}")
+    except MasterRejected as e:
+        emit({"ok": False, "clip": clip, "problems": e.problems})
+        raise typer.Exit(1) from e
+    except (QAError, StorageError) as e:
+        fail(str(e))
+    emit({"clip": done.id, "master_path": done.master_path, "bucket": MASTER_BUCKET})

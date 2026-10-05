@@ -1,0 +1,19 @@
+{
+  "_doc": "Identity-lock references and account links for Biscuit. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). An account with a null handle is not seeded yet; an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value: the Instagram guard and the terminal change it later and a re-seed leaves it alone. closeup_center / blue_eye_xy are pixels of the 1080x1920 close-up (centre of the push-in) and of the screen at the outro zoom 1.3 (where the glint sits).",
+  "slug": "biscuit",
+  "name": "Biscuit",
+  "status": "designing",
+  "bodies": ["biped", "quadruped"],
+  "masters": {
+    "biped": "42f579b9-3da3-42ff-af47-98d758112743",
+    "quadruped": "d863df81-54f8-45df-9676-cf44338d07fa"
+  },
+  "closeup": "7798e2bc-d0bd-492d-8d7f-a96063150c4f",
+  "closeup_center": [536, 732],
+  "blue_eye_xy": [301, 960],
+  "avatar": "assets/avatars/biscuit.png",
+  "accounts": [
+    {"platform": "tiktok", "handle": null, "postiz_integration_id": null, "dropin_share": 0.70},
+    {"platform": "instagram", "handle": null, "postiz_integration_id": null, "dropin_share": 0.40}
+  ]
+}

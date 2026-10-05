@@ -530,3 +530,77 @@ def test_cli_master_build_reports_a_bad_enhancement_as_exit_2(tmp_path):
     path = spec_json(tmp_path, dance, tone(tmp_path / "beat.wav", 3), enhancements=[{"type": "wobble"}])
     r = CliRunner().invoke(app, ["master", "build", "--spec", str(path)])
     assert r.exit_code == 2 and "unknown enhancement" in r.output
+
+
+# ---- master upload: the finished master goes to the `clips` bucket and onto the clip ---------------
+
+
+@pytest.fixture
+def upload_rig(monkeypatch, tmp_path):
+    from studio.models import Clip
+    from studio.storage import LocalStorage
+    from studio.store import MemoryStore
+
+    store = MemoryStore()
+    storage = LocalStorage(tmp_path / "bucket")
+    monkeypatch.setattr(master, "open_store", lambda: store)
+    monkeypatch.setattr(master, "open_storage", lambda: storage)
+    clip = store.add_clip(Clip(character_slug="biscuit", mode="recreate", state="qa_passed"))
+    return store, storage, clip
+
+
+def test_the_master_bucket_is_the_one_publishing_reads():
+    from studio.publish.base import MASTER_BUCKET
+
+    assert master.MASTER_BUCKET == MASTER_BUCKET == "clips"
+
+
+def test_upload_master_stores_the_file_and_sets_the_master_path(upload_rig, synth_video):
+    store, storage, clip = upload_rig
+    got = master.upload_master(store, storage, clip.id, synth_video())
+    assert got.master_path == f"biscuit/{clip.id}.mp4"
+    assert store.get_clip(clip.id).master_path == got.master_path
+    assert storage.signed_url("clips", got.master_path).startswith("file://")  # it is really there
+    assert got.state.value == "qa_passed"  # the state moves through `clip set`, not here
+
+
+def test_upload_master_refuses_a_file_that_misses_the_master_spec(upload_rig, synth_video):
+    store, storage, clip = upload_rig
+    with pytest.raises(master.MasterRejected) as e:
+        master.upload_master(store, storage, clip.id, synth_video(w=720, h=1280))
+    assert any(p.startswith("resolution") for p in e.value.problems)
+    assert store.get_clip(clip.id).master_path is None
+
+
+def test_upload_master_judges_an_eye_loop_by_the_loop_length(upload_rig, synth_video):
+    store, storage, clip = upload_rig
+    with pytest.raises(master.MasterRejected):
+        master.upload_master(store, storage, clip.id, synth_video(dur=3))  # too short for both
+    got = master.upload_master(store, storage, clip.id, synth_video(dur=7), loop=True)
+    assert got.master_path
+
+
+def test_upload_master_unknown_clip_and_missing_file(upload_rig, synth_video):
+    store, storage, clip = upload_rig
+    with pytest.raises(KeyError):
+        master.upload_master(store, storage, "nope", synth_video())
+    with pytest.raises(master.QAError):
+        master.upload_master(store, storage, clip.id, Path("/no/such/file.mp4"))
+
+
+def test_cli_master_upload_prints_the_clip_path(upload_rig, synth_video):
+    store, storage, clip = upload_rig
+    r = CliRunner().invoke(app, ["master", "upload", clip.id, str(synth_video())])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert out == {"clip": clip.id, "master_path": f"biscuit/{clip.id}.mp4", "bucket": "clips"}
+
+
+def test_cli_master_upload_exit_codes(upload_rig, synth_video):
+    store, storage, clip = upload_rig
+    runner = CliRunner()
+    r = runner.invoke(app, ["master", "upload", clip.id, str(synth_video(w=720, h=1280))])
+    assert r.exit_code == 1 and json.loads(r.stdout)["ok"] is False
+    assert any(p.startswith("resolution") for p in json.loads(r.stdout)["problems"])
+    assert runner.invoke(app, ["master", "upload", "nope", str(synth_video())]).exit_code == 2
+    assert runner.invoke(app, ["master", "upload", clip.id, "/no/such/file.mp4"]).exit_code == 2

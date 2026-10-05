@@ -15,6 +15,6 @@ def test_all_subapps_registered():
     assert r.exit_code == 0
     for name in (
         "budget", "source", "fav", "clip", "plan", "qa", "master",
-        "publish", "metrics", "review", "db", "version",
+        "publish", "metrics", "review", "seed", "db", "version",
     ):
         assert name in r.output, name

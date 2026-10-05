@@ -4,7 +4,18 @@ from __future__ import annotations
 
 import typer
 
-from studio import __version__, budget, clips, favorites, metrics, planning, publish, review, sources
+from studio import (
+    __version__,
+    budget,
+    clips,
+    favorites,
+    metrics,
+    planning,
+    publish,
+    review,
+    seed,
+    sources,
+)
 from studio.media import master, qa
 
 app = typer.Typer(
@@ -30,6 +41,7 @@ app.add_typer(master.app, name="master")
 app.add_typer(publish.app, name="publish")
 app.add_typer(metrics.app, name="metrics")
 app.add_typer(review.app, name="review")
+app.add_typer(seed.app, name="seed")
 
 for _name, _help in SUBAPPS.items():
     app.add_typer(typer.Typer(help=_help, no_args_is_help=True), name=_name)
