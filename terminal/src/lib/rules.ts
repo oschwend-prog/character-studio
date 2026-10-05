@@ -1,8 +1,10 @@
+import { ageDays, pickVelocity } from './analyst';
 import { londonDate, londonDayKey, londonTime, londonWallToIso, londonWeekday } from './format';
 import type {
   Channel, Character, CharacterTraits, ClipFile, DecideExtras, LibraryClip, OwnerMode, OwnerMusic, OwnerPresence,
   Pick as ViralPick, PickHistory, QueueClip, RunRow, ScanDetails, Snapshot, Tier, TraitProp,
 } from './types';
+import { TIER_RULES } from './scanConfig';
 
 // The owner-facing rules the terminal applies on its own side. Each one mirrors a rule the database
 // (migration 0004) or the Python studio enforces; the server stays the authority, these only decide
@@ -769,38 +771,45 @@ export const TIER_LABELS: Record<Tier, string> = {
   gallery: 'Ready to drop in',
 };
 export const TIER_HINTS: Record<Tier, string> = {
-  iconic: 'Everyone knows it: a famous meme, dance or scene, months to years old, evergreen',
-  viral_now: 'Peaking this week, with a big outlier',
+  iconic: 'Everyone knows it: a famous meme, dance or scene, 6 months to years old (or 50M+ views), evergreen',
+  viral_now: 'Peaking now: a big outlier, or climbing at 100K+ views a day',
   rising: 'Early and climbing fast: catch it before the peak',
   gallery: 'A clip from Higgsfield’s Genjutsu gallery: already clean and trimmed, a backup when nothing real fits',
 };
 const isTier = (v: unknown): v is Tier => typeof v === 'string' && (TIERS as ReadonlyArray<string>).includes(v);
-const DAY_MS = 86_400_000;
 
 export interface TierInput {
   tier?: string | null;
   gallery?: boolean | null;
   outlier_x: number | null;
   posted_at?: string | null;
+  /** The views at filing time; with the age they give the velocity. */
+  views?: number | null;
+  /** Views per day, stored when the pick was filed; wins over views / age. */
+  velocity?: number | null;
 }
 
 /**
- * The tier of a pick the analyst did not tier (mirrors studio.favorites.default_tier; both read
- * parity-cases.json). In this order: a gallery clip is `gallery`; an outlier of 100 or more posted within 14 days is
- * `viral_now`; posted within 4 days with an outlier of 5 or more is `rising`; posted more than 90 days ago is
- * `iconic`; anything else (an unknown post date included) is `viral_now`.
+ * The tier of a pick the analyst did not tier (mirrors studio.favorites.default_tier; both read parity-cases.json, and
+ * config/scan.json `tier_rules` holds the numbers). In this order: a gallery clip is `gallery`; older than 180 days or
+ * 50M views or more is `iconic`; posted within 21 days with an outlier of 20 or more, or at 100K views a day or more,
+ * is `viral_now`; posted within 7 days with an outlier of 5 or more is `rising`; anything else is `viral_now` up to 30
+ * days old and `iconic` after that (an unknown post date is `viral_now`).
  */
-export function defaultTier(p: Pick<TierInput, 'gallery' | 'outlier_x' | 'posted_at'>, now: number): Tier {
+export function defaultTier(p: Pick<TierInput, 'gallery' | 'outlier_x' | 'posted_at' | 'views' | 'velocity'>, now: number): Tier {
   if (p.gallery) return 'gallery';
-  const at = p.posted_at ? Date.parse(p.posted_at) : Number.NaN;
-  const age = Number.isNaN(at) ? null : (now - at) / DAY_MS;
+  const r = TIER_RULES;
+  const age = ageDays(p.posted_at, now);
   const x = typeof p.outlier_x === 'number' && Number.isFinite(p.outlier_x) ? p.outlier_x : null;
-  if (age != null && x != null) {
-    if (x >= 100 && age <= 14) return 'viral_now';
-    if (x >= 5 && age <= 4) return 'rising';
+  const views = typeof p.views === 'number' && Number.isFinite(p.views) ? p.views : null;
+  if ((age != null && age > r.iconic_min_age_days) || (views != null && views >= r.iconic_min_views)) return 'iconic';
+  if (age == null) return 'viral_now';
+  const velocity = pickVelocity({ velocity: p.velocity, views: views, posted_at: p.posted_at }, now);
+  if (age <= r.viral_now_max_age_days && ((x != null && x >= r.viral_now_min_outlier) || (velocity != null && velocity >= r.viral_now_min_velocity_per_day))) {
+    return 'viral_now';
   }
-  if (age != null && age > 90) return 'iconic';
-  return 'viral_now';
+  if (age <= r.rising_max_age_days && x != null && x >= r.rising_min_outlier) return 'rising';
+  return age <= r.fallback_viral_now_max_age_days ? 'viral_now' : 'iconic';
 }
 
 /** The analyst's tier when it set one, else the derived one (`derived` says which). */

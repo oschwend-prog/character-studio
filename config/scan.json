@@ -13,8 +13,50 @@
     "vidiq_monthly_credits": 150,
     "scans_per_week": 4,
     "breakdowns_per_week": 4,
-    "_note": "4 scans (20) + 4 approved-pick breakdowns (40) = 60/week = more than the 150/month plan; raise the vidIQ plan or cut breakdowns to 2/week."
+    "credits_per_scan": 5,
+    "credits_per_watch": 10,
+    "balance_floor": 20,
+    "watches_per_character": 3,
+    "_note": "4 scans (20) + 4 watches (40) = 60/week = more than the 150/month plan; raise the vidIQ plan or cut watches to 2/week. `breakdowns_per_week` caps every vidiq_watch_shortform_content call of a week (the pre-filing watch of a top pick and the breakdown of an approved one): `watches_per_character` per scan is the most the run asks for, and it stops at the week's cap or when vidiq_balance would fall under `balance_floor` after the watch."
   },
+  "tier_rules": {
+    "_doc": "The category (tier) of a pick the analyst did not tier, in this order; the first rule that holds wins. A pick with an explicit proposal.tier keeps it. studio/favorites.py TIER_RULES and terminal/src/lib/scanConfig.ts must equal these numbers (tests pin both). age = days since posted_at (or the scan's age_days); velocity = views per day since posting (the stored proposal.velocity, else views / max(age, velocity_min_age_days)). An unknown age is viral_now.",
+    "iconic_min_age_days": 180,
+    "iconic_min_views": 50000000,
+    "viral_now_max_age_days": 21,
+    "viral_now_min_outlier": 20,
+    "viral_now_min_velocity_per_day": 100000,
+    "rising_max_age_days": 7,
+    "rising_min_outlier": 5,
+    "fallback_viral_now_max_age_days": 30,
+    "velocity_min_age_days": 1
+  },
+  "saturation_steps": [
+    {"min_count": 8, "score": 3},
+    {"min_count": 4, "score": 5},
+    {"min_count": 1, "score": 8},
+    {"min_count": 0, "score": 10}
+  ],
+  "_saturation_steps": "The saturation sub-score from saturation_count (similar outliers found in the last 7 days): the first row whose min_count the count reaches. studio.favorites.saturation_score and the terminal's saturationScore read the same table.",
+  "access": [
+    {"id": "vidiq_outliers", "name": "vidIQ outlier search", "what": "TikTok and Instagram Reels: views, how far the video beats its creator's median (the outlier score), and the hook, format and audio analysis"},
+    {"id": "vidiq_watch", "name": "vidIQ watch", "what": "A scene-by-scene breakdown of one short video: who is in it, the camera, the beats, the hook and the audio"},
+    {"id": "genjutsu", "name": "Higgsfield Genjutsu galleries", "what": "Trending and New: ready-to-drop-in clips, already clean and trimmed, with previews"},
+    {"id": "tiktok_sounds", "name": "TikTok trending sounds", "what": "What is climbing in the UK and US this week (a sound is never posted without its licence)"},
+    {"id": "owner_links", "name": "Your own links", "what": "Any TikTok, Instagram Reel or YouTube link you paste, approved on the spot"},
+    {"id": "clip_fetch", "name": "Clip fetch", "what": "Only for a pick you approved: the public clip is fetched once for the Drop-in, checked here for free, and deleted after posting"}
+  ],
+  "video_requirements": [
+    "One clear performer or animal as the star",
+    "Full body in frame",
+    "A mostly static camera",
+    "No watermark and no other creator's handle",
+    "No text burned into the picture",
+    "No child visible anywhere",
+    "People in the background are fine",
+    "A clean 6-9 second window to use (16 at most)",
+    "Music: the clip's original audio by default"
+  ],
   "characters": {
     "biscuit": {
       "audienceQuery": "Culture/Region: US/UK English-speaking; Global: true; Demographics: dog lovers and Gen Z/millennials 16-40 who watch cute pet and dance content;",
@@ -49,5 +91,5 @@
   "_themes": "Each rotation entry has a `theme`: a short label (at most 60 characters) naming what the entry looks for. A filed pick carries `proposal.theme` = the theme of the entry it matched, or the closest theme of its character when it came from the Genjutsu gallery or the owner. The terminal groups a character's picks by category or by theme.",
   "free_sources_daily": ["Higgsfield Genjutsu Trending + New galleries (get_presets source=genjutsu)", "TikTok trending commercial sounds (tiktok_music_trending, country GB and US, 7DAY)"],
   "global_reject_rules": ["a real person's likeness or an impersonation as the joke (the real star is always replaced by our character; a famous clip, meme or dance is fine)", "brand ads / sponsored posts", "trend more than 7 days past its peak, unless it is an iconic evergreen moment (tier iconic)", "already picked or produced", "sexualised content, or a child as the star or main subject (a Drop-in source shows no child at all)", "national/ethnic/religious stereotypes"],
-  "pick_card_fields": ["url", "platform", "creator_handle", "views", "outlier_x", "posted_at", "matched_character", "tier", "theme", "thumbnail_url", "preview_url (gallery clips)", "fit_grade A/B/C", "matched_traits", "proposed_mode", "proposed_hook", "proposed_prop", "why_it_works"]
+  "pick_card_fields": ["url", "platform", "creator_handle", "views", "outlier_x", "posted_at", "velocity (views per day, worked out at filing)", "engagement {likes, comments, shares, saves} when vidIQ returns it", "saturation_count", "matched_character", "tier", "theme", "thumbnail_url", "preview_url (gallery clips)", "fit_grade A/B/C", "trait_matches (1-4 phrases of the traits card)", "why (the analyst's reasoning, one paragraph)", "analysis (the clip check, after the clip is fetched or attached)", "proposed_mode", "proposed_hook", "proposed_prop", "why_it_works"]
 }

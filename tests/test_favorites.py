@@ -1005,35 +1005,43 @@ def days_ago(n: float) -> str:
 
 
 @pytest.mark.parametrize(
-    ("proposal", "outlier_x", "tier"),
+    ("proposal", "outlier_x", "views", "tier"),
     [
         # a Genjutsu gallery clip is a gallery pick whatever its numbers (source kind or preset)
-        ({"source_kind": "higgsfield_library", "posted_at": days_ago(2)}, 900, "gallery"),
-        ({"preset_id": "hf-preset-1"}, None, "gallery"),
-        ({"preset_id": "   "}, 12, "viral_now"),  # a blank preset is no preset
-        # big outlier, posted within 14 days: viral now
-        ({"posted_at": days_ago(3)}, 100, "viral_now"),
-        ({"posted_at": days_ago(14)}, 1393, "viral_now"),
-        # early and climbing: posted within 4 days with an outlier of 5 or more (but under 100)
-        ({"posted_at": days_ago(1)}, 5, "rising"),
-        ({"posted_at": days_ago(4)}, 44.6, "rising"),
-        ({"posted_at": days_ago(1)}, 4.9, "viral_now"),  # not enough outlier to be "rising"
-        ({"posted_at": days_ago(6)}, 44.6, "viral_now"),  # too old for rising, not old enough for iconic
-        # famous and old: months to years
-        ({"posted_at": days_ago(91)}, 3.0, "iconic"),
-        ({"posted_at": days_ago(400)}, 2000, "iconic"),
-        ({"posted_at": days_ago(90)}, 3.0, "viral_now"),  # "older than 90 days" is strict
-        # the rules are in order: a fresh mega-outlier is viral now, not rising
-        ({"posted_at": days_ago(2)}, 1000, "viral_now"),
+        ({"source_kind": "higgsfield_library", "posted_at": days_ago(2)}, 900, 3_000_000, "gallery"),
+        ({"preset_id": "hf-preset-1"}, None, None, "gallery"),
+        ({"preset_id": "   "}, 12, None, "viral_now"),  # a blank preset is no preset
+        # posted within 21 days with an outlier of 20 or more: viral now
+        ({"posted_at": days_ago(3)}, 100, 1_400_000, "viral_now"),
+        ({"posted_at": days_ago(21)}, 20, 200_000, "viral_now"),
+        ({"posted_at": days_ago(4)}, 44.6, 200_000, "viral_now"),
+        # ... or climbing at 100K views a day or more, whatever the outlier
+        ({"posted_at": days_ago(2)}, 3, 400_000, "viral_now"),
+        # early and climbing: posted within 7 days with an outlier of 5 or more (but under 20, and under 100K a day)
+        ({"posted_at": days_ago(1)}, 5, 30_000, "rising"),
+        ({"posted_at": days_ago(7)}, 12, 90_000, "rising"),
+        ({"posted_at": days_ago(8)}, 12, 90_000, "viral_now"),  # too old for rising: the fallback is viral now up to 30 days
+        ({"posted_at": days_ago(1)}, 4.9, 50_000, "viral_now"),  # not enough outlier to be "rising"
+        # famous and old: older than 180 days, or 50M views or more
+        ({"posted_at": days_ago(400)}, 2000, 12_000_000, "iconic"),
+        ({"posted_at": days_ago(3)}, 1393, 60_000_000, "iconic"),
+        ({"posted_at": days_ago(3)}, 1393, 49_999_999, "viral_now"),
+        # the fallback: viral now up to 30 days old, iconic after
+        ({"posted_at": days_ago(30)}, 3, 1_000_000, "viral_now"),
+        ({"posted_at": days_ago(31)}, 3, 1_000_000, "iconic"),
+        # the scan's stored velocity beats views / age
+        ({"posted_at": days_ago(2), "velocity": 20_000}, 6, 300_000, "rising"),
+        ({"posted_at": days_ago(2)}, 6, 300_000, "viral_now"),
         # no age known: the fallback
-        ({}, None, "viral_now"),
-        ({"posted_at": "not a date"}, 50, "viral_now"),
-        ({"age_days": 120}, 10, "iconic"),  # the scan's `age_days` works as well as a date
-        ({"age_days": 2}, 8, "rising"),
+        ({}, None, None, "viral_now"),
+        ({"posted_at": "not a date"}, 50, 1_000_000, "viral_now"),
+        ({}, None, 60_000_000, "iconic"),
+        ({"age_days": 120}, 10, None, "iconic"),  # the scan's `age_days` works as well as a date
+        ({"age_days": 2}, 8, 10_000, "rising"),
     ],
 )
-def test_default_tier_follows_the_owners_rules(proposal, outlier_x, tier):
-    assert favorites.default_tier(proposal, outlier_x, NOW) == tier
+def test_default_tier_follows_the_owners_rules(proposal, outlier_x, views, tier):
+    assert favorites.default_tier(proposal, outlier_x, NOW, views=views) == tier
 
 
 def test_default_tier_agrees_with_the_terminals_on_the_shared_cases():
@@ -1041,12 +1049,14 @@ def test_default_tier_agrees_with_the_terminals_on_the_shared_cases():
     path = Path(__file__).resolve().parents[1] / "terminal" / "src" / "lib" / "parity-cases.json"
     cases = json.loads(path.read_text())
     now = datetime.fromisoformat(cases["now"].replace("Z", "+00:00"))
-    assert len(cases["tier"]) >= 10
+    assert len(cases["tier"]) >= 25
     for c in cases["tier"]:
         proposal = {"source_kind": "higgsfield_library"} if c["gallery"] else {}
         if c["days_ago"] is not None:
             proposal["posted_at"] = (now - timedelta(days=c["days_ago"])).isoformat()
-        assert favorites.default_tier(proposal, c["outlier_x"], now) == c["expect"], c
+        if c.get("velocity") is not None:
+            proposal["velocity"] = c["velocity"]
+        assert favorites.default_tier(proposal, c["outlier_x"], now, views=c["views"]) == c["expect"], c
 
 
 def test_the_four_tiers_have_exactly_the_owners_keys_and_labels():
@@ -1114,7 +1124,7 @@ def test_fav_list_exposes_the_tier_the_analyst_set_and_the_one_it_derived(cli_st
 def test_fav_list_derives_rising_and_gallery_when_the_analyst_set_nothing(cli_store, monkeypatch):
     monkeypatch.setattr(favorites, "now_london", lambda: NOW)
     pick(cli_store, D4, proposal={"mode": "recreate", "posted_at": days_ago(2)})  # 131.8x, 2 days old: viral now
-    pick(cli_store, O4, proposal={"mode": "recreate", "posted_at": days_ago(3)})  # 3.8x: not rising, viral now by fallback
+    pick(cli_store, O4, proposal={"mode": "recreate", "posted_at": days_ago(3)})  # 3.8x but 366K views a day: viral now by velocity
     pick(cli_store, B2, proposal={"mode": "recreate", "preset_id": "hf-1", "thumbnail_url": "https://t.example/x.jpg"})
     tiers = {r["creator_handle"]: r["tier"] for r in json.loads(run("list", "--status", "new").stdout)}
     assert tiers == {"@banana.the.wiener": "viral_now", "@theeuropeankid": "viral_now", "@drink321coffee": "gallery"}

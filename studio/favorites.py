@@ -34,17 +34,29 @@ list with a bad item), and a malformed one that is stored anyway holds the pick 
 approving it or breaking ``fav list``.
 
 **The pick card** (owner decisions 2026-10-05) rides in ``proposal`` (no migration; the terminal reads it through
-``v_picks``, migration 0008): ``tier`` (``iconic`` "Broke the internet", ``viral_now`` "Viral now", ``rising``
+``v_picks``, migrations 0008 and 0009): ``tier`` (``iconic`` "Broke the internet", ``viral_now`` "Viral now", ``rising``
 "Up and coming", ``gallery`` "Ready to drop in"), ``theme`` (which of the character's scan themes it matched),
 ``posted_at`` (an ISO date or time, from the tool result: what the tier rule reads), ``thumbnail_url`` and
 ``preview_url`` (https URLs a tool already returned: vidIQ's thumbnail, a Genjutsu preset's thumbnail and
 preview, ``https://i.ytimg.com/vi/<id>/hqdefault.jpg`` for a YouTube clip; never fetched or rehosted here) and
 what the owner says in the Make-it sheet (``owner_props``, ``owner_music``). ``add_pick`` / ``mark_favorite``
-refuse a malformed one (``validate_card``). A pick with no ``tier`` gets one derived by ``default_tier`` (the
-same rule as the terminal's ``defaultTier``): a Genjutsu gallery clip is ``gallery``; an outlier of 100 or more
-posted within 14 days is ``viral_now``; posted within 4 days with an outlier of 5 or more is ``rising``; older
-than 90 days is ``iconic``; anything else ``viral_now``. ``fav list`` prints ``tier``, ``tier_label`` and
-``tier_derived`` next to the stored proposal.
+refuse a malformed one (``validate_card``).
+
+**The analyst's data** (owner request 2026-10-05, migration 0009; every field optional): ``velocity`` (views per day since
+posting, worked out at filing time when the post date and the views are known: ``velocity_per_day``), ``engagement``
+(``{likes, comments, shares, saves}`` from vidIQ when it returns them: ``engagement_rates`` gives the engagement and share
+rate), ``saturation_count`` (similar outliers of the last 7 days: ``saturation_score`` turns it into the 0-10 saturation
+sub-score), ``trait_matches`` (1-4 short phrases of the character's traits card the video matches), ``why`` (the analyst's
+reasoning, one paragraph) and ``analysis`` (the local check of a fetched or attached clip: people, subject, camera,
+watermark, overlay, children, best window, bpm). ``fav mark --analysis-file`` stores the last one.
+
+**The tier rule** (``default_tier``, mirrored by the terminal's ``defaultTier``; the numbers live once, in
+``config/scan.json`` ``tier_rules``, and ``TIER_RULES`` here is pinned equal to them by a test). A pick with an explicit
+``tier`` keeps it. Otherwise, in this order: a Genjutsu gallery clip is ``gallery``; older than 180 days or 50M views or
+more is ``iconic``; posted within 21 days with an outlier of 20 or more, or at 100K views a day or more, is ``viral_now``;
+posted within 7 days with an outlier of 5 or more is ``rising``; anything else is ``viral_now`` up to 30 days old and
+``iconic`` after that (an unknown post date is ``viral_now``). ``fav list`` prints ``tier``, ``tier_label`` and
+``tier_derived`` next to the stored proposal, and ``age_days``, ``velocity_per_day``, ``engagement_rate`` and ``share_rate``.
 
 CLI (``studio fav ...``) prints JSON on stdout. Exit codes: 0 ok, 2 anything the caller must fix,
 4 ``fav decide`` found the pick needs an analyst decision (JSON on stdout says so).
@@ -237,16 +249,35 @@ TIER_LABELS = {
     "rising": "Up and coming",
     "gallery": "Ready to drop in",
 }
-VIRAL_NOW_MIN_OUTLIER = 100.0
-VIRAL_NOW_MAX_AGE_DAYS = 14.0
-RISING_MIN_OUTLIER = 5.0
-RISING_MAX_AGE_DAYS = 4.0
-ICONIC_MIN_AGE_DAYS = 90.0  # strictly older than this
+# The tier rule's numbers: config/scan.json `tier_rules` is the one place they are written (the terminal's scanner panel
+# reads it); tests/test_analyst.py pins this dict equal to it and the terminal's own test pins scanConfig.ts equal to it.
+TIER_RULES: dict[str, int] = {
+    "iconic_min_age_days": 180,  # strictly older than this
+    "iconic_min_views": 50_000_000,
+    "viral_now_max_age_days": 21,
+    "viral_now_min_outlier": 20,
+    "viral_now_min_velocity_per_day": 100_000,
+    "rising_max_age_days": 7,
+    "rising_min_outlier": 5,
+    "fallback_viral_now_max_age_days": 30,  # viral now up to this age, iconic after it
+    "velocity_min_age_days": 1,  # a clip posted hours ago is divided by one day, not by a fraction
+}
+SATURATION_STEPS = ((8, 3.0), (4, 5.0), (1, 8.0), (0, 10.0))  # (similar outliers or more, score)
 THEME_MAX_CHARS = 60
 URL_MAX_CHARS = 2048
 PREVIEW_SUFFIXES = (".mp4", ".webm", ".mov", ".m4v")
 OWNER_PROPS_MAX = 3
 OWNER_PROP_MAX_CHARS = 40
+TRAIT_MATCHES_MAX = 4
+TRAIT_MATCH_MAX_CHARS = 60
+WHY_MAX_CHARS = 600
+ENGAGEMENT_KEYS = ("likes", "comments", "shares", "saves")
+CAMERAS = ("static", "handheld", "moving")
+ANALYSIS_REQUIRED = ("people_count", "camera", "watermark", "overlay", "minors")
+ANALYSIS_KEYS = (*ANALYSIS_REQUIRED, "main_subject", "best_window", "bpm", "notes")
+ANALYSIS_SUBJECT_MAX_CHARS = 80
+ANALYSIS_NOTES_MAX_CHARS = 500
+BPM_RANGE = (30.0, 300.0)
 
 
 def is_gallery(proposal: Mapping[str, Any]) -> bool:
@@ -270,29 +301,92 @@ def posted_age_days(proposal: Mapping[str, Any], now: datetime) -> float | None:
     if (moment := _moment(proposal.get("posted_at"))) is not None:
         return (now - moment).total_seconds() / 86400
     age = proposal.get("age_days")
-    if isinstance(age, (int, float)) and not isinstance(age, bool) and math.isfinite(age) and age >= 0:
-        return float(age)
+    if (n := _finite(age)) is not None and n >= 0:
+        return n
     return None
 
 
-def default_tier(proposal: Mapping[str, Any], outlier_x: float | None, now: datetime) -> str:
+def _finite(value: Any) -> float | None:
+    """``value`` as a finite float, or None (a bool, a string, NaN and infinity are not numbers here)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
+def velocity_per_day(views: Any, age_days: Any) -> int | None:
+    """Views per day since posting, to the whole view; None when the views or the age are unknown.
+
+    A clip posted a few hours ago is divided by one day (``velocity_min_age_days``), never by a fraction of one: 90K
+    views in 12 hours is 90K a day, not 180K.
+    """
+    v, age = _finite(views), _finite(age_days)
+    if v is None or age is None or v < 0:
+        return None
+    return math.floor(v / max(age, TIER_RULES["velocity_min_age_days"]) + 0.5)  # half up, like the terminal
+
+
+def _stored_velocity(proposal: Mapping[str, Any]) -> float | None:
+    v = _finite(proposal.get("velocity"))
+    return v if v is not None and v >= 0 else None
+
+
+def engagement_rates(engagement: Any, views: Any) -> dict[str, float | None] | None:
+    """``{engagement_rate, share_rate}`` of a pick, or None when there is nothing to divide.
+
+    ``engagement_rate`` = (likes + comments + shares + saves) / views over the counts vidIQ returned (a platform that
+    hides one counts the others); ``share_rate`` = shares / views, None when the shares are not known. None without a
+    view count or without any engagement count.
+    """
+    v = _finite(views)
+    if v is None or v <= 0 or not isinstance(engagement, Mapping):
+        return None
+    counts = {k: n for k in ENGAGEMENT_KEYS if (n := _finite(engagement.get(k))) is not None and n >= 0}
+    if not counts:
+        return None
+    return {
+        "engagement_rate": sum(counts.values()) / v,
+        "share_rate": counts["shares"] / v if "shares" in counts else None,
+    }
+
+
+def saturation_score(count: Any) -> float:
+    """The 0-10 saturation sub-score from the number of similar outliers found in the last 7 days.
+
+    8 or more copies is 3, 4-7 is 5, 1-3 is 8, none is 10. ``ValueError`` for anything that is not a whole number of 0 or more.
+    """
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        raise ValueError(f"saturation_count must be a whole number of 0 or more, got {count!r}")
+    return next(score for floor, score in SATURATION_STEPS if count >= floor)
+
+
+def default_tier(proposal: Mapping[str, Any], outlier_x: float | None, now: datetime, views: int | None = None) -> str:
     """The tier of a pick the analyst did not tier (mirrored by ``defaultTier`` in terminal/src/lib/rules.ts).
 
-    In this order: a gallery clip is ``gallery``; ``outlier_x >= 100`` and posted <= 14 days ago is ``viral_now``;
-    posted <= 4 days ago with ``outlier_x >= 5`` is ``rising``; posted > 90 days ago is ``iconic``; else ``viral_now``.
+    In this order (numbers: ``TIER_RULES``): a gallery clip is ``gallery``; older than 180 days or ``views`` of 50M or more
+    is ``iconic``; posted within 21 days with ``outlier_x`` of 20 or more, or at 100K views a day or more (the stored
+    ``proposal['velocity']``, else ``views`` / age), is ``viral_now``; posted within 7 days with an outlier of 5 or more is
+    ``rising``; anything else is ``viral_now`` up to 30 days old and ``iconic`` after (an unknown age: ``viral_now``).
     """
     if is_gallery(proposal):
         return "gallery"
+    r = TIER_RULES
     age = posted_age_days(proposal, now)
-    x = outlier_x if isinstance(outlier_x, (int, float)) and math.isfinite(outlier_x) else None
-    if age is not None and x is not None:
-        if x >= VIRAL_NOW_MIN_OUTLIER and age <= VIRAL_NOW_MAX_AGE_DAYS:
-            return "viral_now"
-        if x >= RISING_MIN_OUTLIER and age <= RISING_MAX_AGE_DAYS:
-            return "rising"
-    if age is not None and age > ICONIC_MIN_AGE_DAYS:
+    x, seen = _finite(outlier_x), _finite(views)
+    if (age is not None and age > r["iconic_min_age_days"]) or (seen is not None and seen >= r["iconic_min_views"]):
         return "iconic"
-    return "viral_now"
+    if age is None:
+        return "viral_now"
+    velocity = _stored_velocity(proposal)
+    if velocity is None:
+        velocity = velocity_per_day(seen, age)
+    if age <= r["viral_now_max_age_days"] and (
+        (x is not None and x >= r["viral_now_min_outlier"])
+        or (velocity is not None and velocity >= r["viral_now_min_velocity_per_day"])
+    ):
+        return "viral_now"
+    if age <= r["rising_max_age_days"] and x is not None and x >= r["rising_min_outlier"]:
+        return "rising"
+    return "viral_now" if age <= r["fallback_viral_now_max_age_days"] else "iconic"
 
 
 def _https_url(value: Any, key: str, suffixes: tuple[str, ...] | None = None) -> None:
@@ -335,6 +429,89 @@ def validate_card(proposal: Mapping[str, Any]) -> None:
                 f"proposal.owner_props must be a list of at most {OWNER_PROPS_MAX} items of 1-{OWNER_PROP_MAX_CHARS} "
                 f"characters, got {props!r:.80}"
             )
+    _validate_analyst_fields(proposal)
+
+
+def _whole(value: Any) -> bool:
+    n = _finite(value)
+    return n is not None and n >= 0 and n == int(n) and not isinstance(value, bool)
+
+
+def _short_text(value: Any, limit: int) -> bool:
+    return isinstance(value, str) and 0 < len(value.strip()) and len(value) <= limit
+
+
+def _validate_analyst_fields(proposal: Mapping[str, Any]) -> None:
+    """The analyst's data of a pick (see the module doc): each optional, each refused with its own sentence."""
+    if (v := proposal.get("velocity")) is not None and not ((n := _finite(v)) is not None and n >= 0):
+        raise ValueError(f"proposal.velocity must be views per day, a number of 0 or more, got {v!r:.40}")
+    if (e := proposal.get("engagement")) is not None:
+        ok = (
+            isinstance(e, Mapping)
+            and bool(e)
+            and set(e) <= set(ENGAGEMENT_KEYS)
+            and all(_whole(n) for n in e.values())
+        )
+        if not ok:
+            raise ValueError(
+                f"proposal.engagement must be counts of {', '.join(ENGAGEMENT_KEYS)} (whole numbers of 0 or more, at "
+                f"least one), got {e!r:.80}"
+            )
+    if (c := proposal.get("saturation_count")) is not None and not (isinstance(c, int) and not isinstance(c, bool) and c >= 0):
+        raise ValueError(f"proposal.saturation_count must be a whole number of 0 or more, got {c!r:.40}")
+    if (t := proposal.get("trait_matches")) is not None:
+        ok = (
+            isinstance(t, list)
+            and 1 <= len(t) <= TRAIT_MATCHES_MAX
+            and all(_short_text(m, TRAIT_MATCH_MAX_CHARS) for m in t)
+        )
+        if not ok:
+            raise ValueError(
+                f"proposal.trait_matches must be a list of 1-{TRAIT_MATCHES_MAX} short phrases (1-{TRAIT_MATCH_MAX_CHARS} "
+                f"characters) from the character's traits card, got {t!r:.80}"
+            )
+    if (w := proposal.get("why")) is not None and not _short_text(w, WHY_MAX_CHARS):
+        raise ValueError(f"proposal.why must be a short paragraph (1-{WHY_MAX_CHARS} characters), got {w!r:.80}")
+    if (a := proposal.get("analysis")) is not None:
+        validate_analysis(a)
+
+
+def validate_analysis(analysis: Any) -> None:
+    """Refuse a malformed ``proposal['analysis']``, the check of a fetched or attached clip.
+
+    Required: ``people_count`` (whole number), ``camera`` (static, handheld or moving) and the three yes/no flags
+    ``watermark``, ``overlay`` and ``minors`` (a child anywhere in the clip). Optional: ``main_subject``, ``best_window``
+    (``{start_s, end_s}``, 0 <= start < end, seconds), ``bpm`` (30-300 or null) and ``notes``. An unknown key is refused,
+    so a typo is never stored as if it were data.
+    """
+    what = "proposal.analysis"
+    if not isinstance(analysis, Mapping) or not analysis:
+        raise ValueError(f"{what} must be an object with {', '.join(ANALYSIS_REQUIRED)}, got {analysis!r:.80}")
+    if unknown := sorted(set(analysis) - set(ANALYSIS_KEYS)):
+        raise ValueError(f"{what} has unknown key(s) {unknown}; allowed: {', '.join(ANALYSIS_KEYS)}")
+    if missing := [k for k in ANALYSIS_REQUIRED if k not in analysis]:
+        raise ValueError(f"{what} needs {', '.join(missing)}")
+    if not _whole(analysis["people_count"]):
+        raise ValueError(f"{what}.people_count must be a whole number of 0 or more, got {analysis['people_count']!r:.40}")
+    if analysis["camera"] not in CAMERAS:
+        raise ValueError(f"{what}.camera must be one of {', '.join(CAMERAS)}, got {analysis['camera']!r:.40}")
+    for flag in ("watermark", "overlay", "minors"):
+        if not isinstance(analysis[flag], bool):
+            raise ValueError(f"{what}.{flag} must be true or false, got {analysis[flag]!r:.40}")
+    if "main_subject" in analysis and not _short_text(analysis["main_subject"], ANALYSIS_SUBJECT_MAX_CHARS):
+        raise ValueError(f"{what}.main_subject must be 1-{ANALYSIS_SUBJECT_MAX_CHARS} characters, got {analysis['main_subject']!r:.80}")
+    if "notes" in analysis and not _short_text(analysis["notes"], ANALYSIS_NOTES_MAX_CHARS):
+        raise ValueError(f"{what}.notes must be 1-{ANALYSIS_NOTES_MAX_CHARS} characters, got {analysis['notes']!r:.80}")
+    if (bpm := analysis.get("bpm")) is not None and not (
+        (n := _finite(bpm)) is not None and BPM_RANGE[0] <= n <= BPM_RANGE[1]
+    ):
+        raise ValueError(f"{what}.bpm must be {BPM_RANGE[0]:g}-{BPM_RANGE[1]:g} or null, got {bpm!r:.40}")
+    if (window := analysis.get("best_window")) is not None:
+        start = end = None
+        if isinstance(window, Mapping) and set(window) == {"start_s", "end_s"}:
+            start, end = _finite(window["start_s"]), _finite(window["end_s"])
+        if start is None or end is None or not 0 <= start < end:
+            raise ValueError(f"{what}.best_window must be {{start_s, end_s}} in seconds with 0 <= start < end, got {window!r:.80}")
 
 
 # ---- scoring ---------------------------------------------------------------------------
@@ -446,6 +623,8 @@ def _add_pick(
         return existing[0], False
     total = scores.pop("total")
     proposal = dict(proposal)
+    if proposal.get("velocity") is None and (v := velocity_per_day(views, posted_age_days(proposal, now_london()))) is not None:
+        proposal["velocity"] = v  # views per day since posting, as of the day it was filed
     if origin == "owner":
         proposal["decision"] = _record("approve", "owner", "owner's own link")
     f = store.add_favorite(
@@ -673,9 +852,19 @@ def _fav_json(f: Favorite, **extra: Any) -> dict[str, Any]:
     out = dataclasses.asdict(f)
     if f.status == "new":
         out["auto_decision"] = auto_decision(f)
+    now = now_london()
     stored = f.proposal.get("tier")
-    tier = stored if stored in TIERS else default_tier(f.proposal, f.outlier_x, now_london())
+    tier = stored if stored in TIERS else default_tier(f.proposal, f.outlier_x, now, views=f.views)
     out.update(tier=tier, tier_label=TIER_LABELS[tier], tier_derived=stored not in TIERS)
+    age = posted_age_days(f.proposal, now)
+    rates = engagement_rates(f.proposal.get("engagement"), f.views) or {}
+    velocity = _stored_velocity(f.proposal)
+    out.update(
+        age_days=None if age is None else round(age, 1),
+        velocity_per_day=math.floor(velocity + 0.5) if velocity is not None else velocity_per_day(f.views, age),
+        engagement_rate=rates.get("engagement_rate"),
+        share_rate=rates.get("share_rate"),
+    )
     return {**out, **extra}
 
 
@@ -717,7 +906,14 @@ def pick_command(
     freshness: Annotated[float, typer.Option(min=0, max=10, help="Judged: 10 rising now, 6 evergreen, 3 past peak.")],
     fit: Annotated[float, typer.Option(min=0, max=10, help="Judged: fit with the character's premise.")],
     feasibility: Annotated[float, typer.Option(min=0, max=10, help="Judged: how easy for our pipeline.")],
-    saturation: Annotated[float, typer.Option(min=0, max=10, help="Judged: 10 fresh, 5 template everywhere.")],
+    saturation: Annotated[
+        float | None,
+        typer.Option(
+            min=0, max=10,
+            help="Judged: 10 fresh, 5 template everywhere. Omit it when the proposal has saturation_count: "
+            "8+ copies = 3, 4-7 = 5, 1-3 = 8, none = 10.",
+        ),
+    ] = None,
     url: Annotated[
         str | None,
         typer.Option(help='Full video URL (or "url" in the --proposal-file JSON: text from a scan goes in a file).'),
@@ -750,6 +946,14 @@ def pick_command(
     creator = _from_file_or_flag(proposal_obj, "creator", creator)
     if url is None and platform != GALLERY_PLATFORM:  # a gallery clip is keyed by its preset_id instead
         fail('a pick needs its URL: pass --url or put "url" in the --proposal-file JSON')
+    if saturation is None:
+        count = proposal_obj.get("saturation_count")
+        if count is None:
+            fail('--saturation is needed (or "saturation_count" in the proposal: the score is worked out from it)')
+        try:
+            saturation = saturation_score(count)
+        except ValueError as e:
+            fail(f"proposal.saturation_count: {e}")
     store = open_store()
     try:
         f, created = _add_pick(
@@ -801,7 +1005,10 @@ def seen_command(
 @app.command("mark")
 def mark_command(
     id: Annotated[str, typer.Argument(help="Favourite id.")],
-    status: Annotated[str, typer.Option(help="new, approved, skipped, analysed, queued or made.")],
+    status: Annotated[
+        str | None,
+        typer.Option(help="new, approved, skipped, analysed, queued or made. Omit it to keep the pick's own status."),
+    ] = None,
     breakdown: Annotated[str | None, typer.Option(help="Beat-by-beat breakdown (markdown).")] = None,
     breakdown_file: Annotated[
         Path | None, typer.Option("--breakdown-file", help="The breakdown, read from a file (use for tool text).")
@@ -810,8 +1017,16 @@ def mark_command(
     source: Annotated[str | None, typer.Option(help="Source id of a clean inbox file (Drop-in).")] = None,
     note: Annotated[str | None, typer.Option()] = None,
     note_file: Annotated[Path | None, typer.Option("--note-file", help="The note, read from a file.")] = None,
+    analysis_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--analysis-file",
+            help="JSON object: the check of the clip (people_count, main_subject, camera, watermark, overlay, minors, "
+            "best_window, bpm, notes), stored as proposal.analysis.",
+        ),
+    ] = None,
 ) -> None:
-    """Move a pick through production and attach its breakdown, clip or source."""
+    """Move a pick through production and attach its breakdown, clip, source or clip check."""
     breakdown = text_option(breakdown, breakdown_file, "breakdown")
     note = text_option(note, note_file, "note")
     fields = {
@@ -823,6 +1038,17 @@ def mark_command(
     }
     store = open_store()
     try:
+        if analysis_file is not None or status is None:
+            current = store.get_favorite(id)
+            if current is None:
+                raise KeyError(id)
+            status = status or current.status
+            if analysis_file is not None:
+                try:
+                    analysis = json.loads(text_option(None, analysis_file, "analysis") or "")
+                except json.JSONDecodeError as e:
+                    fail(f"--analysis-file is not valid JSON: {e}")
+                fields["proposal"] = {**current.proposal, "analysis": analysis}
         f = mark_favorite(store, id, status, **fields)
     except KeyError:
         fail(f"unknown favourite {id}")

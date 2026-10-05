@@ -5,9 +5,10 @@
 import picksJson from './batch1-picks.json';
 import traitsJson from './traits.json';
 import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, checkClipBasics, ownerClipPath } from '../lib/rules';
+import { velocityPerDay } from '../lib/analyst';
 import { londonDayKey, londonWallToIso } from '../lib/format';
 import type {
-  Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipFile, ClipState, DecideExtras, HealthRow, LibraryClip, OwnerMusic,
+  Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, Engagement, HealthRow, LibraryClip, OwnerMusic,
   Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, Tier,
 } from '../lib/types';
 
@@ -90,6 +91,12 @@ const ownerOf = (f: { proposal: Record<string, unknown> }) => ({
   gallery: f.proposal.source_kind === 'higgsfield_library' || String(f.proposal.preset_id ?? '').trim() !== '',
   thumbnail_url: (f.proposal.thumbnail_url as string) ?? null,
   preview_url: (f.proposal.preview_url as string) ?? null,
+  velocity: typeof f.proposal.velocity === 'number' ? f.proposal.velocity : null,
+  engagement: (f.proposal.engagement as Engagement) ?? null,
+  saturation_count: typeof f.proposal.saturation_count === 'number' ? f.proposal.saturation_count : null,
+  trait_matches: Array.isArray(f.proposal.trait_matches) ? (f.proposal.trait_matches as string[]) : null,
+  why: (f.proposal.why as string) ?? null,
+  analysis: (f.proposal.analysis as ClipAnalysis) ?? null,
 });
 
 export class DemoBackend implements Backend {
@@ -269,6 +276,48 @@ export class DemoBackend implements Backend {
     card('B6', { theme: 'elder out-dances the young', posted_at: posted(5) });
     for (const ref of ['O1', 'O2', 'O3', 'O4', 'O5']) card(ref, { posted_at: posted(12), thumbnail_url: demoThumb('DEMO', 260) });
 
+    // The analyst's data (migration 0009), SYNTHETIC like everything here: age comes from posted_at, the stored velocity is what the
+    // scan worked out when it filed the pick (views per day since posting), then reactions, how crowded the idea is, the traits it
+    // matches, the analyst's reasoning and, for the ones already looked at, the check of the clip. Some picks carry none of it.
+    const vel = (views: number, days: number) => velocityPerDay(views, days) ?? 0;
+    card('D1', {
+      velocity: vel(2_000_000, 6), engagement: { likes: 168_000, comments: 3_100, shares: 22_000, saves: 9_400 }, saturation_count: 2,
+      trait_matches: ['dog leads the dancers', 'bouncy and puppy-cute'],
+      why: 'Biscuit takes the front-and-centre spot of a human dance crew: one animal is the star, full body, static camera. Only the lead is swapped; the backup dancers stay as the scene.',
+      analysis: {
+        people_count: 4, main_subject: 'the lead dancer, to be swapped for Biscuit', camera: 'static', watermark: false, overlay: false, minors: false,
+        best_window: { start_s: 1.5, end_s: 9.5 }, bpm: 118, notes: 'Four dancers; swap the lead only. One cut at 11 s, outside the window.',
+      },
+    });
+    card('D3', {
+      trait_matches: ['slick upright dance'],
+      why: 'A ready-made drop-in from the Genjutsu gallery: one performer, static camera, upright dance. It costs no search credits.',
+      analysis: {
+        people_count: 1, main_subject: 'a small dog dancing upright', camera: 'static', watermark: false, overlay: false, minors: false,
+        best_window: { start_s: 0, end_s: 8 }, bpm: 124, notes: 'Gallery clip: already clean and trimmed.',
+      },
+    });
+    card('B4', {
+      velocity: vel(22_300_000, 2), engagement: { likes: 2_100_000, comments: 31_000, shares: 410_000, saves: 180_000 }, saturation_count: 5,
+      trait_matches: ['calm and dignified', 'a straight face under absurdity'],
+      why: 'A straight face while the room falls apart is Reginald’s whole joke. One performer, mostly static camera; whatever burns or breaks behind him is replaced by our scene.',
+    });
+    card('B5', {
+      velocity: vel(2_900_000, 6), engagement: { likes: 240_000, comments: 5_200, shares: 41_000 }, saturation_count: 9,
+      trait_matches: ['formal elder out-dances the young'],
+      why: 'The elder who out-dances the young is a Reginald format, but nine near copies landed this week: the idea is crowded, so the fresh angle has to be the quiff.',
+    });
+    card('B6', {
+      velocity: vel(349_700, 5), engagement: { likes: 41_000, comments: 900, shares: 6_100, saves: 3_300 }, saturation_count: 0,
+      trait_matches: ['uniform at work plus a trend dance', 'the quiff stays rigid'],
+      why: 'Nobody else has this angle yet. A uniform at work and a trend dance is his best format; the creator’s handle is burned in, so it is made as a Recreate.',
+      analysis: {
+        people_count: 3, main_subject: 'a butler among partygoers', camera: 'handheld', watermark: true, overlay: false, minors: false,
+        best_window: { start_s: 2, end_s: 9.5 }, bpm: null, notes: 'The creator’s handle is burned in at the bottom left.',
+      },
+    });
+    card('O1', { velocity: vel(5_700_000, 12), saturation_count: 1 });
+
     // Four stand-in picks (SYNTHETIC, like every clip here) so each tier has a card for both characters.
     const standIn = (n: number, slug: string, platform: string, handle: string, hook: string, concept: string, views: number, x: number, total: number, proposal: Record<string, unknown>): Fav => {
       const f: Fav = {
@@ -284,13 +333,25 @@ export class DemoBackend implements Backend {
     standIn(1, 'biscuit', 'tiktok', '@demo.pawprint', 'tracksuit on. worries off.', 'Small dog in a tracksuit mouths the lyric, one paw on the beat; the caption gives him a job.', 3_100_000, 1240, 78, {
       theme: 'pet with a human job', posted_at: posted(3), thumbnail_url: demoThumb('DEMO', 300),
       decision: { decision: 'approve', by: 'analyst', reason: 'Matches: wholesome ego, ego or job caption. Posted 3 days ago at 1,240x.' },
+      velocity: vel(3_100_000, 3), engagement: { likes: 322_000, comments: 6_400, shares: 58_000, saves: 21_000 }, saturation_count: 3,
+      trait_matches: ['wholesome ego', 'ego or job caption', 'slick upright dance'],
+      why: 'A tiny dog with a main-character job caption: exactly the wholesome ego. One animal, full body, static camera; three near copies this week, so still fresh.',
+      analysis: {
+        people_count: 0, main_subject: 'a dachshund in a tracksuit', camera: 'static', watermark: false, overlay: false, minors: false,
+        best_window: { start_s: 2.5, end_s: 10, }, bpm: 112.5, notes: 'Clean start, one hard cut at 11 s: use the first 10 s.',
+      },
     });
-    standIn(2, 'biscuit', 'instagram', '@demo.doxie', 'vet face. fully fine.', 'Stares into the lens, then hits one perfect beat; rewatch bait.', 420_000, 18, 71, {
+    standIn(2, 'biscuit', 'instagram', '@demo.doxie', 'vet face. fully fine.', 'Stares into the lens, then hits one perfect beat; rewatch bait.', 38_000, 18, 71, {
       theme: 'stare, then hits every beat', posted_at: posted(1), thumbnail_url: demoThumb('DEMO', 80),
+      velocity: vel(38_000, 1), engagement: { likes: 3_100, comments: 190 }, saturation_count: 0,
+      trait_matches: ['head-snap into the lens'],
     });
     standIn(3, 'reginald', 'youtube', '@demo.rainstreet', 'an umbrella. a puddle. no notes.', 'A formal figure dances with an umbrella in the rain, perfectly serious; a famous scene, played straight.', 12_000_000, 5.2, 69, {
       tier: 'iconic', theme: 'one action, new location', posted_at: posted(400), thumbnail_url: demoWide('DEMO', 215),
       decision: { decision: 'approve', by: 'analyst', reason: 'Matches: deadpan under absurdity, black umbrella. A famous moment everyone knows.' },
+      engagement: { likes: 410_000, comments: 8_800 },
+      trait_matches: ['deadpan under absurdity', 'black umbrella'],
+      why: 'A famous scene played completely straight is the Reginald joke. It is an iconic evergreen moment, so it is made as a Recreate with a synthetic driver.',
     });
     standIn(4, 'reginald', 'higgsfield', '@genjutsu', 'tea for two, dance for one', 'A Genjutsu gallery clip: one dancer, static camera, ready to drop in.', 380_000, 9.1, 66, {
       source_kind: 'higgsfield_library', preset_id: 'hf-genjutsu-butler-02', theme: 'deadpan at work', posted_at: posted(8), thumbnail_url: demoThumb('GENJUTSU', 160),

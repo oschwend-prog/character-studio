@@ -31,15 +31,22 @@ describe('the four tiers', () => {
 
 describe('defaultTier (the same cases as studio.favorites.default_tier)', () => {
   it('agrees with every shared case', () => {
-    expect(parity.tier.length).toBeGreaterThanOrEqual(10);
+    expect(parity.tier.length).toBeGreaterThanOrEqual(25);
     for (const c of parity.tier) {
-      const got = defaultTier({ gallery: c.gallery, outlier_x: c.outlier_x, posted_at: c.days_ago == null ? null : ago(c.days_ago) }, NOW);
+      const got = defaultTier(
+        {
+          gallery: c.gallery, outlier_x: c.outlier_x, views: c.views, velocity: 'velocity' in c ? c.velocity : null,
+          posted_at: c.days_ago == null ? null : ago(c.days_ago),
+        },
+        NOW,
+      );
       expect([JSON.stringify(c), got]).toEqual([JSON.stringify(c), c.expect]);
     }
   });
 
   it('tierOf takes the analyst’s tier and says when it derived one', () => {
     expect(tierOf({ tier: 'iconic', outlier_x: 3, posted_at: ago(1) }, NOW)).toEqual({ tier: 'iconic', derived: false });
+    expect(tierOf({ tier: 'rising', outlier_x: 500, posted_at: ago(400), views: 90_000_000 }, NOW)).toEqual({ tier: 'rising', derived: false }); // explicit wins
     expect(tierOf({ tier: null, outlier_x: 3, posted_at: ago(100) }, NOW)).toEqual({ tier: 'iconic', derived: true });
     expect(tierOf({ tier: 'nonsense', outlier_x: 150, posted_at: ago(1) }, NOW)).toEqual({ tier: 'viral_now', derived: true });
     expect(tierOf({ outlier_x: 9, gallery: true }, NOW)).toEqual({ tier: 'gallery', derived: true });
@@ -77,7 +84,7 @@ describe('groupPicksByCharacter', () => {
     card('b-hi', { total_score: 88 }),
     card('b-icon', { tier: 'iconic', total_score: 60 }),
     card('b-gal', { gallery: true, total_score: 95, theme: 'dog leads the dancers' }),
-    card('b-rise', { outlier_x: 20, posted_at: ago(1), total_score: 72, theme: 'pet with a human job' }),
+    card('b-rise', { outlier_x: 12, views: 40_000, posted_at: ago(1), total_score: 72, theme: 'pet with a human job' }),
     card('r-1', { character_slug: 'reginald', total_score: 81, theme: 'deadpan at work' }),
     card('r-2', { character_slug: 'reginald', total_score: 77, theme: 'deadpan at work' }),
     card('r-3', { character_slug: 'reginald', total_score: 90, theme: 'elder out-dances the young' }),

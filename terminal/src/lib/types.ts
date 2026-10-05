@@ -1,4 +1,4 @@
-// Row shapes of the studio views (supabase/migrations/0004_terminal_rpc.sql, 0007_characters_view.sql, 0008_dropin_first.sql). Numbers that Postgres
+// Row shapes of the studio views (supabase/migrations/0004_terminal_rpc.sql, 0007_characters_view.sql, 0008_dropin_first.sql, 0009_analyst.sql). Numbers that Postgres
 // returns as numeric/bigint may arrive as strings over PostgREST; `num()` in data.ts normalises them.
 
 export type Platform = 'tiktok' | 'instagram';
@@ -200,6 +200,41 @@ export interface Pick {
   thumbnail_url?: string | null;
   /** An https video URL (a Genjutsu preset's preview) for the tap-to-play preview. */
   preview_url?: string | null;
+  // The analyst's data (migration 0009): absent on a database that has not had it yet, and every reader treats absent like null.
+  /** Views per day since posting, worked out when the pick was filed. */
+  velocity?: number | null;
+  /** Likes, comments, shares and saves, when vidIQ returned them. */
+  engagement?: Engagement | null;
+  /** Similar outliers found in the last 7 days (the saturation sub-score is worked out from it). */
+  saturation_count?: number | null;
+  /** 1-4 short phrases of the character's traits card the video matches. */
+  trait_matches?: string[] | null;
+  /** The analyst's reasoning, one paragraph. */
+  why?: string | null;
+  /** The local check of a fetched or attached clip. */
+  analysis?: ClipAnalysis | null;
+}
+
+/** What vidIQ returned about a video's reactions; any count may be absent. */
+export interface Engagement {
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  saves?: number;
+}
+
+/** The check of a clip (`proposal.analysis`, stored by `fav mark --analysis-file`): people, subject, camera, flags, best window, beat. */
+export interface ClipAnalysis {
+  people_count: number;
+  main_subject?: string;
+  camera: 'static' | 'handheld' | 'moving';
+  watermark: boolean;
+  overlay: boolean;
+  /** A child is visible somewhere in the clip. */
+  minors: boolean;
+  best_window?: { start_s: number; end_s: number } | null;
+  bpm?: number | null;
+  notes?: string;
 }
 
 export interface PickHistory {
@@ -233,6 +268,12 @@ export interface PickHistory {
   gallery?: boolean | null;
   thumbnail_url?: string | null;
   preview_url?: string | null;
+  velocity?: number | null;
+  engagement?: Engagement | null;
+  saturation_count?: number | null;
+  trait_matches?: string[] | null;
+  why?: string | null;
+  analysis?: ClipAnalysis | null;
 }
 
 /** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */
