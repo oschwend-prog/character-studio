@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references and account links for Biscuit. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value: the Instagram guard and the terminal change it later and a re-seed leaves it alone. closeup_center / blue_eye_xy are pixels of the 1080x1920 close-up (centre of the push-in) and of the screen at the outro zoom 1.3 (where the glint sits).",
+  "_doc": "Identity-lock references and account links for Biscuit. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value (1.00: Drop-in is the default for every video, owner decision 2026-10-05): the Instagram guard and the terminal change it later and a re-seed leaves it alone. traits is the character's trait card (see studio/seed.py): the terminal shows it, its props are the Make-it chips and the daily run scores fit against it. closeup_center / blue_eye_xy are pixels of the 1080x1920 close-up (centre of the push-in) and of the screen at the outro zoom 1.3 (where the glint sits).",
   "slug": "biscuit",
   "name": "Biscuit",
   "status": "designing",
@@ -12,8 +12,31 @@
   "closeup_center": [536, 732],
   "blue_eye_xy": [301, 960],
   "avatar": "assets/avatars/biscuit.png",
+  "sheets": {"biped": "a81a474c-4c7f-4bcd-9b23-43a822c7c004", "quadruped": "aad0f3d0-9694-4148-acbe-eb1f4bf34891"},
+  "traits": {
+    "energy": "bouncy and puppy-cute: smooth, never clumsy, adorable but somehow dances better than you",
+    "comedy": "wholesome ego: a tiny dog with big main-character confidence, the caption carries the attitude and never explains the joke",
+    "best_formats": ["slick AI motion-transfer dance, looping", "lead dancer in front of backup dancers", "hits every beat: paw and hand gestures", "ego or job caption", "6-8 s eye-contact micro-loop"],
+    "settings": ["sunlit pastel room", "mirrored dance studio", "kitchen at night", "dark dance studio", "spotlit stage"],
+    "moves": ["slick upright trend dance", "paw and hand gestures on every beat", "head-snap into the lens", "four-legged head-bob", "slow knowing look down the lens"],
+    "props": [
+      {"name": "aviator shades", "job": "the reveal, he lowers them on the drop to show the odd eyes"},
+      {"name": "gold chain", "job": "swagger energy, comment bait"},
+      {"name": "tiny crown", "job": "lead-dancer / king ego captions"},
+      {"name": "terry headband + wristbands", "job": "gym and workout trends"},
+      {"name": "mini white hi-tops", "job": "footwork shots, sporty look"},
+      {"name": "chunky retro sneakers (baby-blue+white)", "job": "sneakerhead / drip-check trends, close-up on the footwork"},
+      {"name": "light-up LED sneakers", "job": "night dance shots: every step glows on the beat"},
+      {"name": "baby-blue bucket hat", "job": "streetwear drip trends"},
+      {"name": "cream puffer vest", "job": "autumn/winter drip"},
+      {"name": "hot-dog-bun costume", "job": "Halloween (seasonal)"},
+      {"name": "Santa hat", "job": "Christmas (seasonal)"}
+    ],
+    "music": "afro house / melodic house, 118-124 BPM, organic percussion; the trend's in-app sound for a named trend",
+    "never": ["clumsy or sloppy moves", "barking or any voice", "exposed belly: the tracksuit stays on", "real people or famous IP", "explaining the joke"]
+  },
   "accounts": [
-    {"platform": "tiktok", "handle": null, "planned_handle": "@biscuit.moves", "postiz_integration_id": null, "dropin_share": 0.70},
-    {"platform": "instagram", "handle": "biscuit.moves", "planned_handle": "biscuit.moves", "postiz_integration_id": "cmuv24qx600brql0yuylht0gj", "dropin_share": 0.40}
+    {"platform": "tiktok", "handle": null, "planned_handle": "@biscuit.moves", "postiz_integration_id": null, "dropin_share": 1.00},
+    {"platform": "instagram", "handle": "biscuit.moves", "planned_handle": "biscuit.moves", "postiz_integration_id": "cmuv24qx600brql0yuylht0gj", "dropin_share": 1.00}
   ]
 }

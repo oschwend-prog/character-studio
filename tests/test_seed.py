@@ -83,6 +83,132 @@ def test_seed_writes_the_setup_the_terminal_shows(tmp_path):
     assert by["reginald"].setup == {"closeup": False, "planned_handles": {"tiktok": None, "instagram": None}}
 
 
+TRAITS = {
+    "energy": "bouncy and puppy-cute",
+    "comedy": "wholesome ego",
+    "best_formats": ["slick dance", "eye loop", "hits every beat"],
+    "settings": ["sunlit room", "dance studio", "kitchen"],
+    "moves": ["upright dance", "head snap", "paw gestures"],
+    "props": ["gold chain", "shades", "tiny crown"],
+    "music": "afro house, 118-124 BPM",
+    "never": ["clumsy moves", "barking", "exposed belly"],
+}
+
+
+BISCUIT_GADGETS = [
+    ("aviator shades", "the reveal, he lowers them on the drop to show the odd eyes"),
+    ("gold chain", "swagger energy, comment bait"),
+    ("tiny crown", "lead-dancer / king ego captions"),
+    ("terry headband + wristbands", "gym and workout trends"),
+    ("mini white hi-tops", "footwork shots, sporty look"),
+    # the owner's name has a space either side of "+": 41 characters, one over a chip / owner prop, so it is written without them
+    ("chunky retro sneakers (baby-blue+white)", "sneakerhead / drip-check trends, close-up on the footwork"),
+    ("light-up LED sneakers", "night dance shots: every step glows on the beat"),
+    ("baby-blue bucket hat", "streetwear drip trends"),
+    ("cream puffer vest", "autumn/winter drip"),
+    ("hot-dog-bun costume", "Halloween (seasonal)"),
+    ("Santa hat", "Christmas (seasonal)"),
+]
+REGINALD_GADGETS = [
+    ("silver tray + teapot", 'his signature, "not a drop spilled" rewatch bait'),
+    ("sweatband under the quiff", "gym/dance gag, the quiff still doesn't move"),
+    ("aviators over his glasses", "cool-butler reveal, double-glasses gag"),
+    ("gold pocket watch", '"4pm. tea." timing gags, Tea Tuesday series'),
+    ("black umbrella", "iconic routines (Singin' in the Rain), cane"),
+    ("feather duster", "microphone gag, cleaning-day trends"),
+    ("candelabra", "Halloween / Wednesday"),
+]
+
+
+def test_seed_writes_the_traits_card_into_the_setup(tmp_path):
+    """characters.setup.traits = refs.json traits, verbatim: the terminal's Traits card and the daily run's fit scoring read it."""
+    store = MemoryStore()
+    seed.seed_characters(store, write_refs(tmp_path, refs(BISCUIT, traits=TRAITS), REGINALD))
+    by = {c.slug: c for c in store.characters()}
+    assert by["biscuit"].setup["traits"] == TRAITS
+    assert "traits" not in by["reginald"].setup  # a character without a card has none (not an empty one)
+    assert by["biscuit"].setup["closeup"] is True  # the rest of the setup is unchanged
+
+
+SHEETS = {"biped": "a81a474c-4c7f-4bcd-9b23-43a822c7c004", "quadruped": "aad0f3d0-9694-4148-acbe-eb1f4bf34891"}
+
+
+def test_seed_writes_the_character_sheets_into_the_setup(tmp_path):
+    """Higgsfield best practice: the character sheet goes to Genjutsu as the reference image next to the master."""
+    store = MemoryStore()
+    seed.seed_characters(store, write_refs(tmp_path, refs(BISCUIT, sheets=SHEETS), REGINALD))
+    by = {c.slug: c for c in store.characters()}
+    assert by["biscuit"].setup["sheets"] == SHEETS
+    assert "sheets" not in by["reginald"].setup  # a character without a sheet has none
+
+
+@pytest.mark.parametrize(
+    ("sheets", "message"),
+    [
+        ("a81a474c", "sheets"),  # not an object
+        ({"winged": "x"}, "winged"),  # a body that does not exist
+        ({"biped": ""}, "biped"),
+        ({"biped": 5}, "biped"),
+        ({"quadruped": "aad0f3d0"}, "quadruped"),  # Reginald is biped only: a quadruped sheet names a body he does not have
+    ],
+)
+def test_a_malformed_sheets_object_is_refused_before_anything_is_written(tmp_path, sheets, message):
+    store = MemoryStore()
+    ref = refs(REGINALD, sheets=sheets)
+    with pytest.raises(ValueError, match=message):
+        seed.seed_characters(store, write_refs(tmp_path, ref))
+    assert store.characters() == []
+
+
+def test_a_prop_is_a_plain_string_or_a_name_with_its_viral_job(tmp_path):
+    """owner 2026-10-05: gadgets should help characters go viral, so a prop may say what it is for."""
+    props = ["gold chain", {"name": "aviator shades", "job": "the reveal: lowers them on the drop"}]
+    store = MemoryStore()
+    seed.seed_characters(store, write_refs(tmp_path, refs(BISCUIT, traits={**TRAITS, "props": props})))
+    assert store.characters()[0].setup["traits"]["props"] == props  # both shapes survive the seed verbatim
+    assert seed.prop_names({"props": props}) == ["gold chain", "aviator shades"]
+
+
+def test_a_reseed_replaces_the_traits(tmp_path):
+    store = MemoryStore()
+    seed.seed_characters(store, write_refs(tmp_path, refs(BISCUIT, traits=TRAITS)))
+    seed.seed_characters(store, write_refs(tmp_path, refs(BISCUIT, traits={**TRAITS, "energy": "calm"})))
+    assert store.characters()[0].setup["traits"]["energy"] == "calm"
+
+
+@pytest.mark.parametrize(
+    ("traits", "message"),
+    [
+        ("calm", "traits"),  # not an object
+        ({**TRAITS, "energy": ""}, "energy"),
+        ({**TRAITS, "comedy": 5}, "comedy"),
+        ({**TRAITS, "music": "x" * 161}, "music"),
+        ({k: v for k, v in TRAITS.items() if k != "never"}, "never"),  # every key is needed
+        ({**TRAITS, "vibe": "chill"}, "vibe"),  # and no others
+        ({**TRAITS, "props": []}, "props"),
+        ({**TRAITS, "moves": "dance"}, "moves"),  # a bare string is not a list
+        ({**TRAITS, "settings": ["ok", ""]}, "settings"),
+        ({**TRAITS, "best_formats": ["a"] * 9}, "best_formats"),
+        ({**TRAITS, "never": ["x" * 81]}, "never"),
+        ({**TRAITS, "props": ["x" * 41]}, "props"),  # a prop becomes a Make-it chip: at most 40 characters
+        ({**TRAITS, "moves": [3]}, "moves"),
+        ({**TRAITS, "props": [{"name": "gold chain"}]}, "props"),  # an object prop needs its job too
+        ({**TRAITS, "props": [{"name": "", "job": "swagger"}]}, "props"),
+        ({**TRAITS, "props": [{"name": "x" * 41, "job": "swagger"}]}, "props"),
+        ({**TRAITS, "props": [{"name": "gold chain", "job": "x" * 121}]}, "props"),
+        ({**TRAITS, "props": [{"name": "gold chain", "job": "swagger", "price": 5}]}, "props"),  # no other keys
+        ({**TRAITS, "props": [{"name": "gold chain", "job": 4}]}, "props"),
+        ({**TRAITS, "props": ["chain"] * 13}, "props"),
+        ({**TRAITS, "moves": [{"name": "dance", "job": "x"}]}, "moves"),  # only props carry a job
+    ],
+)
+def test_a_malformed_traits_card_is_refused_before_anything_is_written(tmp_path, traits, message):
+    store = MemoryStore()
+    with pytest.raises(ValueError, match=message):
+        seed.seed_characters(store, write_refs(tmp_path, refs(BISCUIT, traits=traits)))
+    assert store.characters() == []
+
+
 def test_the_setup_names_the_real_handle_once_the_account_exists_and_follows_the_closeup(tmp_path):
     store = MemoryStore()
     accounts = [
@@ -238,11 +364,53 @@ def test_the_shipped_refs_files_load_and_match_the_brief():
     assert r["closeup"] is None and r["bodies"] == ["biped"]
     for c in (b, r):
         assert c["status"] == "designing"  # flipped to live at go-live (Task 16)
-        assert {a["platform"]: a["dropin_share"] for a in c["accounts"]} == {"tiktok": 0.70, "instagram": 0.40}
+        # owner decision 2026-10-05: Drop-in is the default for every video, so every account starts at 1.00
+        assert {a["platform"]: a["dropin_share"] for a in c["accounts"]} == {"tiktok": 1.0, "instagram": 1.0}
         # an account the owner has created carries its real handle (and, once connected, its Postiz id); the rest stay null
         assert all(a["handle"] is None or isinstance(a["handle"], str) for a in c["accounts"])
         assert all(a["handle"] for a in c["accounts"] if a["postiz_integration_id"])  # an id without a handle would not seed
         assert (ROOT / c["avatar"]).parent.is_dir()
+
+
+def test_the_shipped_refs_carry_the_character_sheets_the_owner_made():
+    by = {r["slug"]: r["sheets"] for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
+    assert by["biscuit"] == SHEETS
+    assert by["reginald"] == {"biped": "a0216125-21c8-4f56-a79e-14a3388bdd85"}
+
+
+def test_the_shipped_refs_keep_the_real_live_accounts():
+    """The live handles and Postiz ids are the owner's real values: a change to the shares or traits must not touch them."""
+    by = {r["slug"]: {a["platform"]: a for a in r["accounts"]} for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
+    assert by["biscuit"]["instagram"]["handle"] == "biscuit.moves"
+    assert by["biscuit"]["instagram"]["postiz_integration_id"] == "cmuv24qx600brql0yuylht0gj"
+    assert by["reginald"]["instagram"]["handle"] == "reginald.thebutler"
+    assert by["reginald"]["instagram"]["postiz_integration_id"] == "cmuv2mx9s00kxql0y8k92piif"
+    assert by["biscuit"]["tiktok"]["handle"] is None and by["reginald"]["tiktok"]["handle"] is None
+
+
+def test_the_shipped_refs_carry_a_traits_card_that_fits_the_bible():
+    loaded = {r["slug"]: r["traits"] for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
+    assert sorted(loaded) == ["biscuit", "reginald"]
+    for slug, t in loaded.items():
+        assert set(t) == set(seed.TRAIT_TEXT_KEYS) | set(seed.TRAIT_LIST_KEYS), slug
+        for key in seed.TRAIT_LIST_KEYS:
+            assert 3 <= len(t[key]) <= (12 if key == "props" else 6), (slug, key)  # short phrases, a handful each
+    b, r = loaded["biscuit"], loaded["reginald"]
+    assert "bouncy" in b["energy"] and "puppy" in b["energy"] and "ego" in b["comedy"]
+    assert "calm" in r["energy"] and "deadpan" in r["comedy"] and "quiff" in r["comedy"]
+    assert "never smiles" not in " ".join(r["never"]) and any("smil" in n for n in r["never"])  # the bible's rules are in the card
+    assert any("quiff" in n for n in r["never"]) and any("belly" in n for n in b["never"])
+    # the gadgets and the viral job each one does (owner 2026-10-05), exactly
+    assert [(p["name"], p["job"]) for p in b["props"]] == BISCUIT_GADGETS
+    assert [(p["name"], p["job"]) for p in r["props"]] == REGINALD_GADGETS
+    assert all(len(p["name"]) <= 40 for p in b["props"] + r["props"])  # each name is a Make-it chip
+    assert "afro house" in b["music"] and "orchestral" in r["music"]
+
+
+def test_seeding_the_shipped_refs_puts_the_traits_into_the_database():
+    store = MemoryStore()
+    seed.seed_characters(store, seed.DEFAULT_CHARACTERS_DIR)
+    assert all(c.setup["traits"]["props"] for c in store.characters())
 
 
 def test_seeding_the_shipped_refs_creates_two_characters_and_exactly_the_accounts_that_have_a_handle():
@@ -299,6 +467,13 @@ def test_cli_seed_status_lists_each_character_with_its_status_and_accounts(cli_s
         {"platform": "tiktok", "handle": "@b", "connected": True, "mode": "approval", "dropin_share": 0.7}
     ]
     assert out[1]["accounts"] == []
+
+
+def test_cli_seed_status_hands_the_daily_run_each_characters_traits(cli_store, tmp_path):
+    seed.seed_characters(cli_store, write_refs(tmp_path, refs(BISCUIT, traits=TRAITS), REGINALD))
+    out = {c["slug"]: c for c in json.loads(run("status").stdout)}
+    assert out["biscuit"]["traits"] == TRAITS  # fit is scored against this card
+    assert out["reginald"]["traits"] is None
 
 
 # ---- batch-1 picks: parsing --------------------------------------------------------------------

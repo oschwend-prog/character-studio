@@ -16,7 +16,20 @@
   accounts: ``{"closeup": <the close-up shot exists>, "planned_handles": {"tiktok": .., "instagram": ..}}``.
   A planned handle is the account's real ``handle`` once it exists, else the file's optional
   ``planned_handle`` (the first choice of ``docs/launch/social-pages.md``), else null.
-* ``studio seed status`` prints every character with its status and accounts (what the daily run reads).
+* ``traits`` (optional) is the character's trait card: ``energy`` and ``comedy`` and ``music`` (one short phrase
+  each) and the lists ``best_formats``, ``settings``, ``moves``, ``props`` and ``never`` (short phrases). Every
+  key is required once a card is given and no other key is allowed. The seed copies it into
+  ``characters.setup.traits`` (no migration: ``setup`` is jsonb): the terminal shows it as the Traits card, the
+  ``props`` become the Make-it sheet's "Gadgets & jewellery" chips (each is a phrase or ``{"name", "job"}``, the
+  job being what the gadget does for virality, shown as the chip's hint), and the daily run scores a pick's ``fit``
+  against it. A re-seed replaces the card.
+* ``sheets`` (optional) maps a body (``biped`` / ``quadruped``, one of the character's ``bodies``) to the Higgsfield job
+  id of its character sheet: the daily run passes the matching sheet to Genjutsu as a reference image together with the
+  master (Higgsfield best practice). The seed copies it into ``characters.setup.sheets``; ``masters`` and ``closeup``
+  are the owner's and are not touched by it.
+* ``dropin_share`` is the first-insert value of a new account row (owner decision 2026-10-05: ``characters/*/refs.json``
+  ships 1.00 for every account, Drop-in is the default for every video); the controller updates live rows.
+* ``studio seed status`` prints every character with its status, traits and accounts (what the daily run reads).
 
 **Picks** (``studio seed picks FILE``) loads ``docs/launch/viral-picks-2026-10-04.md``. The document is
 the single source: its tables are parsed, nothing is duplicated into code, and the parse is checked rather
@@ -67,6 +80,14 @@ from studio.store import Store
 # The characters folder is resolved from the package location, never from the working directory.
 DEFAULT_CHARACTERS_DIR = Path(__file__).resolve().parents[1] / "characters"
 CHARACTER_STATUSES = ("designing", "live", "paused")
+TRAIT_TEXT_KEYS = ("energy", "comedy", "music")
+TRAIT_LIST_KEYS = ("best_formats", "settings", "moves", "props", "never")
+TRAIT_TEXT_MAX = 160
+TRAIT_ITEM_MAX = 80
+TRAIT_PROP_MAX = 40  # a prop becomes a Make-it chip, and an owner prop is at most 40 characters
+TRAIT_JOB_MAX = 120
+TRAIT_LIST_MAX = 8
+TRAIT_PROPS_MAX = 12
 
 RULE_MIN_TOTAL = 80  # `by` is the rule from this total up (spec 4.4b), the analyst below
 RULE_MIN_FEASIBILITY = 7
@@ -82,6 +103,52 @@ def _require(cond: bool, path: Path, message: str) -> None:
 
 def _is_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def _is_prop(item: Any) -> bool:
+    """A prop is a phrase, or ``{"name", "job"}``: the name is the Make-it chip, the job says what it is for (viral job)."""
+    if _is_str(item):
+        return True
+    return (
+        isinstance(item, dict) and set(item) == {"name", "job"}
+        and _is_str(item["name"]) and _is_str(item["job"]) and len(item["job"]) <= TRAIT_JOB_MAX
+    )
+
+
+def _item_fits(item: Any, limit: int) -> bool:
+    return len(item["name"] if isinstance(item, dict) else item) <= limit
+
+
+def prop_names(traits: dict[str, Any]) -> list[str]:
+    """The names of a traits card's props, whichever shape each one has (the Make-it chips)."""
+    return [p["name"] if isinstance(p, dict) else p for p in traits.get("props", [])]
+
+
+def _validate_traits(traits: Any, path: Path) -> None:
+    _require(isinstance(traits, dict), path, "traits must be an object")
+    keys = (*TRAIT_TEXT_KEYS, *TRAIT_LIST_KEYS)
+    unknown = sorted(set(traits) - set(keys))
+    _require(not unknown, path, f"traits has unknown key(s) {', '.join(unknown)}; allowed: {', '.join(keys)}")
+    for key in TRAIT_TEXT_KEYS:
+        value = traits.get(key)
+        _require(
+            _is_str(value) and len(value) <= TRAIT_TEXT_MAX, path,
+            f"traits.{key} must be a short phrase (1-{TRAIT_TEXT_MAX} characters), got {value!r:.60}",
+        )
+    for key in TRAIT_LIST_KEYS:
+        items = traits.get(key)
+        limit = TRAIT_PROP_MAX if key == "props" else TRAIT_ITEM_MAX
+        most = TRAIT_PROPS_MAX if key == "props" else TRAIT_LIST_MAX
+        ok = (
+            isinstance(items, list) and 1 <= len(items) <= most
+            and all((_is_prop(i) if key == "props" else _is_str(i)) and _item_fits(i, limit) for i in items)
+        )
+        extra = " or {name, job} objects" if key == "props" else ""
+        _require(
+            ok, path,
+            f"traits.{key} must be a list of 1-{most} short phrases{extra} (at most {limit} characters each"
+            f"{f', a job at most {TRAIT_JOB_MAX}' if key == 'props' else ''}), got {items!r:.60}",
+        )
 
 
 def _validate_ref(ref: Any, path: Path) -> dict[str, Any]:
@@ -112,6 +179,15 @@ def _validate_ref(ref: Any, path: Path) -> dict[str, Any]:
             or (isinstance(value, list) and len(value) == 2 and all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in value)),
             path, f"{key} must be [x, y] or null, got {value!r}",
         )
+
+    if ref.get("traits") is not None:
+        _validate_traits(ref["traits"], path)
+    sheets = ref.get("sheets")
+    if sheets is not None:
+        _require(isinstance(sheets, dict), path, "sheets must be an object of body -> Higgsfield job id")
+        for body, job in sheets.items():
+            _require(body in bodies, path, f"sheets.{body}: not one of this character's bodies {bodies}")
+            _require(_is_str(job), path, f"sheets.{body} must be a Higgsfield job id")
 
     accounts = ref.get("accounts", [])
     _require(isinstance(accounts, list), path, "accounts must be a list")
@@ -156,11 +232,16 @@ def load_refs(characters_dir: Path | str = DEFAULT_CHARACTERS_DIR) -> list[dict[
 
 
 def character_setup(ref: dict[str, Any]) -> dict[str, Any]:
-    """``characters.setup`` for a validated refs.json: the close-up flag and the planned handle per platform."""
+    """``characters.setup`` for a validated refs.json: the close-up flag, the planned handle per platform and the traits card."""
     planned: dict[str, str | None] = {p.value: None for p in Platform}
     for a in ref.get("accounts", []):
         planned[a["platform"]] = a.get("handle") or a.get("planned_handle")
-    return {"closeup": bool(ref.get("closeup")), "planned_handles": planned}
+    setup: dict[str, Any] = {"closeup": bool(ref.get("closeup")), "planned_handles": planned}
+    if ref.get("traits") is not None:
+        setup["traits"] = {k: ref["traits"][k] for k in (*TRAIT_TEXT_KEYS, *TRAIT_LIST_KEYS)}
+    if ref.get("sheets") is not None:
+        setup["sheets"] = dict(ref["sheets"])
+    return setup
 
 
 @dataclass
@@ -511,6 +592,7 @@ def status_command() -> None:
                 "status": c.status,
                 "live": c.status == "live",
                 "bodies": [b.value for b in c.bodies],
+                "traits": c.setup.get("traits"),
                 "accounts": [_account_json(a) for a in store.accounts(c.slug)],
             }
             for c in store.characters()

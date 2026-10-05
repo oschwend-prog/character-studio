@@ -19,22 +19,22 @@
     "biscuit": {
       "audienceQuery": "Culture/Region: US/UK English-speaking; Global: true; Demographics: dog lovers and Gen Z/millennials 16-40 who watch cute pet and dance content;",
       "rotation": [
-        {"embeddingType": "format", "query": "clothed animal standing upright doing a skilled trend dance, seamless loop, music only"},
-        {"embeddingType": "concept", "query": "small dog front and centre leading human backup dancers in a trending dance"},
-        {"embeddingType": "hook", "query": "small dog in an outfit stares into the camera, then hits every beat of a high-energy track"},
-        {"embeddingType": "concept", "query": "pet with a human job or an ego caption doing a viral trend"}
+        {"embeddingType": "format", "theme": "skilled upright dance", "query": "clothed animal standing upright doing a skilled trend dance, seamless loop, music only"},
+        {"embeddingType": "concept", "theme": "dog leads the dancers", "query": "small dog front and centre leading human backup dancers in a trending dance"},
+        {"embeddingType": "hook", "theme": "stare, then hits every beat", "query": "small dog in an outfit stares into the camera, then hits every beat of a high-energy track"},
+        {"embeddingType": "concept", "theme": "pet with a human job", "query": "pet with a human job or an ego caption doing a viral trend"}
       ],
-      "fit_rules": ["one animal or one dancer as the subject (2+ bodies are still filed, with needs multi_body, and held until the multi-body test passes)", "full body visible", "mostly static camera", "music-driven (no dialogue needed)", "upright/biped motion for the biped master; four-legged head-bob for the quadruped master"]
+      "fit_rules": ["one animal or one dancer as the subject (2+ bodies are still filed, with needs multi_body, and held until the multi-body test passes)", "full body visible", "mostly static camera", "music-driven (no dialogue needed)", "upright/biped motion for the biped master; four-legged head-bob for the quadruped master", "fits Biscuit's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): bouncy, puppy-cute, a wholesome ego, never clumsy, no voice"]
     },
     "reginald": {
       "audienceQuery": "Culture/Region: UK/US English-speaking; Global: true; Demographics: Gen Z and millennials 16-34 who watch comedy, memes and dance trends;",
       "rotation": [
-        {"embeddingType": "concept", "query": "stone-faced person in a work uniform performs a trend dance perfectly at work, then calmly resumes the task"},
-        {"embeddingType": "hook", "query": "on-screen premise like 'first day as' then a mundane task done with total seriousness, then the beat drops into a dance"},
-        {"embeddingType": "format", "query": "deadpan costumed character, one repeatable action, changing locations"},
-        {"embeddingType": "concept", "query": "older or formally dressed person steps in and out-dances young people"}
+        {"embeddingType": "concept", "theme": "deadpan at work", "query": "stone-faced person in a work uniform performs a trend dance perfectly at work, then calmly resumes the task"},
+        {"embeddingType": "hook", "theme": "false premise, then the drop", "query": "on-screen premise like 'first day as' then a mundane task done with total seriousness, then the beat drops into a dance"},
+        {"embeddingType": "format", "theme": "one action, new location", "query": "deadpan costumed character, one repeatable action, changing locations"},
+        {"embeddingType": "concept", "theme": "elder out-dances the young", "query": "older or formally dressed person steps in and out-dances young people"}
       ],
-      "fit_rules": ["one performer (others only as background that we replace or recreate)", "full body visible", "deadpan-compatible (the joke must survive a straight face)", "no real-person likeness, masks or impersonations as the joke"]
+      "fit_rules": ["one performer (others only as background that we replace or recreate)", "full body visible", "deadpan-compatible (the joke must survive a straight face)", "no real-person likeness, masks or impersonations as the joke", "fits Reginald's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): calm, deadpan, a straight face under absurdity, never smiling, the quiff never moves"]
     },
     "outsider": {
       "_status": "inactive until the voice lane (Slice 3)",
@@ -46,7 +46,8 @@
       ]
     }
   },
+  "_themes": "Each rotation entry has a `theme`: a short label (at most 60 characters) naming what the entry looks for. A filed pick carries `proposal.theme` = the theme of the entry it matched, or the closest theme of its character when it came from the Genjutsu gallery or the owner. The terminal groups a character's picks by category or by theme.",
   "free_sources_daily": ["Higgsfield Genjutsu Trending + New galleries (get_presets source=genjutsu)", "TikTok trending commercial sounds (tiktok_music_trending, country GB and US, 7DAY)"],
-  "global_reject_rules": ["famous IP, celebrities or real-person likeness as the joke", "brand ads / sponsored posts", "trend more than 7 days past its peak", "already picked or produced", "sexualised or minors-centred content", "national/ethnic/religious stereotypes"],
-  "pick_card_fields": ["url", "platform", "creator_handle", "views", "outlier_x", "age_days", "matched_character", "fit_grade A/B/C", "proposed_mode", "proposed_hook", "proposed_prop", "why_it_works"]
+  "global_reject_rules": ["a real person's likeness or an impersonation as the joke (the real star is always replaced by our character; a famous clip, meme or dance is fine)", "brand ads / sponsored posts", "trend more than 7 days past its peak, unless it is an iconic evergreen moment (tier iconic)", "already picked or produced", "sexualised content, or a child as the star or main subject (a Drop-in source shows no child at all)", "national/ethnic/religious stereotypes"],
+  "pick_card_fields": ["url", "platform", "creator_handle", "views", "outlier_x", "posted_at", "matched_character", "tier", "theme", "thumbnail_url", "preview_url (gallery clips)", "fit_grade A/B/C", "matched_traits", "proposed_mode", "proposed_hook", "proposed_prop", "why_it_works"]
 }

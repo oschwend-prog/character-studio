@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references and account links for Reginald. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). closeup, closeup_center and blue_eye_xy stay null until the eye close-up is generated in the rehearsal (Task 16). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value: the Instagram guard and the terminal change it later and a re-seed leaves it alone.",
+  "_doc": "Identity-lock references and account links for Reginald. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). closeup, closeup_center and blue_eye_xy stay null until the eye close-up is generated in the rehearsal (Task 16). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value (1.00: Drop-in is the default for every video, owner decision 2026-10-05): the Instagram guard and the terminal change it later and a re-seed leaves it alone. traits is the character's trait card (see studio/seed.py): the terminal shows it, its props are the Make-it chips and the daily run scores fit against it.",
   "slug": "reginald",
   "name": "Reginald",
   "status": "designing",
@@ -12,8 +12,27 @@
   "closeup_center": null,
   "blue_eye_xy": null,
   "avatar": "assets/avatars/reginald.png",
+  "sheets": {"biped": "a0216125-21c8-4f56-a79e-14a3388bdd85"},
+  "traits": {
+    "energy": "calm and dignified: a big man with light feet and a straight face that never cracks",
+    "comedy": "deadpan under absurdity: he dances every trend perfectly, then resumes service as if nothing happened, and the quiff never moves",
+    "best_formats": ["false premise, mundane task, total seriousness, then the drop", "uniform at work plus a trend dance", "authority figure reveals a hidden talent", "formal elder out-dances the young", "one still, one dancing"],
+    "settings": ["stately-home drawing room", "grand hall staircase", "kitchen below stairs", "wine cellar", "rainy London street at dawn"],
+    "moves": ["flawless trend dance with a rigid quiff", "straightens gloves, small formal bow", "deadpan stare down the lens", "serves tea without a spill mid-routine", "freezes, then resumes service"],
+    "props": [
+      {"name": "silver tray + teapot", "job": "his signature, \"not a drop spilled\" rewatch bait"},
+      {"name": "sweatband under the quiff", "job": "gym/dance gag, the quiff still doesn't move"},
+      {"name": "aviators over his glasses", "job": "cool-butler reveal, double-glasses gag"},
+      {"name": "gold pocket watch", "job": "\"4pm. tea.\" timing gags, Tea Tuesday series"},
+      {"name": "black umbrella", "job": "iconic routines (Singin' in the Rain), cane"},
+      {"name": "feather duster", "job": "microphone gag, cleaning-day trends"},
+      {"name": "candelabra", "job": "Halloween / Wednesday"}
+    ],
+    "music": "epic orchestral or spy-tension setup, then an afro house drop; the trend's in-app sound for a named trend",
+    "never": ["smiling or acknowledging the dancing", "the quiff moving", "speaking (not in Slice 1)", "resembling a real actor or a famous TV butler", "real-person masks or impersonations"]
+  },
   "accounts": [
-    {"platform": "tiktok", "handle": null, "planned_handle": "@reginald.thebutler", "postiz_integration_id": null, "dropin_share": 0.70},
-    {"platform": "instagram", "handle": "reginald.thebutler", "planned_handle": "reginald.thebutler", "postiz_integration_id": "cmuv2mx9s00kxql0y8k92piif", "dropin_share": 0.40}
+    {"platform": "tiktok", "handle": null, "planned_handle": "@reginald.thebutler", "postiz_integration_id": null, "dropin_share": 1.00},
+    {"platform": "instagram", "handle": "reginald.thebutler", "planned_handle": "reginald.thebutler", "postiz_integration_id": "cmuv2mx9s00kxql0y8k92piif", "dropin_share": 1.00}
   ]
 }
