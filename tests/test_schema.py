@@ -157,9 +157,10 @@ def test_seed_matches_in_code_defaults():
 def test_migrations_are_additive_and_stay_inside_schema_studio():
     assert not re.search(r"\b(drop|truncate)\b", ALL_SQL, re.I)
     assert not re.search(r"\balter\s+column\b|\brename\b", ALL_SQL, re.I)
-    # the only references outside schema studio: auth.jwt() for RLS, the Storage buckets
+    # the only references outside schema studio: auth.jwt() for RLS, the Storage buckets, and (0004)
+    # one read policy on storage.objects so the owner's browser can sign URLs for the clips bucket
     outside = set(re.findall(r"\b(?:public|auth|storage|extensions)\.[a-z_]+", ALL_SQL))
-    assert outside == {"auth.jwt", "storage.buckets"}
+    assert outside == {"auth.jwt", "storage.buckets", "storage.objects"}
     # every created / altered table, index and policy is in studio
     for stmt in re.findall(
         r"^(?:create table|alter table|create index \w+ on)\s+(\S+)", ALL_SQL, re.M
@@ -206,3 +207,76 @@ def test_run_kinds_and_statuses_are_the_ones_the_log_and_health_know():
     assert {str(k) for k in RunKind} == {"daily", "weekly", "publish", "metrics"}
     assert {str(s) for s in RunStatus} == {"ok", "budget_stop", "error"}
     assert "check" not in table_body("runs")  # if a CHECK is ever added it must match the enums
+
+
+# ---- 0004: the terminal's views and owner RPCs ------------------------------------------------------
+
+TERMINAL_SQL = (MIGRATIONS / "0004_terminal_rpc.sql").read_text()
+TERMINAL_VIEWS = ["v_channels", "v_queue", "v_library", "v_budget", "v_picks", "v_pick_history", "v_health"]
+TERMINAL_RPCS = [
+    "approve_clip", "reject_clip", "regenerate_clip", "set_budget", "set_account_mode",
+    "decide_pick", "add_owner_link",
+]
+TERMINAL_HELPERS = ["num", "cadence_days", "upcoming_slot", "next_slot", "dropin_ratio", "accounts_for_clip", "approved_posts"]
+
+
+def _function_sql(name: str) -> str:
+    m = re.search(
+        rf"create or replace function studio\.{name}\((.*?)\$\$;", TERMINAL_SQL, re.S
+    )
+    assert m, f"no function studio.{name}"
+    return m.group(0)
+
+
+def test_0004_views_are_security_invoker_and_granted_to_authenticated_only():
+    for view in TERMINAL_VIEWS:
+        assert re.search(
+            rf"create or replace view studio\.{view}\s+with \(security_invoker = true\) as", TERMINAL_SQL
+        ), view  # RLS of the owner applies through every view
+        assert re.search(rf"grant select on studio\.{view} to authenticated;", TERMINAL_SQL), view
+    assert not re.search(r"\banon\b", TERMINAL_SQL)  # nothing is ever granted to the anon role
+
+
+def test_0004_functions_run_as_the_caller_with_an_empty_search_path():
+    for name in TERMINAL_RPCS + TERMINAL_HELPERS:
+        body = _function_sql(name)
+        assert "security definer" not in body, name  # RLS decides, never the function owner
+        assert "set search_path = ''" in body, name
+        assert re.search(rf"revoke all on function studio\.{name}\(", TERMINAL_SQL), name
+        assert re.search(rf"grant execute on function studio\.{name}\(.*?\) to authenticated;", TERMINAL_SQL), name
+    for name in TERMINAL_RPCS:
+        assert "security invoker" in _function_sql(name), name
+
+
+def test_0004_approve_mirrors_schedule_clip():
+    body = _function_sql("approve_clip")
+    assert "clip_id uuid, caption text default null, hook text default null, schedule_at timestamptz default null" in body
+    assert "for update" in body  # the state checked is the state written
+    assert "studio.accounts_for_clip(" in body and "studio.upcoming_slot(" in body
+    assert "'awaiting_approval', 'approved'" in body
+    assert "state = 'scheduled'" in body
+    rule = _function_sql("accounts_for_clip")
+    assert "c.mode = 'recreate'" in rule and "studio.dropin_ratio(a.id, c.id) < a.dropin_share" in rule
+    ratio = _function_sql("dropin_ratio")
+    assert "order by p.scheduled_for desc, p.id desc" in ratio and "limit 10" in ratio  # ROLLING_WINDOW
+
+
+def test_0004_autopilot_is_locked_below_six_approved_posts_in_the_database_too():
+    body = _function_sql("set_account_mode")
+    assert "studio.approved_posts(" in body and "< 6" in body
+    assert "6 as autopilot_min_approved" in TERMINAL_SQL  # the view tells the UI the same bar
+
+
+def test_0004_owner_decisions_are_recorded_like_studio_fav_decide():
+    body = _function_sql("decide_pick")
+    assert "'by', 'owner'" in body and "- 'hold_reason'" in body
+    assert "('queued', 'made')" in body
+    link = _function_sql("add_owner_link")
+    assert "'owner'" in link and "'approved'" in link
+
+
+def test_0004_realtime_and_storage_are_guarded_and_idempotent():
+    for table in ("clips", "posts", "favorites"):
+        assert f"alter publication supabase_realtime add table studio.{table}" in TERMINAL_SQL
+    assert "bucket_id = 'clips'" in TERMINAL_SQL and "for select to authenticated" in TERMINAL_SQL
+    assert "not exists (select 1 from pg_policies" in TERMINAL_SQL

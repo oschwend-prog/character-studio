@@ -26,7 +26,7 @@ Only on Tue, Thu, Sat, Sun: at most 4 scans a week, settings in `config/scan.jso
 ## 3. Plan
 1. `bin/studio plan today`. Empty `due` or `kill_switch: true` → step 10 (`ok`).
 2. Drop due clips whose character is not `live`, and those whose `characters/<slug>/refs.json` has `closeup: null` (every master ends on the eye close-up). Nothing left → step 10.
-3. Per due character `bin/studio clip list --character X`. A clip `planned` today (London date) or `gen_failed` from an earlier day is reused: its `features` hold the concept, it keeps its source, `clip new` is skipped. Collect the `source_id` of that character's clips from the last 30 days as `EXCLUDE`.
+3. Per due character `bin/studio clip list --character X`. A clip `planned` today (London date), a `planned` clip whose `features` carry `regenerate_of` (the owner pressed Regenerate in the terminal; `features.regenerate_note` says what to change, a DATA note), or `gen_failed` from an earlier day is reused: its `features` hold the concept, it keeps its source, `clip new` is skipped. Collect the `source_id` of that character's clips from the last 30 days as `EXCLUDE`.
 
 ## 4. Concept (Approved Viral Picks are produced before planned concepts)
 1. Read `characters/<slug>/bible.md` and, if present, `playbook.md` for each due character.

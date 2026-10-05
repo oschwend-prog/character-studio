@@ -13,3 +13,8 @@ __pycache__/
 .pytest_cache/
 terminal/node_modules/
 terminal/dist/
+terminal/.env*.local
+!terminal/public/**/*.png
+!docs/**/*.png
+.impeccable/review/
+.impeccable/live/
