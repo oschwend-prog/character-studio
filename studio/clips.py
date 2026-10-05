@@ -30,6 +30,16 @@ use ``"evergreen"`` for ``trend_name`` when there is no trend). Extra tags are k
 a synthetic driver exists only after the clip was created and its credits reserved, so it has to be linked
 afterwards. Once generation starts the source is fixed again (``clip set --source-id`` is refused).
 
+**Scheduling** (``schedule_clip``, ``studio clip schedule <id> [--at ISO]``) is the autopilot path and the
+rule the terminal's approve RPC mirrors. A clip in ``mastered`` or ``approved`` gets one ``scheduled``
+post for every account ``planning.accounts_for_clip`` picks (its connected accounts; for a Drop-in only
+those under their own share), at ``--at`` or the character's ``upcoming_slot`` (today's slot if it is
+still ahead, else the next cadence day's), and the clip moves to ``scheduled`` through ``transition``,
+all in one transaction. It refuses, writing nothing, for any other state, for a character with no
+connected account, for a Drop-in no account may take, and for a character with no slot when no ``--at``
+is given. A post that already exists for a (clip, account) is kept as it is, never duplicated, so a call
+that was cut short can simply be repeated.
+
 CLI (``studio clip ...``) prints JSON on stdout; exit 2 for anything the caller must fix
 (unknown id, illegal transition, missing tags, bad value). ``clip set --state`` goes through
 ``transition``, so the table cannot be bypassed from the command line either.
@@ -40,14 +50,17 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
-from studio.cli_support import emit, fail, open_store, text_option
-from studio.models import Clip, ClipState, Mode
-from studio.store import Store
+from studio.cli_support import emit, fail, open_store, parse_when, text_option
+from studio.config import now_london
+from studio.models import Clip, ClipState, Mode, Post
+from studio.planning import accounts_for_clip, upcoming_slot
+from studio.store import DuplicatePost, Store, require_aware
 
 S = ClipState
 
@@ -218,6 +231,54 @@ def new_clip(
     )
 
 
+def schedule_clip(
+    store: Store, clip_id: str, *, at: datetime | None = None, now: datetime | None = None
+) -> tuple[Clip, list[Post]]:
+    """Create the posts of a ``mastered`` / ``approved`` clip and move it to ``scheduled``.
+
+    Returns the clip and its posts (one per account, including ones that already existed). See the
+    module docstring for the rule. ``KeyError`` for an unknown clip; ``ValueError`` (nothing written) for
+    a wrong state, no connected account, no account that may take a Drop-in, no slot, or a naive ``at``.
+    """
+    if at is not None:
+        require_aware(at, "schedule_clip(at)")
+    now = now_london() if now is None else now
+    with store.transaction():  # all of it or none of it
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(clip_id)
+        if clip.state not in (S.mastered, S.approved):
+            raise ValueError(
+                f"clip {clip_id} is {clip.state.value}: only a mastered or approved clip can be scheduled"
+            )
+        slug = clip.character_slug
+        if not any(a.postiz_integration_id for a in store.accounts(slug)):
+            raise ValueError(
+                f"no connected account for {slug!r}: no Postiz integration id yet (connect it, then run seed)"
+            )
+        accounts = accounts_for_clip(store, clip)
+        if not accounts:
+            raise ValueError(
+                f"no account of {slug!r} may take this {clip.mode.value} clip: every connected account "
+                "is at or over its drop-in share"
+            )
+        when = at if at is not None else upcoming_slot(slug, now, store.get_settings().cadence)
+        posts: list[Post] = []
+        for account in accounts:
+            existing = next((p for p in store.list_posts(clip_id=clip.id) if p.account_id == account.id), None)
+            if existing is None:
+                try:
+                    existing = store.add_post(
+                        Post(clip_id=clip.id, account_id=account.id, scheduled_for=when)
+                    )
+                except DuplicatePost:  # another runner won the (clip, account) slot: use its post
+                    existing = next(
+                        p for p in store.list_posts(clip_id=clip.id) if p.account_id == account.id
+                    )
+            posts.append(existing)
+        return transition(store, clip.id, S.scheduled), posts
+
+
 # ---- CLI -----------------------------------------------------------------------------------
 
 app = typer.Typer(
@@ -362,3 +423,23 @@ def list_command(
         if v is not None
     }
     emit([_clip_json(c) for c in open_store().list_clips(**filters)])
+
+
+@app.command("schedule")
+def schedule_command(
+    id: Annotated[str, typer.Argument(help="Clip id (mastered or approved).")],
+    at: Annotated[
+        str | None,
+        typer.Option(help="ISO 8601 post time (no offset = London); default: the next cadence slot."),
+    ] = None,
+) -> None:
+    """Create a post per account for a mastered/approved clip and move it to scheduled (autopilot)."""
+    when = parse_when(at, "--at") if at is not None else None
+    store = open_store()
+    try:
+        clip, posts = schedule_clip(store, id, at=when)
+    except KeyError:
+        fail(f"unknown clip {id}")
+    except ValueError as e:
+        fail(str(e))
+    emit({"clip": _clip_json(clip), "posts": posts})

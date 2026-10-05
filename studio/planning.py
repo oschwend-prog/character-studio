@@ -31,7 +31,8 @@ Accounts with no ``postiz_integration_id`` are not connected yet, so planning sk
 everywhere. A character without a connected TikTok account is therefore always ``recreate``.
 
 **Slots** (``slot_for``) are London wall-clock times built with ``zoneinfo``, never naive:
-19:00 is 19:00 whether it is GMT or BST that day.
+19:00 is 19:00 whether it is GMT or BST that day. ``upcoming_slot`` is the first slot still ahead of a
+moment: today's if today is a cadence day and the slot has not started, else the next cadence day's.
 
 CLI (``studio plan today``) prints JSON on stdout; exit 0 even when nothing is due (the caller
 reads ``due`` and ``kill_switch``), exit 2 for a cadence the caller must fix.
@@ -42,7 +43,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import date, datetime, time, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
 import typer
@@ -112,6 +113,29 @@ def slot_for(
     slot = _slot_time(character_slug, DEFAULT_CADENCE if cadence is None else cadence)
     local = datetime.combine(day, slot, tzinfo=LONDON)
     return local.astimezone(timezone.utc).astimezone(LONDON)
+
+
+def upcoming_slot(
+    character_slug: str, now: datetime, cadence: Mapping[str, Any]
+) -> datetime:
+    """The character's first posting slot strictly after ``now``, on a cadence day (London days).
+
+    Today's slot if today is a cadence day and the slot has not started yet, else the slot of the next
+    cadence day. ``ValueError`` when the character has no slot, or no cadence days at all.
+    """
+    require_aware(now, "upcoming_slot(now)")
+    _slot_time(character_slug, cadence)  # a missing or malformed slot is reported as such
+    days = _cadence_days(cadence.get(character_slug))
+    today = now.astimezone(LONDON).date()
+    for offset in range(8):  # today and the next seven days: every weekday is seen twice at most
+        day = today + timedelta(days=offset)
+        if WEEKDAYS[day.weekday()] in days:
+            candidate = slot_for(character_slug, day, cadence)
+            if candidate > now:
+                return candidate
+    if not days:
+        raise ValueError(f"no posting days configured for {character_slug!r}")
+    raise ValueError(f"no upcoming slot found for {character_slug!r}")  # unreachable with real weekdays
 
 
 # ---- Drop-in ratio and mode choice -----------------------------------------------------------

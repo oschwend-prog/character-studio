@@ -19,6 +19,7 @@ from studio.sources import (
     median_outlier_x,
     rank_sources,
     record_checks,
+    signed_source_url,
 )
 from studio.storage import LocalStorage, StorageError
 from studio.store import MemoryStore
@@ -750,3 +751,107 @@ def test_cli_flag_reason_from_a_file(cli_store, tmp_path):
     r = run("flag", sid, "--reason", "x", "--reason-file", str(f))
     assert r.exit_code == 2 and "--reason" in r.output
     assert run("flag", sid).exit_code == 2  # neither
+
+
+# ---- signed URL for a source in Storage (Higgsfield media_import_url) -----------------------------
+
+
+class RecordingStorage:
+    """A Storage that only records the sign request and returns a recognisable URL."""
+
+    def __init__(self):
+        self.calls: list[tuple[str, str, int]] = []
+
+    def signed_url(self, bucket, path, expires_s=86_400):
+        self.calls.append((bucket, path, expires_s))
+        return f"https://signed.example/{bucket}/{path}?token=t&exp={expires_s}"
+
+
+def inbox_source(store, path="owner_inbox/abc.mp4"):
+    return add_source(store, "owner_inbox", path, "biped", 1, 8.0, storage_path=path)
+
+
+def test_signed_source_url_signs_the_storage_path_in_the_sources_bucket():
+    store, storage = make_store(), RecordingStorage()
+    src = inbox_source(store)
+    url = signed_source_url(store, storage, src.id)
+    assert storage.calls == [("sources", "owner_inbox/abc.mp4", 3600)]  # default: one hour
+    assert url == "https://signed.example/sources/owner_inbox/abc.mp4?token=t&exp=3600"
+    signed_source_url(store, storage, src.id, 120)
+    assert storage.calls[-1][2] == 120
+
+
+def test_signed_source_url_with_local_storage_points_at_the_stored_file(tmp_path):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    media = tmp_path / "clip.mp4"
+    media.write_bytes(b"video")
+    storage.upload("sources", "owner_inbox/abc.mp4", media)
+    src = inbox_source(store)
+    assert signed_source_url(store, storage, src.id) == (tmp_path / "store" / "sources" / "owner_inbox" / "abc.mp4").resolve().as_uri()
+
+
+def test_signed_source_url_refuses_unknown_sources_and_sources_not_in_storage(tmp_path):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    with pytest.raises(KeyError):
+        signed_source_url(store, storage, "nope")
+    library = new_source(store)  # a Higgsfield library source: a CDN url, nothing in Storage
+    with pytest.raises(ValueError, match="storage_path"):
+        signed_source_url(store, storage, library.id)
+    missing = inbox_source(store, "owner_inbox/gone.mp4")  # catalogued but the object is not there
+    with pytest.raises(StorageError) as e:
+        signed_source_url(store, storage, missing.id)
+    assert e.value.status == 404
+    present = tmp_path / "x.mp4"
+    present.write_bytes(b"x")
+    storage.upload("sources", "owner_inbox/abc.mp4", present)
+    with pytest.raises(ValueError, match="expires"):
+        signed_source_url(store, storage, inbox_source(store).id, 0)
+
+
+@pytest.fixture
+def signing(cli_store, monkeypatch):
+    storage = RecordingStorage()
+    monkeypatch.setattr(sources, "open_storage", lambda: storage)
+    return cli_store, storage
+
+
+def test_cli_source_url_prints_just_the_url(signing):
+    store, storage = signing
+    src = inbox_source(store)
+    r = run("url", src.id)
+    assert r.exit_code == 0, r.output
+    assert r.stdout == "https://signed.example/sources/owner_inbox/abc.mp4?token=t&exp=3600\n"  # one line, nothing else
+    assert storage.calls == [("sources", "owner_inbox/abc.mp4", 3600)]
+    r = run("url", src.id, "--expires", "120")
+    assert r.exit_code == 0 and r.stdout.strip().endswith("exp=120")
+
+
+def test_cli_source_url_refusals_exit_2(signing):
+    store, storage = signing
+    assert run("url", "nope").exit_code == 2
+    library = new_source(store)
+    r = run("url", library.id)
+    assert r.exit_code == 2 and "storage_path" in r.output
+    src = inbox_source(store)
+    assert run("url", src.id, "--expires", "0").exit_code == 2
+    assert storage.calls == []
+
+
+def test_cli_source_url_turns_a_storage_failure_into_exit_2(cli_store, monkeypatch, tmp_path):
+    monkeypatch.setattr(sources, "open_storage", lambda: LocalStorage(tmp_path / "empty"))
+    src = inbox_source(cli_store)
+    r = run("url", src.id)
+    assert r.exit_code == 2 and "not found" in r.output
+
+
+def test_cli_source_url_without_supabase_env_exits_2_and_names_the_variables(cli_store, monkeypatch):
+    monkeypatch.delenv("SUPABASE_URL", raising=False)
+    monkeypatch.setenv("SUPABASE_SERVICE_KEY", "sb-service-key-DO-NOT-LEAK")
+    src = inbox_source(cli_store)
+    r = run("url", src.id)
+    assert r.exit_code == 2 and "SUPABASE_URL" in r.output and "DO-NOT-LEAK" not in r.output
+
+
+def test_cli_source_help_lists_url():
+    r = CliRunner().invoke(app, ["source", "--help"])
+    assert r.exit_code == 0 and " url" in r.output

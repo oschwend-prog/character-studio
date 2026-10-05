@@ -26,7 +26,14 @@ unchecked, so it is not Drop-in eligible until Claude has looked at it and run `
 A file that cannot be ingested (not a readable video, or the upload failed) stays in ``inbox/``;
 the others still go through and ``IngestError`` reports both.
 
-CLI (``studio source ...``) prints JSON on stdout; exit 2 for anything the caller must fix.
+**Handing a stored source to Higgsfield.** ``signed_source_url`` signs a source that lives in Storage
+(``storage_path`` in the ``sources`` bucket: an owner inbox clip) for ``expires_s`` seconds (default one
+hour), the URL the daily run gives to ``media_import_url``. ``studio source url <id> [--expires N]``
+prints that URL and nothing else. A library or synthetic source has no ``storage_path``: its ``url`` is
+already something Higgsfield can fetch.
+
+CLI (``studio source ...``) prints JSON on stdout (``url`` prints the bare URL); exit 2 for anything the
+caller must fix.
 """
 
 from __future__ import annotations
@@ -57,6 +64,7 @@ DEFAULT_INBOX = Path(__file__).resolve().parents[1] / "inbox"
 INBOX_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".webm"})
 SOURCES_BUCKET = "sources"
 INBOX_PREFIX = "owner_inbox"
+DEFAULT_URL_EXPIRES_S = 3600
 
 _E = TypeVar("_E", bound=Enum)
 
@@ -279,6 +287,27 @@ def ingest_inbox(store: Store, storage: Storage, inbox_dir: Path | str) -> list[
     return ingested
 
 
+def signed_source_url(
+    store: Store, storage: Storage, source_id: str, expires_s: int = DEFAULT_URL_EXPIRES_S
+) -> str:
+    """A time-limited URL for a source stored in the ``sources`` bucket.
+
+    ``KeyError`` for an unknown source; ``ValueError`` for a source with no ``storage_path`` or a
+    non-positive ``expires_s``; ``StorageError`` when the object is missing or the signing fails.
+    """
+    if expires_s <= 0:
+        raise ValueError(f"expires must be a positive number of seconds, got {expires_s!r}")
+    source = next((s for s in store.list_sources() if s.id == source_id), None)
+    if source is None:
+        raise KeyError(source_id)
+    if not source.storage_path:
+        raise ValueError(
+            f"source {source_id} has no storage_path: it is not in Storage "
+            "(a library or synthetic source is used through its own url)"
+        )
+    return storage.signed_url(SOURCES_BUCKET, source.storage_path, expires_s)
+
+
 # ---- CLI -----------------------------------------------------------------------------------
 
 app = typer.Typer(
@@ -417,3 +446,22 @@ def ingest_inbox_command(
             typer.echo(f"error: {problem}", err=True)
         raise typer.Exit(EXIT_USAGE) from None
     emit([_source_json(s) for s in made])
+
+
+@app.command("url")
+def url_command(
+    id: Annotated[str, typer.Argument(help="Source id (an owner inbox clip stored in Storage).")],
+    expires: Annotated[
+        int, typer.Option(min=1, help="Seconds the link stays valid.")
+    ] = DEFAULT_URL_EXPIRES_S,
+) -> None:
+    """Print a signed URL for a stored source: the input of Higgsfield's media_import_url."""
+    store = open_store()
+    storage = open_storage()
+    try:
+        url = signed_source_url(store, storage, id, expires)
+    except KeyError:
+        fail(f"unknown source {id}")
+    except (ValueError, StorageError) as e:
+        fail(str(e))
+    typer.echo(url)
