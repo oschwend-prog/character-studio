@@ -312,23 +312,41 @@ def test_abandoning_a_post_does_not_stop_the_others(rig):
     assert out["pulled"] == [{"post_id": fresh.id, "window": "24h"}]
 
 
-def test_an_old_post_that_already_holds_a_7d_snapshot_is_not_abandoned(rig):
+def test_an_old_post_that_already_holds_a_7d_snapshot_is_complete_not_abandoned(rig):
     post = rig.post(age=20 * D)
     rig.seven_day_views(post, 100)
     fake = FakePostiz(default=analytics(views=5))
     out = pull(rig.store, fake, NOW)
-    assert fake.calls == [] and out["abandoned"] == []
-    assert out["already_pulled"] == [{"post_id": post.id, "window": "7d"}]
+    assert fake.calls == [] and out["abandoned"] == [] and out["errors"] == []
 
 
-def test_an_abandoned_posts_clip_is_still_refreshed_from_an_existing_figure(rig):
-    """Abandoning only stops the fetch: the clip bookkeeping for aged posts is unchanged."""
+def test_a_post_older_than_the_report_horizon_costs_no_snapshot_query_at_all(rig, monkeypatch):
+    """Bounds the work of every run: only posts up to 28 d old are looked at (14 d to pull, 14 d to report)."""
+    rig.post(age=metrics.ABANDON_AFTER + metrics.ABANDON_REPORT_FOR + MIN)
+    seen: list[str] = []
+    real = rig.store.snapshots_for
+    monkeypatch.setattr(rig.store, "snapshots_for", lambda post_id: seen.append(post_id) or real(post_id))
+    fake = FakePostiz(default=analytics(views=5))
+    out = pull(rig.store, fake, NOW)
+    assert seen == [] and fake.calls == []  # not even the idempotency lookup
+    assert out["abandoned"] == [] and out["errors"] == []  # and it is no longer reported either
+
+
+def test_a_post_inside_the_report_horizon_is_still_reported_without_a_fetch(rig):
+    post = rig.post(age=metrics.ABANDON_AFTER + metrics.ABANDON_REPORT_FOR)
+    fake = FakePostiz(default=analytics(views=5))
+    out = pull(rig.store, fake, NOW)
+    assert fake.calls == [] and [a["post_id"] for a in out["abandoned"]] == [post.id]
+
+
+def test_an_abandoned_post_does_not_keep_its_clip_in_the_outlier_heal_loop(rig, monkeypatch):
+    """Past 14 d the post is no longer the pull's business: its clip is not refreshed from here."""
     clip = rig.clip()
-    post = rig.post(age=20 * D, clip=clip)
-    rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=post.claimed_at + 8 * D, views=600))
-    rig.history("@biscuit.tt", [100, 200, 300], target_at=NOW - 20 * D)
+    rig.post(age=20 * D, clip=clip)
+    calls: list[str] = []
+    monkeypatch.setattr(metrics, "_refresh_clip", lambda store, clip_id: calls.append(clip_id) or (None, False))
     out = pull(rig.store, FakePostiz(), NOW)
-    assert rig.features(clip)["outlier_x"] == 3.0 and out["abandoned"] == []
+    assert calls == [] and len(out["abandoned"]) == 1
 
 
 def test_a_snapshot_belongs_to_the_window_its_own_age_falls_in(rig):

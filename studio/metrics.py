@@ -13,7 +13,9 @@ window up to 14 d, see below). (A run that first meets a post at 30 h pulls the 
 is gone for good, a snapshot taken at 30 h can only honestly be a 24 h one.) The 7 d window gives up
 at post age > ``ABANDON_AFTER`` (14 d): a post that old with no 7 d snapshot (deleted, never indexed)
 is no longer fetched and is listed under ``abandoned`` (not ``errors``), so it cannot keep the
-Action red for ever; the clip bookkeeping below is unchanged. A pull runs
+Action red for ever. It is listed for 14 more days (``ABANDON_REPORT_FOR``) and is then skipped before
+any snapshot query, so a run's work is bounded by the last 28 days of posts, not the whole library;
+past 14 d a post's clip is no longer refreshed from the pull (an ingest still does). A pull runs
 ``postiz analytics:post <postiz-post-id> -d 7`` and writes one ``Snapshot`` with ``captured_at = now``.
 **Idempotent per (post, window):** a window that already holds a snapshot of the post (from any
 source) is never pulled again, so a job that runs every 5 minutes writes one snapshot per window, not
@@ -85,8 +87,12 @@ WINDOWS: tuple[tuple[str, timedelta], ...] = (
 )
 SEVEN_DAYS = dict(WINDOWS)["7d"]
 # The 7 d window is the last one and has no end as a classification (a late snapshot still belongs
-# to it), but a pull gives up on a post older than this with no 7 d snapshot: reported as abandoned.
+# to it), but a pull gives up on a post older than ABANDON_AFTER with no 7 d snapshot: it is reported as
+# abandoned for ABANDON_REPORT_FOR more days (so the owner sees it), then dropped from the run entirely:
+# a post older than both is skipped before any snapshot query, which bounds the work of every run to
+# the last 28 days of posts however long the library grows.
 ABANDON_AFTER = timedelta(days=14)
+ABANDON_REPORT_FOR = timedelta(days=14)
 
 MIN_PRIORS = 3  # fewer non-None prior 7-day views than this: no baseline, outlier_x is None
 MAX_PRIORS = 15  # the baseline is the median of the account's last 15
@@ -364,15 +370,6 @@ def _pull_window(
     if _snapshots_in_window(store, post, window):
         out["already_pulled"].append(where)
         return False
-    age = now - posted_at(post)
-    if window == "7d" and age > ABANDON_AFTER:
-        log.warning(
-            "giving up on post %s (postiz id %s): aged %.1f d with no 7 d snapshot (deleted or never "
-            "indexed); not pulled again",
-            post.id, post.platform_post_id, age / timedelta(days=1),
-        )  # fmt: skip
-        out["abandoned"].append({**where, "age_days": round(age / timedelta(days=1), 1)})
-        return False
     payload = _fetch(postiz_run, executable, post.platform_post_id)
     if isinstance(payload, dict) and payload.get("missing") is True:
         log.warning(
@@ -392,6 +389,24 @@ def _pull_window(
     return True
 
 
+def _report_abandoned(store: Store, post: Post, age: timedelta, out: dict[str, Any]) -> None:
+    """A post past ``ABANDON_AFTER``: list it under ``abandoned`` unless it holds its 7 d snapshot."""
+    try:
+        if _snapshots_in_window(store, post, "7d"):
+            return  # measured: nothing was lost
+    except Exception as e:  # noqa: BLE001 - one post must never stop the rest
+        out["errors"].append({"post_id": post.id, "window": "7d", "error": _short(e)})
+        return
+    log.warning(
+        "giving up on post %s (postiz id %s): aged %.1f d with no 7 d snapshot (deleted or never "
+        "indexed); not pulled again",
+        post.id, post.platform_post_id, age / timedelta(days=1),
+    )  # fmt: skip
+    out["abandoned"].append(
+        {"post_id": post.id, "window": "7d", "age_days": round(age / timedelta(days=1), 1)}
+    )
+
+
 def pull(
     store: Store,
     postiz_run: Callable[..., Any],
@@ -403,7 +418,8 @@ def pull(
 
     ``postiz_run`` is ``subprocess.run`` (a fake in tests). One post's failure never stops the rest:
     it is listed under ``errors`` and nothing is written for it. A post past ``ABANDON_AFTER`` with no
-    7 d snapshot is listed under ``abandoned`` and is not fetched.
+    7 d snapshot is listed under ``abandoned`` (for ``ABANDON_REPORT_FOR``) and is not fetched; one older
+    than both is skipped without any query.
     """
     require_aware(now, "pull(now)")
     out: dict[str, Any] = {
@@ -416,8 +432,12 @@ def pull(
     for post in store.list_posts(status=PostStatus.posted):
         if not post.platform_post_id:
             continue
-        window = window_at(now - posted_at(post))
-        if window is None:
+        age = now - posted_at(post)
+        window = window_at(age)
+        if window is None or age > ABANDON_AFTER + ABANDON_REPORT_FOR:
+            continue  # too young, or long past reporting: not even the idempotency lookup is spent
+        if window == "7d" and age > ABANDON_AFTER:
+            _report_abandoned(store, post, age, out)
             continue
         if window == "7d":
             aged[post.clip_id] = None
