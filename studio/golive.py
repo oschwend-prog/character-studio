@@ -9,7 +9,7 @@ What is checked, in the order the owner's checklist (``docs/launch/go-live.md``)
 
 * Keychain items ``cs-database-url``, ``cs-supabase-url``, ``cs-supabase-service-key``,
   ``cs-postiz-api-key``: present or absent. The probe never reads a value.
-* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0008.
+* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0009.
 * The Supabase Data API exposes schema ``studio`` (the terminal and the owner RPCs need it).
 * Characters: at least one is ``live``; each launch character has masters, a close-up and an account
   with a Postiz integration id (``characters/*/refs.json`` plus the database).
@@ -106,6 +106,9 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("column", "has_minors"), ("function", "accounts_for_clip"), ("function", "decide_pick"),
         ("function", "attach_clip"), ("view", "v_picks"), ("view", "v_pick_history"),
     ),
+    # 0009 (the analyst's data): only the two picks views, with six columns appended. The last of them, `analysis`, is the
+    # marker that tells 0009 from 0008 (the probe reads it from the view's own columns).
+    "0009": (("view", "v_picks"), ("view", "v_pick_history"), ("column", "analysis")),
 }
 
 PROBE_SQL = """
@@ -119,7 +122,8 @@ join pg_class c on c.oid = a.attrelid
 join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'studio' and a.attnum > 0 and not a.attisdropped
   and ((c.relname = 'snapshots') or (c.relname = 'characters' and a.attname = 'setup')
-       or (c.relname = 'runs' and a.attname = 'details') or (c.relname = 'sources' and a.attname = 'has_minors'))
+       or (c.relname = 'runs' and a.attname = 'details') or (c.relname = 'sources' and a.attname = 'has_minors')
+       or (c.relname = 'v_picks' and a.attname = 'analysis'))
 union all
 select 'index', indexname::text from pg_indexes where schemaname = 'studio'
 union all

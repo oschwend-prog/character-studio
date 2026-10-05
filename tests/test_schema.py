@@ -668,3 +668,54 @@ def test_0008_stays_inside_schema_studio_apart_from_its_storage_policies_and_gra
         assert stmt.startswith("studio."), stmt
     assert not re.search(r"\b(truncate|delete|update studio\.(?!favorites))\b", DROPIN_CODE, re.I)
     assert not re.search(r"\balter\s+column\b|\brename\b", DROPIN_CODE, re.I)
+
+
+# ---- 0009: the analyst's data on every pick card -----------------------------------------------------------
+
+ANALYST_PATH = MIGRATIONS / "0009_analyst.sql"
+ANALYST_SQL = ANALYST_PATH.read_text()
+ANALYST_CODE = re.sub(r"--[^\n]*", "", ANALYST_SQL)
+ANALYST_COLUMNS = ["velocity", "engagement", "saturation_count", "trait_matches", "why", "analysis"]
+
+
+def test_0009_picks_views_keep_every_column_and_append_the_analysts_fields():
+    cols = lambda text: re.findall(r"\bas (\w+),?\s*$", text, re.M)  # noqa: E731
+    for view in ("v_picks", "v_pick_history"):
+        new = re.search(rf"create or replace view studio\.{view} .*?from studio\.favorites f", ANALYST_SQL, re.S).group(0)
+        old = re.search(rf"create or replace view studio\.{view} .*?from studio\.favorites f", DROPIN_SQL, re.S).group(0)
+        assert "with (security_invoker = true)" in new
+        assert cols(new)[: len(cols(old))] == cols(old), f"{view}: create or replace view may only append columns"
+        assert cols(new)[len(cols(old)) :] == ANALYST_COLUMNS
+        # numbers go through studio.num (a non-number is null, never 0); objects and arrays stay JSON, text stays text
+        assert "studio.num(f.proposal -> 'velocity') as velocity" in new
+        assert "studio.num(f.proposal -> 'saturation_count') as saturation_count" in new
+        assert "f.proposal -> 'engagement' as engagement" in new
+        assert "f.proposal -> 'trait_matches' as trait_matches" in new
+        assert "f.proposal ->> 'why' as why" in new
+        assert "f.proposal -> 'analysis' as analysis" in new
+        assert f"grant select on studio.{view} to authenticated;" in ANALYST_SQL
+    # the where clauses and joins of 0008 are unchanged
+    assert "where f.status = 'new'" in ANALYST_CODE and "where f.status <> 'new'" in ANALYST_CODE
+    assert "left join studio.clips c on c.id = f.clip_id" in ANALYST_CODE
+
+
+def test_0009_changes_nothing_but_the_two_views():
+    statements = [s.strip() for s in ANALYST_CODE.split(";") if s.strip()]
+    kinds = sorted(re.match(r"(create or replace view studio\.\w+|grant select on studio\.\w+)", s).group(1) for s in statements)
+    assert kinds == [
+        "create or replace view studio.v_pick_history", "create or replace view studio.v_picks",
+        "grant select on studio.v_pick_history", "grant select on studio.v_picks",
+    ]  # fmt: skip
+    assert not re.search(r"\b(drop|truncate|delete|insert|update|alter)\b", ANALYST_CODE, re.I)
+    assert not re.search(r"\banon\b", ANALYST_CODE)
+    assert re.findall(r"\b(?:public|auth|storage|extensions)\.[a-z_]+", ANALYST_CODE) == []
+
+
+def test_0009_every_column_it_exposes_is_a_field_the_cli_validates():
+    import inspect
+
+    from studio import favorites
+
+    source = inspect.getsource(favorites._validate_analyst_fields) + inspect.getsource(favorites.validate_card)
+    for column in ANALYST_COLUMNS:
+        assert f'"{column}"' in source, f"{column}: exposed by the views but not validated by studio.favorites"
