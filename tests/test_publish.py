@@ -352,13 +352,25 @@ class FlakyStore(MemoryStore):
     """Loses the write that records a successful post, as a crash right after Postiz would."""
 
     fail_posted_write = True
+    fail_status = "posted"  # the status whose write is lost
     only_ids: set[str] | None = None  # None: every post
 
     def update_post(self, id, /, **kw):
         lost = self.only_ids is None or id in self.only_ids
-        if self.fail_posted_write and lost and kw.get("status") == "posted":
+        if self.fail_posted_write and lost and kw.get("status") == self.fail_status:
             raise RuntimeError("db went away")
         return super().update_post(id, **kw)
+
+
+class ClipFlakyStore(MemoryStore):
+    """Loses the clip -> posted move, as a crash between the post write and the transition would."""
+
+    fail_clip_move = True
+
+    def update_clip(self, id, /, **kw):
+        if self.fail_clip_move and kw.get("state") == "posted":
+            raise RuntimeError("db went away")
+        return super().update_clip(id, **kw)
 
 
 def test_a_lost_success_write_is_never_posted_twice(tmp_path):
@@ -382,6 +394,34 @@ def test_a_lost_success_write_is_never_posted_twice(tmp_path):
     assert len(pub.calls) == 1
 
 
+def test_a_lost_success_write_still_counts_toward_the_daily_cap(tmp_path):
+    rig = Rig(tmp_path)
+    rig.store = FlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    posts = [rig.post(when=SLOT + timedelta(minutes=i)) for i in range(3)]
+    pub = FakePublisher()
+
+    summary = rig.run(pub)  # both Postiz successes lose their "posted" write
+
+    assert len(pub.calls) == 2  # the third is NOT published in the same run
+    assert [e["post_id"] for e in summary["errors"]] == [posts[0].id, posts[1].id]
+    third = rig.get(posts[2])
+    assert third.status is PostStatus.scheduled
+    assert third.scheduled_for == datetime(2026, 10, 7, 19, 0, tzinfo=LONDON)
+    assert [x["post_id"] for x in summary["rescheduled"]] == [posts[2].id]
+
+
+def test_a_lost_needs_check_write_still_counts_toward_the_daily_cap(tmp_path):
+    rig = Rig(tmp_path)
+    flaky = FlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    flaky.fail_status = "needs_check"
+    rig.store = flaky
+    posts = [rig.post(when=SLOT + timedelta(minutes=i)) for i in range(3)]
+    pub = FakePublisher(fail=UncertainPublish("posts:create timed out"))
+    rig.run(pub)
+    assert len(pub.calls) == 2  # an uncertain post may be live: it counts even if unrecorded
+    assert rig.get(posts[2]).status is PostStatus.scheduled
+
+
 def test_one_bad_post_does_not_stop_the_others(tmp_path):
     rig = Rig(tmp_path)
     rig.store = FlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
@@ -395,6 +435,73 @@ def test_one_bad_post_does_not_stop_the_others(tmp_path):
     assert [x["post_id"] for x in summary["posted"]] == [second.id]
     assert rig.get(first).status is PostStatus.posting
     assert rig.get(second).status is PostStatus.posted
+
+
+# ---- publish_due: a clip whose posts are all posted but which is still `scheduled` ---------------
+
+
+def test_reconcile_moves_a_clip_whose_posts_are_all_posted(rig):
+    done = rig.post(status="posted", claimed_at=SLOT, platform_post_id="x")
+    assert rig.store.get_clip(done.clip_id).state is ClipState.scheduled
+    pub = FakePublisher()
+
+    summary = rig.run(pub)
+
+    assert rig.store.get_clip(done.clip_id).state is ClipState.posted
+    assert summary["clips_posted"] == [done.clip_id]
+    assert pub.calls == []
+
+
+def test_reconcile_leaves_every_other_clip_alone(tmp_path):
+    rig = Rig(tmp_path, instagram=True)
+    mixed = rig.clip()  # one posted, one failed: not all posted
+    rig.post("@biscuit.tt", clip=mixed, status="posted", claimed_at=SLOT, platform_post_id="a")
+    rig.post("@biscuit.ig", clip=mixed, status="failed", attempts=3)
+    pending = rig.clip("reginald")  # posted + a post that is still to come
+    rig.post("@reginald.tt", clip=pending, status="posted", claimed_at=SLOT, platform_post_id="b")
+    rig.post("@biscuit.ig", clip=pending, when=NOW + timedelta(hours=1))
+    postless = rig.clip()  # no posts at all
+    elsewhere = rig.clip(state=ClipState.approved)  # not scheduled: never touched
+    rig.post("@biscuit.tt", clip=elsewhere, status="posted", claimed_at=SLOT, platform_post_id="c")
+
+    summary = rig.run(FakePublisher())
+
+    assert rig.store.get_clip(mixed.id).state is ClipState.scheduled
+    assert rig.store.get_clip(pending.id).state is ClipState.scheduled
+    assert rig.store.get_clip(postless.id).state is ClipState.scheduled
+    assert rig.store.get_clip(elsewhere.id).state is ClipState.approved
+    assert summary["clips_posted"] == [] and summary["errors"] == []
+
+
+def test_a_crash_between_the_post_write_and_the_clip_move_heals_on_the_next_run(tmp_path):
+    rig = Rig(tmp_path)
+    flaky = ClipFlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    rig.store = flaky
+    p = rig.post()
+    pub = FakePublisher()
+
+    first = rig.run(pub)  # the post is recorded, the clip move is lost
+    assert rig.get(p).status is PostStatus.posted
+    assert rig.store.get_clip(p.clip_id).state is ClipState.scheduled
+    assert [e["post_id"] for e in first["errors"]] == [p.id]
+
+    flaky.fail_clip_move = False
+    second = rig.run(pub, NOW + timedelta(minutes=15))
+    assert rig.store.get_clip(p.clip_id).state is ClipState.posted
+    assert second["clips_posted"] == [p.clip_id] and second["errors"] == []
+    assert len(pub.calls) == 1  # healing never publishes anything
+
+
+def test_a_failing_reconcile_is_reported_and_does_not_stop_the_run(tmp_path):
+    rig = Rig(tmp_path)
+    flaky = ClipFlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    rig.store = flaky
+    stuck = rig.post(status="posted", claimed_at=SLOT, platform_post_id="x")
+    due = rig.post("@reginald.tt", when=SLOT + timedelta(minutes=30))
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert [e["clip_id"] for e in summary["errors"] if "clip_id" in e] == [stuck.clip_id]
+    assert rig.get(due).status is PostStatus.posted  # the due post still went out
 
 
 # ---- publish_due: at most 2 posted per account per London day -----------------------------------
@@ -580,7 +687,8 @@ class FakeRun:
             self.path_existed_at_create = self.uploaded_path.exists()
         if sub in self.raises:
             raise self.raises[sub]
-        rc, out, err = self.answers[sub]
+        answer = self.answers[sub]
+        rc, out, err = answer(list(argv)) if callable(answer) else answer
         return subprocess.CompletedProcess(argv, rc, stdout=out, stderr=err)
 
     def option(self, sub: str, flag: str) -> str:
@@ -620,12 +728,13 @@ def test_postiz_tiktok_uses_direct_post(tmp_path):
     assert settings["content_posting_method"] == "DIRECT_POST"  # Rule 3
     assert settings["video_made_with_ai"] is True
     assert settings["privacy_level"] == "PUBLIC_TO_EVERYONE"
+    assert settings["autoAddMusic"] == "no"  # required by the DTO; never let TikTok add music
     assert settings == TIKTOK_SETTINGS
     assert run.option("posts:create", "-i") == "int-bis-tt"
     # the media is the path Postiz returned from the upload, never a local file or the signed URL
     assert run.option("posts:create", "-m") == "https://uploads.postiz.test/abc.mp4"
     content = run.option("posts:create", "-c")
-    assert content == "the right eye is ice-blue\n\n#oddeyes #biscuit"
+    assert content == "the right eye is ice-blue\n\nAI-generated character 🤖\n\n#oddeyes #biscuit"
     assert run.option("posts:create", "-s") == "2026-10-06T18:05:09Z"
     assert result == PublishResult(platform_post_id="pz-post-9", url=None)
 
@@ -675,9 +784,40 @@ def test_postiz_upload_without_a_path_is_a_plain_error(tmp_path):
     assert [c[1] for c in run.calls] == ["upload"]
 
 
-def test_postiz_rejection_is_a_plain_retriable_error(tmp_path):
-    run = FakeRun(create=(1, "", "❌ Failed to create post: 400 invalid privacy"))
+@pytest.mark.parametrize("status", [400, 401, 403, 404, 422, 429])
+def test_postiz_a_definite_4xx_is_a_plain_retriable_error(tmp_path, status):
+    err = f"❌ Failed to create post: Request failed: API Error ({status}): invalid privacy"
+    run = FakeRun(create=(1, "", err))
     with pytest.raises(PostizError, match="invalid privacy") as e:
+        publish_via_postiz(tmp_path, run)
+    assert not isinstance(e.value, UncertainPublish)  # Postiz refused it: nothing was created
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "❌ Failed to create post: Request failed: API Error (502): Bad Gateway",
+        "❌ Failed to create post: Request failed: API Error (500): boom",
+        "❌ Failed to create post: Request failed: API Error (503): unavailable",
+        "❌ Failed to create post: Request failed: API Error (524): origin timed out",
+        "❌ Failed to create post: Request failed: socket hang up",
+        "❌ Failed to create post: Request failed: connect ECONNRESET 10.0.0.1:443",
+        "❌ Failed to create post: fetch failed",
+        "❌ Failed to create post: something nobody has seen before",
+        "",
+    ],
+)
+def test_postiz_anything_but_a_definite_4xx_is_uncertain(tmp_path, stderr):
+    # A 5xx or a dropped connection may already have committed server-side, and Postiz has no
+    # idempotency key: only the operator can say whether the post exists.
+    run = FakeRun(create=(1, "", stderr))
+    with pytest.raises(UncertainPublish):
+        publish_via_postiz(tmp_path, run)
+
+
+def test_postiz_reads_the_status_from_stdout_when_stderr_is_empty(tmp_path):
+    run = FakeRun(create=(1, "Request failed: API Error (400): nope", ""))
+    with pytest.raises(PostizError) as e:
         publish_via_postiz(tmp_path, run)
     assert not isinstance(e.value, UncertainPublish)
 
@@ -744,7 +884,9 @@ def test_postiz_with_a_real_subprocess(tmp_path):
     assert result.platform_post_id == "pz-real"
     upload, create = json.loads(log.read_text())
     assert upload[0] == "upload" and upload[1].endswith(".mp4")
-    assert create[create.index("-c") + 1] == 'two words,\nthree lines\n"quoted"\n\n#oddeyes'
+    assert create[create.index("-c") + 1] == (
+        'two words,\nthree lines\n"quoted"\n\nAI-generated character 🤖\n\n#oddeyes'
+    )
     assert create[create.index("-m") + 1] == "https://uploads.postiz.test/real.mp4"
     assert json.loads(create[create.index("--settings") + 1])["content_posting_method"] == "DIRECT_POST"
 
@@ -818,18 +960,38 @@ def test_download_media_reads_file_uris_and_refuses_other_schemes(tmp_path):
         download_media("ftp://example.test/m.mp4", dest)
 
 
+AI = "AI-generated character 🤖"
+
+
 @pytest.mark.parametrize(
     ("caption", "tags", "expected"),
     [
-        ("hello", ["a", "#b"], "hello\n\n#a #b"),
-        ("hello", [], "hello"),
-        ("", ["a"], "#a"),
-        ("hello", ["A", "a", "#A", " b ", ""], "hello\n\n#A #b"),  # trimmed, de-duplicated
-        ("  hello  ", ["#"], "hello"),
+        ("hello", ["a", "#b"], f"hello\n\n{AI}\n\n#a #b"),
+        ("hello", [], f"hello\n\n{AI}"),
+        ("", ["a"], f"{AI}\n\n#a"),
+        ("hello", ["A", "a", "#A", " b ", ""], f"hello\n\n{AI}\n\n#A #b"),  # trimmed, de-duplicated
+        ("  hello  ", ["#"], f"hello\n\n{AI}"),
+        # a caption that already says it is not told twice (any case); a hashtag does not count
+        ("Meet Biscuit, AI-generated since day one", ["a"], "Meet Biscuit, AI-generated since day one\n\n#a"),
+        ("an ai-generated dance", [], "an ai-generated dance"),
+        ("a dance", ["aigenerated"], f"a dance\n\n{AI}\n\n#aigenerated"),
     ],
 )
 def test_compose_content(caption, tags, expected):
     assert compose_content(caption, tags) == expected
+
+
+@pytest.mark.parametrize(
+    ("platform", "integration"),
+    [(Platform.tiktok, "int-bis-tt"), (Platform.instagram, "int-bis-ig")],
+)
+def test_every_platform_gets_the_ai_disclosure_before_the_hashtags(tmp_path, platform, integration):
+    run = FakeRun()
+    publish_via_postiz(tmp_path, run, platform, integration)
+    content = run.option("posts:create", "-c")
+    assert AI in content
+    assert content.index(AI) < content.index("#oddeyes")  # visible before Instagram folds the text
+    assert content.startswith("the right eye is ice-blue")
 
 
 # ---- publish_due + the Postiz adapter together --------------------------------------------------
@@ -848,6 +1010,32 @@ def test_publish_due_through_the_postiz_adapter(tmp_path):
     assert summary["errors"] == []
     assert json.loads(run.option("posts:create", "--settings"))["content_posting_method"] == "DIRECT_POST"
     assert run.uploaded_bytes == MASTER
+
+
+def test_a_400_from_postiz_is_retried_but_a_502_is_not_end_to_end(tmp_path):
+    rig = Rig(tmp_path)
+    bad_request = rig.post("@biscuit.tt")
+    bad_gateway = rig.post("@reginald.tt")
+
+    def create(argv):  # the status depends on which integration the post goes to
+        status = 400 if "int-bis-tt" in argv else 502
+        return 1, "", f"❌ Failed to create post: Request failed: API Error ({status}): x"
+
+    run = FakeRun(create=create)
+    publisher = PostizPublisher(run)
+
+    rig.run(publisher)
+    retried = rig.get(bad_request)
+    assert (retried.status, retried.attempts) == (PostStatus.scheduled, 1)  # refused: try again
+    unsure = rig.get(bad_gateway)
+    assert (unsure.status, unsure.attempts) == (PostStatus.needs_check, 0)  # may exist: a human looks
+    assert "502" in unsure.error
+
+    rig.run(publisher, NOW + timedelta(minutes=15))
+    assert rig.get(bad_gateway).status is PostStatus.needs_check
+    by_integration = [c[c.index("-i") + 1] for c in run.calls if c[1] == "posts:create"]
+    assert by_integration.count("int-reg-tt") == 1  # the 502 post was never sent again
+    assert by_integration.count("int-bis-tt") == 2  # the 400 post was
 
 
 def test_a_posts_create_timeout_ends_in_needs_check_end_to_end(tmp_path):

@@ -3,6 +3,8 @@
 ``publish_due(store, storage, publisher, now)`` is the whole job (``studio publish due``, every 15
 minutes on GitHub Actions). The rules, in the order they run:
 
+0. **Reconcile.** A clip still ``scheduled`` whose posts are ALL ``posted`` moves to ``posted``: this
+   heals a crash between the post write and the clip transition. It never publishes anything.
 1. **Stale claims.** A post in ``posting`` whose ``claimed_at`` is more than 30 minutes before
    ``now`` (or missing) becomes ``needs_check`` and is never retried automatically: the process that
    claimed it may have reached the platform before it died, so only a human can say whether the
@@ -16,8 +18,10 @@ minutes on GitHub Actions). The rules, in the order they run:
    * **at most 2 posted per account per London day.** A third due post goes back to ``scheduled``
      at that account's character's next cadence slot (``slot_for`` with the real
      ``Settings.cadence``, the next cadence day after today). A ``needs_check`` post counts like a
-     posted one: it may well be live. The day of a posted post is the London date of its
-     ``claimed_at`` (the posts table has no ``posted_at``), falling back to ``scheduled_for``;
+     posted one: it may well be live. The in-run counter is bumped as soon as the publisher
+     returns, before any database write, so a lost write cannot let a third post out in that run.
+     The day of a posted post is the London date of its ``claimed_at`` (the posts table has no
+     ``posted_at``), falling back to ``scheduled_for``;
    * the master's signed URL goes to ``publisher.publish(..., ai_label=True)`` (never without the AI
      label);
    * success: the post is ``posted`` with the platform id and URL, and the clip moves to ``posted``
@@ -35,7 +39,8 @@ twice. One post's failure never stops the others.
 
 ``publish_due`` returns a JSON-friendly summary: ``stale``, ``posted``, ``retry``, ``failed``,
 ``rescheduled``, ``needs_check`` (each a list of dicts with a ``post_id``), ``clips_posted`` (clip
-ids) and ``errors`` (outcomes that could not be recorded; the CLI exits 1 on any).
+ids, reconciled ones included) and ``errors`` (outcomes that could not be recorded, each with a
+``post_id`` or a ``clip_id``; the CLI exits 1 on any).
 ``preview_due(store, now)`` is the read-only twin behind ``--dry-run``: same decisions, nothing
 claimed or written, no storage or publisher needed.
 """
@@ -172,6 +177,8 @@ def publish_due(
         "rescheduled": [], "needs_check": [], "clips_posted": [], "errors": [],
     }  # fmt: skip
 
+    _reconcile_clips(store, out)
+
     for post in stale_posts(store, now):
         reason = (
             f"stuck in posting since {post.claimed_at}: not retried, check the platform "
@@ -236,8 +243,8 @@ def _publish_one(
             ai_label=True,
         )
     except UncertainPublish as e:
+        counts[account.id] += 1  # it may be live: counted before the write, which may fail
         store.update_post(post.id, status=PostStatus.needs_check, error=_short(e))
-        counts[account.id] += 1  # it may be live
         out["needs_check"].append({"post_id": post.id, "error": _short(e)})
         return
     except Exception as e:  # noqa: BLE001 - any failure of the publisher is one failed attempt
@@ -253,7 +260,9 @@ def _publish_one(
             out["failed"].append({"post_id": post.id, "attempts": attempts, "error": error})
         return
 
-    # The platform said yes. From here nothing may send the post back to `scheduled`.
+    # The platform said yes. From here nothing may send the post back to `scheduled`, and the post
+    # counts toward the cap even if the write below fails.
+    counts[account.id] += 1
     store.update_post(
         post.id,
         status=PostStatus.posted,
@@ -261,13 +270,26 @@ def _publish_one(
         url=result.url,
         error=None,
     )
-    counts[account.id] += 1
     out["posted"].append(
         {"post_id": post.id, "platform_post_id": result.platform_post_id, "url": result.url}
     )
     if _all_posted(store, clip.id):
         transition(store, clip.id, ClipState.posted)
         out["clips_posted"].append(clip.id)
+
+
+def _reconcile_clips(store: Store, out: dict[str, Any]) -> None:
+    """Move ``scheduled`` clips whose posts are all ``posted`` to ``posted`` (crash recovery)."""
+    posted_clips = {p.clip_id for p in store.list_posts(status=PostStatus.posted)}
+    for clip in store.list_clips(state=ClipState.scheduled):
+        if clip.id not in posted_clips:
+            continue
+        try:
+            if _all_posted(store, clip.id):
+                transition(store, clip.id, ClipState.posted)
+                out["clips_posted"].append(clip.id)
+        except Exception as e:  # noqa: BLE001 - one clip must never stop the run
+            out["errors"].append({"clip_id": clip.id, "error": _short(e)})
 
 
 def _all_posted(store: Store, clip_id: str) -> bool:

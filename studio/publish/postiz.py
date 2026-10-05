@@ -16,10 +16,13 @@ The CLI prints a status line before its JSON (``✅ File uploaded successfully!`
 picked out of stdout, with or without that line. Credentials are the CLI's own: ``POSTIZ_API_KEY``
 from the environment (``bin/studio`` exports it from the Keychain).
 
-**What is safe to retry.** A failed fetch, a failed or timed-out upload and a ``posts:create`` that
-exits non-zero all happen before anything is published: plain exceptions, retried by ``publish_due``.
-A ``posts:create`` that times out, or exits 0 without a post id we can read, may have created the
-post: those raise ``UncertainPublish`` and end in ``needs_check``, never in a retry.
+**What is safe to retry.** A failed fetch and a failed or timed-out upload happen before any post
+exists: plain ``PostizError``, retried by ``publish_due``. So is a ``posts:create`` whose output shows
+a definite 4xx (``API Error (4xx)``): Postiz refused the request. Every other way ``posts:create`` can
+end may already have committed server-side, and Postiz has no idempotency key: a timeout, a 5xx
+(502, 524...), a network failure (``Request failed: socket hang up``), any other non-zero exit, and
+exit 0 without a post id we can read. Those raise ``UncertainPublish`` and end in ``needs_check``,
+never in a retry.
 
 The signed URL carries a token: it is never put in an error message.
 """
@@ -50,6 +53,7 @@ from studio.publish.base import PublishResult, UncertainPublish
 TIKTOK_SETTINGS: dict[str, Any] = {
     "content_posting_method": "DIRECT_POST",
     "privacy_level": "PUBLIC_TO_EVERYONE",
+    "autoAddMusic": "no",  # required by the DTO; "no" keeps TikTok from adding third-party music
     "video_made_with_ai": True,  # TikTok's "AI-generated content" label: always on
     "duet": True,
     "stitch": True,
@@ -68,6 +72,13 @@ PLATFORM_SETTINGS: dict[Platform, dict[str, Any]] = {
     Platform.instagram: INSTAGRAM_SETTINGS,
 }
 
+# The Postiz CLI prints "Request failed: API Error (<status>): ..." for an HTTP error answer.
+_DEFINITE_REJECTION = re.compile(r"API Error \(4\d\d\)")
+
+# Every post carries a visible AI disclosure, whatever the platform: on Instagram it is the only one
+# (the label is not an API setting there); on TikTok it backs up ``video_made_with_ai``.
+AI_DISCLOSURE = "AI-generated character 🤖"
+
 UPLOAD_TIMEOUT_S = 900
 CREATE_TIMEOUT_S = 180
 _OUTPUT_CHARS = 500
@@ -79,8 +90,7 @@ class PostizError(RuntimeError):
     """A Postiz CLI step or the media fetch failed before anything was published."""
 
 
-def compose_content(caption: str, hashtags: list[str]) -> str:
-    """The post text: caption, a blank line, then the hashtags (``#`` added, de-duplicated)."""
+def _clean_tags(hashtags: list[str]) -> list[str]:
     tags: list[str] = []
     seen: set[str] = set()
     for raw in hashtags:
@@ -88,10 +98,20 @@ def compose_content(caption: str, hashtags: list[str]) -> str:
         if tag and tag.lower() not in seen:
             seen.add(tag.lower())
             tags.append(f"#{tag}")
+    return tags
+
+
+def compose_content(caption: str, hashtags: list[str]) -> str:
+    """The post text: the caption ending in the AI disclosure, a blank line, then the hashtags.
+
+    The disclosure (``AI_DISCLOSURE``) is added unless the caption already says "AI-generated"
+    (any case); hashtags get their ``#`` and are de-duplicated.
+    """
     text = caption.strip()
-    if tags:
-        text = f"{text}\n\n{' '.join(tags)}" if text else " ".join(tags)
-    return text
+    if "ai-generated" not in text.lower():
+        text = f"{text}\n\n{AI_DISCLOSURE}" if text else AI_DISCLOSURE
+    tags = _clean_tags(hashtags)
+    return f"{text}\n\n{' '.join(tags)}" if tags else text
 
 
 def download_media(
@@ -178,9 +198,9 @@ class PostizPublisher:
             raise ValueError("refusing to publish without the AI label")
         if not integration_id:
             raise ValueError("no Postiz integration id for this account")
-        content = compose_content(caption, hashtags)
-        if not content:
+        if not caption.strip() and not _clean_tags(hashtags):
             raise ValueError("nothing to post: caption and hashtags are empty")
+        content = compose_content(caption, hashtags)
         settings = PLATFORM_SETTINGS[platform]  # never mutated, only serialised
 
         with tempfile.TemporaryDirectory(prefix="studio-publish-") as tmp:
@@ -238,7 +258,10 @@ class PostizPublisher:
                 f"postiz posts:create timed out after {CREATE_TIMEOUT_S} s: the post may exist"
             ) from None
         if proc.returncode != 0:
-            raise PostizError(f"postiz posts:create failed (exit {proc.returncode}): {_tail(proc)}")
+            detail = f"postiz posts:create failed (exit {proc.returncode}): {_tail(proc)}"
+            if _DEFINITE_REJECTION.search(f"{proc.stderr or ''}\n{proc.stdout or ''}"):
+                raise PostizError(detail)  # Postiz refused the request: nothing was created
+            raise UncertainPublish(f"{detail} (the post may exist)")  # 5xx, network, anything else
         try:
             post_id, url = _post_id(_json_in(proc.stdout or ""))
         except ValueError:
