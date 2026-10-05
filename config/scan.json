@@ -40,9 +40,9 @@
       "_status": "inactive until the voice lane (Slice 3)",
       "audienceQuery": "Culture/Region: UK/US English-speaking; Global: true; Demographics: millennials and Gen Z 18-40 who watch character comedy and history content;",
       "rotation": [
-        {"embeddingType": "concept", "query": "naive confident character from another era baffled by a modern everyday object"},
-        {"embeddingType": "format", "query": "openly AI recurring character talks to a handheld camera, numbered episode"},
-        {"embeddingType": "hook", "query": "over-formal verbose speaker reacts to modern slang"}
+        {"embeddingType": "concept", "theme": "stranger baffled by a modern object", "query": "naive confident character from another era baffled by a modern everyday object"},
+        {"embeddingType": "format", "theme": "numbered episode to camera", "query": "openly AI recurring character talks to a handheld camera, numbered episode"},
+        {"embeddingType": "hook", "theme": "formal speaker meets modern slang", "query": "over-formal verbose speaker reacts to modern slang"}
       ]
     }
   },
