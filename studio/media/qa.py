@@ -347,6 +347,36 @@ def frame_times(duration_s: float, n: int, fps: float = 30.0) -> list[float]:
     return [last * i / (n - 1) for i in range(n)]
 
 
+def _write_sheet(path: Path, times: list[float], cols: int, rows: int, width: int, out: Path) -> None:
+    """Write the frames of ``path`` nearest to ``times`` (first at or after each) tiled ``cols`` x ``rows`` to ``out``."""
+    # One decode pass, not one seek per frame: a seek decodes from the previous keyframe, and a
+    # master's keyframes are ~8 s apart. A frame is picked when it is the first at or after a
+    # target moment (``prev_t`` is the previous *input* frame's time).
+    pick = "+".join(
+        "isnan(prev_t)" if t == 0 else f"gte(t-start_t,{t:.3f})*lt(prev_t-start_t,{t:.3f})" for t in times
+    )
+    graph = f"select='{pick}',scale={width}:-2,setsar=1,tile={cols}x{rows}"
+    cmd = [
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(path),
+        "-vf", graph, "-fps_mode", "passthrough", "-frames:v", "1", "-q:v", "2", "-update", "1", str(out),
+    ]  # fmt: skip
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    proc = _run(cmd)
+    if proc.returncode != 0 or not out.is_file():
+        raise QAError(f"ffmpeg could not build the frame sheet for {path}: {_tail(proc.stderr)}")
+
+
+def _sheet_times(path: Path, n: int) -> list[float]:
+    data = _ffprobe(path)
+    video = _stream(data, "video")
+    if video is None:
+        raise QAError(f"{path} has no video stream")
+    # The video stream's own length: the container may run on for a longer audio track.
+    duration = _number(video.get("duration")) or _duration(data, video)
+    return frame_times(duration, n, _fps(video))
+
+
 def frame_sheet(path: str | Path, n: int = 6, out: str | Path | None = None) -> Path:
     """Write ``n`` evenly spaced frames of ``path``, 270 px wide each, side by side, to ``out``.
 
@@ -361,31 +391,27 @@ def frame_sheet(path: str | Path, n: int = 6, out: str | Path | None = None) -> 
     out = Path(out) if out is not None else path.with_name(f"{path.stem}.frames.jpg")
     if out.suffix.lower() not in _IMAGE_SUFFIXES:
         raise ValueError(f"the sheet must be a .jpg or .png file, got {out.name!r}")
-    data = _ffprobe(path)
-    video = _stream(data, "video")
-    if video is None:
-        raise QAError(f"{path} has no video stream")
-    # The video stream's own length: the container may run on for a longer audio track.
-    duration = _number(video.get("duration")) or _duration(data, video)
-    times = frame_times(duration, n, _fps(video))
-
-    # One decode pass, not one seek per frame: a seek decodes from the previous keyframe, and a
-    # master's keyframes are ~8 s apart. A frame is picked when it is the first at or after a
-    # target moment (``prev_t`` is the previous *input* frame's time).
-    pick = "+".join(
-        "isnan(prev_t)" if t == 0 else f"gte(t-start_t,{t:.3f})*lt(prev_t-start_t,{t:.3f})" for t in times
-    )
-    graph = f"select='{pick}',scale={FRAME_WIDTH}:-2,setsar=1,tile={n}x1"
-    cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", str(path),
-        "-vf", graph, "-fps_mode", "passthrough", "-frames:v", "1", "-q:v", "2", "-update", "1", str(out),
-    ]  # fmt: skip
-
-    out.parent.mkdir(parents=True, exist_ok=True)
-    proc = _run(cmd)
-    if proc.returncode != 0 or not out.is_file():
-        raise QAError(f"ffmpeg could not build the frame sheet for {path}: {_tail(proc.stderr)}")
+    _write_sheet(path, _sheet_times(path, n), n, 1, FRAME_WIDTH, out)
     return out
+
+
+def contact_sheet(
+    path: str | Path, out: str | Path, *, cols: int = 3, rows: int = 3, width: int = 320
+) -> tuple[Path, list[float]]:
+    """A ``cols`` x ``rows`` grid of evenly spaced frames of ``path`` (first and last included), ``width`` px per cell.
+
+    Cells read left to right, top to bottom, at ``times`` (seconds into the clip, returned with the path): the picture an
+    agent looks at to judge who is in the clip, the camera, a watermark or a burned-in text. Raises ``ValueError`` for a
+    bad size or extension, ``QAError`` for an unreadable video.
+    """
+    if not (1 <= cols <= 6 and 1 <= rows <= 6 and 64 <= width <= 960):
+        raise ValueError(f"a contact sheet is 1-6 columns, 1-6 rows and 64-960 px per cell, got {cols}x{rows} at {width}")
+    path, out = Path(path), Path(out)
+    if out.suffix.lower() not in _IMAGE_SUFFIXES:
+        raise ValueError(f"the sheet must be a .jpg or .png file, got {out.name!r}")
+    times = _sheet_times(path, cols * rows)
+    _write_sheet(path, times, cols, rows, width, out)
+    return out, [round(t, 3) for t in times]
 
 
 # ---- CLI ---------------------------------------------------------------------------------------

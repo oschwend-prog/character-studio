@@ -47,6 +47,13 @@ parent's checks (watermark, overlay, people, children), credit handle, trend and
 first, then trim. A source that is not in Storage (a Genjutsu library one) is trimmed from ``--file``, its
 downloaded preview. The parent is left alone.
 
+**Looking at a clip before it is used** (owner request 2026-10-05). ``analyze_source`` (``studio source analyze <source id |
+file> [--out sheet.png]``) runs the free local analysis of ``studio.media.analyze`` on a file or on a source in Storage
+(downloaded to a temporary folder and removed again): motion energy per half second, cuts, the beat, the best 6-9 s window and
+a 3 x 3 contact sheet (default ``renders/<source id or file name>/analysis.png``), as JSON. The agent looks at the sheet
+(people, subject, camera, watermark, overlay, children), records the checks with ``source check`` and the clip check with
+``fav mark --analysis-file``, and trims to the window.
+
 **Handing a stored source to Higgsfield.** ``signed_source_url`` signs a source that lives in Storage
 (``storage_path`` in the ``sources`` bucket: an owner inbox clip) for ``expires_s`` seconds (default one
 hour), the URL the daily run gives to ``media_import_url``. ``studio source url <id> [--expires N]``
@@ -74,6 +81,7 @@ from urllib.parse import urlsplit
 import typer
 
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
+from studio.media.analyze import AnalysisError, analyze_clip
 from studio.media.clipwork import ClipworkError, trim_clip
 from studio.media.qa import QAError, probe
 from studio.models import Body, Character, Mode, Source, SourceKind
@@ -89,6 +97,7 @@ PLATFORM_DOMAINS = frozenset({
 
 # The owner's drop folder: resolved from the package location, never from the working directory.
 DEFAULT_INBOX = Path(__file__).resolve().parents[1] / "inbox"
+RENDERS_DIR = Path(__file__).resolve().parents[1] / "renders"  # never in git: where an analysis puts its contact sheet
 INBOX_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".webm"})
 SOURCES_BUCKET = "sources"
 INBOX_PREFIX = "owner_inbox"
@@ -409,6 +418,47 @@ def trim_source(
     )
 
 
+def analyze_source(
+    store: Store | None, storage: Storage | None, target: str, out: Path | str | None = None
+) -> dict[str, Any]:
+    """The local analysis of ``target``: a video file, or the id of a source that lives in Storage.
+
+    A file needs neither the database nor Storage (``store`` and ``storage`` may be None). ``KeyError`` for an id that names
+    no source; ``ValueError`` for something that is neither a file nor an id, for a source
+    that is not in Storage (a library source: pass its downloaded preview as a file), and a bad sheet extension;
+    ``QAError`` / ``AnalysisError`` / ``StorageError`` when the clip cannot be read, analysed or fetched.
+    """
+    local = Path(target)
+    if local.is_file():
+        source_id, name = None, local.stem
+    else:
+        try:
+            source_id = str(uuid.UUID(target))
+        except ValueError:
+            raise ValueError(f"{target!r} is neither a video file nor a source id") from None
+        if store is None or storage is None:
+            raise ValueError(f"source {source_id}: the database and Storage are needed to fetch it")
+        source = next(iter(store.list_sources(id=source_id)), None)
+        if source is None:
+            raise KeyError(target)
+        if not source.storage_path:
+            raise ValueError(
+                f"source {source_id} is not in Storage (a library source is used through its own url): "
+                "download its preview and pass the file instead"
+            )
+        name = source_id
+    sheet = Path(out) if out is not None else RENDERS_DIR / name / "analysis.png"
+    if source_id is None:
+        result = analyze_clip(local, sheet)
+    else:
+        with tempfile.TemporaryDirectory(prefix="studio-analyze-") as tmp:
+            suffix = Path(source.storage_path).suffix or ".mp4"
+            fetched = storage.download(SOURCES_BUCKET, source.storage_path, Path(tmp) / f"source{suffix}")
+            result = analyze_clip(fetched, sheet)
+            result["file"] = source.storage_path  # the Storage key, not the temporary copy that is gone now
+    return {"target": target, "source_id": source_id, **result}
+
+
 def signed_source_url(
     store: Store, storage: Storage, source_id: str, expires_s: int = DEFAULT_URL_EXPIRES_S
 ) -> str:
@@ -618,6 +668,26 @@ def trim_command(
     except (ValueError, QAError, ClipworkError, StorageError) as e:
         fail(str(e))
     emit(_source_json(child, parent_id=id))
+
+
+@app.command("analyze")
+def analyze_command(
+    target: Annotated[str, typer.Argument(help="A source id (a clip in Storage) or the path of a video file.")],
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Where to write the 3 x 3 contact sheet (.png or .jpg; default renders/<id>/analysis.png)."),
+    ] = None,
+) -> None:
+    """Analyse a clip for free: motion, cuts, beat, the best 6-9 s window and a contact sheet to look at (JSON)."""
+    on_disk = Path(target).is_file()  # a file needs no database and no Storage
+    store = None if on_disk else open_store()
+    storage = None if on_disk else open_storage()
+    try:
+        emit(analyze_source(store, storage, target, out))
+    except KeyError:
+        fail(f"unknown source {target}")
+    except (ValueError, QAError, AnalysisError, StorageError) as e:
+        fail(str(e))
 
 
 @app.command("url")
