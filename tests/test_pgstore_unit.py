@@ -16,7 +16,7 @@ import pytest
 from psycopg.types.json import Jsonb
 
 from studio.config import LONDON
-from studio.models import Account, Clip, ClipState, Favorite, Mode, Post, PostStatus, Snapshot
+from studio.models import Account, Character, Clip, ClipState, Favorite, Mode, Post, PostStatus, Snapshot
 from studio.pgstore import PostgresStore
 from studio.store import MemoryStore, Store
 
@@ -327,7 +327,7 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
     proto_methods = [
         n for n, v in inspect.getmembers(Store, inspect.isfunction) if not n.startswith("_")
     ]
-    assert len(proto_methods) == 25  # 24 data methods + transaction()
+    assert len(proto_methods) == 27  # 26 data methods + transaction()
     for name in proto_methods:
         expected = inspect.signature(getattr(Store, name))
         for impl in (MemoryStore, PostgresStore):
@@ -335,3 +335,58 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
             assert [(p.name, p.kind) for p in actual.parameters.values()] == [
                 (p.name, p.kind) for p in expected.parameters.values()
             ], f"{impl.__name__}.{name} differs from Store.{name}"
+
+
+def test_upsert_character_is_one_insert_on_conflict_do_update(db):
+    db.queue([{"slug": "biscuit", "name": "Biscuit", "status": "live", "bodies": ["biped", "quadruped"]}])
+    got = PostgresStore(DSN).upsert_character(
+        Character(slug="biscuit", name="Biscuit", status="live", bodies=["biped", "quadruped"])
+    )
+    assert len(db.statements) == 1
+    query, params = db.statements[0]
+    assert query.startswith('insert into "studio"."characters" ("slug", "name", "status", "bodies") values')
+    assert 'on conflict ("slug") do update set' in query
+    for col in ("name", "status", "bodies"):
+        assert f'"{col}" = excluded."{col}"' in query
+    assert "returning" in query
+    assert params == ["biscuit", "Biscuit", "live", ["biped", "quadruped"]]  # enums as text[], bound
+    assert db.connections[0].outcome == "commit"
+    assert isinstance(got, Character) and got.status == "live" and got.bodies[0].value == "biped"
+
+
+def test_upsert_account_conflicts_on_character_and_platform_and_spares_mode_and_share(db):
+    uid = uuid.uuid4()
+    db.queue([{
+        "id": uid, "character_slug": "biscuit", "platform": "instagram", "handle": "b.ig",
+        "postiz_integration_id": "pz-1", "mode": "auto", "dropin_share": 0.2, "created_at": NOW,
+    }])
+    got = PostgresStore(DSN).upsert_account(
+        Account(
+            character_slug="biscuit", platform="instagram", handle="b.ig",
+            postiz_integration_id="pz-1", dropin_share=0.4,
+        )
+    )
+    query, params = db.statements[0]
+    assert query.startswith('insert into "studio"."accounts" (')
+    head = query.split("values")[0]
+    assert '"id"' not in head and '"created_at"' not in head  # the database assigns both
+    assert 'on conflict ("character_slug", "platform") do update set' in query
+    update = query.split("do update set")[1].split("returning")[0]
+    assert '"handle" = excluded."handle"' in update
+    assert '"postiz_integration_id" = excluded."postiz_integration_id"' in update
+    assert "dropin_share" not in update and '"mode"' not in update  # operational state survives
+    assert "instagram" in params and 0.4 in params  # explicit share on first insert, bound
+    assert (got.id, got.mode, got.dropin_share) == (str(uid), "auto", 0.2)
+
+
+def test_upsert_account_turns_a_check_violation_into_a_value_error(db, monkeypatch):
+    from psycopg.errors import CheckViolation
+
+    def boom(self, query, params=()):
+        raise CheckViolation("dropin_share out of range")
+
+    monkeypatch.setattr(FakeCursor, "execute", boom)
+    with pytest.raises(ValueError):
+        PostgresStore(DSN).upsert_account(
+            Account(character_slug="biscuit", platform="tiktok", handle="b", dropin_share=7)
+        )

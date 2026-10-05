@@ -184,3 +184,12 @@ def test_0002_adds_the_two_snapshot_kpi_columns_and_nothing_else():
 
 def test_private_buckets_are_created():
     assert "('sources', 'sources', false), ('clips', 'clips', false)" in SQL
+
+
+def test_0003_makes_character_and_platform_unique_for_the_account_upsert():
+    sql = (MIGRATIONS / "0003_accounts_unique_platform.sql").read_text()
+    statements = [s.strip() for s in re.sub(r"--[^\n]*", "", sql).split(";") if s.strip()]
+    assert [" ".join(s.split()) for s in statements] == [
+        "create unique index if not exists accounts_character_platform_key "
+        "on studio.accounts (character_slug, platform)"
+    ]  # the ON CONFLICT target of PostgresStore.upsert_account

@@ -215,3 +215,25 @@ def test_settings_row_is_locked_inside_a_transaction(store):
     for t in threads:
         t.join()
     assert order == ["first-commit", "second-read"]
+
+
+def test_upserts_are_idempotent_and_spare_operational_state(store):
+    from studio.models import Account, Character
+
+    c = store.upsert_character(Character(slug="biscuit", name="Biscuit II", status="live", bodies=["biped"]))
+    assert (c.name, c.status, [b.value for b in c.bodies]) == ("Biscuit II", "live", ["biped"])
+    assert [x.slug for x in store.characters()] == ["biscuit"]
+
+    existing = store.accounts("biscuit")
+    insta = next(a for a in existing if a.platform.value == "instagram")
+    store.update_account(insta.id, dropin_share=0.2, mode="auto")
+    again = store.upsert_account(
+        Account(character_slug="biscuit", platform="instagram", handle="biscuit.odd2",
+                postiz_integration_id="pz-9", dropin_share=0.4)
+    )
+    assert again.id == insta.id and (again.handle, again.postiz_integration_id) == ("biscuit.odd2", "pz-9")
+    assert (again.dropin_share, again.mode) == (0.2, "auto")
+    assert len(store.accounts("biscuit")) == 2
+
+    fresh = store.upsert_account(Account(character_slug="biscuit", platform="tiktok", handle="@biscuit"))
+    assert fresh.dropin_share == 0.7  # the model default for tiktok, written explicitly

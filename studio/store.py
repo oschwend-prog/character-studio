@@ -13,6 +13,11 @@ talks to a ``Store``. ``studio.pgstore.PostgresStore`` is the production impleme
 * ``list_*(**filters)`` filters by equality on any field (``None`` matches NULL) and
   raises ``TypeError`` for an unknown field. Order: ``created_at`` (posts:
   ``scheduled_for``, snapshots: ``captured_at``).
+* ``upsert_character(c)`` inserts or replaces the character by ``slug``. ``upsert_account(a)`` matches an
+  account on ``(character_slug, platform)``: a new one is inserted as given; an existing one gets only
+  its identity refreshed (``handle``, ``postiz_integration_id``). Its ``mode`` and ``dropin_share`` are
+  operational state (the terminal's autopilot toggle, the weekly review's Instagram guard) and a
+  re-seed must not undo them, so they are kept.
 * One post per ``(clip_id, account_id)``: a second ``add_post`` raises ``DuplicatePost``.
 * ``claim_due_posts(now)`` atomically flips due ``scheduled`` posts to ``posting``; a
   post is handed out at most once. ``now`` must be timezone-aware.
@@ -98,11 +103,13 @@ class Store(Protocol):
     def add_snapshot(self, s: Snapshot) -> Snapshot: ...
     def snapshots_for(self, post_id: str) -> list[Snapshot]: ...
 
-    # characters and accounts (seeded by `studio seed`; the one write is update_account, used by
-    # the weekly review's Instagram guard to cut an account's dropin_share)
+    # characters and accounts (written by `studio seed` through the two upserts; the one other
+    # write is update_account, used by the weekly review's Instagram guard to cut dropin_share)
     def accounts(self, character_slug: str | None = None) -> list[Account]: ...
     def update_account(self, id: str, /, **kw: Any) -> Account: ...
     def characters(self) -> list[Character]: ...
+    def upsert_character(self, c: Character) -> Character: ...
+    def upsert_account(self, a: Account) -> Account: ...
 
     # favourites (Viral Picks)
     def add_favorite(self, f: Favorite) -> Favorite: ...
@@ -310,6 +317,28 @@ class MemoryStore:
     def characters(self) -> list[Character]:
         with self._lock:
             return [copy.deepcopy(c) for _, c in sorted(self._characters.items())]
+
+    def upsert_character(self, c: Character) -> Character:
+        with self._lock:
+            return self.add_character(c)
+
+    def upsert_account(self, a: Account) -> Account:
+        with self._lock:
+            old = next(
+                (
+                    x
+                    for x in self._accounts.values()
+                    if x.character_slug == a.character_slug and x.platform is a.platform
+                ),
+                None,
+            )
+            if old is None:
+                return self.add_account(a)
+            return self._update(
+                self._accounts,
+                old.id,
+                {"handle": a.handle, "postiz_integration_id": a.postiz_integration_id},
+            )
 
     # ---- favourites --------------------------------------------------------
 

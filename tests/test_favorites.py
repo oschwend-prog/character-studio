@@ -699,3 +699,57 @@ def test_cli_fav_group_is_the_modules_own_app():
         assert cmd in r.output
     top = CliRunner().invoke(app, ["--help"])
     assert "fav" in top.output
+
+
+# ---- proposal.needs is validated when a pick is filed -------------------------------------
+# A misspelt `needs` used to be filtered out silently, so the rule approved a pick that was
+# really blocked by an untested capability (fail-open). Now it is refused at the door.
+
+
+def test_a_misspelt_needs_is_rejected_instead_of_auto_approving():
+    store = make_store()
+    with pytest.raises(ValueError, match="multi_body.*talking_lane"):
+        pick(store, B1, proposal={"mode": "recreate", "needs": "multi-body"})
+    assert store.list_favorites() == []
+
+
+@pytest.mark.parametrize(
+    "needs", ["multibody", "", ["multi_body", "talking-lane"], ["multi_body", 3], 5, {"multi_body": True}]
+)
+def test_needs_must_be_one_or_a_list_of_the_known_tokens(needs):
+    store = make_store()
+    with pytest.raises(ValueError, match="needs"):
+        pick(store, B1, proposal={"needs": needs})
+    assert store.list_favorites() == []
+
+
+@pytest.mark.parametrize(
+    "needs", ["multi_body", "talking_lane", ["multi_body"], ["multi_body", "talking_lane"], [], None]
+)
+def test_known_needs_tokens_are_accepted(needs):
+    store = make_store()
+    f = pick(store, B1, proposal={"mode": "recreate", "needs": needs})
+    assert f.proposal["needs"] == needs
+    expected = "hold" if needs else "approve"
+    assert auto_decision(f) == expected
+
+
+def test_a_proposal_without_needs_is_fine():
+    assert auto_decision(pick(make_store(), B1)) == "approve"
+
+
+def test_cli_pick_rejects_a_misspelt_needs(cli_store):
+    r = run("pick", *pick_args(**{"--proposal": json.dumps({"mode": "recreate", "needs": "multibody"})}))
+    assert r.exit_code == 2 and "needs" in r.output
+    assert cli_store.list_favorites() == []
+
+
+# ---- a pick that is not matched to a seeded character yet -----------------------------------
+
+
+def test_a_pick_may_have_no_character_yet_but_an_unknown_slug_is_refused():
+    store = make_store()
+    f = pick(store, B1, character_slug=None)
+    assert f.character_slug is None and f.status == "new"
+    with pytest.raises(ValueError, match="unknown character"):
+        pick(store, B2, character_slug="nobody")

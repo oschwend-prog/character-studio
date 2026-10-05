@@ -186,6 +186,38 @@ class PostgresStore:
                 row = cur.fetchone()
         return self._from_row(table, row)
 
+    def _upsert(
+        self, table: _Table, obj: Any, conflict: Sequence[str], update: Sequence[str]
+    ) -> Any:
+        """``insert ... on conflict (<conflict>) do update set <update> = excluded.<update>``.
+
+        Columns outside ``update`` keep their stored value when the row already exists.
+        """
+        cols = [
+            c
+            for c in table.columns
+            if not (c in table.db_default and getattr(obj, c) is None)
+        ]
+        query = sql.SQL(
+            "insert into {t} ({cols}) values ({vals}) on conflict ({conflict}) do update set {sets} "
+            "returning {ret}"
+        ).format(
+            t=self._tbl(table),
+            cols=self._cols(cols),
+            vals=sql.SQL(", ").join([sql.Placeholder()] * len(cols)),
+            conflict=self._cols(conflict),
+            sets=sql.SQL(", ").join(
+                sql.SQL("{c} = excluded.{c}").format(c=sql.Identifier(c)) for c in update
+            ),
+            ret=self._cols(table.columns),
+        )
+        params = [self._to_db(table, c, getattr(obj, c)) for c in cols]
+        try:
+            rows = self._execute(query, params)
+        except CheckViolation as e:
+            raise ValueError(str(e)) from e
+        return self._from_row(table, rows[0])
+
     def _get(self, table: _Table, id: str) -> Any | None:
         uid = _as_uuid(id)
         if uid is None:
@@ -357,6 +389,16 @@ class PostgresStore:
 
     def characters(self) -> list[Character]:
         return self._list(_CHARACTERS, {}, ["slug"])
+
+    def upsert_character(self, c: Character) -> Character:
+        return self._upsert(_CHARACTERS, c, ["slug"], ["name", "status", "bodies"])
+
+    def upsert_account(self, a: Account) -> Account:
+        # Needs the unique index of migration 0003. Only the identity is refreshed on conflict:
+        # mode and dropin_share are operational state (autopilot toggle, Instagram guard).
+        return self._upsert(
+            _ACCOUNTS, a, ["character_slug", "platform"], ["handle", "postiz_integration_id"]
+        )
 
     # ---- favourites --------------------------------------------------------
 

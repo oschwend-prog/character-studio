@@ -28,7 +28,9 @@ The standing rule (``auto_decision``, owner 2026-10-04: "approve for me"), check
 ``talking_lane``); ``approve`` when total >= 80 and feasibility >= 7; ``skip`` when total < 65;
 otherwise ``analyst`` (Claude decides and must write a reason). ``decide`` records every decision
 as ``proposal['decision'] = {decision, by, reason}``; a hold also stores ``proposal['hold_reason']``
-and leaves the status ``new`` so it is re-checked when the capability lands.
+and leaves the status ``new`` so it is re-checked when the capability lands. ``add_pick`` refuses any
+other ``needs`` token (``validate_needs``): the rule ignores unknown ones, so a misspelling would
+otherwise approve a blocked pick.
 
 CLI (``studio fav ...``) prints JSON on stdout. Exit codes: 0 ok, 2 anything the caller must fix,
 4 ``fav decide`` found the pick needs an analyst decision (JSON on stdout says so).
@@ -155,6 +157,22 @@ def _needs(proposal: dict[str, Any]) -> list[str]:
     return [n for n in items if n in HOLD_NEEDS]
 
 
+def validate_needs(proposal: dict[str, Any]) -> None:
+    """Refuse a ``proposal['needs']`` that is not one of ``HOLD_NEEDS`` or a list of them.
+
+    ``_needs`` ignores unknown tokens, so a misspelling (``multi-body``) would silently turn a hold
+    into an approval. Checking at the door keeps the rule fail-closed. Absent, ``None`` and ``[]``
+    all mean "needs nothing".
+    """
+    needs = proposal.get("needs")
+    if needs is None:
+        return
+    allowed = ", ".join(sorted(HOLD_NEEDS))
+    items = [needs] if isinstance(needs, str) else needs
+    if not isinstance(items, (list, tuple)) or not all(isinstance(n, str) and n in HOLD_NEEDS for n in items):
+        raise ValueError(f"proposal.needs must be one of or a list of {{{allowed}}}, got {needs!r}")
+
+
 # ---- scoring ---------------------------------------------------------------------------
 
 
@@ -234,7 +252,7 @@ def _add_pick(
     creator_handle: str | None,
     views: int | None,
     outlier_x: float | None,
-    character_slug: str,
+    character_slug: str | None,
     proposal: dict[str, Any],
     origin: FavoriteOrigin,
     judged: dict[str, float],
@@ -244,7 +262,9 @@ def _add_pick(
     found_platform, canonical = parse_video_url(url)
     if platform != found_platform:
         raise ValueError(f"platform {platform!r} does not match the URL ({found_platform})")
-    _require_character(store, character_slug)
+    if character_slug is not None:  # None = not matched to a seeded character yet
+        _require_character(store, character_slug)
+    validate_needs(proposal)
     scores = score_pick(outlier_x, views, **judged)
     existing = store.list_favorites(url=canonical)
     if existing:
@@ -278,7 +298,7 @@ def add_pick(
     creator_handle: str | None,
     views: int | None,
     outlier_x: float | None,
-    character_slug: str,
+    character_slug: str | None,
     proposal: dict[str, Any],
     origin: FavoriteOrigin = "scan",
     *,
@@ -292,6 +312,9 @@ def add_pick(
     The four judged sub-scores (0-10, rubric in the spec) come in as keyword arguments;
     virality and reach are computed from ``outlier_x`` and ``views``. A URL already in the list
     returns the existing row untouched, so a rescan never duplicates or rescores a pick.
+    ``proposal['needs']`` must be ``multi_body`` / ``talking_lane`` (or a list of them), else
+    ``ValueError``. ``character_slug=None`` files a pick not matched to a character yet (the owner
+    assigns one in the terminal); an unknown slug is still refused.
     """
     judged = {"freshness": freshness, "fit": fit, "feasibility": feasibility, "saturation": saturation}
     f, _ = _add_pick(
@@ -471,7 +494,10 @@ def pick_command(
     saturation: Annotated[float, typer.Option(min=0, max=10, help="Judged: 10 fresh, 5 template everywhere.")],
     creator: Annotated[str | None, typer.Option(help="Creator handle.")] = None,
     proposal: Annotated[
-        str, typer.Option(help='JSON: {"mode", "hook", "prop", "concept", "needs"?}.')
+        str,
+        typer.Option(
+            help='JSON: {"mode", "hook", "prop", "concept", "needs"?}; needs is multi_body and/or talking_lane.'
+        ),
     ] = "{}",
     origin: Annotated[str, typer.Option(help="scan (default) or owner.")] = "scan",
 ) -> None:

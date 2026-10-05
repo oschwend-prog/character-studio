@@ -310,3 +310,57 @@ def test_invalid_enum_values_are_rejected_at_construction():
         Clip(character_slug="biscuit", mode="sideways")
     with pytest.raises(ValueError):
         Source(kind="tiktok_page", body=Body.biped, bodies=1, duration_s=1.0)
+
+
+# ---- upserts (used by `studio seed`) ---------------------------------------------------------
+
+
+def test_upsert_character_inserts_then_updates_in_place():
+    store = MemoryStore()
+    first = store.upsert_character(Character(slug="biscuit", name="Biscuit", bodies=[Body.biped]))
+    assert (first.slug, first.status, first.bodies) == ("biscuit", "designing", [Body.biped])
+    again = store.upsert_character(
+        Character(slug="biscuit", name="Biscuit II", status="live", bodies=["biped", "quadruped"])
+    )
+    assert (again.name, again.status, again.bodies) == ("Biscuit II", "live", [Body.biped, Body.quadruped])
+    assert [c.slug for c in store.characters()] == ["biscuit"]  # one row, not two
+
+
+def test_upsert_character_returns_a_copy():
+    store = MemoryStore()
+    got = store.upsert_character(Character(slug="biscuit", name="Biscuit"))
+    got.name = "mutated"
+    assert store.characters()[0].name == "Biscuit"
+
+
+def test_upsert_account_inserts_with_an_id_and_the_explicit_share():
+    store = MemoryStore()
+    a = store.upsert_account(
+        Account(character_slug="biscuit", platform="instagram", handle="b.ig", dropin_share=0.4)
+    )
+    assert a.id and (a.platform, a.handle, a.dropin_share, a.mode) == (Platform.instagram, "b.ig", 0.4, "approval")
+
+
+def test_upsert_account_matches_on_character_and_platform_and_keeps_operational_state():
+    """Re-seeding refreshes the identity (handle, Postiz id) but never undoes what the weekly
+    review's Instagram guard or the terminal's autopilot toggle set (dropin_share, mode)."""
+    store = MemoryStore()
+    first = store.upsert_account(Account(character_slug="biscuit", platform="instagram", handle="old"))
+    store.update_account(first.id, dropin_share=0.2, mode="auto")  # the guard cut it, the owner went auto
+    again = store.upsert_account(
+        Account(
+            character_slug="biscuit", platform="instagram", handle="new",
+            postiz_integration_id="pz-1", dropin_share=0.4,
+        )
+    )
+    assert again.id == first.id
+    assert (again.handle, again.postiz_integration_id) == ("new", "pz-1")
+    assert (again.dropin_share, again.mode) == (0.2, "auto")
+    assert len(store.accounts("biscuit")) == 1
+
+
+def test_upsert_account_keeps_other_platforms_and_characters_apart():
+    store = MemoryStore()
+    for slug, platform in (("biscuit", "tiktok"), ("biscuit", "instagram"), ("reginald", "tiktok")):
+        store.upsert_account(Account(character_slug=slug, platform=platform, handle=f"{slug}.{platform}"))
+    assert len(store.accounts()) == 3
