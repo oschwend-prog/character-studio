@@ -172,6 +172,20 @@ def test_claim_due_posts_is_one_atomic_update(db):
     assert claimed[0].scheduled_for < claimed[1].scheduled_for  # sorted by slot
 
 
+def test_delete_post_is_one_bound_delete_by_id_and_raises_for_a_missing_row(db):
+    uid = uuid.uuid4()
+    db.queue([{"id": uid}])
+    PostgresStore(DSN).delete_post(str(uid))
+    query, params = db.statements[0]
+    assert query.startswith('delete from "studio"."posts" where id = %s') and "returning" in query
+    assert params == [uid] and db.connections[0].outcome == "commit"
+    db.queue([])
+    with pytest.raises(KeyError):
+        PostgresStore(DSN).delete_post(str(uuid.uuid4()))
+    with pytest.raises(KeyError):
+        PostgresStore(DSN).delete_post("not-a-uuid")
+
+
 def test_claim_due_posts_refuses_naive_now(db):
     with pytest.raises(ValueError):
         PostgresStore(DSN).claim_due_posts(datetime(2026, 10, 6, 19, 0))
@@ -341,7 +355,7 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
     proto_methods = [
         n for n, v in inspect.getmembers(Store, inspect.isfunction) if not n.startswith("_")
     ]
-    assert len(proto_methods) == 31  # 30 data methods + transaction()
+    assert len(proto_methods) == 32  # 31 data methods + transaction()
     for name in proto_methods:
         expected = inspect.signature(getattr(Store, name))
         for impl in (MemoryStore, PostgresStore):
@@ -467,49 +481,36 @@ def test_list_runs_filters_by_bound_enum_values_oldest_first(db):
     assert [r.kind for r in runs] == [RunKind.daily] * 2
 
 
-def test_upsert_review_inserts_when_there_is_none_in_one_transaction(db):
-    db.queue([], [review_row()])
-    got = PostgresStore(DSN).upsert_review(
-        Review(week=WEEK, character_slug="biscuit", report_md="report", bar_status="continue")
-    )
-    assert len(db.connections) == 1 and db.connections[0].events == ["begin", "commit"]
-    (find, find_params), (insert, insert_params) = db.statements
-    assert find.startswith('select id from "studio"."reviews" where week = %s and character_slug = %s')
-    assert find.endswith("limit 1 for update") and find_params == [WEEK, "biscuit"]
-    head = insert.split("values")[0]
-    assert insert.startswith('insert into "studio"."reviews" (') and '"id"' not in head and '"created_at"' not in head
-    assert insert_params == [WEEK, "biscuit", "report", "continue"]
-    assert (got.week, got.report_md, got.bar_status) == (WEEK, "report", "continue")
-
-
-def test_upsert_review_rewrites_the_existing_row_keeping_its_id(db):
+def test_upsert_review_is_one_insert_on_conflict_do_update_on_the_unique_key(db):
+    """Migration 0006's unique index on (week, character_slug) is the conflict target: no lookup, no race."""
     uid = uuid.uuid4()
-    db.queue([{"id": uid}], [review_row(id=uid, report_md="v2", bar_status="promote")])
+    db.queue([review_row(id=uid, report_md="v2", bar_status="promote")])
     got = PostgresStore(DSN).upsert_review(
         Review(week=WEEK, character_slug="biscuit", report_md="v2", bar_status="promote")
     )
-    assert len(db.connections) == 1  # the lookup and the write share one connection
-    update, params = db.statements[1]
-    assert update.startswith('update "studio"."reviews" set "report_md" = %s, "bar_status" = %s where id = %s')
-    assert params == ["v2", "promote", uid]
-    assert "insert" not in update and got.id == str(uid) and got.report_md == "v2"
+    assert len(db.statements) == 1  # one statement: nothing between a lookup and a write to race on
+    query, params = db.statements[0]
+    head = query.split("values")[0]
+    assert query.startswith('insert into "studio"."reviews" (') and '"id"' not in head and '"created_at"' not in head
+    assert 'on conflict ("week", "character_slug") do update set' in query
+    assert '"report_md" = excluded."report_md"' in query and '"bar_status" = excluded."bar_status"' in query
+    assert '"week" = excluded' not in query and '"created_at" = excluded' not in query  # identity and age stay
+    assert "returning" in query
+    assert params == [WEEK, "biscuit", "v2", "promote"]
+    assert db.connections[0].outcome == "commit"
+    assert got.id == str(uid) and got.report_md == "v2" and got.bar_status == "promote"
 
 
 def test_upsert_review_turns_an_unknown_character_into_a_value_error(db, monkeypatch):
     from psycopg.errors import ForeignKeyViolation
 
-    real = FakeCursor.execute
-
     def boom(self, query, params=()):
-        if query.as_string().startswith("insert"):
-            raise ForeignKeyViolation('violates foreign key constraint "reviews_character_slug_fkey"')
-        return real(self, query, params)
+        raise ForeignKeyViolation('violates foreign key constraint "reviews_character_slug_fkey"')
 
     monkeypatch.setattr(FakeCursor, "execute", boom)
-    db.queue([])
     with pytest.raises(ValueError, match="foreign key"):
         PostgresStore(DSN).upsert_review(Review(week=WEEK, character_slug="nobody", report_md="x"))
-    assert db.connections[0].events == ["begin", "rollback"]
+    assert db.connections[0].outcome == "rollback"
 
 
 def test_list_reviews_orders_by_week_then_character(db):

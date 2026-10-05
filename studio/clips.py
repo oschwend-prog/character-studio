@@ -8,7 +8,9 @@ Every clip walks one fixed path (``ALLOWED``); ``transition`` is the only way it
               gen_failed      qa_failed                              |
                   |              |                                   v
                   +--> dropped <-+                                 posted      (rejected: from
-                                                                               awaiting_approval)
+                                                                               awaiting_approval, or from
+                                                                               scheduled once every post
+                                                                               of the clip was dropped)
 
 ``rejected``, ``posted`` and ``dropped`` are final: they have no entry in ``ALLOWED``.
 
@@ -33,16 +35,30 @@ afterwards. Once generation starts the source is fixed again (``clip set --sourc
 **Scheduling** (``schedule_clip``, ``studio clip schedule <id> [--at ISO]``) is the autopilot path and the
 rule the terminal's approve RPC mirrors. A clip in ``mastered`` or ``approved`` gets one ``scheduled``
 post for every account ``planning.accounts_for_clip`` picks (its connected accounts; for a Drop-in only
-those under their own share), at ``--at`` or the character's ``upcoming_slot`` (today's slot if it is
-still ahead, else the next cadence day's), and the clip moves to ``scheduled`` through ``transition``,
-all in one transaction. It refuses, writing nothing, for any other state, for a character with no
-connected account, for a Drop-in no account may take, and for a character with no slot when no ``--at``
-is given. A post that already exists for a (clip, account) is kept as it is, never duplicated, so a call
-that was cut short can simply be repeated.
+those under their own share), and the clip moves to ``scheduled`` through ``transition``, all in one
+transaction. The time is ``--at`` (the owner's choice, taken as given) or the **free slot**
+(``planning.free_slot``): the first cadence slot, from the character's ``upcoming_slot``, on a London day
+on which none of those accounts has a post in ``scheduled`` / ``posting`` / ``posted`` / ``needs_check``,
+so two clips for the same accounts never share a day. It refuses, writing nothing, for any other state,
+for a clip with no master file, for a character with no connected account, for a Drop-in no account may
+take, for a character with no slot or free day when no ``--at`` is given. A post that already exists for a
+(clip, account) is kept as it is, never duplicated, so a call that was cut short can simply be repeated.
+
+**Approval mode.** A ``mastered`` clip is the autopilot's: it is refused when ANY account it would go to
+is in ``approval`` mode (the default; the owner approves those in the terminal), with the handles named
+and the instruction to set the clip to ``awaiting_approval``. There is no override flag. An ``approved``
+clip (the owner's yes) is scheduled whatever the account mode. Only the accounts that would get a post
+count (not an unconnected one, not one a Drop-in skips).
+
+**Idempotent.** Asking again for a clip that is already ``scheduled`` and has posts returns those posts
+(and the clip) unchanged, exit 0, writing nothing and checking nothing: ``--at`` is ignored then, the
+existing posts keep their times. A ``scheduled`` clip with no posts at all is refused (it is inconsistent).
 
 CLI (``studio clip ...``) prints JSON on stdout; exit 2 for anything the caller must fix
 (unknown id, illegal transition, missing tags, bad value). ``clip set --state`` goes through
-``transition``, so the table cannot be bypassed from the command line either.
+``transition``, so the table cannot be bypassed from the command line either. ``clip set --caption`` /
+``--hashtag`` refuse (exit 2, nothing written) a caption that, composed with the AI disclosure and the
+hashtags (``studio.captions``), would be over the 2,200-character post limit.
 """
 
 from __future__ import annotations
@@ -56,10 +72,11 @@ from typing import Annotated, Any
 
 import typer
 
+from studio.captions import compose_content
 from studio.cli_support import emit, fail, open_store, parse_when, text_option
 from studio.config import now_london
 from studio.models import Clip, ClipState, Mode, Post
-from studio.planning import accounts_for_clip, upcoming_slot
+from studio.planning import accounts_for_clip, free_slot, taken_days
 from studio.store import DuplicatePost, Store, require_aware
 
 S = ClipState
@@ -74,7 +91,7 @@ ALLOWED: dict[ClipState, set[ClipState]] = {
     S.mastered: {S.awaiting_approval, S.scheduled},
     S.awaiting_approval: {S.approved, S.rejected},
     S.approved: {S.scheduled},
-    S.scheduled: {S.posted},
+    S.scheduled: {S.posted, S.rejected},
 }
 
 REQUIRED_FEATURES = frozenset(
@@ -232,13 +249,19 @@ def new_clip(
 
 
 def schedule_clip(
-    store: Store, clip_id: str, *, at: datetime | None = None, now: datetime | None = None
+    store: Store,
+    clip_id: str,
+    *,
+    at: datetime | None = None,
+    now: datetime | None = None,
 ) -> tuple[Clip, list[Post]]:
     """Create the posts of a ``mastered`` / ``approved`` clip and move it to ``scheduled``.
 
-    Returns the clip and its posts (one per account, including ones that already existed). See the
-    module docstring for the rule. ``KeyError`` for an unknown clip; ``ValueError`` (nothing written) for
-    a wrong state, no connected account, no account that may take a Drop-in, no slot, or a naive ``at``.
+    Returns the clip and its posts (one per account, including ones that already existed; for a clip
+    that is already ``scheduled``, the posts it has). See the module docstring for the rule.
+    ``KeyError`` for an unknown clip; ``ValueError`` (nothing written) for a wrong state, no master file,
+    no connected account, no account that may take a Drop-in, a ``mastered`` clip with a target account in
+    ``approval`` mode, no slot or free day, or a naive ``at``.
     """
     if at is not None:
         require_aware(at, "schedule_clip(at)")
@@ -247,10 +270,14 @@ def schedule_clip(
         clip = store.get_clip(clip_id)
         if clip is None:
             raise KeyError(clip_id)
+        if clip.state is S.scheduled and (existing_posts := store.list_posts(clip_id=clip.id)):
+            return clip, existing_posts  # asking twice is fine: nothing to write, nothing to bypass
         if clip.state not in (S.mastered, S.approved):
             raise ValueError(
                 f"clip {clip_id} is {clip.state.value}: only a mastered or approved clip can be scheduled"
             )
+        if not clip.master_path:  # the publisher would fail it three times (migration 0005 refuses it too)
+            raise ValueError(f"clip {clip_id} has no master file yet: upload one before scheduling")
         slug = clip.character_slug
         if not any(a.postiz_integration_id for a in store.accounts(slug)):
             raise ValueError(
@@ -262,7 +289,16 @@ def schedule_clip(
                 f"no account of {slug!r} may take this {clip.mode.value} clip: every connected account "
                 "is at or over its drop-in share"
             )
-        when = at if at is not None else upcoming_slot(slug, now, store.get_settings().cadence)
+        if clip.state is S.mastered and (manual := [a for a in accounts if a.mode != "auto"]):
+            handles = ", ".join(a.handle for a in manual)
+            raise ValueError(
+                f"{handles} {'is' if len(manual) == 1 else 'are'} in approval mode: set the clip to "
+                "awaiting_approval, the owner approves it in the terminal"
+            )
+        when = at if at is not None else free_slot(
+            slug, now, store.get_settings().cadence,
+            taken_days(store, [a.id for a in accounts], exclude_clip_id=clip.id),
+        )  # fmt: skip
         posts: list[Post] = []
         for account in accounts:
             existing = next((p for p in store.list_posts(clip_id=clip.id) if p.account_id == account.id), None)
@@ -383,6 +419,13 @@ def set_command(
     store = open_store()
     try:
         with store.transaction():  # the source first (it needs the clip still planned), then the rest
+            if "caption" in fields or "hashtags" in fields:
+                current = store.get_clip(id)  # unknown clip: the writes below say so
+                if current is not None:  # the text posted must fit the 2,200 limit, disclosure included
+                    compose_content(
+                        fields.get("caption", current.caption or ""),
+                        fields.get("hashtags", current.hashtags),
+                    )
             if source_id is not None:
                 c = set_source(store, id, source_id)
             if state is not None:
@@ -430,10 +473,18 @@ def schedule_command(
     id: Annotated[str, typer.Argument(help="Clip id (mastered or approved).")],
     at: Annotated[
         str | None,
-        typer.Option(help="ISO 8601 post time (no offset = London); default: the next cadence slot."),
+        typer.Option(
+            help="ISO 8601 post time (no offset = London); default: the first cadence slot on a day "
+            "none of the clip's accounts posts."
+        ),
     ] = None,
 ) -> None:
-    """Create a post per account for a mastered/approved clip and move it to scheduled (autopilot)."""
+    """Create a post per account for a mastered/approved clip and move it to scheduled (autopilot).
+
+    A mastered clip is refused (exit 2) when an account it goes to is in approval mode: set it to
+    awaiting_approval and the owner approves it in the terminal. Asking again for a clip that is
+    already scheduled prints its existing posts (exit 0).
+    """
     when = parse_when(at, "--at") if at is not None else None
     store = open_store()
     try:

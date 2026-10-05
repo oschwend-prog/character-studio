@@ -317,3 +317,69 @@ def test_0005_v_queue_keeps_its_columns_and_appends_the_block_reason():
     assert cols(new)[: len(cols(old))] == cols(old), "create or replace view may only append columns"
     assert cols(new)[-1] == "blocked_reason"
     assert "grant select on studio.v_queue to authenticated;" in sql
+
+
+# ---- 0006: one slot rule, and a unique key on reviews --------------------------------------------------
+
+SLOT_SQL_PATH = MIGRATIONS / "0006_slot_and_reviews.sql"
+SLOT_SQL = SLOT_SQL_PATH.read_text()
+
+
+def _slot_function(name: str) -> str:
+    m = re.search(rf"create or replace function studio\.{name}\((.*?)\$\$;", SLOT_SQL, re.S)
+    assert m, f"no function studio.{name} in 0006"
+    return m.group(0)
+
+
+def test_0006_free_slot_mirrors_planning_free_slot():
+    body = _slot_function("free_slot")
+    # the same statuses as studio.planning.TAKEN_STATUSES, the same day as publish's cap (claimed_at, else slot)
+    assert "p.status in ('scheduled', 'posting', 'posted', 'needs_check')" in body
+    assert "coalesce(p.claimed_at, p.scheduled_for) at time zone 'Europe/London'" in body
+    assert "studio.upcoming_slot(" in body and "studio.cadence_days(" in body  # starts where upcoming_slot does
+    assert "p.clip_id <> free_slot.exclude_clip_id" in body  # a clip's own half-written posts are left out
+    assert "for i in 0..55 loop" in body  # FREE_SLOT_LOOKAHEAD_DAYS = 56
+    assert "no free posting day" in body
+    for name in ("free_slot", "next_free_slot"):
+        fn = _slot_function(name)
+        assert "security invoker" in fn and "set search_path = ''" in fn and "security definer" not in fn
+    from studio.planning import FREE_SLOT_LOOKAHEAD_DAYS, TAKEN_STATUSES
+
+    assert FREE_SLOT_LOOKAHEAD_DAYS == 56
+    assert sorted(s.value for s in TAKEN_STATUSES) == ["needs_check", "posted", "posting", "scheduled"]
+
+
+def test_0006_approve_clip_takes_its_default_slot_from_free_slot_and_keeps_everything_else():
+    body = _slot_function("approve_clip")
+    assert "clip_id uuid, caption text default null, hook text default null, schedule_at timestamptz default null" in body
+    assert "coalesce(approve_clip.schedule_at, studio.free_slot(c.character_slug, targets, c.id, now()))" in body
+    assert "studio.upcoming_slot(" not in body  # no second rule: an explicit schedule_at is the only other source
+    # carried over from 0005 unchanged
+    assert "studio.queue_block_reason(c.id)" in body and "for update" in body
+    assert "nullif(btrim(approve_clip.caption), '')" in body and "nullif(btrim(approve_clip.hook), '')" in body
+    assert "'awaiting_approval', 'approved'" in body and "state = 'scheduled'" in body
+    assert "security invoker" in body and "set search_path = ''" in body and "security definer" not in body
+
+
+def test_0006_v_queue_keeps_every_column_and_shows_the_free_slot():
+    new = re.search(r"create or replace view studio\.v_queue .*?from studio\.clips c", SLOT_SQL, re.S).group(0)
+    old = re.search(r"create or replace view studio\.v_queue .*?from studio\.clips c", FIXES_SQL_PATH.read_text(), re.S).group(0)
+    cols = lambda text: re.findall(r"\bas (\w+),?\s*$", text, re.M)  # noqa: E731
+    assert cols(new) == cols(old), "the view must keep exactly the columns of 0005"
+    assert "studio.next_free_slot(c.id, now()) as next_slot" in new and "with (security_invoker = true)" in new
+
+
+def test_0006_reviews_get_a_unique_key_after_the_old_duplicates_are_folded():
+    assert re.search(
+        r"create unique index if not exists reviews_week_character_slug_key\s+on studio\.reviews \(week, character_slug\);",
+        SLOT_SQL,
+    )  # the ON CONFLICT target of PostgresStore.upsert_review
+    assert SLOT_SQL.index("delete from studio.reviews") < SLOT_SQL.index("create unique index")  # dedupe first
+    assert "(r.created_at, r.id) > (keep.created_at, keep.id)" in SLOT_SQL  # the oldest row survives
+
+
+def test_0006_grants_the_new_functions_to_authenticated_only():
+    for sig in ("free_slot(text, uuid[], uuid, timestamptz)", "next_free_slot(uuid, timestamptz)"):
+        assert f"revoke all on function studio.{sig} from public;" in SLOT_SQL
+        assert f"grant execute on function studio.{sig} to authenticated;" in SLOT_SQL
+    assert "grant select on studio.v_queue to authenticated;" in SLOT_SQL

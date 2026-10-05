@@ -303,6 +303,20 @@ def test_transaction_is_a_usable_no_op_context_manager():
     assert store.get_settings().kill_switch is True
 
 
+def test_delete_post_removes_the_row_and_nothing_else():
+    store = MemoryStore()
+    clip = store.add_clip(Clip(character_slug="biscuit", mode="recreate"))
+    a = store.add_post(Post(clip_id=clip.id, account_id="a1", scheduled_for=datetime(2026, 10, 6, 19, tzinfo=LONDON)))
+    b = store.add_post(Post(clip_id=clip.id, account_id="a2", scheduled_for=datetime(2026, 10, 6, 19, tzinfo=LONDON)))
+    store.delete_post(a.id)
+    assert [p.id for p in store.list_posts()] == [b.id]
+    store.add_post(Post(clip_id=clip.id, account_id="a1", scheduled_for=datetime(2026, 10, 7, 19, tzinfo=LONDON)))
+    with pytest.raises(KeyError):
+        store.delete_post(a.id)  # already gone
+    with pytest.raises(KeyError):
+        store.delete_post("nope")
+
+
 def test_memory_store_implements_the_protocol():
     assert isinstance(MemoryStore(), Store)
 

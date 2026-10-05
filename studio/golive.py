@@ -9,7 +9,7 @@ What is checked, in the order the owner's checklist (``docs/launch/go-live.md``)
 
 * Keychain items ``cs-database-url``, ``cs-supabase-url``, ``cs-supabase-service-key``,
   ``cs-postiz-api-key``: present or absent. The probe never reads a value.
-* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0005.
+* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0006.
 * The Supabase Data API exposes schema ``studio`` (the terminal and the owner RPCs need it).
 * Characters: at least one is ``live``; each launch character has masters, a close-up and an account
   with a Postiz integration id (``characters/*/refs.json`` plus the database).
@@ -88,6 +88,11 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     # 0005 re-creates approve_clip and v_queue; queue_block_reason is what tells it apart from 0004.
     "0005": (("function", "queue_block_reason"), ("function", "approve_clip"), ("view", "v_queue")),
+    # 0006 re-creates approve_clip and v_queue on the free-slot rule and keys reviews on (week, character).
+    "0006": (
+        ("function", "free_slot"), ("function", "next_free_slot"), ("function", "approve_clip"),
+        ("view", "v_queue"), ("index", "reviews_week_character_slug_key"),
+    ),
 }
 
 PROBE_SQL = """

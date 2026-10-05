@@ -78,7 +78,7 @@ def test_allowed_is_exactly_the_spec():
         S.mastered: {S.awaiting_approval, S.scheduled},
         S.awaiting_approval: {S.approved, S.rejected},
         S.approved: {S.scheduled},
-        S.scheduled: {S.posted},
+        S.scheduled: {S.posted, S.rejected},  # rejected: a scheduled clip whose posts were all dropped
     }
     # Final states have no way out: rejected, posted and dropped are not keys at all.
     assert set(S) - set(ALLOWED) == {S.rejected, S.posted, S.dropped}
@@ -456,6 +456,35 @@ def test_cli_set_plain_fields_leave_the_state_alone(cli_store):
     assert (clip.hook, clip.caption, clip.hashtags) == ("he knows", "tea. again.", ["#odd", "#eyes"])
     assert (clip.qa, clip.master_path) == ({"tech": "ok"}, "clips/a.mp4")
     assert (clip.credits_reserved, clip.credits_actual) == (115, 0)  # zero is a value, not "unset"
+
+
+def test_cli_set_caption_over_the_post_limit_is_refused_with_the_disclosure_counted(cli_store):
+    """The text posted is caption + AI disclosure + hashtags: over 2,200 is refused when it is set."""
+    cid = cli_clip(cli_store)
+    r = run("set", cid, "--caption", "z" * 2190)  # the disclosure line alone takes it past 2,200
+    assert r.exit_code == 2 and "2200" in r.output and "caption" in r.output
+    assert cli_store.get_clip(cid).caption is None  # nothing written
+    assert run("set", cid, "--caption", "z" * 2100).exit_code == 0
+
+
+def test_cli_set_hashtags_are_checked_against_the_caption_already_stored(cli_store):
+    cid = cli_clip(cli_store)
+    assert run("set", cid, "--caption", "z" * 2100).exit_code == 0
+    r = run("set", cid, "--hashtag", "#" + "t" * 90)
+    assert r.exit_code == 2 and "2200" in r.output
+    assert cli_store.get_clip(cid).hashtags == []
+
+
+def test_cli_set_a_state_move_with_an_over_long_caption_writes_nothing(cli_store):
+    cid = cli_clip(cli_store)
+    r = run("set", cid, "--state", "generating", "--caption", "z" * 3000)
+    assert r.exit_code == 2 and cli_store.get_clip(cid).state is S.planned
+
+
+def test_cli_set_without_caption_or_hashtags_is_not_checked(cli_store):
+    cid = cli_clip(cli_store)
+    cli_store.update_clip(cid, caption="z" * 5000)  # whatever is stored already: a hook edit still works
+    assert run("set", cid, "--hook", "h").exit_code == 0
 
 
 def test_cli_set_one_field_leaves_the_others_alone(cli_store):

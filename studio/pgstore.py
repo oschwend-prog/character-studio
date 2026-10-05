@@ -371,6 +371,15 @@ class PostgresStore:
     def list_posts(self, **filters: Any) -> list[Post]:
         return self._list(_POSTS, filters, ["scheduled_for", "id"])
 
+    def delete_post(self, id: str, /) -> None:
+        """Remove one post row (``studio publish resolve --drop``). ``KeyError`` when there is none."""
+        uid = _as_uuid(id)
+        if uid is None:
+            raise KeyError(id)
+        query = sql.SQL("delete from {t} where id = %s returning id").format(t=self._tbl(_POSTS))
+        if not self._execute(query, [uid]):
+            raise KeyError(id)
+
     # ---- metrics -----------------------------------------------------------
 
     def add_snapshot(self, s: Snapshot) -> Snapshot:
@@ -427,24 +436,12 @@ class PostgresStore:
         return self._list(_RUNS, filters, ["started_at", "id"])
 
     def upsert_review(self, r: Review) -> Review:
-        # The schema has no unique key on (week, character_slug), so the lookup and the write share
-        # one transaction and the matching row is locked: two saves of the same week queue up.
-        with self.transaction():
-            query = sql.SQL(
-                "select id from {t} where week = %s and character_slug = %s "
-                "order by created_at, id limit 1 for update"
-            ).format(t=self._tbl(_REVIEWS))
-            found = self._execute(query, [r.week, r.character_slug])
-            try:
-                if found:
-                    return self._update(
-                        _REVIEWS,
-                        str(found[0]["id"]),
-                        {"report_md": r.report_md, "bar_status": r.bar_status},
-                    )
-                return self._insert(_REVIEWS, r)
-            except ForeignKeyViolation as e:  # an unknown character
-                raise ValueError(str(e)) from e
+        # Needs the unique index of migration 0006 on (week, character_slug). One statement, so two saves
+        # of the same week cannot both insert; the stored id and created_at survive a rewrite.
+        try:
+            return self._upsert(_REVIEWS, r, ["week", "character_slug"], ["report_md", "bar_status"])
+        except ForeignKeyViolation as e:  # an unknown character
+            raise ValueError(str(e)) from e
 
     def list_reviews(self, **filters: Any) -> list[Review]:
         return self._list(_REVIEWS, filters, ["week", "character_slug", "id"])

@@ -251,3 +251,46 @@ def test_upserts_are_idempotent_and_spare_operational_state(store):
 
     fresh = store.upsert_account(Account(character_slug="biscuit", platform="tiktok", handle="@biscuit"))
     assert fresh.dropin_share == 0.7  # the model default for tiktok, written explicitly
+
+
+def test_delete_post_removes_one_row_and_raises_for_a_missing_one(store):
+    now = datetime.now(timezone.utc)
+    account = store.accounts("biscuit")[0]
+    post = _due_post(store, account.id, now)
+    store.delete_post(post.id)
+    assert store.list_posts() == []
+    with pytest.raises(KeyError):
+        store.delete_post(post.id)
+
+
+def test_review_upsert_is_keyed_on_week_and_character_by_the_database(store):
+    monday = date(2026, 10, 5)
+    first = store.upsert_review(Review(week=monday, character_slug="biscuit", report_md="v1"))
+    store.upsert_review(Review(week=monday, character_slug="biscuit", report_md="v2", bar_status="continue"))
+    assert [(r.id, r.report_md) for r in store.list_reviews(week=monday)] == [(first.id, "v2")]
+    with psycopg.connect(DSN, autocommit=True) as conn, pytest.raises(psycopg.errors.UniqueViolation):
+        conn.execute(
+            f"insert into {SCHEMA}.reviews (week, character_slug, report_md) values (%s, 'biscuit', 'dup')", [monday]
+        )
+
+
+def test_free_slot_in_sql_agrees_with_planning_free_slot(store):
+    from studio.config import LONDON
+    from studio.planning import free_slot, taken_days
+
+    accounts = store.accounts("biscuit")
+    ids = [a.id for a in accounts]
+    store.set_settings(cadence={"biscuit": {"days": ["tue", "wed", "thu"], "slot": "19:00"}})
+    tue_evening = datetime(2026, 10, 6, 8, 0, tzinfo=LONDON)  # Tuesday morning: today's 19:00 is ahead
+    clip = store.add_clip(Clip(character_slug="biscuit", mode=Mode.recreate))
+    other = store.add_clip(Clip(character_slug="biscuit", mode=Mode.recreate))
+    store.add_post(Post(clip_id=other.id, account_id=ids[0], scheduled_for=datetime(2026, 10, 6, 19, 0, tzinfo=LONDON)))
+    store.add_post(Post(clip_id=other.id, account_id=ids[1], scheduled_for=datetime(2026, 10, 7, 19, 0, tzinfo=LONDON),
+                        status=PostStatus.failed))  # a failed post never took the slot
+
+    expected = free_slot("biscuit", tue_evening, store.get_settings().cadence, taken_days(store, ids, exclude_clip_id=clip.id))
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        got = conn.execute(
+            f"select {SCHEMA}.free_slot('biscuit', %s::uuid[], %s::uuid, %s)", [ids, clip.id, tue_evening]
+        ).fetchone()[0]
+    assert got == expected == datetime(2026, 10, 7, 19, 0, tzinfo=LONDON)

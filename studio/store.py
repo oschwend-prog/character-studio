@@ -105,6 +105,7 @@ class Store(Protocol):
     def claim_due_posts(self, now: datetime) -> list[Post]: ...
     def update_post(self, id: str, /, **kw: Any) -> Post: ...
     def list_posts(self, **filters: Any) -> list[Post]: ...
+    def delete_post(self, id: str, /) -> None: ...
 
     # metrics
     def add_snapshot(self, s: Snapshot) -> Snapshot: ...
@@ -287,6 +288,13 @@ class MemoryStore:
     def list_posts(self, **filters: Any) -> list[Post]:
         with self._lock:
             return self._select(self._posts.values(), filters, Post, lambda p: p.scheduled_for)
+
+    def delete_post(self, id: str, /) -> None:
+        """Remove one post row (``studio publish resolve --drop``). ``KeyError`` when there is none."""
+        with self._lock:
+            if id not in self._posts:
+                raise KeyError(id)
+            del self._posts[id]
 
     # ---- metrics -----------------------------------------------------------
 

@@ -41,7 +41,7 @@ reads ``due`` and ``kill_switch``), exit 2 for a cadence the caller must fix.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -51,7 +51,16 @@ import typer
 from studio.budget import committed, month_key
 from studio.cli_support import emit, fail, open_store
 from studio.config import LONDON, now_london
-from studio.models import DEFAULT_CADENCE, Account, Character, Clip, ClipState, Mode, Platform
+from studio.models import (
+    DEFAULT_CADENCE,
+    Account,
+    Character,
+    Clip,
+    ClipState,
+    Mode,
+    Platform,
+    PostStatus,
+)
 from studio.sources import rank_sources
 from studio.store import Store, require_aware
 
@@ -136,6 +145,53 @@ def upcoming_slot(
     if not days:
         raise ValueError(f"no posting days configured for {character_slug!r}")
     raise ValueError(f"no upcoming slot found for {character_slug!r}")  # unreachable with real weekdays
+
+
+# A post in one of these statuses holds (or already used) its account's slot on its London day.
+TAKEN_STATUSES = (PostStatus.scheduled, PostStatus.posting, PostStatus.posted, PostStatus.needs_check)
+FREE_SLOT_LOOKAHEAD_DAYS = 56  # eight weeks of cadence days to look through
+
+
+def taken_days(
+    store: Store, account_ids: Collection[str], *, exclude_clip_id: str | None = None
+) -> set[date]:
+    """The London days on which any of ``account_ids`` already has a post that holds a slot.
+
+    A post counts when it is ``scheduled``, ``posting``, ``posted`` or ``needs_check`` (a failed one
+    never took the slot). Its day is that of ``claimed_at`` (when it really went out), else of
+    ``scheduled_for``: the same day ``studio.publish.base`` caps on. ``exclude_clip_id`` leaves one clip's
+    own posts out (a half-finished earlier call of the clip being scheduled must not push its other
+    posts to another day). Mirrors ``studio.free_slot`` in migration 0006.
+    """
+    days: set[date] = set()
+    for account_id in account_ids:
+        for post in store.list_posts(account_id=account_id):
+            if post.status in TAKEN_STATUSES and post.clip_id != exclude_clip_id:
+                days.add((post.claimed_at or post.scheduled_for).astimezone(LONDON).date())
+    return days
+
+
+def free_slot(
+    character_slug: str, start: datetime, cadence: Mapping[str, Any], taken: Collection[date]
+) -> datetime:
+    """The first cadence slot at or after ``upcoming_slot(start)`` whose London day is not in ``taken``.
+
+    The one rule for a default slot: an approval (``schedule_clip`` here, ``approve_clip`` in migration
+    0006) and a publish deferral past the daily cap both land on the first cadence day on which none of
+    the target accounts already posts, so two clips approved for the same accounts never share a day.
+    An explicit time given by the owner is not passed through here. ``ValueError`` when the character has
+    no slot or cadence days, or when the next ``FREE_SLOT_LOOKAHEAD_DAYS`` days hold no free cadence day.
+    """
+    first = upcoming_slot(character_slug, start, cadence)  # raises for a missing slot or cadence days
+    days = _cadence_days(cadence.get(character_slug))
+    first_day = first.astimezone(LONDON).date()
+    for offset in range(FREE_SLOT_LOOKAHEAD_DAYS):
+        day = first_day + timedelta(days=offset)
+        if WEEKDAYS[day.weekday()] in days and day not in taken:
+            return slot_for(character_slug, day, cadence)
+    raise ValueError(
+        f"no free posting day for {character_slug!r} in the next {FREE_SLOT_LOOKAHEAD_DAYS} days"
+    )
 
 
 # ---- Drop-in ratio and mode choice -----------------------------------------------------------
