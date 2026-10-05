@@ -161,7 +161,9 @@ def test_the_skill_follows_the_owners_note_mode_and_presence_inside_the_guardrai
     assert "`cameo` = replace a secondary element" in prompt and "keep his motion minimal" in prompt
     assert "`featured` = replace the main performer and follow their motion" in prompt
     assert "`star` = replace the main performer and push the performance" in prompt
-    assert "his hook in the first second" in prompt and "eye close-up with the glint" in prompt
+    assert "his hook in the first second" in prompt
+    # owner 2026-10-05: no eye close-up, glint or sting at the end of a master
+    assert "eye close-up with the glint" not in prompt
 
 
 def test_the_values_the_skill_names_are_the_ones_the_database_accepts():
