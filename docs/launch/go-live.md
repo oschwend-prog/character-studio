@@ -10,8 +10,8 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 
 ## 2. Create the social accounts
 - [ ] Create 4 accounts: TikTok and Instagram for Biscuit and for Reginald. All 4 must be **Creator**, not Business.
-- [ ] Instagram: Edit profile, turn on the **AI-generated profile** label (name may vary by app version). TikTok's per-post label is set by the publisher.
-- [ ] Bios, handles and display names: `docs/launch/social-pages.md`. Avatars: `assets/avatars/biscuit.png`; `reginald.png` is not in the repo yet (Quiff avatar job `ecaf6a89-77ff-4d5a-bf92-24beb2b20c93` in Higgsfield, or ask Claude).
+- [ ] Instagram: on **Reginald's** account only, Edit profile, turn on the **AI-generated profile** label (Meta, 31 Aug 2026: required for profiles featuring an AI person; owner decision 2026-10-05: Biscuit's account has none). Every caption carries the AI disclosure (enforced in code); TikTok's per-post AI label is set by the publisher.
+- [ ] Bios, handles and display names: `docs/launch/social-pages.md`. Avatars: `assets/avatars/biscuit.png`, `assets/avatars/reginald.png`.
 - [ ] 2-factor on everywhere. Note the 4 final handles for step 3.
 
 ## 3. Postiz Cloud
@@ -59,6 +59,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - Turns ✅: `permissions: proposal applied (explicit allows, deny rules)`. The check also fails while `settings.json` allows a whole MCP server or `Bash(uv run:*)`.
 
 ## 8. Vercel (the terminal)
+- ✅ Done 2026-10-05: Vercel project `viral`, root `terminal`, production branch `build/slice1`, env `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`; live at **https://viral-alpha-sandy.vercel.app**; Supabase redirect URL `https://viral-alpha-sandy.vercel.app/**` added.
 - [ ] Vercel > Add New > Project > import `oschwend-prog/character-studio`. Root Directory `terminal`. Production branch `build/slice1` (or `main` after the merge).
 - [ ] Environment variables: `VITE_SUPABASE_URL` (the project URL) and `VITE_SUPABASE_ANON_KEY` (the anon / publishable key, Settings > API; it is safe in a browser). Deploy.
 - [ ] Open the URL, log in by magic link (only `o.schwend@gmail.com` can see data), then finish step 5's two items.
