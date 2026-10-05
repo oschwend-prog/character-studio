@@ -124,7 +124,7 @@ def test_the_skill_has_no_second_generating_call_in_a_reroll_and_returns_picks_b
 def test_the_skill_names_a_beat_that_is_not_the_sources_soundtrack():
     body = text("daily-run")
     assert "Beat render" in body and "generate_audio: true" in body
-    assert "Never the audio of `gen.mp4` or of the source file" in body
+    assert "Never the raw source file's audio (an inbox or library file)" in body  # the generation's own audio only for music `original`
     assert "`generate_audio` with" not in body.replace("generate_audio: true", "")  # the speech-only tool is not used
 
 
@@ -172,3 +172,87 @@ def test_the_values_the_skill_names_are_the_ones_the_database_accepts():
     for value in ("dropin", "recreate"):
         assert f"'{value}'" in sql
     assert "owner_note" in sql and "owner_mode" in sql and "owner_presence" in sql
+
+
+# ---- Drop-in first (owner decisions 2026-10-05): the playbook, the effective mode, music, gallery picks, the cards ------
+
+
+def test_the_playbook_names_the_five_rules_in_the_owners_words():
+    body = text("daily-run")
+    playbook = body.split("## Drop-in playbook", 1)[1].split("## 1. Orient", 1)[0]
+    for rule in ("Pick swap-friendly clips", "Trim before generating", "Transform", "Credit and cleanliness", "Music"):
+        assert f"**{rule}" in playbook, rule
+    assert "6-9 s" in playbook and "16 s the hard maximum" in playbook and "paid per second" in playbook
+    assert "`original` is the default of a Drop-in" in playbook and "`in_app`" in playbook and "`ai_beat`" in playbook
+    assert "Never put in audio that the clip did not carry" in playbook
+
+
+def test_the_modes_the_skill_uses_are_the_effective_mode_and_never_wait_on_a_download():
+    body = text("daily-run")
+    assert "NEVER download from TikTok or Instagram and never ask the owner for a clip" in body
+    assert "**Effective mode.**" in body and "logs which one it used and why" in body
+    step = body.split("5. **Effective mode.**", 1)[1].split("## 5. Create", 1)[0]
+    # a usable source is a gallery preset or an attached clip; anything else is an automatic Recreate
+    assert "a **gallery pick** (`proposal.preset_id`)" in step and "`proposal.owner_clip_path`" in step
+    assert "`bin/studio source ingest-owner --pick <id>`" in body
+    assert "automatic Recreate" in step and "Never ask the owner for a clip" in step
+    assert "--other-people 0 --no-minors`" in step and "`--minors` when a child is visible" in step
+    assert "`bin/studio source trim <id> --start S --duration D`" in step and "6-9 s" in step
+    # a real pick without a clip is briefed from vidIQ's breakdown and driven by a synthetic Seedance driver
+    assert "vidIQ `watch_shortform_content` on the pick's URL (10 credits" in body
+    assert "Synthetic driver (only for a Recreate without a usable source)" in body and "`resolution: 480p`" in body
+
+
+def test_the_reserve_follows_the_cost_model_and_the_music():
+    body = text("daily-run")
+    assert "`bin/studio plan estimate --mode M --seconds S --music MUSIC`" in body
+    assert "Recreate 160; Drop-in ceil(S x 11) + 3, plus 30 for an `ai_beat`" in body
+    assert "Recreate 160, Drop-in 115" not in body and "(Recreate 160, Drop-in" not in body.replace("Recreate 160; Drop-in", "")
+    assert "(no watermark, overlay or other people)" not in body  # background people no longer block
+
+
+def test_music_original_is_the_default_and_a_lost_audio_track_is_muxed_back():
+    body = text("daily-run")
+    assert "`original` for a Drop-in unless the pick's `proposal.owner_music` says `in_app` or `ai_beat`" in body
+    assert "a Recreate: `ai_beat`" in body
+    qa = body.split("## 8. QA", 1)[1].split("## 9.", 1)[0]
+    assert "check `has_audio`" in qa and "`bin/studio master mux-audio renders/<id>/gen.mp4" in qa and "--start <the trim start in seconds>" in qa
+    assert "aligned to the trimmed window" in qa
+    master = body.split("## 9. Master", 1)[1].split("## 10.", 1)[0]
+    assert '`music` = the clip\'s `music`' in master or "`music` = the clip's `music`" in master
+    assert "for `original` the same file as `dance`" in master and "none for `in_app`" in master
+
+
+def test_gadgets_are_worn_or_held_in_the_still_and_the_genjutsu_prompt_with_no_logo():
+    body = text("daily-run")
+    assert "`proposal.owner_props`" in body and "the character wears or holds them" in body
+    assert "in the scene still prompt and in the Genjutsu prompt" in body and "never with a real brand logo" in body
+    assert "Say in the run log how they were used" in body
+
+
+def test_the_character_sheet_goes_to_genjutsu_with_the_master_and_the_scan_is_daily_for_the_gallery():
+    body = text("daily-run")
+    assert "the character sheet `sheets[body]` of the character" in body and "as a second `image_references` entry" in body
+    part_b = body.split("Part B, the Genjutsu gallery, EVERY day", 1)[1].split("## 3. Plan", 1)[0]
+    assert "`genjutsu-trending` and `genjutsu-new`" in part_b and "the best 2-4 per character" in part_b
+    assert '"tier": "gallery"' in part_b and '"preset_id"' in part_b and '"thumbnail_url"' in part_b and '"preview_url"' in part_b
+    assert "--platform higgsfield" in part_b and "stored, never downloaded here" in part_b
+    scan = body.split("## 2. Scan", 1)[1].split("Part B", 1)[0]
+    assert '"tier": "viral_now"' in scan and '"theme"' in scan and '"posted_at"' in scan and '"thumbnail_url"' in scan
+    assert "name the matching traits" in scan and "score against `traits`" in scan
+    assert "no media is downloaded or rehosted" in scan
+
+
+def test_scan_json_has_a_theme_per_rotation_entry_and_fit_rules_that_reference_the_traits():
+    scan = json.loads((ROOT / "config" / "scan.json").read_text())
+    for slug in ("biscuit", "reginald", "outsider"):
+        rotation = scan["characters"][slug]["rotation"]
+        themes = [r["theme"] for r in rotation]
+        assert all(isinstance(t, str) and 0 < len(t) <= 60 for t in themes), slug
+        assert len(set(themes)) == len(themes), slug  # a theme names one entry
+    assert [r["theme"] for r in scan["characters"]["reginald"]["rotation"]][0] == "deadpan at work"
+    assert "elder out-dances the young" in [r["theme"] for r in scan["characters"]["reginald"]["rotation"]]
+    assert "pet with a human job" in [r["theme"] for r in scan["characters"]["biscuit"]["rotation"]]
+    for slug in ("biscuit", "reginald"):
+        assert any("traits card" in rule for rule in scan["characters"][slug]["fit_rules"]), slug
+    assert "tier" in scan["pick_card_fields"] and "theme" in scan["pick_card_fields"] and "thumbnail_url" in scan["pick_card_fields"]
