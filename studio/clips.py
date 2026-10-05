@@ -26,6 +26,10 @@ use ``"evergreen"`` for ``trend_name`` when there is no trend). Extra tags are k
 ``transition`` and ``set_fields`` write only ``SETTABLE_FIELDS``. The state never changes through
 ``set_fields`` (or ``store.update_clip`` anywhere else): that is the whole point of the table.
 
+**The source** is set at creation and may be changed by ``set_source`` only while the clip is ``planned``:
+a synthetic driver exists only after the clip was created and its credits reserved, so it has to be linked
+afterwards. Once generation starts the source is fixed again (``clip set --source-id`` is refused).
+
 CLI (``studio clip ...``) prints JSON on stdout; exit 2 for anything the caller must fix
 (unknown id, illegal transition, missing tags, bad value). ``clip set --state`` goes through
 ``transition``, so the table cannot be bypassed from the command line either.
@@ -36,11 +40,12 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
-from studio.cli_support import emit, fail, open_store
+from studio.cli_support import emit, fail, open_store, text_option
 from studio.models import Clip, ClipState, Mode
 from studio.store import Store
 
@@ -157,6 +162,24 @@ def set_fields(store: Store, clip_id: str, **fields: Any) -> Clip:
     return store.update_clip(clip_id, **fields)
 
 
+def set_source(store: Store, clip_id: str, source_id: str) -> Clip:
+    """Link ``source_id`` to the clip, only while it is ``planned`` and only to a source that exists.
+
+    ``KeyError`` for an unknown clip, ``ValueError`` for an unknown source or a clip past ``planned``.
+    """
+    with store.transaction():
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(clip_id)
+        if clip.state is not S.planned:
+            raise ValueError(
+                f"the source can only change while the clip is planned (clip {clip_id} is {clip.state.value})"
+            )
+        if source_id not in {s.id for s in store.list_sources()}:
+            raise ValueError(f"unknown source {source_id!r}")
+        return store.update_clip(clip_id, source_id=source_id)
+
+
 def new_clip(
     store: Store,
     character_slug: str,
@@ -223,18 +246,26 @@ def new_command(
     character: Annotated[str, typer.Option(help="Character slug (biscuit, reginald).")],
     mode: Annotated[Mode, typer.Option(help="dropin or recreate.")],
     features: Annotated[
-        str,
+        str | None,
         typer.Option(
             help="JSON object with every required tag: " + ", ".join(sorted(REQUIRED_FEATURES))
             + ". Use \"evergreen\" for trend_name when there is no trend."
         ),
-    ],
-    source: Annotated[str | None, typer.Option(help="Source id the clip is made from.")] = None,
+    ] = None,
+    features_file: Annotated[
+        Path | None, typer.Option("--features-file", help="Same JSON, read from a file (use for any free text).")
+    ] = None,
+    source: Annotated[
+        str | None, typer.Option(help="Source id the clip is made from (can be linked later while planned).")
+    ] = None,
 ) -> None:
     """Create a planned clip. Refused (exit 2) when a required feature tag is missing."""
+    raw = text_option(features, features_file, "features")
+    if raw is None:
+        fail("--features or --features-file is required")
     store = open_store()
     try:
-        c = new_clip(store, character, source, mode, _json_object(features, "--features"))
+        c = new_clip(store, character, source, mode, _json_object(raw, "--features"))
     except ValueError as e:
         fail(str(e))
     emit(_clip_json(c))
@@ -247,12 +278,19 @@ def set_command(
         ClipState | None,
         typer.Option(help="Move to this state (through the state machine; exit 2 if illegal)."),
     ] = None,
+    source_id: Annotated[
+        str | None,
+        typer.Option("--source-id", help="Link a source: only while the clip is planned (applied before --state)."),
+    ] = None,
     hook: Annotated[str | None, typer.Option(help="On-screen hook text.")] = None,
+    hook_file: Annotated[Path | None, typer.Option("--hook-file", help="Hook text from a file.")] = None,
     caption: Annotated[str | None, typer.Option(help="Post caption.")] = None,
+    caption_file: Annotated[Path | None, typer.Option("--caption-file", help="Caption from a file.")] = None,
     hashtag: Annotated[
         list[str] | None, typer.Option("--hashtag", help="Hashtag (repeatable); replaces the list.")
     ] = None,
     qa: Annotated[str | None, typer.Option(help="JSON object; replaces the QA record.")] = None,
+    qa_file: Annotated[Path | None, typer.Option("--qa-file", help="QA JSON object from a file.")] = None,
     master_path: Annotated[str | None, typer.Option(help="Storage path of the master.")] = None,
     hf_job_id: Annotated[str | None, typer.Option(help="Higgsfield job id.")] = None,
     credits_reserved: Annotated[int | None, typer.Option(min=0, help="Credits reserved.")] = None,
@@ -260,6 +298,9 @@ def set_command(
     reject_reason: Annotated[str | None, typer.Option(help="Why it was rejected.")] = None,
 ) -> None:
     """Set a clip's state and/or fields; the state only moves along the allowed transitions."""
+    hook = text_option(hook, hook_file, "hook")
+    caption = text_option(caption, caption_file, "caption")
+    qa = text_option(qa, qa_file, "qa")
     fields: dict[str, Any] = {
         "hook": hook,
         "caption": caption,
@@ -276,15 +317,17 @@ def set_command(
     except ValueError as e:
         fail(str(e))
     fields = {k: v for k, v in fields.items() if v is not None}
-    if state is None and not fields:
-        fail("nothing to set: pass --state and/or at least one field")
+    if state is None and source_id is None and not fields:
+        fail("nothing to set: pass --state, --source-id and/or at least one field")
     store = open_store()
     try:
-        c = (
-            transition(store, id, state, **fields)
-            if state is not None
-            else set_fields(store, id, **fields)
-        )
+        with store.transaction():  # the source first (it needs the clip still planned), then the rest
+            if source_id is not None:
+                c = set_source(store, id, source_id)
+            if state is not None:
+                c = transition(store, id, state, **fields)
+            elif fields:
+                c = set_fields(store, id, **fields)
     except KeyError:
         fail(f"unknown clip {id}")
     except IllegalTransition as e:

@@ -43,7 +43,7 @@ from urllib.parse import urlsplit
 
 import typer
 
-from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store
+from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
 from studio.media.qa import QAError, probe
 from studio.models import Body, Character, Mode, Source, SourceKind
 from studio.storage import Storage, StorageError
@@ -343,9 +343,15 @@ def check_command(
 @app.command("flag")
 def flag_command(
     id: Annotated[str, typer.Argument(help="Source id.")],
-    reason: Annotated[str, typer.Option(help="What was seen, e.g. 'watermark in output frame 40'.")],
+    reason: Annotated[
+        str | None, typer.Option(help="What was seen, e.g. 'watermark in output frame 40'.")
+    ] = None,
+    reason_file: Annotated[
+        Path | None, typer.Option("--reason-file", help="The same, read from a file (use for free text).")
+    ] = None,
 ) -> None:
     """Flag a source dirty (watermark found downstream): it stops being Drop-in eligible."""
+    reason = text_option(reason, reason_file, "reason") or ""
     store = open_store()
     try:
         s = flag_dirty(store, id, reason)

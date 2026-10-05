@@ -11,6 +11,7 @@ from studio.clips import (
     IllegalTransition,
     new_clip,
     set_fields,
+    set_source,
     transition,
 )
 from studio.models import Body, Character, ClipState, Mode, Source, SourceKind
@@ -527,3 +528,126 @@ def test_clip_group_is_registered_once():
     assert r.exit_code == 0
     for cmd in ("new", "set", "show", "list"):
         assert cmd in r.output
+
+
+# ---- the source may be linked while the clip is still planned ---------------------------------------
+# A synthetic driver only exists after the clip was created and its credits reserved, so the clip
+# has to take its source later. Once generation starts the source is fixed again.
+
+
+def test_set_source_links_a_source_to_a_planned_clip():
+    store, clip = fresh()
+    src = add_source(store)
+    got = set_source(store, clip.id, src.id)
+    assert got.source_id == src.id and got.state is S.planned
+    assert store.get_clip(clip.id).source_id == src.id
+
+
+def test_set_source_can_swap_the_source_while_planned():
+    store, clip = fresh()
+    a, b = add_source(store), add_source(store)
+    set_source(store, clip.id, a.id)
+    assert set_source(store, clip.id, b.id).source_id == b.id
+
+
+@pytest.mark.parametrize(
+    "state", [S.generating, S.gen_failed, S.generated, S.qa_failed, S.qa_passed, S.mastered, S.awaiting_approval, S.dropped]
+)
+def test_set_source_is_refused_once_the_clip_left_planned(state):
+    store, clip = fresh()
+    src = add_source(store)
+    store.update_clip(clip.id, state=state)  # straight to the state under test
+    with pytest.raises(ValueError, match="planned"):
+        set_source(store, clip.id, src.id)
+    assert store.get_clip(clip.id).source_id is None
+
+
+def test_set_source_refuses_an_unknown_source_or_clip():
+    store, clip = fresh()
+    with pytest.raises(ValueError, match="unknown source"):
+        set_source(store, clip.id, "no-such-source")
+    assert store.get_clip(clip.id).source_id is None
+    with pytest.raises(KeyError):
+        set_source(store, "nope", add_source(store).id)
+
+
+def test_source_id_is_still_not_a_settable_field():
+    store, clip = fresh()
+    with pytest.raises(TypeError, match="source_id"):
+        set_fields(store, clip.id, source_id=add_source(store).id)  # only set_source may move it
+
+
+def test_cli_set_source_id_on_a_planned_clip(cli_store):
+    cid = cli_clip(cli_store)
+    src = add_source(cli_store)
+    r = run("set", cid, "--source-id", src.id)
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert (out["source_id"], out["state"]) == (src.id, "planned")
+
+
+def test_cli_set_source_id_with_the_state_move_applies_the_source_first(cli_store):
+    cid = cli_clip(cli_store)
+    src = add_source(cli_store)
+    r = run("set", cid, "--source-id", src.id, "--state", "generating", "--credits-reserved", "160")
+    assert r.exit_code == 0, r.output
+    clip = cli_store.get_clip(cid)
+    assert (clip.source_id, clip.state, clip.credits_reserved) == (src.id, S.generating, 160)
+
+
+def test_cli_set_source_id_is_refused_after_planned_and_for_unknown_sources(cli_store):
+    cid = cli_clip(cli_store)
+    src = add_source(cli_store)
+    r = run("set", cid, "--source-id", "nope")
+    assert r.exit_code == 2 and "unknown source" in r.output
+    assert run("set", cid, "--state", "generating").exit_code == 0
+    r = run("set", cid, "--source-id", src.id)
+    assert r.exit_code == 2 and "planned" in r.output
+    assert cli_store.get_clip(cid).source_id is None
+    assert run("set", "nope", "--source-id", src.id).exit_code == 2
+
+
+def test_cli_set_a_refused_source_applies_no_other_field(cli_store):
+    cid = cli_clip(cli_store)
+    r = run("set", cid, "--source-id", "nope", "--hook", "should not stick")
+    assert r.exit_code == 2
+    assert cli_store.get_clip(cid).hook is None
+
+
+# ---- free text through files (never inline in the shell line) ---------------------------------------
+
+NASTY = "it's $(echo pwned) `x` \"q\" ; && | > \U0001F499"
+
+
+def test_cli_set_text_fields_from_files(cli_store, tmp_path):
+    cid = cli_clip(cli_store)
+    hook, caption, qa = tmp_path / "h.txt", tmp_path / "c.txt", tmp_path / "q.json"
+    hook.write_text(NASTY + "\n", encoding="utf-8")
+    caption.write_text(NASTY + " caption\n", encoding="utf-8")
+    qa.write_text(json.dumps({"tech": "ok", "visual": NASTY}), encoding="utf-8")
+    r = run("set", cid, "--hook-file", str(hook), "--caption-file", str(caption), "--qa-file", str(qa))
+    assert r.exit_code == 0, r.output
+    clip = cli_store.get_clip(cid)
+    assert (clip.hook, clip.caption, clip.qa) == (NASTY, NASTY + " caption", {"tech": "ok", "visual": NASTY})
+
+
+def test_cli_set_file_and_inline_together_are_refused(cli_store, tmp_path):
+    cid = cli_clip(cli_store)
+    f = tmp_path / "h.txt"
+    f.write_text("x")
+    for flag in ("hook", "caption", "qa"):
+        r = run("set", cid, f"--{flag}", "{}", f"--{flag}-file", str(f))
+        assert r.exit_code == 2 and f"--{flag}" in r.output
+    assert run("set", cid, "--hook-file", str(tmp_path / "nope")).exit_code == 2
+
+
+def test_cli_new_features_from_a_file(cli_store, tmp_path):
+    f = tmp_path / "features.json"
+    f.write_text(json.dumps({**FEATURES, "hook_text": NASTY}), encoding="utf-8")
+    r = run("new", "--character", "biscuit", "--mode", "recreate", "--features-file", str(f))
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["features"]["hook_text"] == NASTY
+    assert run("new", "--character", "biscuit", "--mode", "recreate").exit_code == 2  # neither flag
+    r = run("new", "--character", "biscuit", "--mode", "recreate", "--features", "{}", "--features-file", str(f))
+    assert r.exit_code == 2 and "--features" in r.output
+    assert cli_store.list_clips()[0].features["hook_text"] == NASTY and len(cli_store.list_clips()) == 1

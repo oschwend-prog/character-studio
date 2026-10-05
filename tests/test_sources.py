@@ -735,3 +735,18 @@ def test_cli_ingest_inbox_without_database_url_exits_2(monkeypatch):
 def test_cli_source_help_lists_ingest_inbox():
     r = CliRunner().invoke(app, ["source", "--help"])
     assert r.exit_code == 0 and "ingest-inbox" in r.output
+
+
+def test_cli_flag_reason_from_a_file(cli_store, tmp_path):
+    src = run("add", "--kind", "synthetic", "--body", "biped", "--bodies", "1", "--duration", "9")
+    sid = json.loads(src.stdout)["id"]
+    f = tmp_path / "why.txt"
+    nasty = "it's $(echo pwned) `x` \"q\" ; && | >"
+    f.write_text(nasty + "\n", encoding="utf-8")
+    r = run("flag", sid, "--reason-file", str(f))
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert out["flag_reason"] == nasty and out["has_watermark"] is True
+    r = run("flag", sid, "--reason", "x", "--reason-file", str(f))
+    assert r.exit_code == 2 and "--reason" in r.output
+    assert run("flag", sid).exit_code == 2  # neither

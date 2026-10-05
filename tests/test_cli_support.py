@@ -54,3 +54,29 @@ def test_budget_uses_the_shared_helpers():
 
     assert budget.open_store is cli_support.open_store
     assert budget.fail is cli_support.fail
+
+
+# ---- text_option: free text goes through a file, never through the shell line -------------------
+
+
+def test_text_option_returns_the_inline_value_when_no_file_is_given():
+    assert cli_support.text_option("hello", None, "caption") == "hello"
+    assert cli_support.text_option(None, None, "caption") is None
+
+
+def test_text_option_reads_the_file_literally(tmp_path):
+    f = tmp_path / "t.txt"
+    nasty = "it's $(rm -rf ~) `x` \"quoted\" ; && | > emoji \U0001F499\nline two"
+    f.write_text(nasty + "\n", encoding="utf-8")
+    assert cli_support.text_option(None, f, "caption") == nasty  # one trailing newline dropped, rest verbatim
+
+
+def test_text_option_refuses_both_and_missing_files(tmp_path, capsys):
+    f = tmp_path / "t.txt"
+    f.write_text("x")
+    with pytest.raises(typer.Exit) as e:
+        cli_support.text_option("a", f, "caption")
+    assert e.value.exit_code == 2 and "--caption or --caption-file" in capsys.readouterr().err
+    with pytest.raises(typer.Exit) as e:
+        cli_support.text_option(None, tmp_path / "nope.txt", "caption")
+    assert e.value.exit_code == 2 and "no such file" in capsys.readouterr().err

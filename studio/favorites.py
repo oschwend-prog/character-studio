@@ -42,12 +42,13 @@ import dataclasses
 import json
 import math
 import re
+from pathlib import Path
 from typing import Annotated, Any, Literal, cast, get_args
 from urllib.parse import urlsplit
 
 import typer
 
-from studio.cli_support import emit, fail, open_store
+from studio.cli_support import emit, fail, open_store, text_option
 from studio.models import Favorite, FavoriteOrigin, FavoriteStatus
 from studio.store import Store
 
@@ -326,11 +327,16 @@ def add_pick(
 # ---- listing and rule ------------------------------------------------------------------
 
 
-def list_picks(store: Store, status: str | None = "new") -> list[Favorite]:
-    """Favourites with this status (``None`` = any), highest total first, unscored last."""
+def list_picks(store: Store, status: str | None = "new", character: str | None = None) -> list[Favorite]:
+    """Favourites with this status (``None`` = any; ``character`` limits to one), highest total first, unscored last."""
     if status is not None:
         _one_of(status, get_args(FavoriteStatus), "status")
-    rows = store.list_favorites() if status is None else store.list_favorites(status=status)
+    if character is not None:
+        _require_character(store, character)
+    filters: dict[str, Any] = {} if status is None else {"status": status}
+    if character is not None:
+        filters["character_slug"] = character
+    rows = store.list_favorites(**filters)
     rows.sort(key=lambda f: (f.total_score is None, -(f.total_score or 0.0)))  # stable: older first
     return rows
 
@@ -419,13 +425,38 @@ def apply_rule(store: Store, id: str) -> Favorite:
 # ---- production ------------------------------------------------------------------------
 
 
-def next_favorites(store: Store, limit: int) -> list[Favorite]:
-    """Up to ``limit`` picks ready to produce: ``approved`` or ``analysed``, oldest first."""
+def next_favorites(store: Store, limit: int, character: str | None = None) -> list[Favorite]:
+    """Up to ``limit`` picks ready to produce: ``approved`` or ``analysed``, oldest first.
+
+    ``character`` limits the queue to that character's picks, so a character is never starved by
+    older picks of another (the daily run asks once per due clip).
+    """
     if limit < 0:
         raise ValueError(f"limit must be 0 or more, got {limit!r}")
-    ready = [f for status in ("approved", "analysed") for f in store.list_favorites(status=status)]
+    if character is not None:
+        _require_character(store, character)
+    extra = {} if character is None else {"character_slug": character}
+    ready = [f for status in ("approved", "analysed") for f in store.list_favorites(status=status, **extra)]
     ready.sort(key=lambda f: f.created_at.timestamp() if f.created_at else 0.0)
     return ready[:limit]
+
+
+def content_id(url: str) -> str:
+    """The platform id of a canonical favourite URL: TikTok video id, Instagram reel shortcode, Shorts id."""
+    return url.rstrip("/").rsplit("/", 1)[-1]
+
+
+def seen_ids(store: Store, limit: int) -> list[str]:
+    """Platform ids of the ``limit`` newest favourites of any status, newest first.
+
+    Feeds vidIQ's ``excludeContentIds`` (which takes at most 100) so a scan never resurfaces a video
+    that was already picked, produced or skipped.
+    """
+    if limit < 0:
+        raise ValueError(f"limit must be 0 or more, got {limit!r}")
+    rows = store.list_favorites()
+    rows.sort(key=lambda f: f.created_at.timestamp() if f.created_at else 0.0, reverse=True)
+    return [content_id(f.url) for f in rows[:limit]]
 
 
 def mark_favorite(store: Store, id: str, status: str, **fields: Any) -> Favorite:
@@ -494,14 +525,18 @@ def pick_command(
     saturation: Annotated[float, typer.Option(min=0, max=10, help="Judged: 10 fresh, 5 template everywhere.")],
     creator: Annotated[str | None, typer.Option(help="Creator handle.")] = None,
     proposal: Annotated[
-        str,
+        str | None,
         typer.Option(
             help='JSON: {"mode", "hook", "prop", "concept", "needs"?}; needs is multi_body and/or talking_lane.'
         ),
-    ] = "{}",
+    ] = None,
+    proposal_file: Annotated[
+        Path | None, typer.Option("--proposal-file", help="The same JSON, read from a file (use for free text).")
+    ] = None,
     origin: Annotated[str, typer.Option(help="scan (default) or owner.")] = "scan",
 ) -> None:
     """File a scored Viral Pick (status new). A URL already in the list is returned as is."""
+    proposal = text_option(proposal, proposal_file, "proposal") or "{}"
     try:
         proposal_obj = json.loads(proposal)
     except json.JSONDecodeError as e:
@@ -528,6 +563,9 @@ def list_command(
     next_: Annotated[
         int | None, typer.Option("--next", min=0, help="The next N picks to produce (approved/analysed, oldest first).")
     ] = None,
+    character: Annotated[
+        str | None, typer.Option(help="Only this character's picks (with --next: its own queue).")
+    ] = None,
 ) -> None:
     """List picks by total score, or with --next the production queue."""
     if next_ is not None and status is not None:
@@ -535,12 +573,22 @@ def list_command(
     store = open_store()
     try:
         if next_ is not None:
-            rows = next_favorites(store, next_)
+            rows = next_favorites(store, next_, character)
         else:
-            rows = list_picks(store, None if status == "all" else (status or "new"))
+            rows = list_picks(store, None if status == "all" else (status or "new"), character)
     except ValueError as e:
         fail(str(e))
     emit([_fav_json(f) for f in rows])
+
+
+@app.command("seen")
+def seen_command(
+    limit: Annotated[
+        int, typer.Option(min=0, max=100, help="How many (vidIQ's excludeContentIds takes at most 100).")
+    ] = 100,
+) -> None:
+    """Platform ids of the newest favourites of any status, newest first: vidIQ's excludeContentIds."""
+    emit(seen_ids(open_store(), limit))
 
 
 @app.command("mark")
@@ -548,11 +596,17 @@ def mark_command(
     id: Annotated[str, typer.Argument(help="Favourite id.")],
     status: Annotated[str, typer.Option(help="new, approved, skipped, analysed, queued or made.")],
     breakdown: Annotated[str | None, typer.Option(help="Beat-by-beat breakdown (markdown).")] = None,
+    breakdown_file: Annotated[
+        Path | None, typer.Option("--breakdown-file", help="The breakdown, read from a file (use for tool text).")
+    ] = None,
     clip: Annotated[str | None, typer.Option(help="Clip id made from it.")] = None,
     source: Annotated[str | None, typer.Option(help="Source id of a clean inbox file (Drop-in).")] = None,
     note: Annotated[str | None, typer.Option()] = None,
+    note_file: Annotated[Path | None, typer.Option("--note-file", help="The note, read from a file.")] = None,
 ) -> None:
     """Move a pick through production and attach its breakdown, clip or source."""
+    breakdown = text_option(breakdown, breakdown_file, "breakdown")
+    note = text_option(note, note_file, "note")
     fields = {
         k: v
         for k, v in {
@@ -574,10 +628,16 @@ def mark_command(
 def decide_command(
     id: Annotated[str, typer.Argument(help="Favourite id.")],
     decision: Annotated[str | None, typer.Option(help="approve, skip or hold. Omit to apply the standing rule.")] = None,
-    reason: Annotated[str, typer.Option(help="One line; required for analyst decisions and holds.")] = "",
+    reason: Annotated[
+        str | None, typer.Option(help="One line; required for analyst decisions and holds.")
+    ] = None,
+    reason_file: Annotated[
+        Path | None, typer.Option("--reason-file", help="The reason, read from a file (use for free text).")
+    ] = None,
     by: Annotated[str | None, typer.Option(help="owner, analyst or rule; required with --decision.")] = None,
 ) -> None:
     """Decide a pick: by the standing rule (default; exit 4 = needs an analyst) or by hand."""
+    reason = text_option(reason, reason_file, "reason") or ""
     store = open_store()
     try:
         if decision is None:

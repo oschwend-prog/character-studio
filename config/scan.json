@@ -1,5 +1,5 @@
 {
-  "_doc": "Daily Viral Picks scan settings (owner request 2026-10-04). Used by /daily-run. vidIQ tool: vidiq_instagram_tiktok_outlier_search (5 credits/call). Dates are relative: posted_within_days -> datePostedAfter = today - N days.",
+  "_doc": "Daily Viral Picks scan settings (owner request 2026-10-04). Used by /daily-run. vidIQ tool: vidiq_instagram_tiktok_outlier_search (5 credits/call). Dates are relative: posted_within_days -> datePostedAfter = today - N days. `defaults` holds only vidIQ parameters; already-seen videos are excluded by the skill (excludeContentIds = `bin/studio fav seen`, at most 100 ids).",
   "defaults": {
     "posted_within_days": 14,
     "viewsMin": 200000,
@@ -7,8 +7,7 @@
     "durationMax": 30,
     "descriptionLanguage": ["en"],
     "collapseByCreator": true,
-    "resultsPerPlatform": 10,
-    "exclude_already_seen": true
+    "resultsPerPlatform": 10
   },
   "budget": {
     "vidiq_monthly_credits": 150,
@@ -25,7 +24,7 @@
         {"embeddingType": "hook", "query": "small dog in an outfit stares into the camera, then hits every beat of a high-energy track"},
         {"embeddingType": "concept", "query": "pet with a human job or an ego caption doing a viral trend"}
       ],
-      "fit_rules": ["one animal or one dancer as the subject (up to 3 if the multi-body test passes)", "full body visible", "mostly static camera", "music-driven (no dialogue needed)", "upright/biped motion for the biped master; four-legged head-bob for the quadruped master"]
+      "fit_rules": ["one animal or one dancer as the subject (2+ bodies are still filed, with needs multi_body, and held until the multi-body test passes)", "full body visible", "mostly static camera", "music-driven (no dialogue needed)", "upright/biped motion for the biped master; four-legged head-bob for the quadruped master"]
     },
     "reginald": {
       "audienceQuery": "Culture/Region: UK/US English-speaking; Global: true; Demographics: Gen Z and millennials 16-34 who watch comedy, memes and dance trends;",

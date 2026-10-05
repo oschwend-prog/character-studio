@@ -12,6 +12,7 @@ import json
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from pathlib import Path
 from typing import Any, NoReturn
 
 import typer
@@ -28,6 +29,27 @@ def fail(message: str) -> NoReturn:
     """Print ``error: <message>`` on stderr and exit 2 (the caller must fix something)."""
     typer.echo(f"error: {message}", err=True)
     raise typer.Exit(EXIT_USAGE)
+
+
+def text_option(value: str | None, file: Path | None, name: str) -> str | None:
+    """The text of ``--<name>`` or ``--<name>-file`` (never both; exit 2 if both).
+
+    Free text (a breakdown, a hook, a caption, a reason, a JSON blob) belongs in a file the caller
+    wrote with a file tool and passes with ``--<name>-file``: the shell never sees it, so a quote,
+    ``$(...)`` or backtick in text that came from a third party cannot become a command. The file is
+    read as UTF-8 and exactly one trailing newline is dropped.
+    """
+    if value is not None and file is not None:
+        fail(f"use --{name} or --{name}-file, not both")
+    if file is None:
+        return value
+    try:
+        text = file.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        fail(f"no such file: {file}")
+    except (OSError, UnicodeDecodeError) as e:
+        fail(f"cannot read {file}: {e}")
+    return text[:-1] if text.endswith("\n") else text
 
 
 def open_store() -> Store:

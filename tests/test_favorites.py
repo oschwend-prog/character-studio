@@ -17,6 +17,7 @@ from studio.favorites import (
     mark_favorite,
     next_favorites,
     parse_video_url,
+    seen_ids,
     score_pick,
 )
 from studio.models import Body, Character, Clip, Favorite, Mode, Source
@@ -753,3 +754,112 @@ def test_a_pick_may_have_no_character_yet_but_an_unknown_slug_is_refused():
     assert f.character_slug is None and f.status == "new"
     with pytest.raises(ValueError, match="unknown character"):
         pick(store, B2, character_slug="nobody")
+
+
+# ---- the queue per character, the seen list, and free text from files -----------------------------------
+
+NASTY = "it's $(echo pwned) `x` \"q\" ; && | > \U0001F499"
+
+
+def approved(store, spec, days):
+    f = pick(store, spec)
+    aged(store, f.id, days)
+    return decide(store, f.id, "approve", "", "rule")
+
+
+def test_next_favorites_can_be_limited_to_one_character():
+    store = make_store()
+    b1, b2, d2 = approved(store, B1, 5), approved(store, B2, 4), approved(store, D2, 3)
+    assert [f.id for f in next_favorites(store, 1)] == [b1.id]  # oldest overall: reginald's
+    assert [f.id for f in next_favorites(store, 1, character="biscuit")] == [d2.id]
+    assert [f.id for f in next_favorites(store, 5, character="reginald")] == [b1.id, b2.id]
+    with pytest.raises(ValueError, match="unknown character"):
+        next_favorites(store, 1, character="nobody")
+
+
+def test_cli_list_next_with_a_character(cli_store):
+    b1, d2 = approved(cli_store, B1, 5), approved(cli_store, D2, 3)
+    rows = json.loads(run("list", "--next", "1", "--character", "biscuit").stdout)
+    assert [x["id"] for x in rows] == [d2.id]
+    assert run("list", "--next", "1", "--character", "nobody").exit_code == 2
+    new = pick(cli_store, D4)
+    rows = json.loads(run("list", "--status", "new", "--character", "biscuit").stdout)
+    assert [x["id"] for x in rows] == [new.id]
+
+
+def test_seen_ids_are_the_newest_video_ids_first_and_capped():
+    store = make_store()
+    a, b, c = pick(store, B1), pick(store, D2), pick(store, D4)  # instagram reel, tiktok, tiktok
+    for f, days in ((a, 3), (b, 2), (c, 1)):
+        aged(store, f.id, days)
+    assert seen_ids(store, 100) == ["7673905586383113503", "7688386199270001953", "Dde-rPWCOC6"]
+    assert seen_ids(store, 2) == ["7673905586383113503", "7688386199270001953"]
+    assert seen_ids(store, 0) == []
+    with pytest.raises(ValueError):
+        seen_ids(store, -1)
+
+
+def test_seen_includes_every_status_so_a_rescan_never_resurfaces_a_skip():
+    store = make_store()
+    f = pick(store, B1)
+    decide(store, f.id, "skip", "off brand", "owner")
+    assert seen_ids(store, 100) == ["Dde-rPWCOC6"]
+
+
+def test_cli_seen(cli_store):
+    pick(cli_store, B1)
+    pick(cli_store, D2)
+    r = run("seen", "--limit", "1")
+    assert r.exit_code == 0, r.output
+    assert len(json.loads(r.stdout)) == 1
+    assert len(json.loads(run("seen").stdout)) == 2  # default limit 100
+    assert run("seen", "--limit", "101").exit_code == 2  # vidIQ takes at most 100
+
+
+def test_cli_pick_proposal_from_a_file(cli_store, tmp_path):
+    f = tmp_path / "proposal.json"
+    f.write_text(json.dumps({"mode": "recreate", "hook": NASTY, "concept": NASTY}), encoding="utf-8")
+    args = pick_args(B1)
+    args[args.index("--proposal")] = "--proposal-file"
+    args[args.index("--proposal-file") + 1] = str(f)
+    r = run("pick", *args)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["proposal"]["hook"] == NASTY
+    both = pick_args(B2, **{"--proposal": "{}"}) + ["--proposal-file", str(f)]
+    r = run("pick", *both)
+    assert r.exit_code == 2 and "--proposal" in r.output
+    f.write_text("{not json")
+    bad = pick_args(D2)
+    bad[bad.index("--proposal")] = "--proposal-file"
+    bad[bad.index("--proposal-file") + 1] = str(f)
+    assert run("pick", *bad).exit_code == 2
+    assert len(cli_store.list_favorites()) == 1
+
+
+def test_cli_mark_breakdown_and_note_from_files(cli_store, tmp_path):
+    f = pick(cli_store, B1)
+    decide(cli_store, f.id, "approve", "", "rule")
+    bd, note = tmp_path / "bd.md", tmp_path / "note.txt"
+    bd.write_text("## beats\n" + NASTY + "\n", encoding="utf-8")
+    note.write_text(NASTY + "\n", encoding="utf-8")
+    r = run("mark", f.id, "--status", "analysed", "--breakdown-file", str(bd), "--note-file", str(note))
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert out["breakdown_md"] == "## beats\n" + NASTY and out["note"] == NASTY
+    r = run("mark", f.id, "--status", "analysed", "--breakdown", "x", "--breakdown-file", str(bd))
+    assert r.exit_code == 2 and "--breakdown" in r.output
+    assert run("mark", f.id, "--status", "analysed", "--note-file", str(tmp_path / "nope")).exit_code == 2
+
+
+def test_cli_decide_reason_from_a_file(cli_store, tmp_path):
+    d4 = pick(cli_store, D4)
+    f = tmp_path / "reason.txt"
+    f.write_text(NASTY + "\n", encoding="utf-8")
+    r = run("decide", d4.id, "--decision", "approve", "--reason-file", str(f), "--by", "analyst")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["proposal"]["decision"]["reason"] == NASTY
+    o4 = pick(cli_store, O4)
+    r = run("decide", o4.id, "--decision", "skip", "--reason", "x", "--reason-file", str(f), "--by", "analyst")
+    assert r.exit_code == 2 and "--reason" in r.output
+    r = run("decide", o4.id, "--reason-file", str(f))  # a reason without --decision means nothing
+    assert r.exit_code == 2
