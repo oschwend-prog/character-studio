@@ -47,6 +47,10 @@ parent's checks (watermark, overlay, people, children), credit handle, trend and
 first, then trim. A source that is not in Storage (a Genjutsu library one) is trimmed from ``--file``, its
 downloaded preview. The parent is left alone.
 
+**Fetching the clip of an approved pick** is ``studio.fetch`` (``studio source fetch --pick <id>``, and ``studio source purge
+--clip <id>`` to delete it again after posting): see that module for the rules (approved picks only, one at a time,
+public, no login, yt-dlp failure = the pick becomes a Recreate). The result is an ordinary unchecked ``owner_inbox`` source.
+
 **Looking at a clip before it is used** (owner request 2026-10-05). ``analyze_source`` (``studio source analyze <source id |
 file> [--out sheet.png]``) runs the free local analysis of ``studio.media.analyze`` on a file or on a source in Storage
 (downloaded to a temporary folder and removed again): motion energy per half second, cuts, the beat, the best 6-9 s window and

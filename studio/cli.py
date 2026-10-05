@@ -9,6 +9,7 @@ from studio import (
     budget,
     clips,
     favorites,
+    fetch,
     golive,
     health,
     metrics,
@@ -34,6 +35,8 @@ SUBAPPS: dict[str, str] = {
 }
 
 app.add_typer(budget.app, name="budget")
+sources.app.command("fetch")(fetch.fetch_command)  # the clip of an approved pick (yt-dlp, one at a time) and its cleanup
+sources.app.command("purge")(fetch.purge_command)
 app.add_typer(sources.app, name="source")
 app.add_typer(favorites.app, name="fav")
 app.add_typer(clips.app, name="clip")

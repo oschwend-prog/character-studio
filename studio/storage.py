@@ -11,6 +11,8 @@ publishing) talks to this protocol, so tests run on ``LocalStorage`` and product
   failed download never leaves a partial file) and returns ``dest``.
 * ``signed_url(bucket, path, expires_s=86400) -> str`` is a time-limited link anyone can fetch,
   for handing a clip to Postiz.
+* ``delete(bucket, path) -> None`` removes the object. Idempotent: an object that is already gone is not an error
+  (``studio source purge`` runs again and again after a clip is posted).
 
 A ``bucket`` is one plain name; a ``path`` is relative with ``/``-separated, non-empty segments
 and no ``.`` / ``..``. Anything else is a ``ValueError`` before any I/O. A missing file or a
@@ -57,6 +59,8 @@ class Storage(Protocol):
     def download(self, bucket: str, path: str, dest: Path | str) -> Path: ...
 
     def signed_url(self, bucket: str, path: str, expires_s: int = DEFAULT_EXPIRES_S) -> str: ...
+
+    def delete(self, bucket: str, path: str) -> None: ...
 
 
 def _check_target(bucket: str, path: str) -> None:
@@ -127,6 +131,9 @@ class LocalStorage:
     def signed_url(self, bucket: str, path: str, expires_s: int = DEFAULT_EXPIRES_S) -> str:
         _check_expiry(expires_s)
         return self._existing(bucket, path).resolve().as_uri()
+
+    def delete(self, bucket: str, path: str) -> None:
+        self._object(bucket, path).unlink(missing_ok=True)
 
 
 class SupabaseStorage:
@@ -203,6 +210,17 @@ class SupabaseStorage:
         except httpx.HTTPError as e:
             raise self._unreachable("GET", bucket, path, e) from e
         return dest
+
+    def delete(self, bucket: str, path: str) -> None:
+        endpoint = self._endpoint("", bucket, path)
+        try:
+            response = self._client.delete(endpoint, headers=self._auth())
+        except httpx.HTTPError as e:
+            raise self._unreachable("DELETE", bucket, path, e) from e
+        if response.status_code == 404:
+            return  # already gone
+        if not response.is_success:
+            raise self._fail("DELETE", bucket, path, response)
 
     def signed_url(self, bucket: str, path: str, expires_s: int = DEFAULT_EXPIRES_S) -> str:
         _check_expiry(expires_s)

@@ -102,6 +102,8 @@ def test_bad_bucket_or_path_is_rejected_by_both_backends(tmp_path, bucket, path)
             storage.download(bucket, path, tmp_path / "d.mp4")
         with pytest.raises(ValueError):
             storage.signed_url(bucket, path)
+        with pytest.raises(ValueError):
+            storage.delete(bucket, path)
     assert rec.requests == []  # nothing left the machine
     assert not (tmp_path / "escape.mp4").exists()
 
@@ -329,3 +331,42 @@ def test_open_storage_with_env_returns_supabase_storage_and_never_prints_the_key
     assert isinstance(storage, SupabaseStorage)  # constructing never connects
     captured = capsys.readouterr()
     assert KEY not in captured.out + captured.err + repr(storage)
+
+
+# ---- delete: idempotent, for `studio source purge` ----------------------------------------------------------------------
+
+
+def test_local_delete_removes_the_object_and_is_idempotent(tmp_path):
+    storage = LocalStorage(tmp_path / "store")
+    storage.upload("sources", "owner_inbox/a.mp4", video(tmp_path))
+    storage.upload("sources", "owner_inbox/b.mp4", video(tmp_path))
+    storage.delete("sources", "owner_inbox/a.mp4")
+    with pytest.raises(StorageError):
+        storage.download("sources", "owner_inbox/a.mp4", tmp_path / "d.mp4")
+    storage.delete("sources", "owner_inbox/a.mp4")  # already gone: no error
+    storage.delete("clips", "never-was.mp4")
+    assert storage.download("sources", "owner_inbox/b.mp4", tmp_path / "b.mp4").is_file()  # nothing else was touched
+
+
+def test_supabase_delete_sends_one_authenticated_delete_and_treats_404_as_done():
+    rec = Recorder(lambda request: httpx.Response(200, json=[]))
+    supabase(rec).delete("sources", "owner_inbox/a b.mp4")
+    (request,) = rec.requests
+    assert request.method == "DELETE" and request.url.raw_path.decode() == "/storage/v1/object/sources/owner_inbox/a%20b.mp4"
+    assert request.headers["authorization"] == f"Bearer {KEY}" and request.headers["apikey"] == KEY
+    gone = Recorder(lambda request: httpx.Response(404, json={"error": "not_found"}))
+    supabase(gone).delete("sources", "owner_inbox/a.mp4")  # no raise
+
+
+def test_supabase_delete_failures_are_storage_errors_that_never_leak_the_key():
+    refused = Recorder(lambda request: httpx.Response(403, json={"message": "not allowed"}))
+    with pytest.raises(StorageError, match="DELETE sources/x.mp4") as exc:
+        supabase(refused).delete("sources", "x.mp4")
+    assert exc.value.status == 403 and KEY not in str(exc.value)
+
+    def boom(request):
+        raise httpx.ConnectError("no route", request=request)
+
+    with pytest.raises(StorageError, match="DELETE sources/x.mp4") as exc:
+        supabase(Recorder(boom)).delete("sources", "x.mp4")
+    assert KEY not in str(exc.value)
