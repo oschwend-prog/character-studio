@@ -83,7 +83,8 @@ def test_rescore_keeps_the_decision_the_owners_choices_the_clip_check_and_the_br
     f = decide(store, f.id, "approve", "fits", "owner")
     out = rescore_pick(store, f.id, {**LONGLIST, "tier": "viral_now"}, **JUDGED)
     assert out.status == "approved"
-    assert out.proposal["decision"] == {"decision": "approve", "by": "owner", "reason": "fits"}
+    assert {k: v for k, v in out.proposal["decision"].items() if k != "at"} == {"decision": "approve", "by": "owner", "reason": "fits"}
+    assert out.proposal["decision"]["at"] == f.proposal["decision"]["at"]  # the decision time is kept too
     for key, value in {**owner, "analysis": analysis, "breakdown": "beat 1: stare"}.items():
         assert out.proposal[key] == value, key
     assert out.proposal["checks"] == LONGLIST["checks"] and out.proposal["tier"] == "viral_now"  # the card's keys override

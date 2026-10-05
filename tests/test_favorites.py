@@ -61,6 +61,11 @@ O4 = dict(
 )
 
 
+def _plain(record: dict) -> dict:
+    """A decision record without its time (``at``: when it was made, pinned by its own test)."""
+    return {k: v for k, v in record.items() if k != "at"}
+
+
 def make_store() -> MemoryStore:
     # MemoryStore enforces no foreign keys; seed what Postgres would require.
     store = MemoryStore()
@@ -156,7 +161,7 @@ def test_owner_favourites_are_auto_approved_and_not_sources():
     store = make_store()
     f = add_favorite(store, "https://www.tiktok.com/@x/video/123", "biscuit")
     assert (f.origin, f.status, f.character_slug) == ("owner", "approved", "biscuit")
-    assert f.proposal["decision"] == {"decision": "approve", "by": "owner", "reason": "owner's own favourite"}
+    assert _plain(f.proposal["decision"]) == {"decision": "approve", "by": "owner", "reason": "owner's own favourite"}
     assert (f.total_score, f.scores, f.source_id, f.clip_id) == (None, {}, None, None)
     assert store.list_sources() == []  # favourites are never downloaded, so never sources
 
@@ -393,8 +398,8 @@ def test_decide_approve_and_skip_set_the_status_and_record_who_and_why():
     approved = decide(store, a.id, "approve", "rule: total 92 >= 80", "rule")
     skipped = decide(store, s.id, "skip", "", "owner")
     assert (approved.status, skipped.status) == ("approved", "skipped")
-    assert approved.proposal["decision"] == {"decision": "approve", "by": "rule", "reason": "rule: total 92 >= 80"}
-    assert skipped.proposal["decision"] == {"decision": "skip", "by": "owner", "reason": None}
+    assert _plain(approved.proposal["decision"]) == {"decision": "approve", "by": "rule", "reason": "rule: total 92 >= 80"}
+    assert _plain(skipped.proposal["decision"]) == {"decision": "skip", "by": "owner", "reason": None}
     assert approved.proposal["mode"] == "recreate"  # the rest of the proposal survives
     assert store.get_favorite(a.id) == approved
 
@@ -717,7 +722,7 @@ def test_cli_decide_by_rule_and_by_hand(cli_store):
     assert r.exit_code == 0, r.output
     out = json.loads(r.stdout)
     assert out["status"] == "approved"
-    assert out["proposal"]["decision"] == {
+    assert _plain(out["proposal"]["decision"]) == {
         "decision": "approve", "by": "analyst", "reason": "cheapest clip; ODD EYES signature",
     }
     r = run("decide", "missing", "--decision", "skip", "--by", "owner")
@@ -1230,3 +1235,21 @@ def test_an_iconic_clip_scores_full_virality_whatever_its_outlier():
     iconic = score_pick(1, 6_000_000_000, 6, 9, 7, 8, iconic=True)
     assert plain["virality"] == 0 and iconic["virality"] == 10
     assert iconic["total"] == plain["total"] + 25
+
+
+def test_every_decision_record_carries_when_it_was_made(monkeypatch):
+    """`at` (ISO, London, timezone-aware): "In the works" counts the time at Approved from it, not from the filing time."""
+    from datetime import datetime as dt
+
+    from studio.config import LONDON
+
+    moment = dt(2026, 10, 7, 18, 30, tzinfo=LONDON)
+    monkeypatch.setattr(favorites, "now_london", lambda: moment)
+    store = make_store()
+    f = pick(store, D4)
+    out = decide(store, f.id, "approve", "fits", "owner")
+    assert out.proposal["decision"]["at"] == "2026-10-07T18:30:00+01:00"
+    assert dt.fromisoformat(out.proposal["decision"]["at"]).utcoffset() is not None  # aware
+    assert apply_rule(store, pick(store, B1).id).proposal["decision"]["at"] == "2026-10-07T18:30:00+01:00"
+    assert add_favorite(store, "https://www.tiktok.com/@x/video/77", "biscuit").proposal["decision"]["at"] == "2026-10-07T18:30:00+01:00"
+    assert favorites._record("skip", "analyst", "x") == {"decision": "skip", "by": "analyst", "reason": "x", "at": "2026-10-07T18:30:00+01:00"}

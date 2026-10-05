@@ -132,6 +132,20 @@ export function trackerStep(r: TrackerRow, now: number): TrackerStep {
   }
 }
 
+const ISO_AT = /^[12]\d{3}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])T([01]\d|2[0-3]):[0-5]\d:[0-5]\d(\.\d{1,6})?(Z|[+-]([01]\d|1[0-4]):[0-5]\d)$/;
+
+/**
+ * When a pick was approved, as v_tracker works it out (migration 0011): the decision record's `at` when it is a valid ISO time (the shape, and a
+ * day its month has), else the pick's filing time (records from before 2026-10-05 carry no `at`).
+ */
+export function decisionTime(decision: { at?: unknown } | null | undefined, filedAt: string): string {
+  const at = decision?.at;
+  if (typeof at !== 'string' || !ISO_AT.test(at)) return filedAt;
+  const [y, m, d] = [Number(at.slice(0, 4)), Number(at.slice(5, 7)), Number(at.slice(8, 10))];
+  const daysInMonth = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return d <= daysInMonth ? at : filedAt;
+}
+
 /** Is the row listed: approved, analysed or queued, or made and not posted more than 7 days ago (v_tracker's own rule). */
 export function inTracker(r: Pick<TrackerRow, 'status' | 'post_status' | 'post_posted_at' | 'post_scheduled_for'>, now: number): boolean {
   if (r.status === 'approved' || r.status === 'analysed' || r.status === 'queued') return true;

@@ -27,7 +27,7 @@ The standing rule (``auto_decision``, owner 2026-10-04: "approve for me"), check
 ``hold`` when ``proposal['needs']`` names an untested capability (``multi_body``,
 ``talking_lane``); ``approve`` when total >= 80 and feasibility >= 7; ``skip`` when total < 65;
 otherwise ``analyst`` (Claude decides and must write a reason). ``decide`` records every decision
-as ``proposal['decision'] = {decision, by, reason}``; a hold also stores ``proposal['hold_reason']``
+as ``proposal['decision'] = {decision, by, reason, at}`` (``at``: when, ISO, London; records older than 2026-10-05 lack it); a hold also stores ``proposal['hold_reason']``
 and leaves the status ``new`` so it is re-checked when the capability lands. ``add_pick`` and
 ``mark_favorite`` refuse any other ``needs`` value (``validate_needs``: an unknown token, a dict, an int, a
 list with a bad item), and a malformed one that is stored anyway holds the pick (``_needs``) rather than
@@ -212,7 +212,9 @@ def _require_character(store: Store, slug: str | None) -> None:
 
 
 def _record(decision: Decision, by: DecidedBy, reason: str) -> dict[str, Any]:
-    return {"decision": decision, "by": by, "reason": reason or None}
+    """The decision record stored as ``proposal['decision']``; ``at`` (ISO, London, aware) is when it was made: the terminal's
+    "In the works" counts the time at Approved from it (v_tracker ``approved_at``, migration 0011)."""
+    return {"decision": decision, "by": by, "reason": reason or None, "at": now_london().isoformat()}
 
 
 MALFORMED_NEEDS = "unreadable"

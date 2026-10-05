@@ -80,7 +80,9 @@ def test_the_call_of_0004_still_works_unchanged(db):
     pick = add_pick(db)
     out = decide(db, pick, reason=None, character_slug="reginald")
     assert out["status"] == "approved" and out["character_slug"] == "reginald"
-    assert out["proposal"]["decision"] == {"decision": "approve", "by": "owner", "reason": None}
+    decision = out["proposal"]["decision"]
+    assert {k: v for k, v in decision.items() if k != "at"} == {"decision": "approve", "by": "owner", "reason": None}
+    assert decision["at"]  # migration 0010: decide_pick stores when the owner decided
     assert "sibling" not in out and not {"owner_note", "owner_mode", "owner_presence"} & set(out["proposal"])
 
 

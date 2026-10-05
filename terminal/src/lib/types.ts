@@ -148,6 +148,8 @@ export interface Decision {
   decision: 'approve' | 'skip' | 'hold';
   by: 'owner' | 'analyst' | 'rule';
   reason: string | null;
+  /** When it was decided (ISO): `fav decide` and, from migration 0011, decide_pick store it; older records lack it. */
+  at?: string | null;
 }
 
 export interface Pick {
@@ -347,7 +349,7 @@ export interface TrackerRow {
   /** The pick's status: approved, analysed, queued or made. */
   status: string;
   decision: Decision | null;
-  /** No decision time is stored: the pick's filing time stands in (migration 0010). */
+  /** When the pick was approved: its decision record's `at`, else (an older record) its filing time (migration 0011). */
   approved_at: string;
   note: string | null;
   source_id: string | null;
@@ -375,6 +377,8 @@ export interface TrackerRow {
   caption: string | null;
   hashtags: string[] | null;
   first_comment: string | null;
+  /** The decision record's checked time alone (migration 0011); null for an older record or before 0011. */
+  decided_at?: string | null;
 }
 
 /** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */

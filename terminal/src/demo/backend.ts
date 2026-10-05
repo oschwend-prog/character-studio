@@ -6,7 +6,7 @@ import picksJson from './batch1-picks.json';
 import traitsJson from './traits.json';
 import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, SCAN_DAYS, checkClipBasics, ownerClipPath } from '../lib/rules';
 import { velocityPerDay } from '../lib/analyst';
-import { inTracker } from '../lib/tracker';
+import { decisionTime, inTracker } from '../lib/tracker';
 import { londonDayKey, londonWallToIso } from '../lib/format';
 import type {
   Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, Engagement, HealthRow, LibraryClip, OwnerMusic,
@@ -715,7 +715,9 @@ export class DemoBackend implements Backend {
       preview_url: o.preview_url, gallery: o.gallery, posted_at: o.posted_at, velocity: o.velocity,
       proposed_mode: (f.proposal.mode as string) ?? null, owner_mode: o.owner_mode, owner_presence: o.owner_presence,
       owner_music: o.owner_music, owner_clip_path: o.owner_clip_path, status: f.status,
-      decision: (f.proposal.decision as TrackerRow['decision']) ?? null, approved_at: f.created_at, note: f.note,
+      decision: (f.proposal.decision as TrackerRow['decision']) ?? null,
+      approved_at: decisionTime(f.proposal.decision as TrackerRow['decision'], f.created_at),
+      decided_at: decisionTime(f.proposal.decision as TrackerRow['decision'], '') || null, note: f.note,
       source_id: (f.proposal.source_id as string) ?? null, analysis: o.analysis,
       fetch_failed: (f.proposal.fetch_failed as TrackerRow['fetch_failed']) ?? null,
       clip_id: c?.id ?? null, clip_state: c?.state ?? null, clip_mode: c?.mode ?? null,
@@ -838,7 +840,7 @@ export class DemoBackend implements Backend {
       if (props.length) owner.owner_props = props;
       if (music) owner.owner_music = music;
     }
-    const record = { decision, by: 'owner', reason: reason?.trim() || null };
+    const record = { decision, by: 'owner', reason: reason?.trim() || null, at: new Date(this.now()).toISOString() }; // 0011: when the owner decided
     const { hold_reason: _drop, ...rest } = f.proposal;
     void _drop;
     f.proposal = { ...rest, ...owner, decision: record };

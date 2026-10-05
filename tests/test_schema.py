@@ -745,13 +745,28 @@ def _view(sql: str, name: str) -> str:
 
 
 def _select_list(view: str) -> list[str]:
-    """Every output column of a view's select list, in order (`f.url` -> url, `x as y` -> y)."""
+    """Every output column of a view's select list, in order (`f.url` -> url, `x as y` -> y), an item running over several
+    lines included: the list is split at the commas outside parentheses and quotes."""
     body = view.split("select", 1)[1].rsplit("from studio.favorites f", 1)[0]
+    items, depth, quoted, current = [], 0, False, ""
+    for ch in body:
+        if ch == "'":
+            quoted = not quoted
+        elif not quoted and ch == "(":
+            depth += 1
+        elif not quoted and ch == ")":
+            depth -= 1
+        if ch == "," and depth == 0 and not quoted:
+            items.append(current)
+            current = ""
+        else:
+            current += ch
+    items.append(current)
     out = []
-    for line in body.strip().splitlines():
-        line = line.strip().rstrip(",")
-        m = re.search(r"\bas (\w+)$", line) or re.fullmatch(r"\w+\.(\w+)", line)
-        assert m, f"cannot read the column of {line!r}"
+    for item in items:
+        item = " ".join(item.split())
+        m = re.search(r"\bas (\w+)$", item) or re.fullmatch(r"\w+\.(\w+)", item)
+        assert m, f"cannot read the column of {item!r}"
         out.append(m.group(1))
     return out
 
@@ -856,3 +871,78 @@ def test_0010_tracker_carries_the_post_text_and_the_first_comment_of_its_clip():
     tail = TRACKER_CODE.split("create or replace view studio.v_tracker", 1)[1]
     assert "select x.id, x.state, x.mode, x.created_at, x.reject_reason, x.qa, x.caption, x.hashtags, x.features" in tail
     assert "c.features ->> 'first_comment' as first_comment" in tail
+
+
+# ---- 0011: when the owner decided ---------------------------------------------------------------------------------------
+
+DECISION_PATH = MIGRATIONS / "0011_decision_time.sql"
+DECISION_SQL = DECISION_PATH.read_text()
+DECISION_CODE = re.sub(r"--[^\n]*", "", DECISION_SQL)
+_DECIDE_PICK = re.compile(r"create or replace function studio\.decide_pick\(.*?\n\$\$;", re.S)
+
+
+def test_0011_is_decide_pick_v_tracker_and_their_grants_only():
+    code = _DECIDE_PICK.sub("", DECISION_CODE)
+    statements = [s.strip() for s in code.split(";") if s.strip()]
+    kinds = sorted(
+        re.match(r"(create or replace view studio\.\w+|grant select on studio\.\w+|revoke all on function studio\.\w+|grant execute on function studio\.\w+)", s).group(1)
+        for s in statements
+    )
+    assert kinds == [
+        "create or replace view studio.v_tracker", "grant execute on function studio.decide_pick", "grant select on studio.v_tracker",
+        "revoke all on function studio.decide_pick",
+    ]  # fmt: skip
+    assert DECISION_CODE.count("create or replace function") == 1
+    assert not re.search(r"\b(drop|truncate|delete|insert|update|alter|create table)\b", code, re.I)
+    assert not re.search(r"\banon\b", DECISION_CODE)
+    assert re.findall(r"\b(?:public|auth|storage|extensions)\.[a-z_]+", DECISION_CODE) == []
+
+
+def test_0011_decide_pick_is_0008s_word_for_word_but_stores_when_the_owner_decided():
+    old, new = _DECIDE_PICK.search(DROPIN_SQL).group(0), _DECIDE_PICK.search(DECISION_SQL).group(0)
+    record = "jsonb_build_object('decision', decide_pick.decision, 'by', 'owner', 'reason', clean"
+    assert f"  record_ := {record});" in old
+    assert f"  record_ := {record}, 'at', now());" in new
+    assert new.replace(", 'at', now());", ");") == old  # the signature, the refusals, the "Both" sibling and the writes are 0008's
+    assert "security invoker" in new and "set search_path = ''" in new and "security definer" not in new
+    for line in (
+        f"revoke all on function studio.decide_pick({NEW_DECIDE_ARGS}) from public;",
+        f"grant execute on function studio.decide_pick({NEW_DECIDE_ARGS}) to authenticated;",
+    ):
+        assert line in DROPIN_SQL and line in DECISION_SQL, line
+    assert "drop function" not in DECISION_CODE  # the same signature: replaced in place, still one function for PostgREST
+
+
+def test_0011_v_tracker_is_0010s_with_approved_at_from_the_decision_and_decided_at_appended():
+    old, new = _view(TRACKER_SQL, "v_tracker"), _view(DECISION_SQL, "v_tracker")
+    assert new.startswith("create or replace view studio.v_tracker with (security_invoker = true) as")
+    assert _select_list(new) == TRACKER_COLUMNS + ["decided_at"]  # 0010's columns in order, one appended
+    assert "  coalesce(da.decided_at, f.created_at) as approved_at," in new and "  da.decided_at as decided_at\n" in new
+    # nothing else of 0010's view changed: the joins after the two new laterals, the where clause
+    whole_old = re.search(r"create or replace view studio\.v_tracker .*?interval '7 days', false\)\);", TRACKER_SQL, re.S).group(0)
+    whole_new = re.search(r"create or replace view studio\.v_tracker .*?interval '7 days', false\)\);", DECISION_SQL, re.S).group(0)
+    lateral = re.search(r"cross join lateral \(select f\.proposal #>> '\{decision,at\}' as decided\) dt\ncross join lateral \(\n.*?\n\) da\n", whole_new, re.S)
+    assert lateral, "the decision time is read in two laterals: the text, then the checked time"
+    back = (
+        whole_new.replace(lateral.group(0), "")
+        .replace("  coalesce(da.decided_at, f.created_at) as approved_at,", "  f.created_at as approved_at,")
+        .replace(",\n  da.decided_at as decided_at\n", "\n")
+    )
+    assert back == whole_old
+    assert "grant select on studio.v_tracker to authenticated;" in DECISION_SQL
+
+
+def test_0011_only_a_valid_iso_decision_time_is_cast_and_anything_else_falls_back_to_the_filing_time():
+    block = re.search(r"\) dt\ncross join lateral \(\n(.*?)\n\) da", DECISION_SQL, re.S).group(1)
+    shape = re.search(r"when dt\.decided ~ '(.*?)'\s+then case", block, re.S)
+    assert shape, "the cast is guarded by the shape of the text"
+    pattern = re.compile(shape.group(1))
+    for good in ("2026-10-05T15:20:00.123456+01:00", "2026-10-05T14:20:00+00:00", "2026-02-28T23:59:59Z"):
+        assert pattern.fullmatch(good), good
+    for bad in ("2026-13-05T15:20:00+01:00", "2026-10-05 15:20", "yesterday", "2026-10-05", "0000-01-01T00:00:00Z", "2026-10-05T24:00:00Z"):
+        assert not pattern.fullmatch(bad), bad
+    # a day the month does not have (30 February) is checked before the cast, inside the guarded branch
+    inner = block.split("then case", 1)[1]
+    assert "make_date(substr(dt.decided, 1, 4)::int, substr(dt.decided, 6, 2)::int, 1) + interval '1 month' - interval '1 day'" in inner
+    assert inner.index("<=") < inner.index("then dt.decided::timestamptz")
+    assert block.count("::timestamptz") == 1  # the only cast, the last thing evaluated

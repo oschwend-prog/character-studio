@@ -9,7 +9,7 @@ What is checked, in the order the owner's checklist (``docs/launch/go-live.md``)
 
 * Keychain items ``cs-database-url``, ``cs-supabase-url``, ``cs-supabase-service-key``,
   ``cs-postiz-api-key``: present or absent. The probe never reads a value.
-* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0010.
+* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0011.
 * The Supabase Data API exposes schema ``studio`` (the terminal and the owner RPCs need it).
 * Characters: at least one is ``live``; each launch character has masters, a close-up and an account
   with a Postiz integration id (``characters/*/refs.json`` plus the database).
@@ -116,6 +116,9 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("view", "v_picks"), ("view", "v_pick_history"), ("view", "v_tracker"), ("view", "v_queue"),
         ("column", "source_candidates"), ("column", "first_comment"),
     ),
+    # 0011 (when the owner decided): decide_pick and v_tracker re-created; the column v_tracker appends, `decided_at`, is what
+    # tells 0011 from 0010 (the function and the view already exist after 0010).
+    "0011": (("function", "decide_pick"), ("view", "v_tracker"), ("column", "decided_at")),
 }
 
 PROBE_SQL = """
@@ -131,7 +134,8 @@ where n.nspname = 'studio' and a.attnum > 0 and not a.attisdropped
   and ((c.relname = 'snapshots') or (c.relname = 'characters' and a.attname = 'setup')
        or (c.relname = 'runs' and a.attname = 'details') or (c.relname = 'sources' and a.attname = 'has_minors')
        or (c.relname = 'v_picks' and a.attname in ('analysis', 'source_candidates'))
-       or (c.relname = 'v_queue' and a.attname = 'first_comment'))
+       or (c.relname = 'v_queue' and a.attname = 'first_comment')
+       or (c.relname = 'v_tracker' and a.attname = 'decided_at'))
 union all
 select 'index', indexname::text from pg_indexes where schemaname = 'studio'
 union all

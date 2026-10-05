@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  NO_CLIP_HOURS, POSTED_KEEP_DAYS, STUCK_HOURS, TRACKER_STEPS, clipReady, compareTracker, durationLabel, groupTracker, inTracker,
+  NO_CLIP_HOURS, POSTED_KEEP_DAYS, STUCK_HOURS, TRACKER_STEPS, clipReady, compareTracker, decisionTime, durationLabel, groupTracker, inTracker,
   musicLabel, slotLabel, timeAtStep, trackerMode, trackerStep, trackerTitle,
 } from './tracker';
 import type { TrackerRow } from './types';
@@ -218,5 +218,38 @@ describe('the post text on the cards', () => {
     }
     expect(snap.queue.some((q) => q.first_comment) && snap.queue.some((q) => !q.first_comment)).toBe(true);
     for (const q of snap.queue) expect(postText(q.caption, q.hashtags).error).toBeNull(); // every demo caption passes the studio's rule
+  });
+});
+
+describe('the time at Approved counts from the decision', () => {
+  it('takes the decision record’s time when it is a valid ISO time, else the filing time, like v_tracker', () => {
+    const filed = '2026-10-02T09:00:00Z';
+    expect(decisionTime({ at: '2026-10-06T11:00:00.123456+01:00' }, filed)).toBe('2026-10-06T11:00:00.123456+01:00');
+    expect(decisionTime({ at: '2026-10-06T10:00:00.000Z' }, filed)).toBe('2026-10-06T10:00:00.000Z');
+    for (const bad of [undefined, null, 42, 'yesterday', '2026-10-06', '2026-02-30T10:00:00Z', '2026-13-01T10:00:00Z', '2026-10-06T24:00:00Z']) {
+      expect(decisionTime({ at: bad }, filed)).toBe(filed);
+    }
+    expect(decisionTime(null, filed)).toBe(filed);
+  });
+
+  it('does not flag "no clip yet" on a pick filed days ago and approved an hour ago', () => {
+    const filed = ago(72);
+    const r = row({ approved_at: decisionTime({ at: ago(1) }, filed) });
+    expect(trackerStep(r, NOW)).toMatchObject({ step: 1, state: 'ok', reason: null });
+    expect(trackerStep(row({ approved_at: decisionTime({ at: ago(NO_CLIP_HOURS + 1) }, filed) }), NOW).reason).toBe('no clip yet');
+    expect(trackerStep(row({ approved_at: decisionTime({}, filed) }), NOW).reason).toBe('no clip yet'); // an old record: the filing time
+  });
+
+  it('in the demo: approving today a pick filed 30 hours ago starts the clock now', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    const demo = new DemoBackend(() => NOW);
+    const pick = (await demo.load()).picks.find((p) => p.character_slug === 'reginald' && p.hook && !p.analysis && !p.gallery)!;
+    expect(NOW - Date.parse(pick.created_at)).toBeGreaterThan(NO_CLIP_HOURS * HOUR);
+    await demo.decidePick(pick.id, 'approve', null, null, { ownerMode: 'dropin' });
+    const r = (await demo.load()).tracker.find((t) => t.pick_id === pick.id)!;
+    expect(r.decision?.at).toBe(new Date(NOW).toISOString());
+    expect(r.approved_at).toBe(new Date(NOW).toISOString());
+    expect(r.decided_at).toBe(r.approved_at);
+    expect(trackerStep(r, NOW)).toMatchObject({ step: 1, state: 'ok', reason: null });
   });
 });
