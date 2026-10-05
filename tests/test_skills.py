@@ -232,11 +232,11 @@ def test_gadgets_are_worn_or_held_in_the_still_and_the_genjutsu_prompt_with_no_l
     assert "Say in the run log how they were used" in body
 
 
-def test_the_character_sheet_goes_to_genjutsu_with_the_master_and_the_scan_is_daily_for_the_gallery():
+def test_the_character_sheet_goes_to_genjutsu_with_the_master_and_the_gallery_is_the_backup():
     body = text("daily-run")
     assert "the character sheet `sheets[body]` of the character" in body and "as a second `image_references` entry" in body
-    part_b = body.split("Part B, the Genjutsu gallery, EVERY day", 1)[1].split("## 3. Plan", 1)[0]
-    assert "`genjutsu-trending` and `genjutsu-new`" in part_b and "the best 2-4 per character" in part_b
+    part_b = body.split("Part B, the Genjutsu gallery, ONLY as a backup", 1)[1].split("## 3. Plan", 1)[0]
+    assert "`genjutsu-trending` and `genjutsu-new`" in part_b and "the best 2-4 for that character" in part_b
     assert '"tier": "gallery"' in part_b and '"preset_id"' in part_b and '"thumbnail_url"' in part_b and '"preview_url"' in part_b
     assert "--platform higgsfield" in part_b and "stored, never downloaded here" in part_b
     scan = body.split("## 2. Scan", 1)[1].split("Part B", 1)[0]
@@ -274,15 +274,53 @@ def test_the_scan_analyses_the_survivors_before_filing_and_inside_the_vidiq_budg
     scan = text("daily-run").split("## 2. Scan", 1)[1].split("Part B", 1)[0]
     for part in (
         "`saturation_count`", "near-duplicates", "8 or more copies 3, 4-7 5, 1-3 8, none 10", "**Velocity**", "views per day since `posted_at`",
-        "`watch_shortform_content`", "the TOP 3 of each", "BEFORE filing", "measured, not guessed",
-        "`watches_per_character`", "`breakdowns_per_week`", "`balance_floor`", "`bin/studio fav mark <id> --breakdown-file renders/tmp/b.md`",
+        "BEFORE filing", "**No watches**", "no vidIQ `watch_shortform_content` before filing", "`bin/studio source analyze`",
+        "`watches_per_character`", "`breakdowns_per_week`", "`balance_floor`",
         "`trait_matches`", "`why`", "`engagement`", "never guess a count", "`config/scan.json` `tier_rules`",
     ):  # fmt: skip
         assert part in scan, part
-    assert scan.index("**Saturation**") < scan.index("**Watch the best ones**") < scan.index("**Fit**") < scan.index("File each:")
+    assert "the TOP 3 of each" not in scan and "--breakdown-file" not in scan  # no vidIQ watch is bought before filing any more
+    assert scan.index("**Saturation**") < scan.index("**No watches**") < scan.index("**Fit**") < scan.index("File each:")
     budget = json.loads((ROOT / "config" / "scan.json").read_text())["budget"]
     for key in ("watches_per_character", "breakdowns_per_week", "balance_floor", "credits_per_watch", "credits_per_scan"):
         assert isinstance(budget[key], int), key
+
+
+def test_the_scan_is_one_instagram_and_tiktok_search_each_weekday_inside_the_150_credit_plan():
+    """Owner 2026-10-05: Instagram + TikTok viral clips only, one outlier search a weekday, the gallery only as a backup."""
+    cfg = json.loads((ROOT / "config" / "scan.json").read_text())
+    budget = cfg["budget"]
+    assert budget["scan_days"] == ["Mon", "Tue", "Wed", "Thu", "Fri"] and budget["scans_per_week"] == 5
+    assert (budget["breakdowns_per_week"], budget["watches_per_character"], budget["balance_floor"]) == (0, 0, 5)
+    assert budget["scans_per_week"] * budget["credits_per_scan"] * 52 / 12 <= budget["vidiq_monthly_credits"]  # about 108 of 150
+    assert cfg["defaults"]["resultsPerPlatform"] == 20  # the call costs the same whatever it returns
+    body = text("daily-run")
+    scan = body.split("## 2. Scan", 1)[1].split("Part B", 1)[0]
+    for part in (
+        "Instagram + TikTok viral clips only", "ONE search each weekday", "`vidiq_instagram_tiktok_outlier_search`", "One call a day, never a second",
+        "`vidiq_balance` first", '`{"vidiq": "skipped, balance N, refills <date>"}`', "5 × ISO week number + (Mon 0, Tue 1, Wed 2, Thu 3, Fri 4)",
+        "Biscuit and Reginald in turn", "rotates through its own themes", "YouTube is used only for the stats of an iconic moment",
+        "**Launch rule**", "first posts are absolute hits people know", "**Owner-pasted links**", "always analysed and filed",
+        "`bin/studio fav rescore <id> --freshness F --fit T --feasibility S --saturation A --proposal-file renders/tmp/p.json`",
+    ):  # fmt: skip
+        assert part in scan, part
+    part_b = body.split("Part B, the Genjutsu gallery", 1)[1].split("## 3. Plan", 1)[0]
+    assert part_b.startswith(", ONLY as a backup") and "fewer than 2 usable picks" in part_b and "could not run" in part_b
+    concept = body.split("## 4. Concept", 1)[1].split("## 5. Create", 1)[0]
+    assert "**Launch rule**" in concept and "`iconic`" in concept
+    assert "Only while `config/scan.json` `budget.breakdowns_per_week` is above 0" in concept  # no breakdown is bought now
+    from studio.health import validate_details
+
+    validate_details({"vidiq": "skipped, balance 3, refills 2026-11-01"})  # the skipped-search record passes the door
+
+
+def test_background_people_are_fine_and_only_a_second_dancing_star_waits_for_the_multi_body_test():
+    cfg = json.loads((ROOT / "config" / "scan.json").read_text())
+    for slug in ("biscuit", "reginald"):
+        first = cfg["characters"][slug]["fit_rules"][0]
+        assert "people in the background are fine" in first and "not a gate" in first, slug
+        assert "a second dancing star is still filed with needs multi_body" in first, slug
+        assert "replace or recreate" not in first and "2+ bodies" not in first, slug
 
 
 def test_the_card_json_the_skill_shows_is_accepted_by_the_door():

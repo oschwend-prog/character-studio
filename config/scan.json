@@ -1,5 +1,5 @@
 {
-  "_doc": "Daily Viral Picks scan settings (owner request 2026-10-04). Used by /daily-run. vidIQ tool: vidiq_instagram_tiktok_outlier_search (5 credits/call). Dates are relative: posted_within_days -> datePostedAfter = today - N days. `defaults` holds only vidIQ parameters; already-seen videos are excluded by the skill (excludeContentIds = `bin/studio fav seen`, at most 100 ids).",
+  "_doc": "Daily Viral Picks scan settings (owner request 2026-10-04; Instagram + TikTok viral only, owner 2026-10-05). Used by /daily-run. vidIQ tool: vidiq_instagram_tiktok_outlier_search (5 credits a call, whatever resultsPerPlatform is), ONE call each weekday (budget.scan_days), Biscuit and Reginald in turn, each rotating through its own themes. Dates are relative: posted_within_days -> datePostedAfter = today - N days. `defaults` holds only vidIQ parameters; already-seen videos are excluded by the skill (excludeContentIds = `bin/studio fav seen`, at most 100 ids).",
   "defaults": {
     "posted_within_days": 14,
     "viewsMin": 200000,
@@ -7,17 +7,18 @@
     "durationMax": 30,
     "descriptionLanguage": ["en"],
     "collapseByCreator": true,
-    "resultsPerPlatform": 10
+    "resultsPerPlatform": 20
   },
   "budget": {
     "vidiq_monthly_credits": 150,
-    "scans_per_week": 4,
-    "breakdowns_per_week": 4,
+    "scans_per_week": 5,
+    "scan_days": ["Mon", "Tue", "Wed", "Thu", "Fri"],
+    "breakdowns_per_week": 0,
     "credits_per_scan": 5,
     "credits_per_watch": 10,
-    "balance_floor": 20,
-    "watches_per_character": 3,
-    "_note": "4 scans (20) + 4 watches (40) = 60/week = more than the 150/month plan; raise the vidIQ plan or cut watches to 2/week. `breakdowns_per_week` caps every vidiq_watch_shortform_content call of a week (the pre-filing watch of a top pick and the breakdown of an approved one): `watches_per_character` per scan is the most the run asks for, and it stops at the week's cap or when vidiq_balance would fall under `balance_floor` after the watch."
+    "balance_floor": 5,
+    "watches_per_character": 0,
+    "_note": "One Instagram + TikTok outlier search each weekday (5 credits a call) = 25 a week, about 108 a month of the 150-credit plan. No watches: `breakdowns_per_week` and `watches_per_character` are 0 because the free local `bin/studio source analyze` of an approved pick's clip replaces the vidIQ breakdown. The search is skipped when vidiq_balance is under `balance_floor` (the run logs `vidiq: skipped, balance N, refills <date>`)."
   },
   "tier_rules": {
     "_doc": "The category (tier) of a pick the analyst did not tier, in this order; the first rule that holds wins. A pick with an explicit proposal.tier keeps it. studio/favorites.py TIER_RULES and terminal/src/lib/scanConfig.ts must equal these numbers (tests pin both). age = days since posted_at (or the scan's age_days); velocity = views per day since posting (the stored proposal.velocity, else views / max(age, velocity_min_age_days)). An unknown age is viral_now.",
@@ -39,9 +40,10 @@
   ],
   "_saturation_steps": "The saturation sub-score from saturation_count (similar outliers found in the last 7 days): the first row whose min_count the count reaches. studio.favorites.saturation_score and the terminal's saturationScore read the same table.",
   "access": [
-    {"id": "vidiq_outliers", "name": "vidIQ outlier search", "what": "TikTok and Instagram Reels: views, how far the video beats its creator's median (the outlier score), and the hook, format and audio analysis"},
-    {"id": "vidiq_watch", "name": "vidIQ watch", "what": "A scene-by-scene breakdown of one short video: who is in it, the camera, the beats, the hook and the audio"},
-    {"id": "genjutsu", "name": "Higgsfield Genjutsu galleries", "what": "Trending and New: ready-to-drop-in clips, already clean and trimmed, with previews"},
+    {"id": "vidiq_outliers", "name": "vidIQ outlier search", "what": "Instagram Reels and TikTok, the only places we scan for viral clips: views, how far the video beats its creator's median (the outlier score), and the hook, format and audio analysis. One search each weekday"},
+    {"id": "vidiq_watch", "name": "vidIQ watch", "what": "A scene-by-scene breakdown of one short video. Not in the daily plan: the free check of an approved clip (people, camera, best window, beat) replaces it"},
+    {"id": "genjutsu", "name": "Higgsfield Genjutsu galleries", "what": "Trending and New: ready-to-drop-in clips, already clean and trimmed, with previews. Filed only as a backup, on a day the scan could not run or found fewer than 2 usable clips for a character"},
+    {"id": "youtube_stats", "name": "YouTube stats", "what": "Only the views and dates of iconic moments, to rank them (free)"},
     {"id": "tiktok_sounds", "name": "TikTok trending sounds", "what": "What is climbing in the UK and US this week (a sound is never posted without its licence)"},
     {"id": "owner_links", "name": "Your own links", "what": "Any TikTok, Instagram Reel or YouTube link you paste, approved on the spot"},
     {"id": "clip_fetch", "name": "Clip fetch", "what": "Only for a pick you approved: the public clip is fetched once for the Drop-in, checked here for free, and deleted after posting"}
@@ -66,7 +68,7 @@
         {"embeddingType": "hook", "theme": "stare, then hits every beat", "query": "small dog in an outfit stares into the camera, then hits every beat of a high-energy track"},
         {"embeddingType": "concept", "theme": "pet with a human job", "query": "pet with a human job or an ego caption doing a viral trend"}
       ],
-      "fit_rules": ["one animal or one dancer as the subject (2+ bodies are still filed, with needs multi_body, and held until the multi-body test passes)", "full body visible", "mostly static camera", "music-driven (no dialogue needed)", "upright/biped motion for the biped master; four-legged head-bob for the quadruped master", "fits Biscuit's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): bouncy, puppy-cute, a wholesome ego, never clumsy, no voice"]
+      "fit_rules": ["one animal or one dancer as the star; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes", "full body visible", "mostly static camera", "music-driven (no dialogue needed)", "upright/biped motion for the biped master; four-legged head-bob for the quadruped master", "fits Biscuit's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): bouncy, puppy-cute, a wholesome ego, never clumsy, no voice"]
     },
     "reginald": {
       "audienceQuery": "Culture/Region: UK/US English-speaking; Global: true; Demographics: Gen Z and millennials 16-34 who watch comedy, memes and dance trends;",
@@ -76,7 +78,7 @@
         {"embeddingType": "format", "theme": "one action, new location", "query": "deadpan costumed character, one repeatable action, changing locations"},
         {"embeddingType": "concept", "theme": "elder out-dances the young", "query": "older or formally dressed person steps in and out-dances young people"}
       ],
-      "fit_rules": ["one performer (others only as background that we replace or recreate)", "full body visible", "deadpan-compatible (the joke must survive a straight face)", "no real-person likeness, masks or impersonations as the joke", "fits Reginald's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): calm, deadpan, a straight face under absurdity, never smiling, the quiff never moves"]
+      "fit_rules": ["one performer as the star; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes", "full body visible", "deadpan-compatible (the joke must survive a straight face)", "no real-person likeness, masks or impersonations as the joke", "fits Reginald's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): calm, deadpan, a straight face under absurdity, never smiling, the quiff never moves"]
     },
     "outsider": {
       "_status": "inactive until the voice lane (Slice 3)",
@@ -89,7 +91,7 @@
     }
   },
   "_themes": "Each rotation entry has a `theme`: a short label (at most 60 characters) naming what the entry looks for. A filed pick carries `proposal.theme` = the theme of the entry it matched, or the closest theme of its character when it came from the Genjutsu gallery or the owner. The terminal groups a character's picks by category or by theme.",
-  "free_sources_daily": ["Higgsfield Genjutsu Trending + New galleries (get_presets source=genjutsu)", "TikTok trending commercial sounds (tiktok_music_trending, country GB and US, 7DAY)"],
+  "free_sources_daily": ["Higgsfield Genjutsu Trending + New galleries (get_presets source=genjutsu): backup picks only, when the scan could not run or found fewer than 2 usable clips for a character that day", "TikTok trending commercial sounds (tiktok_music_trending, country GB and US, 7DAY)", "YouTube stats of iconic moments only (views and dates; free)"],
   "global_reject_rules": ["a real person's likeness or an impersonation as the joke (the real star is always replaced by our character; a famous clip, meme or dance is fine)", "brand ads / sponsored posts", "trend more than 7 days past its peak, unless it is an iconic evergreen moment (tier iconic)", "already picked or produced", "sexualised content, or a child as the star or main subject (a Drop-in source shows no child at all)", "national/ethnic/religious stereotypes"],
   "pick_card_fields": ["url", "platform", "creator_handle", "views", "outlier_x", "posted_at", "velocity (views per day, worked out at filing)", "engagement {likes, comments, shares, saves} when vidIQ returns it", "saturation_count", "matched_character", "tier", "theme", "thumbnail_url", "preview_url (gallery clips)", "fit_grade A/B/C", "trait_matches (1-4 phrases of the traits card)", "why (the analyst's reasoning, one paragraph)", "analysis (the clip check, after the clip is fetched or attached)", "proposed_mode", "proposed_hook", "proposed_prop", "why_it_works"]
 }

@@ -49,7 +49,7 @@ export function filterLines(): string[] {
     `${formatViews(d.viewsMin)} views or more`,
     `Outlier score ${times(d.outlierScoreMin)} or more: views against the creator’s own median`,
     `${d.durationMax} seconds or shorter`,
-    `Up to ${d.resultsPerPlatform} results per platform (TikTok and Instagram Reels)`,
+    `Up to ${d.resultsPerPlatform} results per platform (Instagram Reels and TikTok)`,
     d.descriptionLanguage.map((l) => (l === 'en' ? 'English' : l)).join(', ') + ' descriptions',
     d.collapseByCreator ? 'One result per creator' : 'Every result',
   ];
@@ -111,6 +111,8 @@ export interface BudgetView {
   vidiq: {
     perSearch: number;
     perWatch: number;
+    /** Watches a week in the plan (0: the free check of an approved clip replaces them). */
+    watchesPerWeek: number;
     plan: number;
     used: number;
     /** Share of the plan used this month, 0-100. */
@@ -120,26 +122,38 @@ export interface BudgetView {
     monthlyNeed: number;
     overPlan: boolean;
     weeklyLine: string;
+    /** Below this balance the day's search is skipped. */
+    floor: number;
+    floorLine: string;
   };
   higgsfield: { label: string; credits: number; note: string }[];
 }
 
 /** vidIQ credits per search and per watch against the plan, and what a clip costs in Higgsfield credits per mode. */
 export function budgetView(vidiqUsedThisMonth: number): BudgetView {
-  const b = SCAN_BUDGET;
-  const weekly = b.scans_per_week * b.credits_per_scan + b.breakdowns_per_week * b.credits_per_watch;
+  const b: { scans_per_week: number; scan_days: ReadonlyArray<string>; breakdowns_per_week: number; credits_per_scan: number; credits_per_watch: number; vidiq_monthly_credits: number; balance_floor: number } = SCAN_BUDGET;
+  const searches = b.scans_per_week * b.credits_per_scan;
+  const watches = b.breakdowns_per_week * b.credits_per_watch;
+  const weekly = searches + watches;
   const monthlyNeed = Math.round((weekly * 52) / 12);
+  const days = b.scan_days.length === 5 && b.scan_days.join() === 'Mon,Tue,Wed,Thu,Fri' ? 'one each weekday' : `on ${b.scan_days.join(', ')}`;
   return {
     vidiq: {
       perSearch: b.credits_per_scan,
       perWatch: b.credits_per_watch,
+      watchesPerWeek: b.breakdowns_per_week,
       plan: b.vidiq_monthly_credits,
       used: vidiqUsedThisMonth,
       pct: Math.min(100, (vidiqUsedThisMonth * 100) / b.vidiq_monthly_credits),
       weekly,
       monthlyNeed,
       overPlan: monthlyNeed > b.vidiq_monthly_credits,
-      weeklyLine: `${b.scans_per_week} searches (${b.scans_per_week * b.credits_per_scan}) + up to ${b.breakdowns_per_week} watches (${b.breakdowns_per_week * b.credits_per_watch}) a week = ${weekly} credits`,
+      weeklyLine:
+        b.breakdowns_per_week > 0
+          ? `${b.scans_per_week} searches (${searches}) + up to ${b.breakdowns_per_week} watches (${watches}) a week = ${weekly} credits`
+          : `${b.scans_per_week} searches a week, ${days} (${searches} credits), about ${monthlyNeed} a month; no watches: the free check of an approved clip replaces them`,
+      floor: b.balance_floor,
+      floorLine: `Below ${b.balance_floor} credits the day’s search is skipped (the run says so, with the refill date)`,
     },
     higgsfield: [
       { label: 'Drop-in, 8 s window', credits: estimateCredits('dropin', CREDITS.defaultSeconds, 'original'), note: `${CREDITS.dropinPerSecond} a second + ${CREDITS.stills} for the stills; the clip’s own audio is free` },

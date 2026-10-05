@@ -61,7 +61,10 @@ export function HowWeScan() {
           </ul>
         </Block>
 
-        <Block title="What we scan" hint="One search a scan day, rotating through each character’s themes; the Genjutsu galleries every day.">
+        <Block
+          title="What we scan"
+          hint="Instagram and TikTok viral clips only: one search each weekday, Biscuit and Reginald in turn, each rotating through his themes. The Genjutsu gallery is the backup on a day the search could not run or found fewer than 2 usable clips; the first posts of a channel are Broke the internet moments."
+        >
           {view.characters.map((c) => (
             <div className="how-char" key={c.slug} data-char={c.slug}>
               <div className="how-char-head">
@@ -137,7 +140,7 @@ export function HowWeScan() {
             <div>
               <span className="label">vidIQ</span>
               <p className="small" style={{ margin: 0 }}>
-                A search costs <b className="num">{vidiq.perSearch}</b> credits, a watch of one video <b className="num">{vidiq.perWatch}</b>. This month: <b className="num">{vidiq.used}</b> of <b className="num">{vidiq.plan}</b> used.
+                A search costs <b className="num">{vidiq.perSearch}</b> credits{vidiq.watchesPerWeek > 0 ? <>, a watch of one video <b className="num">{vidiq.perWatch}</b></> : null}. This month: <b className="num">{vidiq.used}</b> of <b className="num">{vidiq.plan}</b> used.
               </p>
               <div
                 className="meter"
@@ -152,6 +155,9 @@ export function HowWeScan() {
               </div>
               <p className="small muted" style={{ margin: 0 }}>
                 The plan: {vidiq.weeklyLine}.{vidiq.overPlan ? ` That is about ${vidiq.monthlyNeed} a month, more than the ${vidiq.plan} of your plan: the run watches fewer.` : ''}
+              </p>
+              <p className="small muted" style={{ margin: 0 }}>
+                {vidiq.floorLine}.
               </p>
             </div>
             <div>

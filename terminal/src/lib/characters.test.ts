@@ -438,26 +438,26 @@ describe('scannerStatus', () => {
 });
 
 describe('the next scan', () => {
-  it('is the next 08:00 London on a scan day (Tue, Thu, Sat, Sun)', () => {
-    // Tue 6 Oct 11:00 London: today's 08:00 has passed, Wed is not a scan day, so Thu 8 Oct
-    expect(nextScanAt(NOW)).toBe(londonWallToIso('2026-10-08T08:00'));
+  it('is the next 08:00 London on a scan day (one search each weekday, Mon to Fri)', () => {
+    // Tue 6 Oct 11:00 London: today's 08:00 has passed, so Wed 7 Oct
+    expect(nextScanAt(NOW)).toBe(londonWallToIso('2026-10-07T08:00'));
     // Tue 6 Oct 06:30 London: today 08:00 is still ahead
     expect(nextScanAt(Date.parse(londonWallToIso('2026-10-06T06:30')))).toBe(londonWallToIso('2026-10-06T08:00'));
-    // Thu 8 Oct 08:00 sharp: strictly after, so Sat 10 Oct
-    expect(nextScanAt(Date.parse(londonWallToIso('2026-10-08T08:00')))).toBe(londonWallToIso('2026-10-10T08:00'));
-    // Sun 11 Oct evening -> Tue 13 Oct
-    expect(nextScanAt(Date.parse(londonWallToIso('2026-10-11T20:00')))).toBe(londonWallToIso('2026-10-13T08:00'));
+    // Thu 8 Oct 08:00 sharp: strictly after, so Fri 9 Oct
+    expect(nextScanAt(Date.parse(londonWallToIso('2026-10-08T08:00')))).toBe(londonWallToIso('2026-10-09T08:00'));
+    // Fri 9 Oct evening: no scan at the weekend -> Mon 12 Oct
+    expect(nextScanAt(Date.parse(londonWallToIso('2026-10-09T20:00')))).toBe(londonWallToIso('2026-10-12T08:00'));
   });
 
   it('keeps 08:00 London across the clock change (GMT from 25 Oct)', () => {
-    const iso = nextScanAt(Date.parse(londonWallToIso('2026-10-24T09:00'))); // Sat 24 Oct, after the scan
-    expect(iso).toBe('2026-10-25T08:00:00.000Z'); // Sun 25 Oct: GMT again, 08:00 London = 08:00 UTC
+    const iso = nextScanAt(Date.parse(londonWallToIso('2026-10-24T09:00'))); // Sat 24 Oct
+    expect(iso).toBe('2026-10-26T08:00:00.000Z'); // Mon 26 Oct: GMT again, 08:00 London = 08:00 UTC
   });
 
   it('is labelled with the schedule once a character is live, and "not scheduled yet" before', () => {
-    expect(nextScanLabel(NOW, true)).toBe('Next scan Thu 8 Oct 08:00');
+    expect(nextScanLabel(NOW, true)).toBe('Next scan Wed 7 Oct 08:00');
     expect(nextScanLabel(NOW, false)).toMatch(/^Not scheduled yet/);
-    expect(nextScanLabel(NOW, false)).toMatch(/Tue, Thu, Sat and Sun at 08:00/);
+    expect(nextScanLabel(NOW, false)).toMatch(/Monday to Friday at 08:00/);
   });
 });
 

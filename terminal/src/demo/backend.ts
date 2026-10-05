@@ -4,7 +4,7 @@
 // figure is SYNTHETIC and the UI says so. Actions follow the same rules as the SQL RPCs.
 import picksJson from './batch1-picks.json';
 import traitsJson from './traits.json';
-import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, checkClipBasics, ownerClipPath } from '../lib/rules';
+import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, SCAN_DAYS, checkClipBasics, ownerClipPath } from '../lib/rules';
 import { velocityPerDay } from '../lib/analyst';
 import { inTracker } from '../lib/tracker';
 import { londonDayKey, londonWallToIso } from '../lib/format';
@@ -462,7 +462,7 @@ export class DemoBackend implements Backend {
     link(work(15, 'biscuit', 'made', "my eyes don't match. my moves do.", 'The first post: the eye close-up loop.', 24 * 14, { mode: 'recreate' }), byHook("my eyes don't match. my moves do."));
 
     // The run log: a finished scan on the latest scan day, an earlier one, and a day that did not scan.
-    const scanDays = ['Tue', 'Thu', 'Sat', 'Sun'];
+    const scanDays = SCAN_DAYS;
     const at0800 = (back: number) => londonWallToIso(`${londonDayKey(now - back * DAY)}T08:00`);
     const weekday = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'short' }).format(new Date(iso));
     const past = [0, 1, 2, 3, 4, 5, 6, 7].map(at0800).filter((iso) => Date.parse(iso) + 45 * 60_000 < now);
@@ -474,14 +474,14 @@ export class DemoBackend implements Backend {
     if (scanAt[0]) {
       this.runs.push(run(scanAt[0], 41, {
         scan: {
-          queries: ['biscuit #2 concept', 'reginald #1 concept'], outliers: 9, picks_added: 4, auto_approved: 1, held: 1, skipped: 2,
-          vidiq_credits: 15,
+          queries: ['biscuit #2 concept'], outliers: 18, picks_added: 4, auto_approved: 1, held: 1, skipped: 2,
+          vidiq_credits: 5,
         },
       }, 'SYNTHETIC: 2 clips made, 4 picks filed'));
     }
     if (scanAt[1]) {
       this.runs.push(run(scanAt[1], 33, {
-        scan: { queries: ['biscuit #1 format', 'reginald #4 concept'], outliers: 7, picks_added: 3, auto_approved: 2, held: 0, skipped: 1, vidiq_credits: 15 },
+        scan: { queries: ['reginald #4 concept'], outliers: 14, picks_added: 3, auto_approved: 2, held: 0, skipped: 1, vidiq_credits: 5 },
       }, 'SYNTHETIC: 2 clips made, 3 picks filed'));
     }
     const noScan = past.find((iso) => !scanDays.includes(weekday(iso)));

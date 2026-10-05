@@ -12,17 +12,24 @@ export const SCAN_DEFAULTS = {
     "en"
   ],
   "collapseByCreator": true,
-  "resultsPerPlatform": 10
+  "resultsPerPlatform": 20
 } as const;
 
 export const SCAN_BUDGET = {
   "vidiq_monthly_credits": 150,
-  "scans_per_week": 4,
-  "breakdowns_per_week": 4,
+  "scans_per_week": 5,
+  "scan_days": [
+    "Mon",
+    "Tue",
+    "Wed",
+    "Thu",
+    "Fri"
+  ],
+  "breakdowns_per_week": 0,
   "credits_per_scan": 5,
   "credits_per_watch": 10,
-  "balance_floor": 20,
-  "watches_per_character": 3
+  "balance_floor": 5,
+  "watches_per_character": 0
 } as const;
 
 export const TIER_RULES = {
@@ -60,17 +67,22 @@ export const SCAN_ACCESS: ReadonlyArray<{ id: string; name: string; what: string
   {
     "id": "vidiq_outliers",
     "name": "vidIQ outlier search",
-    "what": "TikTok and Instagram Reels: views, how far the video beats its creator's median (the outlier score), and the hook, format and audio analysis"
+    "what": "Instagram Reels and TikTok, the only places we scan for viral clips: views, how far the video beats its creator's median (the outlier score), and the hook, format and audio analysis. One search each weekday"
   },
   {
     "id": "vidiq_watch",
     "name": "vidIQ watch",
-    "what": "A scene-by-scene breakdown of one short video: who is in it, the camera, the beats, the hook and the audio"
+    "what": "A scene-by-scene breakdown of one short video. Not in the daily plan: the free check of an approved clip (people, camera, best window, beat) replaces it"
   },
   {
     "id": "genjutsu",
     "name": "Higgsfield Genjutsu galleries",
-    "what": "Trending and New: ready-to-drop-in clips, already clean and trimmed, with previews"
+    "what": "Trending and New: ready-to-drop-in clips, already clean and trimmed, with previews. Filed only as a backup, on a day the scan could not run or found fewer than 2 usable clips for a character"
+  },
+  {
+    "id": "youtube_stats",
+    "name": "YouTube stats",
+    "what": "Only the views and dates of iconic moments, to rank them (free)"
   },
   {
     "id": "tiktok_sounds",
@@ -139,7 +151,7 @@ export const SCAN_CHARACTERS: Readonly<Record<string, ScanCharacter>> = {
       }
     ],
     "fit_rules": [
-      "one animal or one dancer as the subject (2+ bodies are still filed, with needs multi_body, and held until the multi-body test passes)",
+      "one animal or one dancer as the star; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes",
       "full body visible",
       "mostly static camera",
       "music-driven (no dialogue needed)",
@@ -172,7 +184,7 @@ export const SCAN_CHARACTERS: Readonly<Record<string, ScanCharacter>> = {
       }
     ],
     "fit_rules": [
-      "one performer (others only as background that we replace or recreate)",
+      "one performer as the star; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes",
       "full body visible",
       "deadpan-compatible (the joke must survive a straight face)",
       "no real-person likeness, masks or impersonations as the joke",

@@ -4,7 +4,7 @@ import type {
   Channel, Character, CharacterTraits, ClipFile, DecideExtras, LibraryClip, OwnerMode, OwnerMusic, OwnerPresence,
   Pick as ViralPick, PickHistory, QueueClip, RunRow, ScanDetails, Snapshot, Tier, TraitProp,
 } from './types';
-import { TIER_RULES } from './scanConfig';
+import { SCAN_BUDGET, TIER_RULES } from './scanConfig';
 
 // The owner-facing rules the terminal applies on its own side. Each one mirrors a rule the database
 // (migration 0004) or the Python studio enforces; the server stays the authority, these only decide
@@ -664,9 +664,9 @@ export function tabIndexAfter(current: number, count: number, shift: boolean): n
 /** A run that has started and not finished is "stalled" from this age on (the daily run takes well under an hour). */
 export const SCAN_STALL_MS = 3 * 3_600_000;
 /** vidIQ credits per month of the owner's plan (config/scan.json budget.vidiq_monthly_credits). */
-export const VIDIQ_MONTHLY_CREDITS = 150;
-/** London weekdays the daily run scans on (the daily-run skill: at most 4 a week). */
-export const SCAN_DAYS: ReadonlyArray<string> = ['Tue', 'Thu', 'Sat', 'Sun'];
+export const VIDIQ_MONTHLY_CREDITS: number = SCAN_BUDGET.vidiq_monthly_credits;
+/** London weekdays the daily run scans on: one Instagram + TikTok search each weekday (config/scan.json budget.scan_days). */
+export const SCAN_DAYS: ReadonlyArray<string> = SCAN_BUDGET.scan_days;
 
 export interface ScanNumbers {
   queries: string[];
@@ -742,7 +742,7 @@ export function scannerStatus(runs: ReadonlyArray<RunRow>, now: number): Scanner
   return { ...base, state: 'none', headline: 'No scan yet', tone: 'muted', startedAt: null };
 }
 
-/** The next scheduled scan: the first 08:00 London after `now` on a scan day (Tue, Thu, Sat, Sun). */
+/** The next scheduled scan: the first 08:00 London after `now` on a scan day (Mon to Fri). */
 export function nextScanAt(now: number): string {
   const [y, m, d] = londonDayKey(now).split('-').map(Number);
   for (let i = 0; i < 9; i++) {
@@ -755,7 +755,7 @@ export function nextScanAt(now: number): string {
 
 /** "Next scan Thu 8 Oct 08:00", or the static rule until a character is live (the schedule has no backend yet). */
 export function nextScanLabel(now: number, anyLive: boolean): string {
-  if (!anyLive) return 'Not scheduled yet: scans start when a character goes live (Tue, Thu, Sat and Sun at 08:00 London)';
+  if (!anyLive) return 'Not scheduled yet: scans start when a character goes live (Monday to Friday at 08:00 London)';
   const at = nextScanAt(now);
   return `Next scan ${londonDate(at)} ${londonTime(at)}`;
 }

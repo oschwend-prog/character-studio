@@ -38,7 +38,7 @@ describe('what is scanned', () => {
       '200K views or more',
       'Outlier score 5× or more: views against the creator’s own median',
       '30 seconds or shorter',
-      'Up to 10 results per platform (TikTok and Instagram Reels)',
+      'Up to 20 results per platform (Instagram Reels and TikTok)',
       'English descriptions',
       'One result per creator',
     ]);
@@ -98,14 +98,16 @@ describe('the categories with an example from the current picks', () => {
 });
 
 describe('the budget', () => {
-  it('prices a search, a watch and the plan, and says when the weekly plan outgrows it', () => {
+  it('prices one search each weekday against the plan, with no watches, and the floor that skips a search', () => {
     const b = budgetView(40).vidiq;
-    expect([b.perSearch, b.perWatch, b.plan, b.used]).toEqual([5, 10, 150, 40]);
+    expect([b.perSearch, b.perWatch, b.watchesPerWeek, b.plan, b.used]).toEqual([5, 10, 0, 150, 40]);
     expect(b.pct).toBeCloseTo(26.67, 1);
-    expect(b.weekly).toBe(60);
-    expect(b.weeklyLine).toBe('4 searches (20) + up to 4 watches (40) a week = 60 credits');
-    expect(b.monthlyNeed).toBe(260);
-    expect(b.overPlan).toBe(SCAN_BUDGET.vidiq_monthly_credits < 260);
+    expect(b.weekly).toBe(25);
+    expect(b.monthlyNeed).toBe(108);
+    expect(b.weeklyLine).toBe('5 searches a week, one each weekday (25 credits), about 108 a month; no watches: the free check of an approved clip replaces them');
+    expect(b.overPlan).toBe(false);
+    expect(SCAN_BUDGET.vidiq_monthly_credits).toBe(150);
+    expect([b.floor, b.floorLine]).toEqual([5, 'Below 5 credits the day’s search is skipped (the run says so, with the refill date)']);
     expect(budgetView(999).vidiq.pct).toBe(100);
   });
 
