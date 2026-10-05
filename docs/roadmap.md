@@ -18,6 +18,10 @@ Order: get Biscuit + Reginald running on Instagram first, then expand.
    sequels, keyword in caption line 1, first-hour comment drafts, covers, Trial Reels, Collab crossovers,
    follower / watch-time / non-follower-reach data feed (unblocks the week-3 bars and the IG guard).
 4. **Credits plan:** decide top-ups vs Higgsfield Ultra after the first week's real re-roll rate.
+5. **Paid amplification (after the week-3 review, owner 2026-10-05):** [Launchpoint](https://www.launchpointhq.com/) runs
+   creator campaigns from a brief (new videos by 100k+ vetted creators on IG/TikTok/YT, ~$1 per 1,000 verified views,
+   e.g. 1.2M views for $1,200; Higgsfield is a customer). Only once a format has proven itself: a capped $300-500 test
+   ("duet/react to Reginald's latest dance, tag @reginald.thebutler"), judged on follows per 1K views against organic.
 
 ## Character 3: the Outsider (Borat-type)
 - An 1852 Victorian gentleman lost in 2026 London; original, never mocks a real nationality; deadpan
