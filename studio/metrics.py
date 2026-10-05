@@ -6,11 +6,14 @@ Postiz id, the post's age (from ``claimed_at``; the posts table has no ``posted_
 when ``publish_due`` claimed it, ``scheduled_for`` is the fallback) puts it in one **catch-up window**:
 the latest of 1 h / 24 h / 72 h / 7 d (``WINDOWS``, the window *starts*) whose start has passed. The
 windows tile a post's life (1 h = [1 h, 24 h), 24 h = [24 h, 72 h), 72 h = [72 h, 7 d), 7 d = [7 d, for
-ever)), and a snapshot belongs to the window its own age falls in, so every snapshot maps to exactly
+ever): the tiling classifies a snapshot, ``ABANDON_AFTER`` is when a pull stops), and a snapshot belongs to the window its own age falls in, so every snapshot maps to exactly
 one window (a snapshot younger than 1 h belongs to none). A window is due when the post has reached it
-and holds no snapshot of it yet; a due window is pulled as soon as a run sees it, however late: the 7 d
-window has no upper bound. (A run that first meets a post at 30 h pulls the 24 h window; the 1 h window
-is gone for good, a snapshot taken at 30 h can only honestly be a 24 h one.) A pull runs
+and holds no snapshot of it yet; a due window is pulled as soon as a run sees it, however late (the 7 d
+window up to 14 d, see below). (A run that first meets a post at 30 h pulls the 24 h window; the 1 h window
+is gone for good, a snapshot taken at 30 h can only honestly be a 24 h one.) The 7 d window gives up
+at post age > ``ABANDON_AFTER`` (14 d): a post that old with no 7 d snapshot (deleted, never indexed)
+is no longer fetched and is listed under ``abandoned`` (not ``errors``), so it cannot keep the
+Action red for ever; the clip bookkeeping below is unchanged. A pull runs
 ``postiz analytics:post <postiz-post-id> -d 7`` and writes one ``Snapshot`` with ``captured_at = now``.
 **Idempotent per (post, window):** a window that already holds a snapshot of the post (from any
 source) is never pulled again, so a job that runs every 5 minutes writes one snapshot per window, not
@@ -40,8 +43,9 @@ KPIs the weekly review reports, migration 0002; stored in the units vidIQ report
 store (the trial flag, ...) are ignored. Nullable values stay ``None``; a row with no usable metric,
 or whose numbers equal the post's latest snapshot, writes nothing.
 
-CLI (``studio metrics ...``) prints JSON on stdout; exit 0 normally, exit 1 when a pull failed (the
-Action goes red; the window stays due, so the next run tries again), exit 2 for anything the caller must fix
+CLI (``studio metrics ...``) prints JSON on stdout; exit 0 normally (``missing`` and ``abandoned`` posts
+included), exit 1 when a pull failed (the Action goes red; the window stays due, so the next run tries
+again), exit 2 for anything the caller must fix
 (no ``DATABASE_URL``, ``POSTIZ_API_KEY`` or ``postiz`` binary, unreadable input).
 """
 
@@ -80,6 +84,9 @@ WINDOWS: tuple[tuple[str, timedelta], ...] = (
     ("7d", timedelta(days=7)),
 )
 SEVEN_DAYS = dict(WINDOWS)["7d"]
+# The 7 d window is the last one and has no end as a classification (a late snapshot still belongs
+# to it), but a pull gives up on a post older than this with no 7 d snapshot: reported as abandoned.
+ABANDON_AFTER = timedelta(days=14)
 
 MIN_PRIORS = 3  # fewer non-None prior 7-day views than this: no baseline, outlier_x is None
 MAX_PRIORS = 15  # the baseline is the median of the account's last 15
@@ -357,6 +364,15 @@ def _pull_window(
     if _snapshots_in_window(store, post, window):
         out["already_pulled"].append(where)
         return False
+    age = now - posted_at(post)
+    if window == "7d" and age > ABANDON_AFTER:
+        log.warning(
+            "giving up on post %s (postiz id %s): aged %.1f d with no 7 d snapshot (deleted or never "
+            "indexed); not pulled again",
+            post.id, post.platform_post_id, age / timedelta(days=1),
+        )  # fmt: skip
+        out["abandoned"].append({**where, "age_days": round(age / timedelta(days=1), 1)})
+        return False
     payload = _fetch(postiz_run, executable, post.platform_post_id)
     if isinstance(payload, dict) and payload.get("missing") is True:
         log.warning(
@@ -386,11 +402,13 @@ def pull(
     """Pull every due (post, window); returns a JSON-friendly summary (see the module docstring).
 
     ``postiz_run`` is ``subprocess.run`` (a fake in tests). One post's failure never stops the rest:
-    it is listed under ``errors`` and nothing is written for it.
+    it is listed under ``errors`` and nothing is written for it. A post past ``ABANDON_AFTER`` with no
+    7 d snapshot is listed under ``abandoned`` and is not fetched.
     """
     require_aware(now, "pull(now)")
     out: dict[str, Any] = {
-        "pulled": [], "already_pulled": [], "missing": [], "empty": [], "errors": [], "outlier_x": [],
+        "pulled": [], "already_pulled": [], "missing": [], "empty": [], "abandoned": [], "errors": [],
+        "outlier_x": [],
     }  # fmt: skip
     fresh: dict[str, None] = {}  # clips whose post just got a 7 d snapshot (insertion-ordered set)
     aged: dict[str, None] = {}  # clips with a post aged 7 d or more

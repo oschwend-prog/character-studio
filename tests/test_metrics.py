@@ -255,10 +255,10 @@ MIN = timedelta(minutes=1)
         (7 * D - MIN, "72h"),
         (7 * D, "7d"),
         (7 * D + 5 * H, "7d"),             # catch-up: late is still in time
-        (30 * D, "7d"),                    # the 7 d window has no upper bound
+        (14 * D, "7d"),                    # ... up to and including 14 d (then it gives up)
     ],
 )
-def test_pull_windows_start_at_their_age_and_have_no_upper_bound(rig, age, window):
+def test_pull_windows_start_at_their_age_and_catch_up_until_14_days(rig, age, window):
     rig.post(age=age)
     fake = FakePostiz(default=analytics(views=1))
     out = pull(rig.store, fake, NOW)
@@ -273,6 +273,62 @@ def test_pull_windows_start_at_their_age_and_have_no_upper_bound(rig, age, windo
 )  # fmt: skip
 def test_every_age_falls_in_at_most_one_window(age, window):
     assert metrics.window_at(age) == window
+
+
+def test_the_7d_window_gives_up_after_14_days_and_reports_abandoned_not_errors(rig):
+    """A post aged over 14 d with no 7 d snapshot (deleted, never indexed) is no longer fetched: it is
+    reported under ``abandoned`` so the metrics Action does not stay red for ever."""
+    post = rig.post(age=15 * D)
+    fake = FakePostiz(default={"missing": True})
+    out = pull(rig.store, fake, NOW)
+    assert fake.calls == []  # not fetched
+    assert out["abandoned"] == [{"post_id": post.id, "window": "7d", "age_days": 15.0}]
+    assert out["errors"] == [] and out["missing"] == [] and out["pulled"] == []
+    assert rig.snaps(post) == []
+
+
+def test_a_post_exactly_14_days_old_is_still_pulled(rig):
+    post = rig.post(age=14 * D)
+    fake = FakePostiz(default=analytics(views=5))
+    out = pull(rig.store, fake, NOW)
+    assert len(fake.calls) == 1 and out["abandoned"] == []
+    assert out["pulled"] == [{"post_id": post.id, "window": "7d"}]
+
+
+def test_just_over_14_days_is_abandoned(rig):
+    rig.post(age=14 * D + MIN)
+    fake = FakePostiz(default=analytics(views=5))
+    out = pull(rig.store, fake, NOW)
+    assert fake.calls == [] and len(out["abandoned"]) == 1
+
+
+def test_abandoning_a_post_does_not_stop_the_others(rig):
+    old = rig.post(age=20 * D)
+    fresh = rig.post("@biscuit.ig", age=24 * H)
+    fake = FakePostiz(default=analytics(views=7))
+    out = pull(rig.store, fake, NOW)
+    assert [c[2] for c in fake.calls] == [fresh.platform_post_id]
+    assert [a["post_id"] for a in out["abandoned"]] == [old.id]
+    assert out["pulled"] == [{"post_id": fresh.id, "window": "24h"}]
+
+
+def test_an_old_post_that_already_holds_a_7d_snapshot_is_not_abandoned(rig):
+    post = rig.post(age=20 * D)
+    rig.seven_day_views(post, 100)
+    fake = FakePostiz(default=analytics(views=5))
+    out = pull(rig.store, fake, NOW)
+    assert fake.calls == [] and out["abandoned"] == []
+    assert out["already_pulled"] == [{"post_id": post.id, "window": "7d"}]
+
+
+def test_an_abandoned_posts_clip_is_still_refreshed_from_an_existing_figure(rig):
+    """Abandoning only stops the fetch: the clip bookkeeping for aged posts is unchanged."""
+    clip = rig.clip()
+    post = rig.post(age=20 * D, clip=clip)
+    rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=post.claimed_at + 8 * D, views=600))
+    rig.history("@biscuit.tt", [100, 200, 300], target_at=NOW - 20 * D)
+    out = pull(rig.store, FakePostiz(), NOW)
+    assert rig.features(clip)["outlier_x"] == 3.0 and out["abandoned"] == []
 
 
 def test_a_snapshot_belongs_to_the_window_its_own_age_falls_in(rig):
@@ -1024,6 +1080,18 @@ def test_cli_pull_with_a_missing_post_is_still_exit_0(cli, monkeypatch):
     r = run_cli("pull")
     assert r.exit_code == 0
     assert len(json.loads(r.stdout)["missing"]) == 1
+
+
+def test_cli_pull_with_an_abandoned_post_is_exit_0(cli, monkeypatch):
+    """A deleted/missing post older than 14 d is listed under ``abandoned`` and keeps the Action green."""
+    post = cli.post(age=15 * D)
+    fake = FakePostiz(default={"missing": True})
+    monkeypatch.setattr(subprocess, "run", fake)
+    r = run_cli("pull")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert [a["post_id"] for a in out["abandoned"]] == [post.id] and out["errors"] == []
+    assert fake.calls == []
 
 
 def test_cli_pull_without_postiz_key_is_a_caller_error(cli, monkeypatch):

@@ -1,6 +1,6 @@
 # Pull post metrics from Postiz, every 6 hours (`studio metrics pull`). The windows are catch-up
-# windows (a reading is taken once its age is reached, with no upper bound), so a 6-hourly or a
-# skipped run never loses data.
+# windows (a reading is taken once its age is reached; the 7 d one gives up at 14 d and reports the
+# post as `abandoned`, exit 0), so a 6-hourly or a skipped run never loses data.
 #
 # Secrets (repo secrets, added by the owner at go-live): DATABASE_URL, SUPABASE_URL,
 # SUPABASE_SERVICE_KEY, POSTIZ_API_KEY. Until DATABASE_URL exists the job prints a notice and
