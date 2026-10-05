@@ -280,3 +280,40 @@ def test_0004_realtime_and_storage_are_guarded_and_idempotent():
         assert f"alter publication supabase_realtime add table studio.{table}" in TERMINAL_SQL
     assert "bucket_id = 'clips'" in TERMINAL_SQL and "for select to authenticated" in TERMINAL_SQL
     assert "not exists (select 1 from pg_policies" in TERMINAL_SQL
+
+
+# ---- 0005: terminal fixes (review round 1) ------------------------------------------------------------
+
+FIXES_SQL_PATH = MIGRATIONS / "0005_terminal_fixes.sql"
+
+
+def _fixes_function(name: str) -> str:
+    m = re.search(rf"create or replace function studio\.{name}\((.*?)\$\$;", FIXES_SQL_PATH.read_text(), re.S)
+    assert m, f"no function studio.{name} in 0005"
+    return m.group(0)
+
+
+def test_0005_approve_refuses_a_clip_without_a_master_and_never_stores_an_empty_caption():
+    body = _fixes_function("approve_clip")
+    assert "clip_id uuid, caption text default null, hook text default null, schedule_at timestamptz default null" in body
+    assert "studio.queue_block_reason(c.id)" in body
+    assert "nullif(btrim(approve_clip.caption), '')" in body and "nullif(btrim(approve_clip.hook), '')" in body
+    helper = _fixes_function("queue_block_reason")
+    assert "master_path" in helper and "no master file yet" in helper
+    for name in ("approve_clip", "queue_block_reason"):
+        body = _fixes_function(name)
+        assert "security invoker" in body and "set search_path = ''" in body and "security definer" not in body
+    sql = FIXES_SQL_PATH.read_text()
+    assert "revoke all on function studio.queue_block_reason(uuid) from public;" in sql
+    assert "grant execute on function studio.queue_block_reason(uuid) to authenticated;" in sql
+
+
+def test_0005_v_queue_keeps_its_columns_and_appends_the_block_reason():
+    sql = FIXES_SQL_PATH.read_text()
+    old = re.search(r"create or replace view studio\.v_queue .*?from studio\.clips c", TERMINAL_SQL, re.S).group(0)
+    new = re.search(r"create or replace view studio\.v_queue .*?from studio\.clips c", sql, re.S).group(0)
+    assert "with (security_invoker = true)" in new
+    cols = lambda text: re.findall(r"\bas (\w+),?\s*$", text, re.M)  # noqa: E731
+    assert cols(new)[: len(cols(old))] == cols(old), "create or replace view may only append columns"
+    assert cols(new)[-1] == "blocked_reason"
+    assert "grant select on studio.v_queue to authenticated;" in sql
