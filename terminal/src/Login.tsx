@@ -19,7 +19,8 @@ export function Login() {
     setError(null);
     const { error } = await supabase().auth.signInWithOtp({
       email: email.trim(),
-      options: { emailRedirectTo: `${window.location.origin}${window.location.pathname}` },
+      // The owner already exists: a mistyped address must not create an account (and sign-ups may be off).
+      options: { shouldCreateUser: false, emailRedirectTo: `${window.location.origin}${window.location.pathname}` },
     });
     if (error) {
       setState('error');

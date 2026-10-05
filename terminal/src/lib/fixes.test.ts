@@ -8,24 +8,44 @@ import { isStandalone, normaliseOtpCode } from './auth';
 describe('the queue pager: one decision for which clip is on screen', () => {
   const ids = ['a', 'b', 'c'];
   it('first render with a deep link to a non-first clip shows that clip', () => {
-    expect(nextCurrentId({ ids, currentId: null, focus: 'b', appliedFocus: null })).toEqual({ id: 'b', appliedFocus: 'b' });
-    expect(nextCurrentId({ ids, currentId: null, focus: 'c', appliedFocus: null })).toEqual({ id: 'c', appliedFocus: 'c' });
+    expect(nextCurrentId({ ids, currentId: null, focus: 'b', appliedFocus: null, lastIndex: 0 })).toEqual({ id: 'b', appliedFocus: 'b' });
+    expect(nextCurrentId({ ids, currentId: null, focus: 'c', appliedFocus: null, lastIndex: 0 })).toEqual({ id: 'c', appliedFocus: 'c' });
   });
   it('a pending deep link waits for the queue to load, then wins', () => {
-    expect(nextCurrentId({ ids: [], currentId: null, focus: 'c', appliedFocus: null })).toEqual({ id: null, appliedFocus: null });
-    expect(nextCurrentId({ ids, currentId: 'a', focus: 'c', appliedFocus: null })).toEqual({ id: 'c', appliedFocus: 'c' });
+    expect(nextCurrentId({ ids: [], currentId: null, focus: 'c', appliedFocus: null, lastIndex: 0 })).toEqual({ id: null, appliedFocus: null });
+    expect(nextCurrentId({ ids, currentId: 'a', focus: 'c', appliedFocus: null, lastIndex: 0 })).toEqual({ id: 'c', appliedFocus: 'c' });
   });
   it('a refresh keeps the clip being viewed once the link was applied (no snap back)', () => {
-    expect(nextCurrentId({ ids, currentId: 'c', focus: 'b', appliedFocus: 'b' })).toEqual({ id: 'c', appliedFocus: 'b' });
-    expect(nextCurrentId({ ids: ['x', ...ids], currentId: 'c', focus: null, appliedFocus: null }).id).toBe('c');
+    expect(nextCurrentId({ ids, currentId: 'c', focus: 'b', appliedFocus: 'b', lastIndex: 0 })).toEqual({ id: 'c', appliedFocus: 'b' });
+    expect(nextCurrentId({ ids: ['x', ...ids], currentId: 'c', focus: null, appliedFocus: null, lastIndex: 0 }).id).toBe('c');
   });
-  it('a removed clip falls back to the first one; nothing chosen starts at the first; empty is null', () => {
-    expect(nextCurrentId({ ids: ['a', 'c'], currentId: 'b', focus: 'b', appliedFocus: 'b' }).id).toBe('a');
-    expect(nextCurrentId({ ids, currentId: null, focus: null, appliedFocus: null }).id).toBe('a');
-    expect(nextCurrentId({ ids: [], currentId: 'b', focus: null, appliedFocus: null }).id).toBeNull();
+  it('nothing chosen starts at the first clip; empty is null', () => {
+    expect(nextCurrentId({ ids, currentId: null, focus: null, appliedFocus: null, lastIndex: 0 }).id).toBe('a');
+    expect(nextCurrentId({ ids, currentId: null, focus: null, appliedFocus: null, lastIndex: 2 }).id).toBe('a'); // no clip was being viewed
+    expect(nextCurrentId({ ids: [], currentId: 'b', focus: null, appliedFocus: null, lastIndex: 1 }).id).toBeNull();
+    expect(nextCurrentId({ ids: [], currentId: null, focus: null, appliedFocus: null, lastIndex: 0 }).id).toBeNull();
+  });
+  it('a removed clip hands over to the clip that took its place (approve, reject, regenerate or Realtime)', () => {
+    // approving clip 2 of 3: the former clip 3 is now clip 2 of 2
+    const after = nextCurrentId({ ids: ['a', 'c'], currentId: 'b', focus: null, appliedFocus: null, lastIndex: 1 });
+    expect(after.id).toBe('c');
+    expect(['a', 'c'].indexOf(after.id as string) + 1).toBe(2);
+    // the first clip leaves: the next one is first now
+    expect(nextCurrentId({ ids: ['b', 'c'], currentId: 'a', focus: null, appliedFocus: null, lastIndex: 0 }).id).toBe('b');
+  });
+  it('removing the last clip lands on the new last clip', () => {
+    expect(nextCurrentId({ ids: ['a', 'b'], currentId: 'c', focus: null, appliedFocus: null, lastIndex: 2 }).id).toBe('b');
+    expect(nextCurrentId({ ids: ['a'], currentId: 'b', focus: null, appliedFocus: null, lastIndex: 5 }).id).toBe('a'); // clamped
+  });
+  it('a deep link that was applied and then removed also hands over by position, not to the first', () => {
+    expect(nextCurrentId({ ids: ['a', 'c'], currentId: 'b', focus: 'b', appliedFocus: 'b', lastIndex: 1 }).id).toBe('c');
+  });
+  it('a pending deep link still wins over the position, and a present current clip over both', () => {
+    expect(nextCurrentId({ ids, currentId: 'a', focus: 'c', appliedFocus: null, lastIndex: 0 }).id).toBe('c');
+    expect(nextCurrentId({ ids, currentId: 'b', focus: null, appliedFocus: null, lastIndex: 2 }).id).toBe('b');
   });
   it('a new deep link (a different clip) wins again', () => {
-    expect(nextCurrentId({ ids, currentId: 'c', focus: 'a', appliedFocus: 'b' })).toEqual({ id: 'a', appliedFocus: 'a' });
+    expect(nextCurrentId({ ids, currentId: 'c', focus: 'a', appliedFocus: 'b', lastIndex: 0 })).toEqual({ id: 'a', appliedFocus: 'a' });
   });
 });
 
@@ -119,4 +139,42 @@ describe('muted text meets WCAG AA on every surface it is used on', () => {
       expect(ratio(token('ink-3'), token(ground))).toBeGreaterThanOrEqual(4.5);
     });
   }
+});
+
+// ---- final fix wave: copy that states what the rules now do -------------------------------------------
+
+import { KILL_SWITCH_COPY, SCHEDULE_NOTE, SLOT_RULE } from './rules';
+
+describe('copy states the real rules', () => {
+  it('the slot rule says one free day per channel, not "the next slot" (migration 0006 free_slot)', () => {
+    expect(SLOT_RULE).toMatch(/first free/i);
+    expect(SLOT_RULE).toMatch(/no post/i);
+    expect(SLOT_RULE).not.toMatch(/3rd clip/);
+  });
+  it('the schedule note keeps the 2-a-day cap and says a chosen time posts within about 3 hours', () => {
+    expect(SCHEDULE_NOTE).toMatch(/2 posts per channel per day/);
+    expect(SCHEDULE_NOTE).toMatch(/within about 3 hours/);
+  });
+  it('the kill switch stops posting as well as spend (the spec: "stops generation and posting")', () => {
+    expect(KILL_SWITCH_COPY.stopButton).toBe('Stop all new spend and posting');
+    expect(KILL_SWITCH_COPY.on).toMatch(/nothing is generated or posted/i);
+    expect(KILL_SWITCH_COPY.today).toMatch(/nothing is generated or posted/i);
+    expect(KILL_SWITCH_COPY.toastOn).toMatch(/nothing is generated or posted/i);
+    for (const text of Object.values(KILL_SWITCH_COPY)) expect(text).not.toMatch(/posting of approved clips carries on/i);
+  });
+  it('the pages use the shared copy, not their own wording', () => {
+    const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8');
+    expect(read('../pages/Budget.tsx')).toContain('KILL_SWITCH_COPY');
+    expect(read('../pages/Today.tsx')).toContain('KILL_SWITCH_COPY.today');
+    expect(read('../pages/Queue.tsx')).toContain('SCHEDULE_NOTE');
+    expect(read('../pages/Budget.tsx')).not.toMatch(/Posting of approved clips carries on/);
+    expect(read('../pages/Today.tsx')).not.toMatch(/no new clips are generated/);
+  });
+});
+
+describe('sign-in never creates an account (the only owner is already in)', () => {
+  it('Login asks for an OTP with shouldCreateUser: false', () => {
+    const login = readFileSync(new URL('../Login.tsx', import.meta.url), 'utf8');
+    expect(login).toMatch(/signInWithOtp\(\{[\s\S]*shouldCreateUser: false/);
+  });
 });

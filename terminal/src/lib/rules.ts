@@ -97,7 +97,11 @@ export async function approveAll(
  * 1. A deep link (#/queue/<id>) not applied yet wins once its clip is in the queue (it stays pending
  *    while the queue loads).
  * 2. Otherwise the clip being viewed stays, whatever reloads happen (Realtime, focus, the minute poll).
- * 3. Otherwise (nothing chosen, or the clip left the queue) the first clip; null for an empty queue.
+ * 3. Otherwise, when the clip being viewed left the queue (approved, rejected, regenerated, or gone in a
+ *    Realtime reload), the clip that took its place: `ids[min(lastIndex, ids.length - 1)]`, where
+ *    `lastIndex` is the position the viewed clip had. Approving clip 2 of 3 lands on the former clip 3
+ *    (now 2 of 2); removing the last clip lands on the new last one.
+ * 4. Nothing chosen yet: the first clip. An empty queue is null.
  * Returns the id to show and the deep link now counted as applied.
  */
 export function nextCurrentId(s: {
@@ -105,14 +109,40 @@ export function nextCurrentId(s: {
   currentId: string | null;
   focus: string | null;
   appliedFocus: string | null;
+  lastIndex: number;
 }): { id: string | null; appliedFocus: string | null } {
   if (s.focus && s.focus !== s.appliedFocus && s.ids.includes(s.focus)) return { id: s.focus, appliedFocus: s.focus };
   if (s.currentId && s.ids.includes(s.currentId)) return { id: s.currentId, appliedFocus: s.appliedFocus };
+  if (s.currentId && s.ids.length) {
+    const at = Math.min(Math.max(s.lastIndex, 0), s.ids.length - 1);
+    return { id: s.ids[at] ?? null, appliedFocus: s.appliedFocus };
+  }
   return { id: s.ids[0] ?? null, appliedFocus: s.appliedFocus };
 }
 
-/** What one approval does with the slot: the publisher posts at most 2 per channel per London day. */
-export const SLOT_RULE = 'Each posts at its next slot; a 3rd clip for the same character that day waits for the slot after';
+/**
+ * What one approval does with the slot (migration 0006 free_slot, planning.free_slot): the first cadence slot
+ * on a day none of the clip's channels already has a post, so two approved clips never share a day. The
+ * publisher still posts at most 2 per channel per London day.
+ */
+export const SLOT_RULE = 'Each posts at the first free slot: the next posting day on which the channel has no post yet';
+
+/** Under the time picker: the daily cap, and when a time you chose yourself actually goes out. */
+export const SCHEDULE_NOTE =
+  'At most 2 posts per channel per day: a third waits for the next free slot. A time outside the evening posting window goes out within about 3 hours of it.';
+
+/** The kill switch stops generation AND posting (spec): every place that names it uses this wording. */
+export const KILL_SWITCH_COPY = {
+  stopButton: 'Stop all new spend and posting',
+  stopArming: 'Tap again to stop all spend and posting',
+  resumeButton: 'Resume spending and posting',
+  resumeArming: 'Tap again to resume spending and posting',
+  on: 'On. Nothing is generated or posted until you switch it off: the daily run makes nothing, and approved clips wait in their slots and go out once it is off.',
+  off: 'Off. The daily run may reserve credits up to the cap, and approved clips post at their slots.',
+  toastOn: 'Kill switch on: nothing is generated or posted',
+  toastOff: 'Kill switch off: the daily run and posting resume',
+  today: 'Kill switch is on: nothing is generated or posted until you switch it off.',
+} as const;
 
 /** A caption or hook edit for approve_clip: the trimmed text when it changed, else null (keep). Never ''. */
 export function captionEdit(value: string, original: string | null): string | null {

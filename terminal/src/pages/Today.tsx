@@ -6,7 +6,7 @@ import { AutopilotSwitch, Flap, Livery, PlatformCode, Section, Skeleton, Spinner
 import { clipCode, formatCountdown, formatCredits, londonDate, platformName } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
 import { useApproveAll } from '../lib/actions';
-import { boardRows, selectApprovable, spendState, type BoardRow } from '../lib/rules';
+import { KILL_SWITCH_COPY, boardRows, selectApprovable, spendState, type BoardRow } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import type { Channel } from '../lib/types';
 
@@ -230,7 +230,7 @@ function SpendLine() {
       </div>
       {b.kill_switch && (
         <p className="small" style={{ margin: 0, color: 'var(--red)' }}>
-          Kill switch is on: no new clips are generated until you switch it off.
+          {KILL_SWITCH_COPY.today}
         </p>
       )}
     </Section>

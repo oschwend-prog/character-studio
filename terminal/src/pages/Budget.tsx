@@ -4,7 +4,7 @@ import { OctagonPause, Play } from 'lucide-react';
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { Section, Skeleton, Spinner } from '../components/ui';
 import { formatCredits } from '../lib/format';
-import { spendState } from '../lib/rules';
+import { KILL_SWITCH_COPY, spendState } from '../lib/rules';
 import { useStudio } from '../lib/store';
 
 const SERIES: Record<string, string> = { biscuit: 'var(--series-biscuit)', reginald: 'var(--series-reginald)' };
@@ -56,7 +56,7 @@ export function Budget({ account }: { account?: ReactNode }) {
     }
     setArming(false);
     const next = !b.kill_switch;
-    void run('kill', () => backend.setBudget(null, next), next ? 'Kill switch on: no new spend' : 'Kill switch off: the daily run may spend again');
+    void run('kill', () => backend.setBudget(null, next), next ? KILL_SWITCH_COPY.toastOn : KILL_SWITCH_COPY.toastOff);
   };
   const total = b.by_character.reduce((t, c) => t + c.committed, 0);
 
@@ -166,9 +166,7 @@ export function Budget({ account }: { account?: ReactNode }) {
       <Section id="kill" title="Kill switch">
         <div className={`panel kill${b.kill_switch ? ' on' : ''}`}>
           <span>
-            {b.kill_switch
-              ? 'On. No new credits are reserved: the daily run makes nothing until you switch it off. Posting of approved clips carries on.'
-              : 'Off. The daily run may reserve credits up to the cap.'}
+            {b.kill_switch ? KILL_SWITCH_COPY.on : KILL_SWITCH_COPY.off}
           </span>
           <button
             type="button"
@@ -179,7 +177,9 @@ export function Budget({ account }: { account?: ReactNode }) {
             aria-pressed={b.kill_switch}
           >
             {busy.has('kill') ? <Spinner /> : b.kill_switch ? <Play aria-hidden="true" /> : <OctagonPause aria-hidden="true" />}
-            {b.kill_switch ? (arming ? 'Tap again to resume spending' : 'Resume spending') : arming ? 'Tap again to stop all spend' : 'Stop all new spend'}
+            {b.kill_switch
+              ? arming ? KILL_SWITCH_COPY.resumeArming : KILL_SWITCH_COPY.resumeButton
+              : arming ? KILL_SWITCH_COPY.stopArming : KILL_SWITCH_COPY.stopButton}
           </button>
         </div>
       </Section>

@@ -6,7 +6,7 @@ import { Flap, Livery, Skeleton, Spinner, characterName } from '../components/ui
 import { clipCode, formatCredits, isoToLondonWall, londonStamp, londonWallToIso, platformName } from '../lib/format';
 import { href } from '../lib/hooks';
 import { useApproveAll } from '../lib/actions';
-import { SLOT_RULE, captionEdit, nextCurrentId, selectApprovable } from '../lib/rules';
+import { SCHEDULE_NOTE, SLOT_RULE, captionEdit, nextCurrentId, selectApprovable } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import type { QueueClip } from '../lib/types';
 
@@ -21,12 +21,16 @@ export function Queue({ focus }: { focus: string | null }) {
   // render of a deep link already shows that clip) and written back in a single effect.
   const [currentId, setCurrentId] = useState<string | null>(null);
   const appliedFocus = useRef<string | null>(null);
-  const shown = nextCurrentId({ ids, currentId, focus, appliedFocus: appliedFocus.current });
+  // Where the clip on screen sat in the queue: when it leaves (approve, reject, regenerate, Realtime) the
+  // clip that took its place is shown, not the first one.
+  const lastIndex = useRef(0);
+  const shown = nextCurrentId({ ids, currentId, focus, appliedFocus: appliedFocus.current, lastIndex: lastIndex.current });
+  const index = Math.max(0, shown.id ? ids.indexOf(shown.id) : 0);
   useEffect(() => {
     appliedFocus.current = shown.appliedFocus;
+    if (shown.id) lastIndex.current = index;
     if (shown.id !== currentId) setCurrentId(shown.id);
-  }, [shown.id, shown.appliedFocus, currentId]);
-  const index = Math.max(0, shown.id ? ids.indexOf(shown.id) : 0);
+  }, [shown.id, shown.appliedFocus, currentId, index]);
   const clip = queue[index];
   const go = (i: number) => {
     const next = queue[i];
@@ -234,7 +238,7 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
           <form className="inline-form" onSubmit={schedule} aria-label="Schedule this clip">
             <label className="label" htmlFor={`when-${clip.id}`}>Post at (London time)</label>
             <input id={`when-${clip.id}`} className="input" type="datetime-local" value={when} min={isoToLondonWall(Date.now())} onChange={(e) => setWhen(e.target.value)} required />
-            <span className="hint">At most 2 posts per channel per day: a third waits for the next slot.</span>
+            <span className="hint">{SCHEDULE_NOTE}</span>
             <div className="row">
               <button type="button" className="btn ghost" onClick={() => setMode(null)}>Cancel</button>
               <button type="submit" className="btn primary" disabled={working || Boolean(blocked)} aria-busy={working}>
