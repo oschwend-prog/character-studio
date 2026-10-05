@@ -52,9 +52,9 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - Turns ✅: `github: secret DATABASE_URL`, `... SUPABASE_URL`, `... SUPABASE_SERVICE_KEY`, `... POSTIZ_API_KEY`, `github: workflow publish enabled`, `github: workflow metrics enabled`, `repo: no secret files tracked`.
 
 ## 7. Approve the permission proposal
-- [ ] Read it: `diff .claude/settings.json .claude/settings.json.proposed`. It denies every publish/upload/update tool of the Higgsfield and vidIQ MCPs and allows what an unattended run needs (renders, playbook edits, the humanizer and last30days skills).
+- [ ] Read it: `diff .claude/settings.json .claude/settings.json.proposed`. It is an explicit allowlist: it names each Higgsfield and vidIQ tool the two skills call (no whole-server allow, no `uv run`), allows renders and playbook edits and the humanizer and last30days skills, and keeps a deny list of every publish, upload, update and account-linking tool as a backstop.
 - [ ] If happy: `cp .claude/settings.json.proposed .claude/settings.json`
-- Turns ✅: `permissions: proposed deny rules applied`.
+- Turns ✅: `permissions: proposal applied (explicit allows, deny rules)`. The check also fails while `settings.json` allows a whole MCP server or `Bash(uv run:*)`.
 
 ## 8. Vercel (the terminal)
 - [ ] Vercel > Add New > Project > import `oschwend-prog/character-studio`. Root Directory `terminal`. Production branch `build/slice1` (or `main` after the merge).

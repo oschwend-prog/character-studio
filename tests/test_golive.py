@@ -654,6 +654,76 @@ def test_a_proposal_with_no_deny_rules_fails_instead_of_passing_vacuously(world,
     assert "no deny rules" in c.detail and "git checkout -- .claude/settings.json.proposed" in c.fix
 
 
+@pytest.mark.parametrize(
+    "rule",
+    [
+        "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd",  # a whole server, bare
+        "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__*",  # a whole server, wildcard
+        "mcp__hf__*",
+        "mcp__hf__generate_*",  # a partial wildcard is still not an explicit allowlist
+        "mcp__plugin_claude-mem_mcp-search",
+    ],
+)
+def test_a_blanket_mcp_server_allow_fails_the_permissions_check(world, rule):
+    """An allowlist must name each tool: a whole-server allow lets every future tool of it run unattended."""
+    write_settings(world, {"permissions": {**PROPOSED["permissions"],
+                                           "allow": [*PROPOSED["permissions"]["allow"], rule]}})  # fmt: skip
+    c = world.run()["permissions"]
+    assert c.status == "fail" and rule in c.detail and "explicit" in c.detail
+    assert "cp .claude/settings.json.proposed .claude/settings.json" in c.fix
+
+
+@pytest.mark.parametrize("rule", ["Bash(uv run:*)", "Bash(uv run *)", "Bash(uv:*)"])
+def test_a_blanket_uv_run_allow_fails_the_permissions_check(world, rule):
+    write_settings(world, {"permissions": {**PROPOSED["permissions"],
+                                           "allow": [*PROPOSED["permissions"]["allow"], rule]}})  # fmt: skip
+    c = world.run()["permissions"]
+    assert c.status == "fail" and rule in c.detail
+
+
+def test_explicit_mcp_tool_allows_pass(world):
+    allow = [
+        *PROPOSED["permissions"]["allow"],
+        "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__generate_video",
+        "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_balance",
+        "Bash(uv run --version)",  # a fixed command is not a blanket
+    ]
+    write_settings(world, {"permissions": {**PROPOSED["permissions"], "allow": allow}})
+    assert world.run()["permissions"].status == "pass"
+
+
+def test_a_blanket_allow_in_the_proposal_itself_fails_too(world):
+    """The shipped proposal must not ask for it either: the fix is to restore the proposal, not to cp it."""
+    bad = {"permissions": {**PROPOSED["permissions"], "allow": [*PROPOSED["permissions"]["allow"], "mcp__hf"]}}
+    (world.root / ".claude" / "settings.json.proposed").write_text(json.dumps(bad))
+    write_settings(world, bad)
+    c = world.run()["permissions"]
+    assert c.status == "fail" and "mcp__hf" in c.detail and "proposal" in c.detail
+    assert "git checkout -- .claude/settings.json.proposed" in c.fix
+
+
+def test_the_shipped_proposal_is_an_explicit_allowlist_with_the_backstop_denies():
+    """The real file, read as the check reads it: no blanket allow, every tool of the skills named, denies kept."""
+    data = json.loads((ROOT / ".claude" / "settings.json.proposed").read_text())
+    allow, deny = data["permissions"]["allow"], data["permissions"]["deny"]
+    assert golive._too_broad(allow) == []
+    hf, vidiq = "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__", "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__"
+    for tool in ("generate_video", "generate_video_batch", "generate_image", "generate_image_batch", "jobs_wait",
+                 "media_import_url", "get_presets", "show_generations", "show_generation_by_ids", "transactions",
+                 "balance", "models_explore"):  # fmt: skip
+        assert hf + tool in allow, tool
+    for tool in ("vidiq_balance", "vidiq_instagram_tiktok_outlier_search", "vidiq_watch_shortform_content",
+                 "vidiq_job_poll", "vidiq_instagram_connected_accounts", "vidiq_instagram_owner_insights"):  # fmt: skip
+        assert vidiq + tool in allow, tool
+    for gone in ("Bash(uv run:*)", "Bash(ffmpeg:*)", "Bash(ffprobe:*)"):
+        assert gone not in allow
+    for rule in (hf + "tiktok_prepare_publish", hf + "execute_preset", hf + "deploy_website", hf + "publish_website",
+                 vidiq + "vidiq_instagram_publish_reel", vidiq + "vidiq_video_upload", vidiq + "vidiq_update_video",
+                 vidiq + "vidiq_update_video_thumbnail"):  # fmt: skip
+        assert rule in deny, rule  # the 8 original denies stay as the backstop
+    assert not (set(allow) & set(deny))  # nothing is both allowed and denied
+
+
 def test_unreadable_settings_json_fails(world):
     (world.root / ".claude" / "settings.json").write_text("{nope")
     c = world.run()["permissions"]

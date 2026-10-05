@@ -2,14 +2,27 @@
   "permissions": {
     "allow": [
       "Bash(bin/studio:*)",
-      "Bash(uv run:*)",
-      "Bash(ffmpeg:*)",
-      "Bash(ffprobe:*)",
       "Bash(curl:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd",
-      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__generate_video",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__generate_video_batch",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__generate_image",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__generate_image_batch",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__jobs_wait",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__media_import_url",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__get_presets",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__show_generations",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__show_generation_by_ids",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__transactions",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__balance",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__models_explore",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_balance",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_instagram_tiktok_outlier_search",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_watch_shortform_content",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_job_poll",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_instagram_connected_accounts",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_instagram_owner_insights",
       "Edit(renders/**)",
       "Edit(characters/*/playbook.md)",
       "Skill(humanizer:humanizer)",
@@ -23,7 +36,13 @@
       "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_instagram_publish_reel",
       "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_video_upload",
       "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_update_video",
-      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_update_video_thumbnail"
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_update_video_thumbnail",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__participate_in_contest",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__create_website",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__tiktok_connect",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__tiktok_reconnect",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_authorize_with_youtube",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25__vidiq_connect_youtube_channel"
     ]
   }
 }

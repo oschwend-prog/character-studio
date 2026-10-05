@@ -543,11 +543,11 @@ class _BadShape(ValueError):
     """A settings file that parses as JSON but is not shaped like Claude Code settings."""
 
 
-def _deny_rules(path: Path) -> list[str]:
-    """The ``permissions.deny`` strings of a settings file; [] when it has no ``permissions`` at all.
+def _rules(path: Path, key: str) -> list[str]:
+    """The ``permissions.<key>`` strings of a settings file; [] when it has no ``permissions`` at all.
 
     ``_BadShape`` (with a one-line reason) for a file that is not an object, a ``permissions`` that is not
-    an object, or a ``deny`` that is not a list.
+    an object, or a ``<key>`` that is not a list.
     """
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -557,14 +557,39 @@ def _deny_rules(path: Path) -> list[str]:
         return []
     if not isinstance(perms, dict):
         raise _BadShape(f"{path.name}: permissions is not an object")
-    rules = perms.get("deny", [])
+    rules = perms.get(key, [])
     if not isinstance(rules, list):
-        raise _BadShape(f"{path.name}: permissions.deny is not a list")
+        raise _BadShape(f"{path.name}: permissions.{key} is not a list")
     return [r for r in rules if isinstance(r, str)]
 
 
+def _deny_rules(path: Path) -> list[str]:
+    return _rules(path, "deny")
+
+
+_BLANKET_UV = re.compile(r"Bash\(uv(?:\s+run)?(?::\*|\s+\*)\)")
+
+
+def _too_broad(allow: Sequence[str]) -> list[str]:
+    """Allow rules that are not explicit: a whole MCP server, or any ``uv run`` command.
+
+    ``mcp__<server>`` and ``mcp__<server>__*`` (or any ``*`` in an ``mcp__`` rule) let every tool of a server
+    run unattended, including the ones it adds later; the unattended runs may call only the tools their
+    skills name. ``Bash(uv run:*)`` runs any code in the project. Neither is used by the skills.
+    """
+    broad = []
+    for rule in allow:
+        if rule.startswith("mcp__"):
+            _server, _, tool = rule[len("mcp__"):].partition("__")
+            if not tool or "*" in rule:
+                broad.append(rule)
+        elif _BLANKET_UV.fullmatch(rule.strip()):
+            broad.append(rule)
+    return broad
+
+
 def check_permissions(env: Env) -> Check:
-    title, cid = "permissions: proposed deny rules applied", "permissions"
+    title, cid = "permissions: proposal applied (explicit allows, deny rules)", "permissions"
     cp = "cp .claude/settings.json.proposed .claude/settings.json"
     proposed_path = env.root / ".claude" / "settings.json.proposed"
     settings_path = env.root / ".claude" / "settings.json"
@@ -578,6 +603,8 @@ def check_permissions(env: Env) -> Check:
     try:
         wanted = _deny_rules(proposed_path)
         have = set(_deny_rules(settings_path))
+        broad_proposed = _too_broad(_rules(proposed_path, "allow"))
+        broad_applied = _too_broad(_rules(settings_path, "allow"))
     except _BadShape as e:
         return Check(cid, title, "fail", str(e), "repair the file (the proposal is in git), then " + cp)
     except (OSError, ValueError) as e:
@@ -590,13 +617,27 @@ def check_permissions(env: Env) -> Check:
             cid, title, "fail", ".claude/settings.json.proposed lists no deny rules (nothing to check against)",
             "restore it: git checkout -- .claude/settings.json.proposed",
         )  # fmt: skip
-    missing = [r for r in wanted if r not in have]
-    if missing:
+    if broad_proposed:
         return Check(
-            cid, title, "fail", f"missing {len(missing)} deny rule{'s' if len(missing) != 1 else ''}: {_more(missing)}",
+            cid, title, "fail",
+            f"the proposal itself is not an explicit allowlist (a whole MCP server or uv run): {_more(broad_proposed)}",
+            "restore it: git checkout -- .claude/settings.json.proposed",
+        )  # fmt: skip
+    missing = [r for r in wanted if r not in have]
+    problems = []
+    if missing:
+        problems.append(f"missing {len(missing)} deny rule{'s' if len(missing) != 1 else ''}: {_more(missing)}")
+    if broad_applied:
+        problems.append(
+            f"settings.json allows more than the explicit tools the skills call (whole MCP server or uv run): "
+            f"{_more(broad_applied)}"
+        )
+    if problems:
+        return Check(
+            cid, title, "fail", "; ".join(problems),
             f"read the diff (diff .claude/settings.json .claude/settings.json.proposed), then {cp}",
         )  # fmt: skip
-    return Check(cid, title, "pass", f"all {len(wanted)} deny rules present")
+    return Check(cid, title, "pass", f"all {len(wanted)} deny rules present, allow rules are explicit")
 
 
 # ---- (h) tracked secret files ----------------------------------------------------------------------
