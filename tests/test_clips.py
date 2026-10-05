@@ -46,7 +46,7 @@ def add_source(store: MemoryStore) -> Source:
     """A clean, Drop-in eligible inbox source (what a dropin clip would really be made from)."""
     return store.add_source(
         Source(kind=SourceKind.owner_inbox, body=Body.biped, bodies=1, duration_s=8.0,
-               has_watermark=False, has_overlay=False, other_people=0)
+               has_watermark=False, has_overlay=False, other_people=0, has_minors=False)
     )
 
 
@@ -321,6 +321,24 @@ def test_missing_features_rejected():
     assert "audio_arm" in str(err.value) and "prop" in str(err.value)
     assert "format_id" not in str(err.value)  # only what is missing
     assert store.list_clips() == []
+
+
+@pytest.mark.parametrize("arm", ["in_app", "ai_beat"])
+def test_the_music_tag_is_checked_when_present(arm):
+    store = make_store()
+    clip = new_clip(store, "biscuit", None, Mode.dropin, {**FEATURES, "music": arm})
+    assert clip.features["music"] == arm
+    with pytest.raises(ValueError, match="music"):
+        new_clip(store, "biscuit", None, Mode.dropin, {**FEATURES, "music": "spotify"})
+    assert len(store.list_clips()) == 1
+
+
+def test_original_audio_is_only_for_a_dropin():
+    """music "original" keeps the Genjutsu output's own audio: it exists only for a Drop-in."""
+    store = make_store()
+    assert new_clip(store, "biscuit", None, Mode.dropin, {**FEATURES, "music": "original"}).features["music"] == "original"
+    with pytest.raises(ValueError, match="original"):
+        new_clip(store, "biscuit", None, Mode.recreate, {**FEATURES, "music": "original"})
 
 
 def test_a_tag_without_a_value_counts_as_missing():

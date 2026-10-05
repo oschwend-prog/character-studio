@@ -75,7 +75,7 @@ import typer
 from studio.captions import compose_content
 from studio.cli_support import emit, fail, open_store, parse_when, text_option
 from studio.config import now_london
-from studio.models import Clip, ClipState, Mode, Post
+from studio.models import MUSIC_ARMS, Clip, ClipState, Mode, Post
 from studio.planning import accounts_for_clip, free_slot, taken_days
 from studio.store import DuplicatePost, Store, require_aware
 
@@ -234,6 +234,11 @@ def new_clip(
     missing = sorted(k for k in REQUIRED_FEATURES if features.get(k) is None)
     if missing:
         raise ValueError(f"missing feature tags: {', '.join(missing)}")
+    music = features.get("music")
+    if music is not None and music not in MUSIC_ARMS:
+        raise ValueError(f"features['music'] must be one of {', '.join(MUSIC_ARMS)}, got {music!r}")
+    if music == "original" and mode is not Mode.dropin:
+        raise ValueError("features['music'] original (keep the generation's own audio) only applies to a dropin clip")
     if character_slug not in {c.slug for c in store.characters()}:
         raise ValueError(f"unknown character {character_slug!r}")
     if source_id is not None and source_id not in {s.id for s in store.list_sources()}:

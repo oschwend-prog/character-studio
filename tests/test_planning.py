@@ -1,6 +1,7 @@
 import itertools
 import json
 import re
+from pathlib import Path
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -28,7 +29,9 @@ from studio.planning import (
     DueClip,
     accounts_for_clip,
     choose_mode,
+    choose_music,
     dropin_ratio,
+    estimate_credits,
     plan_today,
     slot_for,
 )
@@ -94,7 +97,7 @@ def clean_source(store: MemoryStore, body: Body = Body.quadruped, **overrides) -
     """A clean Drop-in source; each one is created a minute after the previous (so ranking is stable)."""
     fields = dict(
         kind=SourceKind.owner_inbox, body=body, bodies=1, duration_s=8.0,
-        has_watermark=False, has_overlay=False, other_people=0,
+        has_watermark=False, has_overlay=False, other_people=0, has_minors=False,
         created_at=datetime(2026, 9, 1, tzinfo=timezone.utc) + timedelta(minutes=next(_source_clock)),
     ) | overrides
     return store.add_source(Source(**fields))
@@ -255,7 +258,7 @@ def test_plan_may_spend_exactly_up_to_the_cap():
 
 
 def test_plan_stops_at_the_first_clip_that_does_not_fit():
-    # biscuit (19:00, recreate 160) does not fit in 150; reginald's cheaper Drop-in (145) would,
+    # biscuit (19:00, recreate 160) does not fit in 150; reginald's cheaper Drop-in (91) would,
     # but the plan stops adding at the first refusal instead of skipping ahead.
     store = make_store(cap=150)
     clean_source(store, Body.biped)
@@ -268,7 +271,7 @@ def test_est_credits_follow_the_mode():
     clean_source(store, Body.biped)  # only reginald has a Drop-in source
     by_slug = {d.character_slug: d for d in plan_today(store, TUE)}
     assert (by_slug["biscuit"].mode, by_slug["biscuit"].est_credits) == (R, 160)
-    assert (by_slug["reginald"].mode, by_slug["reginald"].est_credits) == (D, 145)
+    assert (by_slug["reginald"].mode, by_slug["reginald"].est_credits) == (D, 91)  # 8 s, the original audio
 
 
 # ---- slots ------------------------------------------------------------------------------
@@ -334,7 +337,7 @@ def test_dropin_chosen_when_clean_source_and_under_share():
     history(store, tiktok, [D, R, R, D, R, R, R, D, R, R])  # 3 of 10 = 0.3 < 0.70
     assert choose_mode(store, character(store, "biscuit")) is D
     (due,) = [d for d in plan_today(store, TUE) if d.character_slug == "biscuit"]
-    assert (due.mode, due.est_credits, due.source_candidates) == (D, 145, [src.id])
+    assert (due.mode, due.est_credits, due.source_candidates) == (D, 91, [src.id])
 
 
 def test_dropin_with_no_history_counts_as_ratio_zero():
@@ -348,13 +351,21 @@ def test_recreate_without_a_dropin_eligible_source():
     store = make_store()
     biscuit = character(store, "biscuit")
     assert choose_mode(store, biscuit) is R  # no source at all
-    clean_source(store, has_watermark=None, has_overlay=None, other_people=None)  # unchecked
+    clean_source(store, has_watermark=None, has_overlay=None, other_people=None, has_minors=None)  # unchecked
     clean_source(store, kind=SourceKind.synthetic)
     clean_source(store, has_watermark=True)
     clean_source(store, has_overlay=True)
-    clean_source(store, other_people=1)
+    clean_source(store, has_minors=True)  # a child in the clip
+    clean_source(store, has_minors=None)  # watermark/overlay checked, the child question never asked
     clean_source(store, body=Body.biped)  # clean, but the wrong body for a dachshund
     assert choose_mode(store, biscuit) is R
+
+
+def test_people_in_the_background_do_not_stop_a_dropin():
+    store = make_store()
+    src = clean_source(store, other_people=3)  # owner decision 2026-10-05: background people are allowed
+    (due,) = [d for d in plan_today(store, TUE) if d.character_slug == "biscuit"]
+    assert (due.mode, due.source_candidates) == (D, [src.id])
 
 
 def test_recreate_when_tiktok_is_at_or_over_its_share():
@@ -419,7 +430,7 @@ def test_ratio_counts_each_account_separately_and_ignores_clips_without_a_post()
     assert dropin_ratio(store, insta) == 1.0
 
 
-def test_choose_mode_looks_at_tiktok_only():
+def test_choose_mode_looks_at_tiktok_only_while_it_is_connected():
     store = make_store()
     clean_source(store)
     history(store, account(store, "biscuit", Platform.instagram), [D] * 10)  # IG way over 0.40
@@ -439,14 +450,32 @@ def test_choose_mode_uses_the_accounts_own_share(share, expected):
     assert choose_mode(store, character(store, "biscuit")) is expected
 
 
-def test_unconnected_or_missing_tiktok_account_means_recreate():
-    for store in (make_store(connected=False), make_store(unconnected=(Platform.tiktok,))):
-        clean_source(store)
-        assert choose_mode(store, character(store, "biscuit")) is R
+def test_no_connected_account_at_all_means_recreate():
+    store = make_store(connected=False)
+    clean_source(store)
+    assert choose_mode(store, character(store, "biscuit")) is R
 
     bare = MemoryStore(characters=[Character(slug="biscuit", name="Biscuit", bodies=[Body.quadruped])])
     clean_source(bare)
     assert choose_mode(bare, character(bare, "biscuit")) is R
+
+
+def test_a_character_with_only_instagram_connected_is_judged_on_its_instagram_account():
+    """Both launch characters have no TikTok account yet: Drop-in must still be the default on Instagram.
+
+    The lead account is TikTok when connected, else Instagram, so an Instagram-only character is not stuck on
+    Recreate, and the weekly review's Instagram guard (share cut to 0.20) still steers its mode.
+    """
+    store = make_store(unconnected=(Platform.tiktok,))
+    clean_source(store)
+    insta = account(store, "biscuit", Platform.instagram)
+    assert choose_mode(store, character(store, "biscuit")) is D  # no history: ratio 0 is under the 0.40 share
+    history(store, insta, [D] * 5 + [R] * 5)  # 0.5: not under 0.40
+    assert choose_mode(store, character(store, "biscuit")) is R
+    store.update_account(insta.id, dropin_share=1.0)
+    assert choose_mode(store, character(store, "biscuit")) is D
+    store.update_account(insta.id, dropin_share=0.2)  # what the guard writes
+    assert choose_mode(store, character(store, "biscuit")) is R
 
 
 def test_source_candidates_are_ranked_for_the_chosen_mode():
@@ -472,6 +501,139 @@ def test_source_candidates_are_ranked_for_the_chosen_mode():
 def test_recreate_with_no_source_has_no_candidates():
     (biscuit,) = [d for d in plan_today(make_store(), TUE) if d.character_slug == "biscuit"]
     assert (biscuit.mode, biscuit.source_candidates) == (R, [])
+
+
+# ---- the cost model: Drop-in is priced per second of the trimmed source (owner decision 2026-10-05) ------------
+
+
+def test_estimate_credits_prices_a_dropin_per_second_plus_stills_and_the_optional_beat():
+    assert estimate_credits(D, 8, "original") == 91  # ceil(8 x 11) + 3: the Genjutsu output's own audio costs nothing extra
+    assert estimate_credits(D, 8, "in_app") == estimate_credits(D, 8, "original")  # a silent master costs the same
+    assert estimate_credits(D, 8, "ai_beat") == 121  # + the ~30 credit Seedance beat render
+    assert estimate_credits(D, 6, "in_app") == 69
+    assert estimate_credits(D, 9, "ai_beat") == 132
+    assert estimate_credits(D, 7.3, "in_app") == 84  # 80.3 rounds up to 81
+    assert estimate_credits(D) == 91  # defaults: 8 s, the original audio
+    assert estimate_credits("dropin", 8) == 91
+
+
+def test_estimate_credits_keeps_recreate_at_160_whatever_the_seconds_or_music():
+    assert estimate_credits(R) == estimate_credits("recreate", 3, "in_app") == estimate_credits(R, 12, "ai_beat") == 160
+
+
+def test_estimate_credits_agrees_with_the_terminals_on_the_shared_cases():
+    """The Make-it sheet shows "about N credits" from terminal/src/lib/parity-cases.json's rule: same numbers here."""
+    path = Path(__file__).resolve().parents[1] / "terminal" / "src" / "lib" / "parity-cases.json"
+    cases = json.loads(path.read_text())["credits"]
+    assert len(cases) >= 8
+    for c in cases:
+        assert estimate_credits(c["mode"], c["seconds"], c["music"]) == c["expect"], c
+
+
+@pytest.mark.parametrize("seconds", [0, -1, float("nan"), float("inf")])
+def test_estimate_credits_refuses_a_length_that_is_not_a_positive_number(seconds):
+    with pytest.raises(ValueError, match="seconds"):
+        estimate_credits(D, seconds)
+
+
+def test_estimate_credits_refuses_an_unknown_music_arm_or_mode():
+    with pytest.raises(ValueError, match="music"):
+        estimate_credits(D, 8, "spotify")
+    with pytest.raises(ValueError, match="mode"):
+        estimate_credits("remix", 8)
+
+
+def test_the_plan_keeps_the_original_audio_for_a_dropin_even_on_autopilot():
+    """Owner decision 2026-10-05: Drop-ins keep the original clip audio by default, so autopilot posts have sound too."""
+    store = make_store()
+    clean_source(store, Body.biped)
+    store.update_account(account(store, "reginald", Platform.tiktok).id, mode="auto")
+    by_slug = {d.character_slug: d for d in plan_today(store, TUE)}
+    assert (by_slug["reginald"].mode, by_slug["reginald"].music, by_slug["reginald"].est_credits) == (D, "original", 91)
+
+
+def test_a_recreate_clip_is_planned_with_the_beat_of_its_own_synthetic_driver():
+    by_slug = {d.character_slug: d for d in plan_today(make_store(), TUE)}
+    assert (by_slug["biscuit"].mode, by_slug["biscuit"].music, by_slug["biscuit"].est_credits) == (R, "ai_beat", 160)
+
+
+def test_choose_music_defaults_to_the_original_audio_whatever_the_posting_mode():
+    store = make_store()
+    reginald = character(store, "reginald")
+    assert choose_music(store, reginald) == "original"
+    store.update_account(account(store, "reginald", Platform.instagram).id, mode="auto")
+    assert choose_music(store, reginald) == "original"  # autopilot no longer forces an AI beat: the file has sound
+
+
+def test_choose_music_passes_the_owners_choice_through_and_refuses_nonsense():
+    store = make_store()
+    biscuit = character(store, "biscuit")
+    for arm in ("in_app", "original", "ai_beat"):
+        assert choose_music(store, biscuit, owner_music=arm) == arm  # in_app: the fallback when Instagram mutes a chart song
+    with pytest.raises(ValueError, match="music"):
+        choose_music(store, biscuit, owner_music="spotify")
+
+
+# ---- Drop-in first: a share of 1.00 means "no cap" (owner decision 2026-10-05) --------------------------
+
+
+@pytest.fixture
+def dropin_first():
+    """Both characters, both platforms at share 1.00 (what characters/*/refs.json now seeds)."""
+    return make_store(shares={Platform.tiktok: 1.0, Platform.instagram: 1.0})
+
+
+def test_with_share_one_a_character_with_an_eligible_source_always_gets_a_dropin(dropin_first):
+    store = dropin_first
+    clean_source(store)
+    tiktok = account(store, "biscuit", Platform.tiktok)
+    biscuit = character(store, "biscuit")
+    assert choose_mode(store, biscuit) is D  # no history
+    history(store, tiktok, [D] * 10)  # a full window of Drop-ins: ratio 1.0 is not "under" 1.0, but 1.00 is no cap
+    assert dropin_ratio(store, tiktok) == 1.0
+    assert choose_mode(store, biscuit) is D
+    (due,) = [d for d in plan_today(store, TUE) if d.character_slug == "biscuit"]
+    assert (due.mode, due.est_credits) == (D, 91)
+
+
+def test_with_share_one_and_no_eligible_source_it_is_recreate(dropin_first):
+    store = dropin_first
+    biscuit = character(store, "biscuit")
+    assert choose_mode(store, biscuit) is R  # no source at all
+    clean_source(store, has_minors=True)
+    clean_source(store, has_watermark=True)
+    clean_source(store, kind=SourceKind.synthetic)
+    assert choose_mode(store, biscuit) is R
+    (due,) = [d for d in plan_today(store, TUE) if d.character_slug == "biscuit"]
+    assert due.mode is R and due.est_credits == 160
+
+
+def test_with_share_one_every_connected_account_takes_the_dropin(dropin_first):
+    store = dropin_first
+    for platform in (Platform.tiktok, Platform.instagram):
+        history(store, account(store, "biscuit", platform), [D] * 10)
+    clip = store.add_clip(Clip(character_slug="biscuit", mode=D))
+    assert {a.platform for a in accounts_for_clip(store, clip)} == {Platform.tiktok, Platform.instagram}
+
+
+def test_a_share_just_under_one_is_still_a_cap():
+    store = make_store(shares={Platform.tiktok: 0.99, Platform.instagram: 0.99})
+    clean_source(store)
+    for platform in (Platform.tiktok, Platform.instagram):
+        history(store, account(store, "biscuit", platform), [D] * 10)  # ratio 1.0 >= 0.99
+    assert choose_mode(store, character(store, "biscuit")) is R
+    clip = store.add_clip(Clip(character_slug="biscuit", mode=D))
+    assert accounts_for_clip(store, clip) == []
+
+
+def test_the_instagram_guard_cut_still_works_after_a_share_of_one():
+    store = make_store(shares={Platform.tiktok: 1.0, Platform.instagram: 1.0})
+    insta = account(store, "biscuit", Platform.instagram)
+    history(store, insta, [D] * 4 + [R] * 6)  # 0.4
+    clip = store.add_clip(Clip(character_slug="biscuit", mode=D))
+    assert insta.id in {a.id for a in accounts_for_clip(store, clip)}
+    store.update_account(insta.id, dropin_share=0.2)  # review.apply_ig_guard
+    assert insta.id not in {a.id for a in accounts_for_clip(store, clip)}
 
 
 # ---- which accounts get the clip ----------------------------------------------------------
@@ -567,12 +729,13 @@ def test_plan_today_cli_prints_the_plan_as_json(cli_store):
     out = json.loads(r.output)
     assert out["date"] == "2026-10-06" and out["month"] == "2026-10" and out["weekday"] == "tue"
     assert out["kill_switch"] is False
-    assert (out["cap"], out["committed"], out["remaining"], out["estimated"]) == (6000, 0, 6000, 305)
+    assert (out["cap"], out["committed"], out["remaining"], out["estimated"]) == (6000, 0, 6000, 251)
     biscuit, reginald = out["due"]
     assert biscuit["character_slug"] == "biscuit" and biscuit["mode"] == "recreate"
     assert biscuit["est_credits"] == 160 and biscuit["source_candidates"] == []
     assert biscuit["slot"] == "2026-10-06T19:00:00+01:00"
-    assert reginald["mode"] == "dropin" and reginald["est_credits"] == 145
+    assert reginald["mode"] == "dropin" and reginald["est_credits"] == 91 and reginald["music"] == "original"
+    assert biscuit["music"] == "ai_beat"  # a Recreate clip carries the beat of its own synthetic driver
     assert len(reginald["source_candidates"]) == 1
     assert reginald["slot"] == "2026-10-06T19:30:00+01:00"
     assert out["deferred_over_cap"] == []
@@ -611,6 +774,21 @@ def test_plan_group_is_registered_once_and_has_today():
     assert r.exit_code == 0
     assert len(re.findall(r"^\W*plan\s", r.output, flags=re.MULTILINE)) == 1
     assert "today" in run("--help").output
+
+
+def test_plan_estimate_cli_prices_the_actual_trimmed_seconds():
+    out = json.loads(run("estimate", "--mode", "dropin", "--seconds", "7.2", "--music", "ai_beat").stdout)
+    assert out == {"mode": "dropin", "seconds": 7.2, "music": "ai_beat", "est_credits": 113}  # ceil(79.2) = 80, + 3 stills, + 30 beat
+    out = json.loads(run("estimate", "--mode", "dropin").stdout)
+    assert (out["seconds"], out["music"], out["est_credits"]) == (8.0, "original", 91)
+    assert json.loads(run("estimate", "--mode", "dropin", "--music", "in_app").stdout)["est_credits"] == 91
+    assert json.loads(run("estimate", "--mode", "recreate").stdout)["est_credits"] == 160
+
+
+def test_plan_estimate_cli_refuses_what_the_function_refuses():
+    assert run("estimate", "--mode", "dropin", "--seconds", "0").exit_code == 2
+    assert run("estimate", "--mode", "dropin", "--music", "spotify").exit_code == 2
+    assert run("estimate", "--mode", "remix").exit_code == 2
 
 
 # ---- only live characters are planned ---------------------------------------------------------------------

@@ -11,18 +11,25 @@
   those it skipped under ``skipped_not_live``, so a day with nothing due says why).
 
 Due characters are ordered by slot, then slug, and added one by one at an estimated cost
-(``EST_CREDITS``: recreate 160 including the amortised synthetic driver, drop-in 145 including its AI beat render). The plan
+(``estimate_credits``, the single source of truth: recreate 160 including the amortised synthetic driver; a
+drop-in is priced per second of the trimmed source, ``ceil(seconds x 11) + 3`` for the stills, plus 30 for an
+``ai_beat`` render, so 91 for the default 8 s keeping the original audio (or adding the song in the app) and 121
+with an AI beat). The plan
 **stops at the first clip that would take ``committed + Σ est`` past the monthly cap**: nothing
 after it is planned either, even if a cheaper clip would still fit (the daily run's rule is to
 stop on a budget refusal). ``studio plan today`` also reports those deferred clips.
 
 **Mode** (``choose_mode``): ``dropin`` when a Drop-in eligible source exists for the character and
-its TikTok account's rolling Drop-in ratio is under that account's ``dropin_share``; else
-``recreate``. The rolling ratio (``dropin_ratio``) is the fraction of Drop-ins among the last
-``ROLLING_WINDOW`` (10) clips that produced a post for the account, oldest to newest by the
-post's ``scheduled_for``. A post counts whatever its status (a failed post still used a slot in
-the window); with no history the ratio is 0. The comparison is strict: a ratio equal to the
-share is not under it, and a share of 0 turns Drop-in off for the account.
+its lead account's rolling Drop-in ratio is under that account's ``dropin_share``; else
+``recreate``. The lead account is the character's connected TikTok account, else its connected
+Instagram account (a character with neither is always ``recreate``). The rolling ratio
+(``dropin_ratio``) is the fraction of Drop-ins among the last ``ROLLING_WINDOW`` (10) clips that
+produced a post for the account, oldest to newest by the post's ``scheduled_for``. A post counts
+whatever its status (a failed post still used a slot in the window); with no history the ratio is 0.
+The comparison is strict: a ratio equal to the share is not under it, and a share of 0 turns Drop-in
+off for the account. **A share of 1 (or more) is the one exception: it means "no cap", Drop-in is the
+default for every video (owner decision 2026-10-05), so it is always under the share** even with ten
+Drop-ins in a row; the Instagram guard still cuts an account to 0.20.
 
 **Accounts** (``accounts_for_clip``): a recreate clip goes to every connected account of the
 character; a drop-in clip only to those whose own ratio is under their own share, so an Instagram
@@ -30,7 +37,7 @@ account at 5 Drop-ins in 10 (share 0.40) is skipped. The clip's own posts are le
 window, so asking again after the posts exist gives the same answer.
 
 Accounts with no ``postiz_integration_id`` are not connected yet, so planning skips them
-everywhere. A character without a connected TikTok account is therefore always ``recreate``.
+everywhere. A character with no connected account at all is therefore always ``recreate``.
 
 **Slots** (``slot_for``) are London wall-clock times built with ``zoneinfo``, never naive:
 19:00 is 19:00 whether it is GMT or BST that day. ``upcoming_slot`` is the first slot still ahead of a
@@ -42,11 +49,12 @@ reads ``due`` and ``kill_switch``), exit 2 for a cadence the caller must fix.
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any
 
 import typer
 
@@ -55,6 +63,7 @@ from studio.cli_support import emit, fail, open_store
 from studio.config import LONDON, now_london
 from studio.models import (
     DEFAULT_CADENCE,
+    MUSIC_ARMS,
     Account,
     Character,
     Clip,
@@ -66,10 +75,41 @@ from studio.models import (
 from studio.sources import rank_sources
 from studio.store import Store, require_aware
 
-# Estimated credits per clip. Recreate includes the ~70 credits of its synthetic driver, spread
-# over the clips made from it; Drop-in includes the ~30-credit Seedance beat render (its music is
-# never the source's soundtrack).
-EST_CREDITS: dict[Mode, int] = {Mode.recreate: 160, Mode.dropin: 145}
+# Estimated credits per clip (owner decision 2026-10-05: the Drop-in cost follows the length Genjutsu is paid for).
+# Recreate includes the ~70 credits of its synthetic driver, spread over the clips made from it. A Drop-in is
+# priced per second of the trimmed source (Genjutsu 1080p), plus the stills, plus the ~30-credit Seedance beat
+# render only when the music is ``ai_beat`` (``original``, the default, and ``in_app`` need none).
+RECREATE_CREDITS = 160
+DROPIN_CREDITS_PER_SECOND = 11
+DROPIN_STILLS_CREDITS = 3
+AI_BEAT_CREDITS = 30
+DEFAULT_DROPIN_SECONDS = 8.0
+DEFAULT_MUSIC = "original"  # owner decision 2026-10-05: Drop-ins keep the original clip audio by default
+RECREATE_MUSIC = "ai_beat"  # a Recreate clip's synthetic driver has no original audio: it carries our own beat
+
+
+def estimate_credits(
+    mode: Mode | str, seconds: float = DEFAULT_DROPIN_SECONDS, music: str = DEFAULT_MUSIC
+) -> int:
+    """Credits one clip is expected to cost. The only place the numbers live: the plan, ``plan estimate`` and
+    the daily run's reserve all call this (the terminal's Make-it sheet mirrors it in ``estimateCredits``).
+
+    Recreate is 160 whatever ``seconds`` and ``music``. A Drop-in is ``ceil(seconds x 11) + 3`` (+ 30 for
+    ``ai_beat``), so the default 8 s costs 91 and 121.
+    """
+    try:
+        mode = Mode(mode)
+    except ValueError:
+        raise ValueError(f"mode must be one of {[m.value for m in Mode]}, got {mode!r}") from None
+    if music not in MUSIC_ARMS:
+        raise ValueError(f"music must be one of {list(MUSIC_ARMS)}, got {music!r}")
+    if mode is Mode.recreate:
+        return RECREATE_CREDITS
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError(f"seconds must be a positive number, got {seconds!r}")
+    # round first: 0.1 x 11 style float noise must not push an exact figure up a whole credit
+    base = math.ceil(round(seconds * DROPIN_CREDITS_PER_SECOND, 6)) + DROPIN_STILLS_CREDITS
+    return base + (AI_BEAT_CREDITS if music == "ai_beat" else 0)
 
 ROLLING_WINDOW = 10
 
@@ -85,6 +125,7 @@ class DueClip:
     slot: datetime
     est_credits: int
     source_candidates: list[str] = field(default_factory=list)  # source ids, best first
+    music: str = DEFAULT_MUSIC  # original | in_app | ai_beat: what ``est_credits`` assumes (see ``choose_music``)
 
 
 @dataclass
@@ -223,19 +264,22 @@ def dropin_ratio(store: Store, account: Account, *, exclude_clip_id: str | None 
     return dropins / len(recent)
 
 
+NO_CAP_SHARE = 1.0  # a Drop-in share at or above this is "no cap": Drop-in is the default for every video
+
+
 def _under_share(ratio: float, account: Account) -> bool:
-    return ratio < float(account.dropin_share)
+    share = float(account.dropin_share)
+    return share >= NO_CAP_SHARE or ratio < share
 
 
-def _tiktok_account(store: Store, character: Character) -> Account | None:
-    return next(
-        (
-            a
-            for a in store.accounts(character.slug)
-            if a.platform is Platform.tiktok and _connected(a)
-        ),
-        None,
-    )
+def _lead_account(store: Store, character: Character) -> Account | None:
+    """The account whose Drop-in ratio decides the character's mode: connected TikTok, else connected Instagram."""
+    connected = [a for a in store.accounts(character.slug) if _connected(a)]
+    for platform in (Platform.tiktok, Platform.instagram):
+        found = next((a for a in connected if a.platform is platform), None)
+        if found is not None:
+            return found
+    return None
 
 
 def _pick_mode(store: Store, character: Character) -> tuple[Mode, list[str]]:
@@ -243,14 +287,28 @@ def _pick_mode(store: Store, character: Character) -> tuple[Mode, list[str]]:
     with store.transaction():
         dropin_sources = rank_sources(store, character, Mode.dropin, set())
         if dropin_sources:
-            tiktok = _tiktok_account(store, character)
-            if tiktok is not None and _under_share(dropin_ratio(store, tiktok), tiktok):
+            lead = _lead_account(store, character)
+            if lead is not None and _under_share(dropin_ratio(store, lead), lead):
                 return Mode.dropin, [s.id for s in dropin_sources]
         return Mode.recreate, [s.id for s in rank_sources(store, character, Mode.recreate, set())]
 
 
+def choose_music(store: Store, character: Character, owner_music: str | None = None) -> str:
+    """Where a Drop-in's music comes from: the owner's choice for the video (``owner_music``, from the Make-it
+    sheet), else ``original``: Drop-ins keep the original clip audio by default (owner decision 2026-10-05; it
+    comes through the Genjutsu output, or is muxed back in from the source), so an autopilot account posts a video
+    with sound too. ``in_app`` (a silent master, the owner adds the song in the Instagram app) is the fallback when
+    Instagram mutes a chart song; ``ai_beat`` is our own Seedance beat (+30 credits).
+    """
+    if owner_music is not None:
+        if owner_music not in MUSIC_ARMS:
+            raise ValueError(f"music must be one of {list(MUSIC_ARMS)}, got {owner_music!r}")
+        return owner_music
+    return DEFAULT_MUSIC
+
+
 def choose_mode(store: Store, character: Character) -> Mode:
-    """``dropin`` if a Drop-in eligible source exists and TikTok is under its share, else ``recreate``."""
+    """``dropin`` if a Drop-in eligible source exists and the lead account is under its share, else ``recreate``."""
     return _pick_mode(store, character)[0]
 
 
@@ -323,7 +381,9 @@ def _plan(store: Store, now: datetime) -> Plan:
     stopped = False
     for slot, character in todo:
         mode, candidates = _pick_mode(store, character)
-        clip = DueClip(character.slug, mode, slot, EST_CREDITS[mode], candidates)
+        # a Recreate clip's soundtrack is the beat of its own synthetic driver; only a Drop-in chooses music
+        music = choose_music(store, character) if mode is Mode.dropin else RECREATE_MUSIC
+        clip = DueClip(character.slug, mode, slot, estimate_credits(mode, music=music), candidates, music)
         if stopped or total + clip.est_credits > plan.cap:
             stopped = True
             plan.deferred.append(clip)
@@ -345,6 +405,24 @@ app = typer.Typer(
     "Prints JSON; exit 2 = cadence the caller must fix.",
     no_args_is_help=True,
 )
+
+
+@app.command("estimate")
+def estimate_command(
+    mode: Annotated[str, typer.Option("--mode", help="dropin or recreate.")],
+    seconds: Annotated[
+        float, typer.Option("--seconds", help="Length of the trimmed source Genjutsu is paid for (Drop-in).")
+    ] = DEFAULT_DROPIN_SECONDS,
+    music: Annotated[
+        str, typer.Option("--music", help="original (default), in_app or ai_beat (+30 credits).")
+    ] = DEFAULT_MUSIC,
+) -> None:
+    """The estimated credits of one clip: what the daily run reserves for the ACTUAL trimmed seconds."""
+    try:
+        credits = estimate_credits(mode, seconds, music)
+    except ValueError as e:
+        fail(str(e))
+    emit({"mode": mode, "seconds": seconds, "music": music, "est_credits": credits})
 
 
 @app.command("today")

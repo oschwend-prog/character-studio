@@ -1,0 +1,32 @@
+{
+  "_doc": "Cases both implementations must agree on: studio/favorites.py default_tier and studio/planning.py estimate_credits (tests/test_favorites.py, tests/test_planning.py) and the terminal's defaultTier and estimateCredits (terminal/src/lib/picks.test.ts). `days_ago` is relative to `now`; null = the post date is unknown.",
+  "now": "2026-10-05T09:00:00Z",
+  "tier": [
+    {"gallery": true, "outlier_x": 900, "days_ago": 2, "expect": "gallery"},
+    {"gallery": true, "outlier_x": null, "days_ago": null, "expect": "gallery"},
+    {"gallery": false, "outlier_x": 100, "days_ago": 3, "expect": "viral_now"},
+    {"gallery": false, "outlier_x": 1393, "days_ago": 14, "expect": "viral_now"},
+    {"gallery": false, "outlier_x": 5, "days_ago": 1, "expect": "rising"},
+    {"gallery": false, "outlier_x": 44.6, "days_ago": 4, "expect": "rising"},
+    {"gallery": false, "outlier_x": 4.9, "days_ago": 1, "expect": "viral_now"},
+    {"gallery": false, "outlier_x": 44.6, "days_ago": 6, "expect": "viral_now"},
+    {"gallery": false, "outlier_x": 3, "days_ago": 91, "expect": "iconic"},
+    {"gallery": false, "outlier_x": 2000, "days_ago": 400, "expect": "iconic"},
+    {"gallery": false, "outlier_x": 3, "days_ago": 90, "expect": "viral_now"},
+    {"gallery": false, "outlier_x": 1000, "days_ago": 2, "expect": "viral_now"},
+    {"gallery": false, "outlier_x": null, "days_ago": null, "expect": "viral_now"},
+    {"gallery": false, "outlier_x": 50, "days_ago": null, "expect": "viral_now"},
+    {"gallery": false, "outlier_x": null, "days_ago": 120, "expect": "iconic"}
+  ],
+  "credits": [
+    {"mode": "dropin", "seconds": 8, "music": "in_app", "expect": 91},
+    {"mode": "dropin", "seconds": 8, "music": "original", "expect": 91},
+    {"mode": "dropin", "seconds": 8, "music": "ai_beat", "expect": 121},
+    {"mode": "dropin", "seconds": 6, "music": "in_app", "expect": 69},
+    {"mode": "dropin", "seconds": 9, "music": "ai_beat", "expect": 132},
+    {"mode": "dropin", "seconds": 7.3, "music": "in_app", "expect": 84},
+    {"mode": "dropin", "seconds": 7.2, "music": "ai_beat", "expect": 113},
+    {"mode": "recreate", "seconds": 8, "music": "in_app", "expect": 160},
+    {"mode": "recreate", "seconds": 3, "music": "ai_beat", "expect": 160}
+  ]
+}
