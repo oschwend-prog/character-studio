@@ -58,6 +58,13 @@ posted within 7 days with an outlier of 5 or more is ``rising``; anything else i
 ``iconic`` after that (an unknown post date is ``viral_now``). ``fav list`` prints ``tier``, ``tier_label`` and
 ``tier_derived`` next to the stored proposal, and ``age_days``, ``velocity_per_day``, ``engagement_rate`` and ``share_rate``.
 
+**The long list** (owner request 2026-10-05, migration 0010; every field optional, ``validate_card`` checks the shapes):
+``recognisability`` (0-10, how instantly people know an iconic moment), ``original_views`` / ``original_url`` (the famous
+original's numbers and page), ``source_status`` and ``audio_risk`` (the clip and audio situation, one line each),
+``est_credits`` (the analyst's cost estimate), ``season`` (when it peaks), ``checks`` (short sentences: what to watch for)
+and ``source_candidates`` (clean clips that might drive a Drop-in). ``fav rescore`` (``rescore_pick``) re-assesses a pick
+that is already filed: new sub-scores and total, the card merged, the status kept; refused once production started.
+
 CLI (``studio fav ...``) prints JSON on stdout. Exit codes: 0 ok, 2 anything the caller must fix,
 4 ``fav decide`` found the pick needs an analyst decision (JSON on stdout says so).
 """
@@ -278,6 +285,15 @@ ANALYSIS_KEYS = (*ANALYSIS_REQUIRED, "main_subject", "best_window", "bpm", "note
 ANALYSIS_SUBJECT_MAX_CHARS = 80
 ANALYSIS_NOTES_MAX_CHARS = 500
 BPM_RANGE = (30.0, 300.0)
+# The long list's extra data (migration 0010): how famous an iconic moment is, the original's numbers, the clip and audio
+# situation, the season, the analyst's checks and the clean-source candidates. Every field optional.
+RECOGNISABILITY_MAX = 10
+LONGLIST_TEXT_KEYS = ("source_status", "audio_risk", "season")
+LONGLIST_TEXT_MAX_CHARS = 160
+CHECKS_MAX = 8
+CHECK_MAX_CHARS = 300
+SOURCE_CANDIDATES_MAX = 6
+SOURCE_CANDIDATE_WHY_MAX_CHARS = 300
 
 
 def is_gallery(proposal: Mapping[str, Any]) -> bool:
@@ -474,6 +490,53 @@ def _validate_analyst_fields(proposal: Mapping[str, Any]) -> None:
         raise ValueError(f"proposal.why must be a short paragraph (1-{WHY_MAX_CHARS} characters), got {w!r:.80}")
     if (a := proposal.get("analysis")) is not None:
         validate_analysis(a)
+    _validate_longlist_fields(proposal)
+
+
+def _validate_longlist_fields(proposal: Mapping[str, Any]) -> None:
+    """The long list's data of a pick (migration 0010): each optional, each refused with its own sentence.
+
+    ``recognisability`` 0-10 (how instantly people know an iconic moment), ``original_views`` and ``est_credits`` whole
+    numbers, ``original_url`` an https URL (only stored), ``source_status`` / ``audio_risk`` / ``season`` short texts,
+    ``checks`` a list of short sentences (what to watch for) and ``source_candidates`` a list of objects (clean clips that
+    might drive a Drop-in: free keys, but a ``why`` is a short text and ``views`` a whole number).
+    """
+    if (r := proposal.get("recognisability")) is not None and not (
+        (n := _finite(r)) is not None and 0 <= n <= RECOGNISABILITY_MAX
+    ):
+        raise ValueError(f"proposal.recognisability must be a number from 0 to {RECOGNISABILITY_MAX}, got {r!r:.40}")
+    for key in ("original_views", "est_credits"):
+        if (v := proposal.get(key)) is not None and not _whole(v):
+            raise ValueError(f"proposal.{key} must be a whole number of 0 or more, got {v!r:.40}")
+    if (url := proposal.get("original_url")) is not None:
+        _https_url(url, "original_url")
+    for key in LONGLIST_TEXT_KEYS:
+        if (t := proposal.get(key)) is not None and not _short_text(t, LONGLIST_TEXT_MAX_CHARS):
+            raise ValueError(f"proposal.{key} must be a short text (1-{LONGLIST_TEXT_MAX_CHARS} characters), got {t!r:.80}")
+    if (checks := proposal.get("checks")) is not None:
+        ok = (
+            isinstance(checks, list)
+            and len(checks) <= CHECKS_MAX
+            and all(_short_text(c, CHECK_MAX_CHARS) for c in checks)
+        )
+        if not ok:
+            raise ValueError(
+                f"proposal.checks must be a list of at most {CHECKS_MAX} short sentences (1-{CHECK_MAX_CHARS} characters), "
+                f"got {checks!r:.80}"
+            )
+    if (cands := proposal.get("source_candidates")) is not None:
+        ok = isinstance(cands, list) and len(cands) <= SOURCE_CANDIDATES_MAX and all(
+            isinstance(c, Mapping)
+            and bool(c)
+            and ("why" not in c or _short_text(c["why"], SOURCE_CANDIDATE_WHY_MAX_CHARS))
+            and ("views" not in c or c["views"] is None or _whole(c["views"]))
+            for c in cands
+        )
+        if not ok:
+            raise ValueError(
+                f"proposal.source_candidates must be a list of at most {SOURCE_CANDIDATES_MAX} objects (a why of "
+                f"1-{SOURCE_CANDIDATE_WHY_MAX_CHARS} characters, views a whole number), got {cands!r:.80}"
+            )
 
 
 def validate_analysis(analysis: Any) -> None:
@@ -675,6 +738,79 @@ def add_pick(
         store, url, platform, creator_handle, views, outlier_x, character_slug, proposal, origin, judged
     )
     return f
+
+
+# A pick may be re-assessed until production starts on it; `analysed`, `queued` and `made` picks are being made.
+RESCORABLE_STATUSES = frozenset({"new", "approved", "skipped"})
+
+
+def rescore_pick(
+    store: Store,
+    id: str,
+    proposal: Mapping[str, Any],
+    *,
+    freshness: float,
+    fit: float,
+    feasibility: float,
+    saturation: float,
+    views: int | None = None,
+    outlier_x: float | None = None,
+) -> Favorite:
+    """Re-assess a pick that is already filed (the long list): new sub-scores and total, the card merged, status kept.
+
+    ``fav pick`` returns a URL that is already in the list untouched (by design: a rescan never rescores); this is the
+    deliberate way to re-score one. Only a ``new``, ``approved`` or ``skipped`` pick (``analysed`` / ``queued`` /
+    ``made`` = production started: ``ValueError``). The proposal is merged: every key of ``proposal`` replaces the stored
+    one, every other stored key is kept, in particular the decision, a hold reason, the owner's choices (``owner_*``),
+    the clip check (``analysis``) and a breakdown: they change only when ``proposal`` names them. ``views`` and
+    ``outlier_x`` replace the stored numbers when given. The scores are worked out exactly like ``add_pick`` (an
+    ``iconic`` tier scores full virality), the merged card passes ``validate_needs`` and ``validate_card``, and when
+    ``proposal`` carries ``posted_at`` (and no ``velocity`` of its own) the velocity is worked out again from the views.
+    ``url`` / ``creator`` in ``proposal`` are pick identity, never stored in it: the url must be the pick's own, the
+    creator replaces the stored handle. Nothing is written when anything is refused.
+    """
+    f = store.get_favorite(id)
+    if f is None:
+        raise KeyError(id)
+    if f.status not in RESCORABLE_STATUSES:
+        raise ValueError(f"favourite {id} is {f.status}: production started, it can no longer be rescored")
+    incoming = dict(proposal)
+    url = incoming.pop("url", None)
+    if url is not None:
+        if not isinstance(url, str):
+            raise ValueError(f'"url" in the proposal must be a string, got {url!r:.60}')
+        canonical = gallery_key(f.proposal, url) if f.platform == GALLERY_PLATFORM else parse_video_url(url)[1]
+        if canonical != f.url:
+            raise ValueError(f"the proposal's url ({url!r:.80}) is not this pick's ({f.url})")
+    creator = incoming.pop("creator", None)
+    if creator is not None and not isinstance(creator, str):
+        raise ValueError(f'"creator" in the proposal must be a string, got {creator!r:.60}')
+    merged = {**f.proposal, **incoming}
+    if f.platform == GALLERY_PLATFORM and gallery_key(merged, None) != f.url:
+        raise ValueError(f"a gallery pick is keyed by its preset ({f.url}): its preset_id cannot change")
+    validate_needs(merged)
+    validate_card(merged)
+    if views is not None and (isinstance(views, bool) or not isinstance(views, int) or views < 0):
+        raise ValueError(f"views must be a whole number of 0 or more, got {views!r}")
+    if outlier_x is not None and not ((x := _finite(outlier_x)) is not None and x >= 0):
+        raise ValueError(f"outlier_x must be a number of 0 or more, got {outlier_x!r}")
+    seen = f.views if views is None else views
+    outlier = f.outlier_x if outlier_x is None else outlier_x
+    scores = score_pick(
+        outlier, seen, freshness, fit, feasibility, saturation, iconic=merged.get("tier") == "iconic"
+    )
+    total = scores.pop("total")
+    if "posted_at" in incoming and "velocity" not in incoming:
+        if (v := velocity_per_day(seen, posted_age_days(merged, now_london()))) is not None:
+            merged["velocity"] = v  # views per day since posting, as of the day it was rescored
+    fields: dict[str, Any] = {"proposal": merged, "scores": scores, "total_score": float(total)}
+    if views is not None:
+        fields["views"] = views
+    if outlier_x is not None:
+        fields["outlier_x"] = outlier_x
+    if creator is not None:
+        fields["creator_handle"] = creator.strip() or None
+    return store.update_favorite(id, **fields)
 
 
 # ---- listing and rule ------------------------------------------------------------------
@@ -964,6 +1100,69 @@ def pick_command(
     except ValueError as e:
         fail(str(e))
     emit(_fav_json(f, duplicate=not created))
+
+
+@app.command("rescore")
+def rescore_command(
+    id: Annotated[str, typer.Argument(help="Favourite id (a new, approved or skipped pick).")],
+    freshness: Annotated[float, typer.Option(min=0, max=10, help="Judged: 10 rising now, 6 evergreen, 3 past peak.")],
+    fit: Annotated[float, typer.Option(min=0, max=10, help="Judged: fit with the character's premise.")],
+    feasibility: Annotated[float, typer.Option(min=0, max=10, help="Judged: how easy for our pipeline.")],
+    proposal_file: Annotated[
+        Path,
+        typer.Option(
+            "--proposal-file",
+            help="JSON object: the card keys to set (merged into the stored card; the decision, a hold reason, the "
+            "owner's choices, the clip check and a breakdown are kept unless named).",
+        ),
+    ],
+    saturation: Annotated[
+        float | None,
+        typer.Option(
+            min=0, max=10,
+            help="Judged: 10 fresh, 5 template everywhere. Omit it when the card has saturation_count: "
+            "8+ copies = 3, 4-7 = 5, 1-3 = 8, none = 10.",
+        ),
+    ] = None,
+    views: Annotated[int | None, typer.Option(min=0, help="The views now (else the stored ones).")] = None,
+    outlier_x: Annotated[
+        float | None, typer.Option(min=0, help="Views divided by the creator's median, now (else the stored one).")
+    ] = None,
+) -> None:
+    """Re-assess a pick already filed (the long list): new scores, the card merged, the status kept.
+
+    Refused (exit 2) for an analysed, queued or made pick: production started.
+    """
+    try:
+        proposal_obj = json.loads(text_option(None, proposal_file, "proposal") or "")
+    except json.JSONDecodeError as e:
+        fail(f"--proposal-file is not valid JSON: {e}")
+    if not isinstance(proposal_obj, dict):
+        fail("--proposal-file must hold a JSON object")
+    store = open_store()
+    current = store.get_favorite(id)
+    if current is None:
+        fail(f"unknown favourite {id}")
+    if current.status not in RESCORABLE_STATUSES:
+        fail(f"favourite {id} is {current.status}: production started, it can no longer be rescored")
+    if saturation is None:
+        count = {**current.proposal, **proposal_obj}.get("saturation_count")
+        if count is None:
+            fail('--saturation is needed (or "saturation_count" in the card: the score is worked out from it)')
+        try:
+            saturation = saturation_score(count)
+        except ValueError as e:
+            fail(f"proposal.saturation_count: {e}")
+    try:
+        f = rescore_pick(
+            store, id, proposal_obj, freshness=freshness, fit=fit, feasibility=feasibility, saturation=saturation,
+            views=views, outlier_x=outlier_x,
+        )
+    except KeyError:
+        fail(f"unknown favourite {id}")
+    except ValueError as e:
+        fail(str(e))
+    emit(_fav_json(f))
 
 
 @app.command("list")
