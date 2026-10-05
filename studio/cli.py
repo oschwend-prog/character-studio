@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from studio import __version__, budget, clips, favorites, metrics, planning, publish, sources
+from studio import __version__, budget, clips, favorites, metrics, planning, publish, review, sources
 from studio.media import master, qa
 
 app = typer.Typer(
@@ -17,7 +17,6 @@ app = typer.Typer(
 # Sub-apps still to come (anonymous skeletons). A task that implements one removes its entry
 # here and registers its module's own ``app`` instead, as ``budget`` does below.
 SUBAPPS: dict[str, str] = {
-    "review": "Weekly review: lift table and KPI bars.",
     "db": "Database utilities.",
 }
 
@@ -30,6 +29,7 @@ app.add_typer(qa.app, name="qa")
 app.add_typer(master.app, name="master")
 app.add_typer(publish.app, name="publish")
 app.add_typer(metrics.app, name="metrics")
+app.add_typer(review.app, name="review")
 
 for _name, _help in SUBAPPS.items():
     app.add_typer(typer.Typer(help=_help, no_args_is_help=True), name=_name)

@@ -202,6 +202,8 @@ class Snapshot:
     watch_time_s: float | None = None
     follows: int | None = None
     non_follower_pct: float | None = None
+    skip_rate: float | None = None  # Instagram owner insights (migration 0002), as vidIQ reports it
+    watched_pct: float | None = None
 
 
 @dataclass(kw_only=True)

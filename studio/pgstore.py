@@ -352,6 +352,9 @@ class PostgresStore:
         filters = {} if character_slug is None else {"character_slug": character_slug}
         return self._list(_ACCOUNTS, filters, ["character_slug", "platform"])
 
+    def update_account(self, id: str, /, **kw: Any) -> Account:
+        return self._update(_ACCOUNTS, id, kw)
+
     def characters(self) -> list[Character]:
         return self._list(_CHARACTERS, {}, ["slug"])
 

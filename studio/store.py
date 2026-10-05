@@ -98,8 +98,10 @@ class Store(Protocol):
     def add_snapshot(self, s: Snapshot) -> Snapshot: ...
     def snapshots_for(self, post_id: str) -> list[Snapshot]: ...
 
-    # characters and accounts (read-only here; seeded by `studio seed`)
+    # characters and accounts (seeded by `studio seed`; the one write is update_account, used by
+    # the weekly review's Instagram guard to cut an account's dropin_share)
     def accounts(self, character_slug: str | None = None) -> list[Account]: ...
+    def update_account(self, id: str, /, **kw: Any) -> Account: ...
     def characters(self) -> list[Character]: ...
 
     # favourites (Viral Picks)
@@ -300,6 +302,10 @@ class MemoryStore:
             ]
             rows.sort(key=lambda a: (a.character_slug, a.platform))
             return [copy.deepcopy(a) for a in rows]
+
+    def update_account(self, id: str, /, **kw: Any) -> Account:
+        with self._lock:
+            return self._update(self._accounts, id, kw)
 
     def characters(self) -> list[Character]:
         with self._lock:

@@ -35,10 +35,10 @@ other keys of ``features`` are never touched.
 **Instagram insights.** ``ingest_ig_insights(store, rows)`` takes the rows of vidIQ's
 ``instagram_owner_insights`` (the weekly-review skill fetches them; ``studio metrics ingest-ig`` feeds
 them in), matches each to a post on ``platform_post_id`` and writes a snapshot of views / likes /
-comments / shares / saves / watch time. Fields we do not store (watched percentage, skip rate, the
-trial flag, ...) are ignored: the snapshot table has no column for them. Nullable values stay
-``None``; a row with no usable metric, or whose numbers equal the post's latest snapshot, writes
-nothing.
+comments / shares / saves / watch time / skip rate / watched percentage (the last two are the Reels
+KPIs the weekly review reports, migration 0002; stored in the units vidIQ reports). Fields we do not
+store (the trial flag, ...) are ignored. Nullable values stay ``None``; a row with no usable metric,
+or whose numbers equal the post's latest snapshot, writes nothing.
 
 CLI (``studio metrics ...``) prints JSON on stdout; exit 0 normally, exit 1 when a pull failed (the
 Action goes red; the window stays due, so the next run tries again), exit 2 for anything the caller must fix
@@ -130,9 +130,15 @@ IG_WATCH_TIME_S_KEYS: tuple[str, ...] = (
     "watchTimeSeconds", "watch_time_s", "watchTimeS", "watchTime", "watch_time",
 )  # fmt: skip
 IG_WATCH_TIME_MS_KEYS: tuple[str, ...] = ("watchTimeMs", "watch_time_ms")
+# The two Reels KPIs stored as reported (no unit conversion: VERIFY whether vidIQ sends a fraction
+# or a percentage; the weekly review only compares an account with its own earlier weeks).
+IG_SKIP_RATE_KEYS: tuple[str, ...] = ("skipRate", "skip_rate", "skipRatePct", "skip_rate_pct")
+IG_WATCHED_PCT_KEYS: tuple[str, ...] = (
+    "watchedPercentage", "watched_percentage", "watchedPct", "watched_pct", "watchedPercent",
+)  # fmt: skip
 
 _COUNT_FIELDS = ("views", "likes", "comments", "shares", "saves")
-_METRIC_FIELDS = (*_COUNT_FIELDS, "watch_time_s")
+_METRIC_FIELDS = (*_COUNT_FIELDS, "watch_time_s", "skip_rate", "watched_pct")
 
 
 class AnalyticsError(RuntimeError):
@@ -448,6 +454,8 @@ def _ig_metrics(row: dict[str, Any]) -> dict[str, Any]:
     if watch is None and (ms := _number(_first(row, IG_WATCH_TIME_MS_KEYS))) is not None:
         watch = ms / 1000
     out["watch_time_s"] = watch
+    out["skip_rate"] = _number(_first(row, IG_SKIP_RATE_KEYS))
+    out["watched_pct"] = _number(_first(row, IG_WATCHED_PCT_KEYS))
     return out
 
 

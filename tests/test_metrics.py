@@ -767,6 +767,7 @@ def test_ingest_maps_owner_metrics_into_a_snapshot(rig):
     assert snap.captured_at == NOW
     assert (snap.views, snap.likes, snap.comments, snap.shares, snap.saves) == (5000, 300, 20, 45, 80)
     assert snap.watch_time_s == 12345.5
+    assert snap.skip_rate == 0.37 and snap.watched_pct == 41.2
     assert snap.follows is None and snap.non_follower_pct is None
     assert out["ingested"] == [{"post_id": post.id, "platform_post_id": post.platform_post_id}]
 
@@ -820,9 +821,39 @@ def test_ingest_skips_rows_for_unknown_posts(rig):
     assert len(rig.snaps(post)) == 1
 
 
+def test_ingest_maps_skip_rate_and_watched_percentage_from_their_key_aliases(rig):
+    post = rig.post("@biscuit.ig")
+    ingest_ig_insights(rig.store, [ig_row(post, skip_rate=0.25, watched_percentage="55.5")], now=NOW)
+    (snap,) = rig.snaps(post)
+    assert (snap.skip_rate, snap.watched_pct) == (0.25, 55.5)
+    assert snap.views is None  # the two KPIs alone are a usable reading
+
+
+def test_ingest_leaves_unreported_skip_rate_and_watched_percentage_none_never_zero(rig):
+    post = rig.post("@biscuit.ig")
+    ingest_ig_insights(
+        rig.store, [ig_row(post, views=10, skipRate=None, watchedPercentage="n/a")], now=NOW
+    )
+    (snap,) = rig.snaps(post)
+    assert snap.skip_rate is None and snap.watched_pct is None
+    ingest_ig_insights(rig.store, [ig_row(post, views=11, skipRate=0, watchedPercentage=0)], now=NOW + D)
+    assert (rig.snaps(post)[-1].skip_rate, rig.snaps(post)[-1].watched_pct) == (0.0, 0.0)  # a real 0
+
+
+def test_ingest_treats_a_changed_skip_rate_as_new_information(rig):
+    post = rig.post("@biscuit.ig")
+    ingest_ig_insights(rig.store, [ig_row(post, views=100, skipRate=0.4)], now=NOW)
+    same = ingest_ig_insights(rig.store, [ig_row(post, views=100, skipRate=0.4)], now=NOW + D)
+    assert same["ingested"] == [] and len(rig.snaps(post)) == 1
+    ingest_ig_insights(rig.store, [ig_row(post, views=100, skipRate=0.3)], now=NOW + 2 * D)
+    assert [s.skip_rate for s in rig.snaps(post)] == [0.4, 0.3]
+
+
 def test_ingest_skips_a_row_with_no_metrics_at_all(rig):
     post = rig.post("@biscuit.ig")
-    out = ingest_ig_insights(rig.store, [ig_row(post, skipRate=0.4, caption="x")], now=NOW)
+    out = ingest_ig_insights(
+        rig.store, [ig_row(post, isPossibleTrial=True, caption="x")], now=NOW
+    )
     assert rig.snaps(post) == []
     assert out["empty"] == [{"post_id": post.id, "platform_post_id": post.platform_post_id}]
 

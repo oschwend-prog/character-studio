@@ -219,6 +219,38 @@ def test_snapshots_for_post_in_time_order():
     assert store.snapshots_for("other") == []
 
 
+def test_snapshot_keeps_skip_rate_and_watched_pct_and_none_means_unreported():
+    store, clip, tiktok, _ = seeded_store()
+    post = store.add_post(Post(clip_id=clip.id, account_id=tiktok.id, scheduled_for=NOW))
+    store.add_snapshot(Snapshot(post_id=post.id, captured_at=NOW, views=10, skip_rate=0.35, watched_pct=62.5))
+    store.add_snapshot(Snapshot(post_id=post.id, captured_at=NOW + timedelta(hours=1), views=20))
+    first, second = store.snapshots_for(post.id)
+    assert (first.skip_rate, first.watched_pct) == (0.35, 62.5)
+    assert second.skip_rate is None and second.watched_pct is None  # never 0
+
+
+def test_update_account_changes_dropin_share_and_returns_the_updated_copy():
+    store, _, tiktok, insta = seeded_store()
+    got = store.update_account(insta.id, dropin_share=0.20)
+    assert got.dropin_share == 0.20 and got.id == insta.id
+    assert {a.id: a.dropin_share for a in store.accounts()}[insta.id] == 0.20
+    assert {a.id: a.dropin_share for a in store.accounts()}[tiktok.id] == 0.70  # others untouched
+    got.dropin_share = 0.99  # a returned copy cannot mutate stored state
+    assert {a.id: a.dropin_share for a in store.accounts()}[insta.id] == 0.20
+
+
+def test_update_account_rejects_unknown_ids_fields_and_id_changes():
+    store, _, tiktok, _ = seeded_store()
+    with pytest.raises(KeyError):
+        store.update_account("nope", dropin_share=0.2)
+    with pytest.raises(TypeError):
+        store.update_account(tiktok.id, colour="red")
+    with pytest.raises(ValueError):
+        store.update_account(tiktok.id, id="other")
+    with pytest.raises(ValueError):
+        store.update_account(tiktok.id, mode="bogus")
+
+
 def test_accounts_and_characters():
     store, _, tiktok, insta = seeded_store()
     store.add_character(Character(slug="reginald", name="Reginald", bodies=[Body.biped]))

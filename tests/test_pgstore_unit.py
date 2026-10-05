@@ -16,7 +16,7 @@ import pytest
 from psycopg.types.json import Jsonb
 
 from studio.config import LONDON
-from studio.models import Clip, ClipState, Favorite, Mode, Post, PostStatus
+from studio.models import Account, Clip, ClipState, Favorite, Mode, Post, PostStatus, Snapshot
 from studio.pgstore import PostgresStore
 from studio.store import MemoryStore, Store
 
@@ -254,6 +254,43 @@ def test_update_binds_values_and_converts_enums(db):
     assert got.state is ClipState.approved
 
 
+def test_update_account_binds_the_share_and_returns_the_account(db):
+    uid = uuid.uuid4()
+    db.queue([{
+        "id": uid, "character_slug": "biscuit", "platform": "instagram", "handle": "@b.ig",
+        "postiz_integration_id": None, "mode": "approval", "dropin_share": 0.2,
+        "created_at": NOW,
+    }])
+    got = PostgresStore(DSN).update_account(str(uid), dropin_share=0.2)
+    query, params = db.statements[0]
+    assert query.startswith('update "studio"."accounts" set "dropin_share" = %s where id = %s')
+    assert params == [0.2, uid]
+    assert isinstance(got, Account) and got.dropin_share == 0.2 and got.id == str(uid)
+
+
+def test_update_account_of_unknown_id_raises_key_error(db):
+    db.queue([])
+    with pytest.raises(KeyError):
+        PostgresStore(DSN).update_account(str(uuid.uuid4()), dropin_share=0.2)
+
+
+def test_snapshot_insert_and_read_carry_skip_rate_and_watched_pct(db):
+    pid = uuid.uuid4()
+    row = {
+        "post_id": pid, "captured_at": NOW, "views": 100, "likes": None, "comments": None,
+        "shares": None, "saves": None, "watch_time_s": None, "follows": None,
+        "non_follower_pct": None, "skip_rate": 0.37, "watched_pct": 41.2,
+    }
+    db.queue([row])
+    got = PostgresStore(DSN).add_snapshot(
+        Snapshot(post_id=str(pid), captured_at=NOW, views=100, skip_rate=0.37, watched_pct=41.2)
+    )
+    query, params = db.statements[0]
+    assert '"skip_rate"' in query and '"watched_pct"' in query
+    assert 0.37 in params and 41.2 in params
+    assert (got.skip_rate, got.watched_pct) == (0.37, 41.2)
+
+
 def test_update_of_unknown_id_raises_key_error(db):
     db.queue([])
     with pytest.raises(KeyError):
@@ -290,7 +327,7 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
     proto_methods = [
         n for n, v in inspect.getmembers(Store, inspect.isfunction) if not n.startswith("_")
     ]
-    assert len(proto_methods) == 24  # 23 data methods + transaction()
+    assert len(proto_methods) == 25  # 24 data methods + transaction()
     for name in proto_methods:
         expected = inspect.signature(getattr(Store, name))
         for impl in (MemoryStore, PostgresStore):

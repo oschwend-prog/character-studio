@@ -6,7 +6,7 @@ owns the objects it creates and the ``authenticated`` role and ``auth.jwt()`` ex
     DATABASE_URL_TEST='postgresql://postgres:...@db.<ref>.supabase.co:5432/postgres' \
         uv run pytest tests/integration -v
 
-The fixture builds the full schema from ``supabase/migrations/0001_studio.sql`` with the
+The fixture builds the full schema from every ``supabase/migrations/*.sql`` (in order) with the
 schema renamed to ``studio_test`` (it never touches ``studio``) and drops it afterwards.
 """
 
@@ -39,11 +39,12 @@ DSN = os.environ.get("DATABASE_URL_TEST")
 pytestmark = pytest.mark.skipif(not DSN, reason="DATABASE_URL_TEST is not set")
 
 SCHEMA = "studio_test"
-MIGRATION = Path(__file__).resolve().parents[2] / "supabase" / "migrations" / "0001_studio.sql"
+MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
 
 
 def _ddl() -> str:
-    return re.sub(r"\bstudio\b", SCHEMA, MIGRATION.read_text())
+    text = "\n".join(f.read_text() for f in sorted(MIGRATIONS.glob("*.sql")))
+    return re.sub(r"\bstudio\b", SCHEMA, text)
 
 
 @pytest.fixture
@@ -163,6 +164,18 @@ def test_roundtrip_every_table(store):
     store.add_snapshot(Snapshot(post_id=post.id, captured_at=now + timedelta(hours=6), views=50, likes=5))
     snaps = store.snapshots_for(post.id)
     assert [s.views for s in snaps] == [10, 50] and snaps[0].likes is None
+    assert snaps[0].skip_rate is None and snaps[0].watched_pct is None  # 0002 columns, NULL = unreported
+    store.add_snapshot(
+        Snapshot(post_id=post.id, captured_at=now + timedelta(hours=12), views=60,
+                 skip_rate=0.37, watched_pct=41.2)
+    )
+    last = store.snapshots_for(post.id)[-1]
+    assert (last.skip_rate, last.watched_pct) == (0.37, 41.2)
+
+    insta = by_platform["instagram"]
+    assert store.update_account(insta.id, dropin_share=0.2).dropin_share == 0.2
+    with pytest.raises(ValueError):
+        store.update_account(insta.id, dropin_share=1.5)  # CHECK (dropin_share between 0 and 1)
 
     store.ledger_add(LedgerEntry(clip_id=clip.id, month="2026-10", kind="reserve", credits=115))
     assert [e.credits for e in store.ledger_month("2026-10")] == [115]
