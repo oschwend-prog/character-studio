@@ -41,14 +41,28 @@ master. The hook windows and the bug are already on the finished timeline.
 CLI: ``studio master build --spec <json> [--clip <id>]`` builds, runs the master QA and prints JSON; it
 exits 1 when the master has QA problems (the JSON says which) and 2 for anything the caller must fix.
 
-**The beat is ours, never the source's.** Third-party audio is never posted, and the generation of a
-Drop-in clip (and a library or inbox source file) carries the source's soundtrack. ``master build``
-therefore refuses (exit 2, nothing rendered) when ``audio`` is the same file as ``dance`` (same path or
-same bytes) or a file under an ``inbox`` folder (the owner's source drop), unless the clip is a
-``recreate`` clip made from a ``synthetic`` driver (Seedance renders it with our own beat in it). The
-clip comes from ``--clip <id>`` or ``clip_id`` in the spec (both: they must agree); without one the
-exception cannot be proved, so it does not apply. Any other ``audio`` file is not looked at: a Seedance
-beat render of its own (``seedance_2_5`` t2v with audio) is the way to get music for a Drop-in.
+**Music** (``MasterSpec.music``, owner decisions 2026-10-05): ``original`` is the default of a Drop-in: it keeps the
+Genjutsu output's own audio (the clip's original soundtrack) as ``audio``, mixed with the sting and loudness-normalised
+to -14 LUFS like any beat ("Drop-ins keep the original clip audio by default; never ADD third-party audio we sourced
+ourselves"). ``ai_beat`` mixes ``audio`` (a Seedance beat render of our own, or a Recreate clip's synthetic driver) the
+same way. ``in_app`` builds a **silent** AAC track (48 kHz stereo, no beat, no sting, no impact sfx; ``audio`` is not
+needed): the owner adds the song in the Instagram app, the fallback when Instagram mutes a chart song, and the master
+QA (``check_master(silent=True)``) skips the loudness rule for silence. A spec with no ``music`` is ``ai_beat``, what
+every spec written before this decision meant.
+
+**Never add the source's audio under a clip that did not carry it; keep the clip's own when ``music`` is original.**
+The generation of a Drop-in clip (and a library or inbox source file) carries the source's soundtrack. ``master
+build`` therefore refuses (exit 2, nothing rendered) when ``audio`` is the same file as ``dance`` (same path or same
+bytes) or a file under an ``inbox`` folder (the owner's source drop), unless the clip is a ``recreate`` clip made
+from a ``synthetic`` driver (Seedance renders it with our own beat in it), or the clip is a ``dropin`` clip marked
+``features.music == "original"`` (and its pick, ``features.fav_id``, does not say the owner chose another music in
+``proposal.owner_music``). An inbox file is refused even then: only the generation's own audio, never the raw
+source file. The clip comes from ``--clip <id>`` or ``clip_id`` in the spec (both: they must agree); without one the
+exception cannot be proved, so it does not apply. Any other ``audio`` file is not looked at: a Seedance beat render
+of its own (``seedance_2_5`` t2v with audio) is the way to get an ``ai_beat``.
+
+``studio master mux-audio`` puts a source clip's audio back under a Genjutsu output that lost it, aligned to the
+trimmed window (``studio.media.clipwork``).
 
 ``studio master upload <clip> <file>`` is the last step: it re-checks the file against the master spec
 (``--loop`` for an eye loop), uploads it to bucket ``clips`` at ``<character>/<clip id>.mp4`` (what
@@ -75,9 +89,9 @@ from PIL import Image
 
 from studio.cli_support import emit, fail, open_storage, open_store
 from studio.clips import set_fields
-from studio.media import overlays
+from studio.media import clipwork, overlays
 from studio.media.qa import QAError, check_master, probe
-from studio.models import Clip, Mode, Source, SourceKind
+from studio.models import MUSIC_ARMS, Clip, Mode, Source, SourceKind
 from studio.storage import Storage, StorageError
 from studio.store import Store
 
@@ -127,7 +141,7 @@ class MasterSpec:
     hook1: list[str]
     hook2: list[str]
     hook2_until_s: float
-    audio: Path
+    audio: Path | None  # None only with music "in_app" (a silent track is built instead)
     audio_offset_s: float
     out: Path
     intro_s: float = 0.8
@@ -137,6 +151,7 @@ class MasterSpec:
     enhancements: list[dict[str, Any]] = field(default_factory=list)
     preset: str = "slow"
     clip_id: str | None = None  # the clip this master is for: lets ``master build`` judge the audio source
+    music: str = "ai_beat"  # ai_beat | in_app | original (see the module docstring)
 
 
 # ---- enhancements: parsing ---------------------------------------------------------------------
@@ -474,7 +489,12 @@ def _boxed(png: Path, start: float = 0.0, end: float | None = None) -> Overlay:
 
 
 def _check_inputs(spec: MasterSpec) -> tuple[Path, Path | None]:
-    dance, audio = Path(spec.dance), Path(spec.audio)
+    if spec.music not in MUSIC_ARMS:
+        raise ValueError(f"music must be one of {', '.join(MUSIC_ARMS)}, got {spec.music!r}")
+    if spec.audio is None and spec.music != "in_app":
+        raise ValueError(f"audio is required unless music is in_app (the master is silent), got music {spec.music!r}")
+    dance = Path(spec.dance)
+    audio = Path(spec.audio) if spec.audio is not None else None
     closeup = Path(spec.closeup) if spec.closeup is not None else None
     for label, path in (("dance", dance), ("audio", audio), ("closeup", closeup)):
         if path is not None and not path.is_file():
@@ -567,24 +587,32 @@ def build_master(spec: MasterSpec) -> Path:
         )  # fmt: skip
         total_s = _duration(video)
 
-        # Audio: the beat fades into the outro and the sting lands just after the dance ends.
-        dance_end = total_s - outro_len
-        mix = mix_audio(
-            Path(spec.audio),
-            spec.audio_offset_s,
-            total_s=total_s,
-            sting_at_s=dance_end + STING_LAG_SECONDS if closeup else None,
-            impacts_at_s=[out_time(e.at_s, slow) for e in items if isinstance(e, ImpactSfx)],
-            out=work / "mix.wav",
-            work=work,
-            fade_out_at_s=dance_end - FADE_LEAD_SECONDS if closeup else None,
-        )
         finished = work / "master.mp4"
-        _ffmpeg(
-            "-i", video, "-i", mix, "-map", "0:v", "-map", "1:a", "-c:v", "copy",
-            "-af", _loudnorm_params(mix), "-c:a", "aac", "-b:a", "320k", "-ar", "48000",
-            "-shortest", "-movflags", "+faststart", finished,
-        )  # fmt: skip
+        if spec.music == "in_app":
+            # a silent AAC track: the owner adds the song in the Instagram app (no beat, sting or sfx to normalise)
+            _ffmpeg(
+                "-i", video, "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-map", "0:v", "-map", "1:a",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "320k", "-ar", "48000", "-t", f"{total_s:.3f}",
+                "-shortest", "-movflags", "+faststart", finished,
+            )  # fmt: skip
+        else:
+            # Audio: the beat fades into the outro and the sting lands just after the dance ends.
+            dance_end = total_s - outro_len
+            mix = mix_audio(
+                Path(spec.audio),
+                spec.audio_offset_s,
+                total_s=total_s,
+                sting_at_s=dance_end + STING_LAG_SECONDS if closeup else None,
+                impacts_at_s=[out_time(e.at_s, slow) for e in items if isinstance(e, ImpactSfx)],
+                out=work / "mix.wav",
+                work=work,
+                fade_out_at_s=dance_end - FADE_LEAD_SECONDS if closeup else None,
+            )
+            _ffmpeg(
+                "-i", video, "-i", mix, "-map", "0:v", "-map", "1:a", "-c:v", "copy",
+                "-af", _loudnorm_params(mix), "-c:a", "aac", "-b:a", "320k", "-ar", "48000",
+                "-shortest", "-movflags", "+faststart", finished,
+            )  # fmt: skip
         out.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(finished, out)
     return out
@@ -592,14 +620,15 @@ def build_master(spec: MasterSpec) -> Path:
 
 # ---- CLI ---------------------------------------------------------------------------------------
 
-_REQUIRED = ("dance", "audio", "out", "closeup")
-_DEFAULTS: dict[str, Any] = {"hook1": [], "hook2": [], "hook2_until_s": 0.0, "audio_offset_s": 0.0}
+_REQUIRED = ("dance", "out", "closeup")
+_DEFAULTS: dict[str, Any] = {"hook1": [], "hook2": [], "hook2_until_s": 0.0, "audio_offset_s": 0.0, "music": "ai_beat"}
 
 
 def spec_from_json(data: Any) -> MasterSpec:
     """A ``MasterSpec`` from a decoded JSON object. Raises ``ValueError`` listing what is wrong.
 
-    ``dance``, ``audio``, ``out`` and ``closeup`` (a path or ``null``) are required; hooks default
+    ``dance``, ``out`` and ``closeup`` (a path or ``null``) are required, and ``audio`` unless ``music`` is
+    ``in_app`` (a silent master); ``music`` defaults to ``ai_beat``. Hooks default
     to none, the offset to 0, and ``closeup_center`` / ``blue_eye_xy`` are required only with a
     close-up. ``hook1`` / ``hook2`` must be lists of strings (a bare string is refused). ``clip_id`` is
     optional. Other keys are the ``MasterSpec`` fields.
@@ -610,8 +639,14 @@ def spec_from_json(data: Any) -> MasterSpec:
     unknown = sorted(set(data) - names)
     if unknown:
         raise ValueError(f"unknown key(s) in the spec: {', '.join(unknown)}")
-    needed = [*_REQUIRED, *(("closeup_center", "blue_eye_xy") if data.get("closeup") else ())]
-    missing = [k for k in needed if k not in data]
+    music = data.get("music", "ai_beat")
+    if music not in MUSIC_ARMS:
+        raise ValueError(f"music must be one of {', '.join(MUSIC_ARMS)}, got {music!r}")
+    needed = [
+        *_REQUIRED, *(() if music == "in_app" else ("audio",)),
+        *(("closeup_center", "blue_eye_xy") if data.get("closeup") else ()),
+    ]
+    missing = [k for k in needed if k not in data or (k == "audio" and not data[k])]
     if missing:
         raise ValueError(f"the spec is missing: {', '.join(missing)}")
     merged = {"closeup_center": (0, 0), "blue_eye_xy": (0, 0), **_DEFAULTS, **data}
@@ -627,8 +662,9 @@ def spec_from_json(data: Any) -> MasterSpec:
         if not (isinstance(xy, list | tuple) and len(xy) == 2 and all(isinstance(v, int | float) for v in xy)):
             raise ValueError(f"{key} must be [x, y]")
         merged[key] = (round(xy[0]), round(xy[1]))
-    for key in ("dance", "audio", "out"):
+    for key in ("dance", "out"):
         merged[key] = Path(merged[key])
+    merged["audio"] = Path(merged["audio"]) if merged.get("audio") else None
     merged["closeup"] = Path(merged["closeup"]) if merged["closeup"] else None
     return MasterSpec(**merged)
 
@@ -650,11 +686,15 @@ def _in_inbox(audio: Path) -> bool:
     return "inbox" in (part.lower() for part in audio.resolve().parts)
 
 
-def audio_problem(dance: Path, audio: Path, clip: Clip | None, source: Source | None) -> str | None:
+def audio_problem(
+    dance: Path, audio: Path, clip: Clip | None, source: Source | None, owner_music: str | None = None
+) -> str | None:
     """Why ``audio`` may not be used for this master, or ``None`` (see the module docstring).
 
-    The soundtrack of the dance generation or of a source file is third-party audio. The one clip whose
-    generation carries our own beat is a ``recreate`` clip with a ``synthetic`` driver.
+    The soundtrack of the dance generation or of a source file is third-party audio. Two cases are ours or
+    kept on purpose: a ``recreate`` clip with a ``synthetic`` driver (its generation carries our own beat), and a
+    ``dropin`` clip marked ``features.music == "original"``, the default (``owner_music`` is its pick's value: a
+    different choice there, e.g. ``in_app`` or ``ai_beat``, refuses). An inbox file is never allowed.
     """
     ours = (
         clip is not None
@@ -662,19 +702,32 @@ def audio_problem(dance: Path, audio: Path, clip: Clip | None, source: Source | 
         and source is not None
         and source.kind is SourceKind.synthetic
     )
+    keeps_original = clip is not None and clip.mode is Mode.dropin and clip.features.get("music") == "original"
+    if not ours and keeps_original and _same_file(Path(dance), Path(audio)):
+        if owner_music not in (None, "original"):
+            return (
+                f"the clip says music original, but the owner chose {owner_music} for this video (Make-it sheet): "
+                "its generation's own soundtrack is not used"
+            )
+        return _inbox_problem(audio) if _in_inbox(Path(audio)) else None
     if not ours and _same_file(Path(dance), Path(audio)):
         return (
             "the audio is the dance generation's own soundtrack, which for this clip may be third-party "
-            "audio (never posted). Use a beat of our own: a seedance_2_5 t2v render with generate_audio. "
-            "Only a recreate clip with a synthetic driver may use its generation's audio, and then "
-            "master build needs --clip <id> (or clip_id in the spec) to know it is one"
+            "audio (kept only for a Drop-in with music original). Use a beat of our own: a seedance_2_5 "
+            "t2v render with generate_audio. Only a recreate clip with a synthetic driver, or a dropin clip whose "
+            "features.music is original, may use its generation's audio, and then master build needs --clip <id> "
+            "(or clip_id in the spec) to know it is one"
         )
     if _in_inbox(Path(audio)):
-        return (
-            f"the audio {audio} is in an inbox folder: that is a source file (third-party audio, "
-            "never posted). Use a beat of our own: a seedance_2_5 t2v render with generate_audio"
-        )
+        return _inbox_problem(audio)
     return None
+
+
+def _inbox_problem(audio: Path) -> str:
+    return (
+        f"the audio {audio} is in an inbox folder: that is a source file (third-party audio, "
+        "never posted). Use a beat of our own: a seedance_2_5 t2v render with generate_audio"
+    )
 
 
 app = typer.Typer(
@@ -695,7 +748,7 @@ def upload_master(
     clip = store.get_clip(clip_id)
     if clip is None:
         raise KeyError(clip_id)
-    problems = check_master(probe(file), loop=loop)
+    problems = check_master(probe(file), loop=loop, silent=clip.features.get("music") == "in_app")
     if problems:
         raise MasterRejected(problems)
     key = f"{clip.character_slug}/{clip.id}.mp4"
@@ -709,17 +762,23 @@ def _check_audio_rights(spec: MasterSpec, clip_id: str | None) -> None:
     Only an audio that is the dance file or sits in an inbox folder needs a closer look, so the store is
     opened (for the clip and its source) only then: an ordinary build needs no database.
     """
+    if spec.audio is None:  # a silent master has no audio to be third-party
+        return
     dance, audio = Path(spec.dance), Path(spec.audio)
     if not (_same_file(dance, audio) or _in_inbox(audio)):
         return
     clip = source = None
+    owner_music = None
     if clip_id is not None:
         store = open_store()
         clip = store.get_clip(clip_id)
         if clip is None:
             raise ValueError(f"unknown clip {clip_id}")
         source = next(iter(store.list_sources(id=clip.source_id)), None) if clip.source_id else None
-    if (problem := audio_problem(dance, audio, clip, source)) is not None:
+        fav_id = clip.features.get("fav_id")
+        pick = store.get_favorite(fav_id) if isinstance(fav_id, str) else None
+        owner_music = pick.proposal.get("owner_music") if pick is not None else None
+    if (problem := audio_problem(dance, audio, clip, source, owner_music)) is not None:
         raise ValueError(problem)
 
 
@@ -756,11 +815,27 @@ def build_command(
         report = probe(out)
     except (ValueError, MasterError, QAError) as e:
         fail(str(e))
-    problems = check_master(report, loop=loop)
+    problems = check_master(report, loop=loop, silent=built.music == "in_app")
     report = dataclasses.replace(report, problems=problems)
     emit({"out": str(out), **dataclasses.asdict(report), "ok": report.ok})
     if problems:
         raise typer.Exit(1)
+
+
+@app.command("mux-audio")
+def mux_audio_command(
+    video: Annotated[Path, typer.Argument(help="The Genjutsu output that came back without its audio.")],
+    source: Annotated[Path, typer.Argument(help="The source clip (trimmed or whole) whose audio goes back under it.")],
+    start: Annotated[float, typer.Option("--start", help="Where the trimmed window began in SOURCE, in seconds.")],
+    out: Annotated[Path, typer.Option("--out", help="Where to write the result (.mp4).")],
+) -> None:
+    """Put SOURCE's audio (from --start, as long as VIDEO runs) back under VIDEO's picture; prints the result as JSON."""
+    try:
+        done = clipwork.mux_source_audio(video, source, out, start)
+        report = probe(done)
+    except (ValueError, QAError, clipwork.ClipworkError) as e:
+        fail(str(e))
+    emit({"out": str(done), "duration_s": report.duration_s, "has_audio": report.has_audio, "lufs": report.lufs})
 
 
 @app.command("upload")

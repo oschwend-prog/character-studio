@@ -8,7 +8,8 @@ report as well as a probed one.
 
 **Master spec** (Global Constraints): 1080x1920, 30 fps, H.264 High, 10-20 Mbps video bitrate
 (the encode targets ~15), AAC at 48 kHz, an audio track, integrated loudness -14 LUFS +/- 1, true
-peak <= -1 dBFS, 7-16 s (an eye loop, ``loop=True``, is 6-8 s instead). The AAC "320k" is an
+peak <= -1 dBFS, 6-16 s (6-9 s is the target of a trimmed Drop-in, 16 s the hard maximum; an eye loop,
+``loop=True``, is 6-8 s instead). The AAC "320k" is an
 encoder setting, not a property of the content (ffmpeg's encoder spends fewer bits on sparse
 audio), so it is not checked; the codec and the sample rate are. Durations accept 0.05 s either
 side: AAC priming and container rounding make 7 s of video read 6.98 or 7.02 s.
@@ -19,6 +20,11 @@ side: AAC priming and container rounding make 7 s of video read 6.98 or 7.02 s.
 Loudness is measured with ffmpeg's ``ebur128=peak=true`` (integrated ``I:`` and true ``Peak:``
 from its summary), the same method the spike used. Digital silence reads -70 LUFS (the filter's
 floor) and an infinite-negative peak, which has no JSON form and is stored as ``None``.
+
+**Silent masters** (``silent=True``, ``studio qa tech --master --music in_app``): the owner adds the song in the
+Instagram app, so the master carries a silent AAC track. Silence (nothing measured, or at or below
+``SILENT_LUFS`` = -60) then skips the loudness and peak rules, nothing else: the track must still exist and
+be AAC 48 kHz, and anything audible is judged against -14 LUFS / -1 dBTP as before.
 
 CLI (``studio qa ...``) prints JSON on stdout. ``qa tech`` exits 1 when there are problems (the
 JSON says which); exit 2 is for anything the caller must fix (no such file, not a video, bad
@@ -39,19 +45,21 @@ from typing import Annotated, Any
 import typer
 
 from studio.cli_support import emit, fail
+from studio.models import MUSIC_ARMS
 
 # ---- specs -------------------------------------------------------------------------------------
 
 MASTER_SIZE = (1080, 1920)
 MASTER_FPS = 30.0
 MASTER_KBPS = (10_000.0, 20_000.0)
-MASTER_SECONDS = (7.0, 16.0)
+MASTER_SECONDS = (6.0, 16.0)
 LOOP_SECONDS = (6.0, 8.0)
 MASTER_AUDIO_CODEC = "aac"
 MASTER_AUDIO_HZ = 48_000
 LUFS_TARGET = -14.0
 LUFS_TOLERANCE = 1.0
 TRUE_PEAK_MAX = -1.0
+SILENT_LUFS = -60.0  # at or below this the track is silence (digital silence reads -70)
 
 SOURCE_MIN_WIDTH = 480
 SOURCE_SECONDS = (4.0, 30.0)
@@ -270,8 +278,15 @@ def _in_range(value: float, low: float, high: float, slack: float = 0.0) -> bool
     return low - slack - _EPS <= value <= high + slack + _EPS
 
 
-def check_master(r: TechReport, *, loop: bool = False) -> list[str]:
-    """Problems of ``r`` against the master spec (empty = it meets it). ``loop``: an eye loop."""
+def _is_silent(r: TechReport) -> bool:
+    return r.lufs is None or r.lufs <= SILENT_LUFS
+
+
+def check_master(r: TechReport, *, loop: bool = False, silent: bool = False) -> list[str]:
+    """Problems of ``r`` against the master spec (empty = it meets it). ``loop``: an eye loop.
+
+    ``silent``: a silent track is expected (music "in_app"), so silence skips the loudness and peak rules.
+    """
     problems: list[str] = []
     if (r.width, r.height) != MASTER_SIZE:
         problems.append(f"resolution: {r.width}x{r.height}, need {MASTER_SIZE[0]}x{MASTER_SIZE[1]}")
@@ -298,6 +313,8 @@ def check_master(r: TechReport, *, loop: bool = False) -> list[str]:
             f"audio_format: {r.audio_codec or '?'} at {r.audio_hz or '?'} Hz, "
             f"need {MASTER_AUDIO_CODEC} at {MASTER_AUDIO_HZ} Hz"
         )
+    if silent and _is_silent(r):
+        return problems
     if r.lufs is None:
         problems.append("loudness: not measured")
     elif not _in_range(r.lufs, LUFS_TARGET - LUFS_TOLERANCE, LUFS_TARGET + LUFS_TOLERANCE):
@@ -388,18 +405,36 @@ def tech_command(
         typer.Option("--master", help="Judge against the delivery spec (default: the looser source spec)."),
     ] = False,
     loop: Annotated[bool, typer.Option("--loop", help="With --master: an eye loop (6-8 s).")] = False,
+    music: Annotated[
+        str | None,
+        typer.Option(
+            "--music",
+            help="With --master: in_app = a silent track is expected (the owner adds the song in the app); "
+            "ai_beat or original = judged for loudness (default).",
+        ),
+    ] = None,
 ) -> None:
     """ffprobe checks of FILE; prints the report as JSON, exit 1 when it has problems."""
     if loop and not master:
         fail("--loop only applies together with --master")
+    if music is not None and not master:
+        fail("--music only applies together with --master")
+    if music is not None and music not in MUSIC_ARMS:
+        fail(f"--music must be one of {', '.join(MUSIC_ARMS)}, got {music!r}")
+    silent = music == "in_app"
     try:
         report = probe(file, loudness=master)  # the source spec has no loudness rule
     except QAError as e:
         fail(str(e))
-    problems = check_master(report, loop=loop) if master else check_source(report)
+    problems = check_master(report, loop=loop, silent=silent) if master else check_source(report)
     report = dataclasses.replace(report, problems=problems)
     checked = ("master (eye loop)" if loop else "master") if master else "source"
-    emit({"file": str(file), "checked": checked, **dataclasses.asdict(report), "ok": report.ok})
+    if silent:
+        checked += " (silent track expected)"
+    emit({
+        "file": str(file), "checked": checked, **({"music": music} if music else {}),
+        **dataclasses.asdict(report), "ok": report.ok,
+    })  # fmt: skip
     if problems:
         raise typer.Exit(1)
 

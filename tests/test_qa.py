@@ -155,9 +155,9 @@ def test_fps_float_noise_is_tolerated():
 
 @pytest.mark.parametrize(
     "seconds,ok",
-    [(7.0, True), (10.5, True), (16.0, True), (6.9, False), (16.1, False), (25.0, False), (0.0, False)],
+    [(6.0, True), (7.0, True), (10.5, True), (16.0, True), (5.9, False), (16.1, False), (25.0, False), (0.0, False)],
 )
-def test_master_duration_7_to_16(seconds, ok):
+def test_master_duration_6_to_16(seconds, ok):  # 6-9 s is the target of a trimmed Drop-in, 16 s the hard maximum
     problems = check_master(good_report(duration_s=seconds))
     assert (problems == []) is ok
     assert ok or keys(problems) == ["duration"]
@@ -174,18 +174,21 @@ def test_eye_loop_duration_6_to_8(seconds, ok):
 
 
 def test_loop_flag_is_a_replacement_range_not_an_extension():
-    # 6.5 s is a fine loop but too short for a normal master; 10 s the other way round.
-    assert keys(check_master(good_report(duration_s=6.5))) == ["duration"]
+    # 6.5 s is fine both ways (a trimmed Drop-in is 6-9 s); 10 s is a normal master but too long for an eye loop,
+    # and 5.5 s is too short for either.
+    assert check_master(good_report(duration_s=6.5)) == []
     assert check_master(good_report(duration_s=6.5), loop=True) == []
     assert check_master(good_report(duration_s=10.0)) == []
     assert keys(check_master(good_report(duration_s=10.0), loop=True)) == ["duration"]
+    assert keys(check_master(good_report(duration_s=5.5))) == ["duration"]
+    assert keys(check_master(good_report(duration_s=5.5), loop=True)) == ["duration"]
 
 
 def test_duration_allows_encoder_padding_of_a_frame_or_two():
-    # AAC priming / container rounding: 7 s of video often reads 6.99x or 7.02x.
-    assert check_master(good_report(duration_s=6.97)) == []
+    # AAC priming / container rounding: 6 s of video often reads 5.99x or 6.02x.
+    assert check_master(good_report(duration_s=5.97)) == []
     assert check_master(good_report(duration_s=16.03)) == []
-    assert keys(check_master(good_report(duration_s=6.93))) == ["duration"]
+    assert keys(check_master(good_report(duration_s=5.93))) == ["duration"]
     assert keys(check_master(good_report(duration_s=16.07))) == ["duration"]
 
 
@@ -244,6 +247,26 @@ def test_loudness_minus_14_plus_minus_1(lufs, ok):
     problems = check_master(good_report(lufs=lufs))
     assert (problems == []) is ok
     assert ok or keys(problems) == ["loudness"]
+
+
+def test_a_silent_track_passes_only_when_silence_is_expected():
+    """music "in_app": the master carries a silent AAC track and the owner adds the song in the app."""
+    silent = good_report(lufs=-70.0, true_peak=None)  # digital silence reads the ebur128 floor and has no peak
+    assert keys(check_master(silent)) == ["loudness"]  # the default still wants -14 LUFS
+    assert check_master(silent, silent=True) == []
+    assert check_master(good_report(lufs=None, true_peak=None), silent=True) == []  # not measured = nothing to judge
+    # silence is a permission, not a loosening: anything audible is judged as before
+    assert keys(check_master(good_report(lufs=-20.0), silent=True)) == ["loudness"]
+    assert keys(check_master(good_report(lufs=-14.0, true_peak=0.5), silent=True)) == ["peak"]
+    assert check_master(good_report(lufs=-14.0), silent=True) == []
+
+
+def test_a_silent_master_still_needs_an_aac_48k_audio_stream():
+    no_audio = good_report(has_audio=False, lufs=None, true_peak=None, audio_codec=None, audio_hz=None)
+    assert keys(check_master(no_audio, silent=True)) == ["audio"]
+    assert keys(check_master(good_report(lufs=-70.0, true_peak=None, audio_hz=44100), silent=True)) == ["audio_format"]
+    # the picture rules do not relax either
+    assert keys(check_master(good_report(lufs=-70.0, true_peak=None, duration_s=20.0), silent=True)) == ["duration"]
 
 
 def test_loudness_not_measured_is_a_problem():
@@ -683,6 +706,34 @@ def test_cli_tech_silent_master_exit_1(synth_video):
     assert keys(json.loads(r.stdout)["problems"]) == ["audio"]
 
 
+def silent_track_master(tmp_path, synth_video, dur=8):
+    """A spec-conforming master picture (the shared synthetic one) with its audio swapped for digital silence."""
+    out = tmp_path / "silent_master.mp4"
+    ffmpeg(
+        "-i", str(synth_video(dur=dur)), "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+        "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-shortest", str(out),
+    )  # fmt: skip
+    return out
+
+
+def test_cli_tech_music_in_app_accepts_a_silent_track_and_the_default_does_not(tmp_path, synth_video):
+    clip = silent_track_master(tmp_path, synth_video)
+    plain = run("tech", str(clip), "--master")
+    assert plain.exit_code == 1 and "loudness" in keys(json.loads(plain.stdout)["problems"])
+    r = run("tech", str(clip), "--master", "--music", "in_app")
+    assert r.exit_code == 0, r.output
+    body = json.loads(r.stdout)
+    assert body["ok"] is True and body["music"] == "in_app" and "silent" in body["checked"]
+    assert run("tech", str(clip), "--master", "--music", "ai_beat").exit_code == 1
+    assert run("tech", str(clip), "--master", "--music", "original").exit_code == 1  # the original audio is normalised too
+
+
+def test_cli_tech_music_needs_a_known_arm_and_a_master(synth_video):
+    assert run("tech", str(synth_video()), "--master", "--music", "nonsense").exit_code == 2
+    r = run("tech", str(synth_video()), "--music", "in_app")
+    assert r.exit_code == 2 and "--master" in r.output
+
+
 def test_cli_tech_without_master_applies_the_source_check(synth_video):
     # 720x1280, 10 s, 30 fps, no loudness judgement: fine as a source, not as a master.
     clip = str(synth_video(w=720, h=1280, audio=False))
@@ -700,11 +751,12 @@ def test_cli_tech_source_problems_exit_1(synth_video):
 
 
 def test_cli_tech_loop_changes_the_duration_range(monkeypatch):
-    clip = good_report(duration_s=6.5)
+    clip = good_report(duration_s=10.0)
     monkeypatch.setattr(qa, "probe", lambda path, *, loudness=True: clip)
-    assert run("tech", "x.mp4", "--master", "--loop").exit_code == 0
-    r = run("tech", "x.mp4", "--master")
+    assert run("tech", "x.mp4", "--master").exit_code == 0
+    r = run("tech", "x.mp4", "--master", "--loop")
     assert r.exit_code == 1 and keys(json.loads(r.stdout)["problems"]) == ["duration"]
+    clip = good_report(duration_s=7.0)
     body = json.loads(run("tech", "x.mp4", "--master", "--loop").stdout)
     assert body["checked"] == "master (eye loop)"
 

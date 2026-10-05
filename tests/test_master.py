@@ -660,6 +660,104 @@ def test_audio_under_an_inbox_folder_is_a_source_file_and_is_refused(tmp_path, c
     assert r.exit_code == 2 and "source" in r.output
 
 
+# ---- Drop-ins keep the original clip audio by default (owner decision 2026-10-05) ----------------------------------
+
+
+@pytest.fixture
+def original_rig(clip_rig):
+    """A Drop-in clip made as the daily run makes it: ``features.music`` and, for a pick, ``features.fav_id``."""
+    from studio.models import Body, Clip, Favorite, Source
+
+    store, _ = clip_rig
+
+    def make(*, clip_music="original", owner_music=None, with_pick=True):
+        source = store.add_source(Source(kind="higgsfield_library", body=Body.biped, bodies=1, duration_s=9.0))
+        pick = store.add_favorite(Favorite(
+            url=f"https://www.tiktok.com/@c/video/{len(store.list_favorites()) + 1}", platform="tiktok",
+            status="approved", proposal={"owner_music": owner_music} if owner_music else {},
+        ))
+        features = {"music": clip_music, **({"fav_id": pick.id} if with_pick else {})}
+        return store.add_clip(Clip(character_slug="biscuit", mode="dropin", state="qa_passed",
+                                   source_id=source.id, features=features))
+
+    return make
+
+
+def sine_dance(tmp_path: Path) -> Path:
+    dance = tmp_path / "dance.mp4"
+    ffmpeg("-f", "lavfi", "-i", "color=c=0x203040:s=1080x1920:r=30:d=1", "-f", "lavfi", "-i", "sine=frequency=330:duration=1",
+           "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", str(dance))  # fmt: skip
+    return dance
+
+
+@pytest.mark.parametrize("kw", [{}, {"with_pick": False}, {"owner_music": "original"}])
+def test_the_original_audio_is_kept_for_a_dropin_clip_marked_music_original(tmp_path, original_rig, kw):
+    """music "original" (the default): the Genjutsu output's own soundtrack is the master's audio, loudness-normalised."""
+    clip = original_rig(**kw)
+    dance = sine_dance(tmp_path)
+    r = run_build(tmp_path, dance, dance, "--clip", clip.id, music="original")
+    assert r.exit_code in (0, 1), r.output  # built (1 only means the 1 s clip misses the master spec)
+    assert (tmp_path / "master.mp4").is_file()
+    assert probe(tmp_path / "master.mp4").lufs == pytest.approx(-14.0, abs=1.5)  # normalised, not left raw
+
+
+@pytest.mark.parametrize(
+    ("kw", "message"),
+    [
+        ({"owner_music": "in_app"}, "owner chose in_app"),  # the owner picked another music for this video
+        ({"owner_music": "ai_beat"}, "owner chose ai_beat"),
+        ({"clip_music": "ai_beat"}, "third-party"),  # the clip is not marked original
+        ({"clip_music": "in_app"}, "third-party"),
+        ({"clip_music": None}, "third-party"),
+    ],
+)
+def test_the_original_audio_is_refused_unless_the_clip_is_original_and_the_owner_did_not_choose_otherwise(
+    tmp_path, original_rig, kw, message
+):
+    clip = original_rig(**kw)
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    r = run_build(tmp_path, dance, dance, "--clip", clip.id, music="original")
+    assert r.exit_code == 2 and message in r.output
+    assert not (tmp_path / "master.mp4").exists()
+
+
+def test_the_original_audio_needs_the_clip_to_be_named(tmp_path, original_rig):
+    """Without --clip the exception cannot be proved, so the generation's audio is refused as ever."""
+    original_rig()
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    r = run_build(tmp_path, dance, dance, music="original")
+    assert r.exit_code == 2 and "third-party" in r.output and "--clip" in r.output
+
+
+def test_a_recreate_clip_never_keeps_original_audio(tmp_path, clip_rig):
+    store, make = clip_rig
+    clip = make("recreate", "higgsfield_library")
+    store.update_clip(clip.id, features={"music": "original"})  # cannot be made through `clip new`; refused here too
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    assert run_build(tmp_path, dance, dance, "--clip", clip.id, music="original").exit_code == 2
+
+
+def test_the_original_audio_choice_does_not_open_the_inbox_files(tmp_path, original_rig):
+    clip = original_rig()
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    r = run_build(tmp_path, dance, tone(inbox / "source.wav", 3), "--clip", clip.id, music="original")
+    assert r.exit_code == 2 and "source" in r.output  # only the generation's own audio, never the raw source file
+
+
+def test_audio_problem_allows_the_default_and_refuses_what_the_owner_overrode(tmp_path):
+    from studio.models import Clip
+
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    clip = Clip(character_slug="biscuit", mode="dropin", features={"music": "original"})
+    assert master.audio_problem(dance, dance, clip, None) is None  # the default needs no explicit owner choice
+    assert master.audio_problem(dance, dance, clip, None, owner_music="original") is None
+    assert "owner chose in_app" in master.audio_problem(dance, dance, clip, None, owner_music="in_app")
+    plain = Clip(character_slug="biscuit", mode="dropin", features={})
+    assert "third-party" in master.audio_problem(dance, dance, plain, None)
+
+
 def test_a_separate_beat_render_is_fine_for_a_dropin_clip(tmp_path, clip_rig):
     """The legal path: a Seedance beat render of our own (a different file from the dance)."""
     store, make = clip_rig
@@ -674,6 +772,52 @@ def test_audio_rights_is_a_plain_function_too(tmp_path):
     beat = tone(tmp_path / "beat.wav", 1)
     assert master.audio_problem(dance, beat, None, None) is None
     assert "third-party" in master.audio_problem(dance, dance, None, None)
+
+
+# ---- music "in_app": a silent master, the owner adds the song in the Instagram app -----------------------------
+
+
+def test_spec_from_json_music_defaults_to_ai_beat_which_needs_its_audio():
+    spec = master.spec_from_json({"dance": "d.mp4", "audio": "a.wav", "out": "o.mp4", "closeup": None})
+    assert spec.music == "ai_beat"
+    with pytest.raises(ValueError, match="audio"):
+        master.spec_from_json({"dance": "d.mp4", "out": "o.mp4", "closeup": None})
+    with pytest.raises(ValueError, match="audio"):
+        master.spec_from_json({"dance": "d.mp4", "out": "o.mp4", "closeup": None, "music": "original"})
+
+
+def test_spec_from_json_in_app_needs_no_audio_and_unknown_music_is_refused():
+    spec = master.spec_from_json({"dance": "d.mp4", "out": "o.mp4", "closeup": None, "music": "in_app"})
+    assert (spec.music, spec.audio) == ("in_app", None)
+    with pytest.raises(ValueError, match="music"):
+        master.spec_from_json({"dance": "d.mp4", "audio": "a.wav", "out": "o.mp4", "closeup": None, "music": "spotify"})
+
+
+def test_an_in_app_master_carries_a_silent_aac_track_and_meets_the_silent_master_spec(tmp_path, synth_video):
+    dance = synth_video(dur=7)
+    spec = spec_for(
+        tmp_path, dance, None, music="in_app", closeup=detailed_png(tmp_path / "closeup.png"), hook2_until_s=3.0,
+    )  # fmt: skip
+    out = build_master(spec)
+    report = probe(out)
+    assert report.has_audio and report.audio_codec == "aac" and report.audio_hz == 48000
+    assert report.lufs is not None and report.lufs <= -60  # digital silence: no sting, no beat, nothing of the source
+    assert check_master(report, silent=True) == [], report
+    assert "loudness" in [p.split(":", 1)[0] for p in check_master(report)]  # judged as a normal master it would fail
+    assert report.duration_s == pytest.approx(0.8 + 7 + 0.7, abs=0.05)
+
+
+def test_an_in_app_master_ignores_impact_sfx_because_it_has_no_sound_at_all(tmp_path, synth_video):
+    spec = spec_for(tmp_path, synth_video(dur=7), None, music="in_app", enhancements=[{"type": "impact_sfx", "at_s": 2.0}])
+    report = probe(build_master(spec))
+    assert report.lufs is not None and report.lufs <= -60
+
+
+def test_a_non_silent_build_without_audio_is_refused_before_rendering(tmp_path, synth_video):
+    spec = spec_for(tmp_path, synth_video(dur=7), None, music="ai_beat")
+    with pytest.raises(ValueError, match="audio"):
+        build_master(spec)
+    assert not spec.out.exists()
 
 
 # ---- CLI ---------------------------------------------------------------------------------------
@@ -696,6 +840,14 @@ def test_cli_master_build_prints_json_and_exits_1_on_problems(tmp_path):
     assert data["duration_s"] == pytest.approx(1.0, abs=0.06)
     keys = [p.split(":", 1)[0] for p in data["problems"]]
     assert "duration" in keys and data["ok"] is False and r.exit_code == 1
+
+
+def test_cli_master_build_in_app_judges_the_silent_track_as_expected(tmp_path, synth_video):
+    path = spec_json(tmp_path, synth_video(dur=7), None, music="in_app", closeup=None, hook1=[], hook2=[], hook2_until_s=0.0)
+    r = CliRunner().invoke(app, ["master", "build", "--spec", str(path)])
+    data = json.loads(r.stdout)
+    assert r.exit_code == 0, r.output
+    assert data["ok"] is True and data["problems"] == [] and data["lufs"] <= -60
 
 
 def test_cli_master_build_rejects_a_bad_spec(tmp_path):
@@ -759,6 +911,18 @@ def test_upload_master_refuses_a_file_that_misses_the_master_spec(upload_rig, sy
         master.upload_master(store, storage, clip.id, synth_video(w=720, h=1280))
     assert any(p.startswith("resolution") for p in e.value.problems)
     assert store.get_clip(clip.id).master_path is None
+
+
+def test_upload_master_accepts_a_silent_master_only_for_an_in_app_clip(upload_rig, synth_video, tmp_path):
+    store, storage, clip = upload_rig
+    silent = tmp_path / "silent.mp4"
+    ffmpeg("-i", str(synth_video(dur=8)), "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
+           "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-shortest", str(silent))  # fmt: skip
+    with pytest.raises(master.MasterRejected) as e:
+        master.upload_master(store, storage, clip.id, silent)  # an ordinary clip: silence is a loudness problem
+    assert any(p.startswith("loudness") for p in e.value.problems)
+    store.update_clip(clip.id, features={"music": "in_app"})
+    assert master.upload_master(store, storage, clip.id, silent).master_path == f"biscuit/{clip.id}.mp4"
 
 
 def test_upload_master_judges_an_eye_loop_by_the_loop_length(upload_rig, synth_video):

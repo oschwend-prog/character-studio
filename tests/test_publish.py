@@ -146,6 +146,66 @@ def test_fake_publisher_is_a_publisher():
     assert isinstance(FakePublisher(), Publisher)
 
 
+# ---- a silent master must not go out on autopilot ------------------------------------------------
+
+
+def silent_clip(rig: Rig, character: str = "biscuit", music: str | None = "in_app") -> Clip:
+    clip = rig.clip(character)
+    return rig.store.update_clip(clip.id, features={"music": music} if music else {})
+
+
+def test_a_silent_in_app_clip_is_flagged_not_posted_on_an_autopilot_account(rig):
+    """music in_app = a silent master the owner finishes by hand in the app; autopilot would post it silent."""
+    rig.store.update_account(rig.account("@biscuit.tt").id, mode="auto")
+    p = rig.post(clip=silent_clip(rig))
+    pub = FakePublisher()
+
+    summary = rig.run(pub)
+
+    assert pub.calls == []  # nothing left the machine
+    done = rig.get(p)
+    assert done.status is PostStatus.failed and done.attempts == 0  # fails at once, no attempt spent: an owner warning
+    assert "silent" in done.error and "autopilot" in done.error and "in_app" in done.error
+    assert [x["post_id"] for x in summary["failed"]] == [p.id]
+    assert rig.store.get_clip(p.clip_id).state is ClipState.scheduled  # not posted, not moved
+
+
+def test_the_dry_run_flags_the_same_post(rig):
+    rig.store.update_account(rig.account("@biscuit.tt").id, mode="auto")
+    p = rig.post(clip=silent_clip(rig))
+    out = preview_due(rig.store, NOW)
+    assert [x["post_id"] for x in out["would_fail"]] == [p.id] and "silent" in out["would_fail"][0]["reason"]
+    assert out["would_post"] == []
+    assert rig.get(p).status is PostStatus.scheduled  # a dry run writes nothing
+
+
+@pytest.mark.parametrize("music", ["ai_beat", "original", None])
+def test_clips_with_sound_in_the_file_still_post_on_autopilot(rig, music):
+    rig.store.update_account(rig.account("@biscuit.tt").id, mode="auto")
+    p = rig.post(clip=silent_clip(rig, music=music))  # music None = a clip made before the flag existed
+    pub = FakePublisher()
+    rig.run(pub)
+    assert len(pub.calls) == 1 and rig.get(p).status is PostStatus.posted
+
+
+def test_an_in_app_clip_on_an_approval_account_posts_as_the_owner_approved_it(rig):
+    """Only autopilot is guarded: in approval mode the owner saw the clip (and the silent-master note) and approved it."""
+    p = rig.post(clip=silent_clip(rig))
+    pub = FakePublisher()
+    rig.run(pub)
+    assert len(pub.calls) == 1 and rig.get(p).status is PostStatus.posted
+
+
+def test_the_flag_is_per_account_so_the_other_account_of_the_clip_is_judged_alone(tmp_path):
+    rig = Rig(tmp_path, instagram=True)
+    rig.store.update_account(rig.account("@biscuit.ig").id, mode="auto")
+    clip = silent_clip(rig)
+    tt, ig = rig.post("@biscuit.tt", clip=clip), rig.post("@biscuit.ig", clip=clip)
+    pub = FakePublisher()
+    rig.run(pub)
+    assert rig.get(tt).status is PostStatus.posted and rig.get(ig).status is PostStatus.failed
+
+
 # ---- publish_due: the happy path ---------------------------------------------------------------
 
 

@@ -19,6 +19,10 @@
 
    * the clip must still be ``scheduled`` (a rejected or dropped clip is never published; the post
      fails at once with the reason and no attempt is spent);
+   * **a silent master never goes out on autopilot.** A clip with ``features.music == "in_app"`` carries a
+     silent track (the owner adds the song in the Instagram app); a post of it to an account in ``auto`` mode
+     would be posted with no sound, so it fails at once like the case above, with a reason that says so (the
+     terminal shows failed posts as an alert). An approval-mode account is not guarded: the owner approved it;
    * **at most 2 posted per account per London day.** A third due post goes back to ``scheduled``
      at that account's character's first *free* cadence slot after today (``planning.free_slot``: the
      first cadence day, from tomorrow, on which the account has no post in ``scheduled`` / ``posting`` /
@@ -180,6 +184,12 @@ def _decide(account: Account | None, clip: Clip | None, posted_today: int) -> tu
         return REFUSE, "unknown clip"
     if clip.state is not ClipState.scheduled:
         return REFUSE, f"clip is {clip.state.value}, not scheduled: never published"
+    if account.mode == "auto" and clip.features.get("music") == "in_app":
+        return REFUSE, (
+            f"silent master: the clip's music is in_app (the song is added by hand in the app), but "
+            f"{account.handle} is on autopilot, so it would go out with no sound. Add the song in the app "
+            "yourself, or remake the clip with an AI beat (music ai_beat)"
+        )
     if posted_today >= DAILY_CAP:
         return DEFER, f"{account.handle} already has {DAILY_CAP} posts today"
     return PUBLISH, ""
