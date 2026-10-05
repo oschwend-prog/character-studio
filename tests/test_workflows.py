@@ -14,11 +14,18 @@ WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 GATE = "if: steps.gate.outputs.configured == 'true'"
 SECRETS = ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "POSTIZ_API_KEY")
 
-# name -> (cron, command, needs the Node + Postiz CLI)
+# The Postiz CLI version the workflows install (the exact one `npm view postiz version` reported on
+# 2026-10-05). VERIFY at go-live (docs/launch/go-live.md step 3): bump it deliberately, never `latest`.
+POSTIZ_VERSION = "2.0.16"
+
+# name -> (crons, command, needs the Node + Postiz CLI)
+# publish: every 15 minutes through the posting window 17:00-20:59 UTC (Biscuit 19:00 and Reginald 19:30
+# London are 18:00 / 18:30 UTC in BST and 19:00 / 19:30 UTC in GMT) + a 3-hourly catch-up for the times the
+# owner picks himself. That is 24 runs a day, not 96: GitHub's free minutes are 2,000 a month.
 SPEC = {
-    "publish": ("*/15 * * * *", "uv run studio publish due", True),
-    "metrics": ("7 */6 * * *", "uv run studio metrics pull", True),
-    "health": ("23 * * * *", "uv run studio health", False),
+    "publish": (("*/15 17-20 * * *", "40 */3 * * *"), "uv run studio publish due", True),
+    "metrics": (("7 */6 * * *",), "uv run studio metrics pull", True),
+    "health": (("23 */3 * * *",), "uv run studio health", False),
 }
 
 
@@ -34,10 +41,9 @@ def steps(name: str) -> list[str]:
 
 @pytest.mark.parametrize("name", SPEC)
 def test_schedule_and_manual_trigger(name):
-    cron = SPEC[name][0]
+    crons = SPEC[name][0]
     t = text(name)
-    assert f"- cron: '{cron}'" in t
-    assert len(re.findall(r"- cron:", t)) == 1
+    assert re.findall(r"- cron: '([^']+)'", t) == list(crons)
     assert re.search(r"(?m)^  workflow_dispatch:", t)
     assert re.search(rf"(?m)^name: {name}$", t)
 
@@ -84,12 +90,58 @@ def test_secrets_reach_only_the_gate_and_the_command_that_needs_them(name):
 
 @pytest.mark.parametrize("name", SPEC)
 def test_the_command_each_workflow_runs(name):
-    cron, command, node = SPEC[name]
+    crons, command, node = SPEC[name]
     t = text(name)
     assert t.count(f"run: {command}") == 1
     if node:
         assert "actions/setup-node@" in t and "node-version: '20'" in t
-        assert t.index("run: npm i -g postiz") < t.index(f"run: {command}")  # installed before it is used
+        install = f"run: npm i -g postiz@{POSTIZ_VERSION}"
+        assert t.count(install) == 1 and "postiz@latest" not in t
+        assert re.search(r"npm i -g postiz(?!@)", t) is None  # never an unpinned install
+        assert t.index(install) < t.index(f"run: {command}")  # installed before it is used
     else:
         code = "\n".join(line for line in t.splitlines() if not line.lstrip().startswith("#"))
         assert "setup-node" not in code and "postiz" not in code.lower().replace("postiz_api_key", "")
+
+
+# ---- the schedules stay inside GitHub's free minutes and still cover the slots ---------------------------
+
+
+def _hours(field: str) -> set[int]:
+    lo, _, hi = field.partition("-")
+    if field.startswith("*/"):
+        return set(range(0, 24, int(field[2:])))
+    return set(range(int(lo), int(hi or lo) + 1))
+
+
+def test_publish_runs_through_both_posting_windows_in_gmt_and_in_bst():
+    """19:00 and 19:30 London are 18:00 / 18:30 UTC in BST and 19:00 / 19:30 UTC in GMT."""
+    window = SPEC["publish"][0][0].split()
+    assert window[2:] == ["*", "*", "*"] and window[0] == "*/15"
+    hours = _hours(window[1])
+    assert {18, 19} <= hours and min(hours) < 18 and max(hours) > 19  # a margin either side of both slots
+    assert 0 in range(0, 60, 15) and 30 in range(0, 60, 15)  # a run lands on :00 and :30
+
+
+def test_publish_has_a_three_hourly_catch_up_for_owner_chosen_times():
+    catch_up = SPEC["publish"][0][1].split()
+    assert catch_up[1] == "*/3" and len(_hours(catch_up[1])) == 8
+
+
+def test_health_is_every_three_hours_and_the_estimate_fits_the_free_minutes():
+    assert SPEC["health"][0][0].split()[1] == "*/3"
+    runs_per_day = {
+        "publish": 4 * len(_hours(SPEC["publish"][0][0].split()[1])) + len(_hours("*/3")),
+        "metrics": len(_hours("*/6")),
+        "health": len(_hours("*/3")),
+    }
+    assert runs_per_day == {"publish": 24, "metrics": 4, "health": 8}
+    billed = {"publish": 1.5, "metrics": 1.5, "health": 1.0}  # minutes a run bills: setup + uv sync + the command
+    monthly_minutes = sum(runs_per_day[w] * billed[w] * 30 for w in runs_per_day)
+    assert monthly_minutes == 1500, monthly_minutes  # the estimate docs/launch/go-live.md states; free tier is 2,000
+
+
+def test_go_live_documents_the_pinned_version_and_the_monthly_minutes():
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "launch" / "go-live.md").read_text(encoding="utf-8")
+    assert f"postiz@{POSTIZ_VERSION}" in doc and "VERIFY at go-live" in doc
+    assert "1,500 minutes" in doc and "2,000" in doc

@@ -8,7 +8,7 @@
 3. ``postiz posts:create -c <caption + hashtags> -s <now> -i <integration> -m <path> --settings
    <json>``, with the per-platform settings below, and reads the Postiz post id from its output.
 
-The posts are scheduled for *now*: the 15-minute publish job decides when a post is due, Postiz
+The posts are scheduled for *now*: the publish job (every 15 minutes in the evening window) decides when a post is due, Postiz
 just sends it. ``posted`` in our database therefore means "Postiz accepted it", and the
 ``platform_post_id`` is the Postiz post id (what ``postiz analytics:post`` takes).
 

@@ -1,4 +1,4 @@
-"""The watchdog: ``studio health`` (hourly, GitHub Actions) and the run log it reads (``studio run log``).
+"""The watchdog: ``studio health`` (every 3 hours, GitHub Actions) and the run log it reads (``studio run log``).
 
 ``check(store, now)`` returns the problems, one human sentence each; no problem, no output. A failing
 scheduled workflow emails the owner through GitHub's own notifications, so ``studio health`` just exits 1

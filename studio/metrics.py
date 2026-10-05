@@ -1,7 +1,7 @@
 """Metrics: pull post analytics from Postiz, ingest vidIQ Instagram insights, compute ``outlier_x``.
 
 **Pull** (``studio metrics pull``, run by the metrics workflow at whatever cadence it likes: every
-15 minutes or every 6 hours, a missed run loses nothing). For every post that is ``posted`` and has a
+6 hours, a missed run loses nothing). For every post that is ``posted`` and has a
 Postiz id, the post's age (from ``claimed_at``; the posts table has no ``posted_at``, ``claimed_at`` is
 when ``publish_due`` claimed it, ``scheduled_for`` is the fallback) puts it in one **catch-up window**:
 the latest of 1 h / 24 h / 72 h / 7 d (``WINDOWS``, the window *starts*) whose start has passed. The

@@ -9,7 +9,7 @@ in the CLI could move them. After looking at the platform, the owner picks exact
   ``posted`` too (the next publish run would reconcile it anyway).
 * ``--retry [--at ISO]``: it is not live, send it again. Only from ``needs_check`` / ``failed``, and only
   while the clip is still ``scheduled``. The post goes back to ``scheduled`` (attempts 0, error and
-  claim cleared) at ``--at`` (no offset = London) or its old time, so the next 15-minute run publishes it.
+  claim cleared) at ``--at`` (no offset = London) or its old time, so the next publish run (every 15 minutes in the evening window, else within 3 hours) publishes it.
 * ``--drop --reason-file F``: forget it. The never-posted row is deleted (refused when it has a platform
   id or any metrics snapshot: it was live). A clip left with no posts at all moves ``scheduled ->
   rejected`` with the reason; a clip with other posts stays as it is.

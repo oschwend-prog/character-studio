@@ -18,8 +18,9 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - [ ] Sign up at postiz.com (Standard plan), Add channel x4: TikTok and Instagram for each character (for Instagram use the standalone login if both are offered).
 - [ ] Settings > Public API: copy the key. Store it now (paste when prompted, input is hidden):
   `security add-generic-password -s cs-postiz-api-key -a "$USER" -w`
-- [ ] Install the CLI and list the channel ids:
-  `npm i -g postiz` then `POSTIZ_API_KEY="$(security find-generic-password -s cs-postiz-api-key -w)" postiz integrations:list`
+- [ ] Install the CLI at the pinned version and list the channel ids:
+  `npm i -g postiz@2.0.16` then `POSTIZ_API_KEY="$(security find-generic-password -s cs-postiz-api-key -w)" postiz integrations:list`
+  VERIFY at go-live: 2.0.16 is what `npm view postiz version` reported on 2026-10-05; the publish and metrics workflows install exactly this version (the parsers were written against its output). Bump it in both workflows and `tests/test_workflows.py` together, only after re-checking step 10's `integrations:settings` and `analytics:post` comparisons.
 - [ ] Put each channel's id in `characters/<slug>/refs.json` (`postiz_integration_id`) with its `handle` (null until the account exists).
 - [ ] `bin/studio seed` loads them. It needs step 4's database item, so run it at the end of step 4.
 - Turns ✅: `keychain: cs-postiz-api-key`, `postiz: CLI installed and authenticated`.
@@ -37,7 +38,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - [ ] Project Settings > Data API (older UI: Settings > API) > **Exposed schemas**: add `studio`, Save.
 - [ ] Authentication > URL Configuration > Redirect URLs: add the terminal URL (you get it in step 8, come back for this).
 - [ ] Authentication > Emails > **Magic Link** template: make sure the body includes `{{ .Token }}` (the 6-digit code) next to the link. The installed iPhone app signs in with the code; a link opened from Mail lands in Safari, which cannot finish an app sign-in.
-- [ ] After your first sign-in to the terminal (step 8: the link in a browser, or the code in the installed app): Authentication > Sign In / Providers, turn **off** "Allow new users to sign up".
+- [ ] After your first sign-in to the terminal (step 8: the link in a browser, or the code in the installed app): Authentication > Sign In / Providers, turn **off** "Allow new users to sign up". Caution: this project (hkcafvzjwkeibbmvskko) is the shared faceless-youtube Supabase project, so the switch is project-wide: nobody new can sign up to anything else that uses it either.
 - Turns ✅: `data api: schema studio exposed`.
 
 ## 6. GitHub secrets and workflows
@@ -47,7 +48,8 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
   - `printf %s "$(security find-generic-password -s cs-supabase-service-key -w)" | gh secret set SUPABASE_SERVICE_KEY`
   - `printf %s "$(security find-generic-password -s cs-postiz-api-key -w)" | gh secret set POSTIZ_API_KEY`
 - [ ] Enable publishing and metrics: `for w in publish metrics; do gh workflow enable $w.yml; done`
-- [ ] **Hold `health.yml` until step 11**: it fails, and GitHub emails you hourly, until the first daily run is logged.
+- [ ] **Hold `health.yml` until step 11**: it fails, and GitHub emails you every 3 hours, until the first daily run is logged.
+- Expected GitHub Actions use: about 1,500 minutes a month of the 2,000 free (private repo): `publish` 24 runs a day (every 15 min from 17:00 to 20:59 UTC, which covers the 19:00 / 19:30 London slots in BST and GMT, plus a 3-hourly catch-up), `metrics` 4, `health` 8, about 1 to 1.5 billed minutes each. A time you choose yourself in the terminal outside that window posts within about 3 hours.
 - Schedules run from the repo's default branch (today `build/slice1`); if you merge to `main` and change the default, they follow.
 - Turns ✅: `github: secret DATABASE_URL`, `... SUPABASE_URL`, `... SUPABASE_SERVICE_KEY`, `... POSTIZ_API_KEY`, `github: workflow publish enabled`, `github: workflow metrics enabled`, `repo: no secret files tracked`.
 
@@ -85,5 +87,6 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 
 ## 12. First posts
 - [ ] Approve the first queued clips in the terminal (Today or Queue). Until an account has 6 approved posts, every post needs your approval.
-- [ ] The next `publish.yml` run (every 15 min) posts them at the slot (Biscuit 19:00, Reginald 19:30 London).
+- [ ] The next `publish.yml` run (every 15 min from 17:00 to 20:59 UTC, else within 3 hours) posts them at the slot (Biscuit 19:00, Reginald 19:30 London).
+- [ ] A post stuck in `needs_check` or `failed` (the terminal and `bin/studio health` show it): look at the platform, then `bin/studio publish resolve <post-id> --live --platform-post-id <id>` (it is live), `--retry` (it is not, send it again) or `--drop --reason-file F` (forget it).
 - [ ] Open each post on TikTok and Instagram: AI label visible, 1080p, post URL stored (Queue / Library).

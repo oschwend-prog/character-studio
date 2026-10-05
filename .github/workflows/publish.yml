@@ -1,15 +1,23 @@
-# Publish due posts through Postiz, every 15 minutes (`studio publish due`).
+# Publish due posts through Postiz (`studio publish due`): every 15 minutes through the evening posting window
+# (17:00-20:59 UTC) and every 3 hours otherwise, to stay inside GitHub's free minutes (see below).
 #
 # Secrets (repo secrets, added by the owner at go-live): DATABASE_URL, SUPABASE_URL,
 # SUPABASE_SERVICE_KEY, POSTIZ_API_KEY. Until DATABASE_URL exists the job prints a notice and
 # every later step is skipped, so the schedule never fails (and never emails) before go-live.
 # No apt packages are needed here (nothing in this job touches media); if one is ever added, run
 # `sudo apt-get update` first, as ci.yml does.
+#
+# The Postiz CLI is pinned to the exact version go-live was verified with (postiz@2.0.16): its output format
+# is what studio.publish.postiz and studio.metrics parse. Bump it deliberately, never `latest`.
 name: publish
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
+    # Every 15 minutes through the posting window (Biscuit 19:00 and Reginald 19:30 London are 18:00 / 18:30
+    # UTC in BST and 19:00 / 19:30 UTC in GMT, so 17:00-20:59 UTC covers both with a margin), plus a
+    # 3-hourly catch-up for the time the owner picks himself: 24 runs a day, not 96.
+    - cron: '*/15 17-20 * * *'
+    - cron: '40 */3 * * *'
   workflow_dispatch:
 
 # One publisher at a time. A run that is still going when the next tick fires is never cancelled:
@@ -47,7 +55,7 @@ jobs:
           node-version: '20'
       - name: Install the Postiz CLI
         if: steps.gate.outputs.configured == 'true'
-        run: npm i -g postiz
+        run: npm i -g postiz@2.0.16
       - name: Publish due posts
         if: steps.gate.outputs.configured == 'true'
         env:
