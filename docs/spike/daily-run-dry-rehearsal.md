@@ -1,4 +1,4 @@
-# Daily-run dry rehearsal (2026-10-05, Task 13)
+# Daily-run dry rehearsal (Task 13, redone in fix round 1)
 
 The `/daily-run` command sequence of `.claude/skills/daily-run/SKILL.md`, run through the real `studio` CLI against a
 `MemoryStore` (every module's `open_store` patched; `master upload` writes to a `LocalStorage` folder). **No MCP call and no
@@ -8,18 +8,22 @@ What is real and what is a stand-in:
 
 | Real | Stand-in (labelled where it appears) |
 |---|---|
-| every `bin/studio` command, its JSON and exit code; the state machine; the budget ledger; `qa tech` / `qa frames` / `master build` / `master upload` | vidIQ scan and breakdown (a fixture row and a fixture breakdown), Higgsfield stills / drivers / Genjutsu (a `testsrc2` clip with a sine tone), the close-up (a flat PNG), `humanizer`, `last30days`, `curl` downloads |
+| every `bin/studio` command, its JSON and exit code; the state machine; the budget ledger; `qa tech` / `qa frames` / `master build` / `master upload` | vidIQ scan and breakdown (a fixture row and a fixture breakdown), the `get_cost` preflights (numbers from the spike), Higgsfield stills / drivers / Genjutsu (a `testsrc2` clip with a sine tone), the close-up (a flat PNG), `humanizer`, `last30days`, `curl` downloads, the agent's Write tool (the harness writes the text files) |
 | the 17 batch-1 picks loaded from `docs/launch/viral-picks-2026-10-04.md` | fake handles and Postiz ids in a *rehearsal copy* of refs.json (status `live`), fixture URLs `@rehearsal.fixture` |
 
 The real clock is Mon 5 Oct 2026 (nothing is due on a Monday), so the clock of `plan`, `budget` and `review` is pinned to
 Tue 6 Oct 2026 08:00 London. Paths are shortened to `$WORK`. Long outputs are cut or reduced to the fields that matter
-(marked "selected fields"). Outputs of the form `exit N (EXPECTED M)` would flag a surprise; there are none.
+(marked "selected fields"). An output marked `(EXPECTED n)` would flag a surprise; there are none. Free text (proposal, breakdown,
+reason, features, hook, caption, qa, note) always goes through a `--*-file` option, never inline.
 
 ## Result
 
-The whole chain `plan -> scan -> pick -> reserve -> (generate) -> settle -> qa -> master -> upload -> awaiting_approval -> fav made`
-runs end to end on the real code. The ledger ends at 181 settled (the reservation of 160 replaced by the actual) and
-`clip.credits_reserved` / `credits_actual` carry 160 / 181. Gaps the rehearsal exposed are listed at the end.
+The whole chain `scan -> plan -> pick -> clip new -> preflight -> reserve -> (assets) -> source link -> generating -> settle ->
+qa -> master -> upload -> awaiting_approval -> fav made` runs end to end on the real code, in the order the skill now prescribes: the
+clip exists and its credits are reserved *before* any paid job, and a synthetic driver's source is linked afterwards while the clip is
+still `planned`. The ledger ends at 181 settled (the reservation of 191 replaced by the actual); `clip.credits_reserved` /
+`credits_actual` carry 191 / 181. A second clip shows the crash recovery (planned, open reservation, over 2 h old: released, dropped,
+its pick back to `approved`). Gaps the rehearsal exposed are listed at the end.
 
 
 ## 0. Seed as shipped (what the repo does today)
@@ -60,9 +64,9 @@ exit 0
 [... 11 more lines]
 ```
 
-Skill step 1.2 therefore drops every due clip (no character is `live`) and goes straight to the run log. Everything below uses a *rehearsal copy* of the refs: status `live`, fake handles and fake Postiz ids, in a MemoryStore only.
+Skill step 3.2 therefore drops every due clip (no character is `live`) and goes straight to the run log. Everything below uses a *rehearsal copy* of the refs: status `live`, fake handles and fake Postiz ids, in a MemoryStore only.
 
-## 1. Plan
+## 1. Orient and recover
 
 `$ bin/studio seed --characters-dir $WORK/characters`  (rehearsal refs: live + fake handles)
 exit 0
@@ -122,6 +126,103 @@ exit 0
       {
 [... 41 more lines]
 ```
+
+Crash recovery finds nothing on a fresh store:
+
+`$ bin/studio clip list --state generating`
+exit 0
+```json
+[]
+```
+`$ bin/studio clip list --state planned`
+exit 0
+```json
+[]
+```
+`$ bin/studio fav list --status queued`
+exit 0
+```json
+[]
+```
+
+## 2. Scan (before the plan; vidIQ is an MCP call: replaced by a fixture row)
+
+Tue 2026-10-06 is ISO week 41: slot = 4*41 + 0 = 164; two live characters sorted by slug (biscuit, reginald): character = 164 mod 2 = 0 -> biscuit, query = rotation[(164 div 2) mod 4] = rotation[2]. Over two weeks both characters reach all four queries (even weeks 0,1 / odd weeks 2,3 for each).
+`excludeContentIds` comes from `fav seen` (newest 100 ids, newest first):
+
+`$ bin/studio fav seen --limit 100`
+exit 0
+```json
+[
+  "DcWMn6QOckQ",
+  "Dc_RQsIMoxO",
+  "7671329075935415574",
+  "7669427457178488086",
+  "7671687450737118478",
+  "7676630835327405326",
+  "DdtbbsNrvu",
+  "Dc1ZM7LIKMg",
+  "Dc_OfoQIii5",
+[... 9 more lines]
+```
+
+The outlier below is a FIXTURE, not a real video; it stands in for one vidIQ result. The proposal goes through a file (`renders/tmp/p.json`), never inline.
+
+`$ bin/studio fav pick --url https://www.tiktok.com/@rehearsal.fixture/video/1000000000000000001 --platform tiktok --views 900000 --outlier-x 40 --creator @rehearsal.fixture --character biscuit --proposal-file $WORK/renders/tmp/p.json --freshness 7 --fit 8 --feasibility 8 --saturation 6`  (fixture outlier, analyst band; selected fields)
+exit 0
+```json
+{
+  "id": "34302653-78b0-491d-92d1-181bb22056fd",
+  "character_slug": "biscuit",
+  "status": "new",
+  "proposal": {
+    "mode": "recreate",
+    "hook": "fixture hook; it's \"quoted\" $(nope)",
+    "prop": "shades",
+    "concept": "fixture concept"
+  },
+  "total_score": 65.0
+}
+```
+`$ bin/studio fav decide 34302653-78b0-491d-92d1-181bb22056fd`  (the standing rule)
+exit 4
+```json
+{
+  "ok": false,
+  "needs": "analyst",
+  "id": "34302653-78b0-491d-92d1-181bb22056fd",
+  "total_score": 65.0,
+  "feasibility": 8.0,
+  "message": "favourite 34302653-78b0-491d-92d1-181bb22056fd needs an analyst decision (total 65.0, feasibility 8.0) - rerun with --decision approve|skip --reason '...' --by analyst"
+}
+```
+`$ bin/studio fav decide 34302653-78b0-491d-92d1-181bb22056fd --decision skip --reason-file $WORK/renders/tmp/reason.txt --by analyst`  (exit 4 -> analyst decides, reason from a file; selected fields)
+exit 0
+```json
+{
+  "id": "34302653-78b0-491d-92d1-181bb22056fd",
+  "status": "skipped",
+  "proposal": {
+    "mode": "recreate",
+    "hook": "fixture hook; it's \"quoted\" $(nope)",
+    "prop": "shades",
+    "concept": "fixture concept",
+    "decision": {
+      "decision": "skip",
+      "by": "analyst",
+      "reason": "fixture: rehearsal row, not a real trend"
+    }
+  }
+}
+```
+`$ bin/studio fav pick --url https://www.tiktok.com/@rehearsal.fixture/video/1000000000000000002 --platform tiktok --views 500000 --outlier-x 12 --character biscuit --proposal-file $WORK/renders/tmp/bad.json --freshness 7 --fit 8 --feasibility 8 --saturation 6`  (a misspelt needs is refused at the door)
+exit 2
+```
+error: proposal.needs must be one of or a list of {multi_body, talking_lane}, got 'multi-body'
+```
+
+## 3. Plan
+
 `$ bin/studio plan today`  (clock pinned to Tue 2026-10-06 08:00 London)
 exit 0
 ```json
@@ -154,118 +255,47 @@ exit 0
 }
 ```
 
-Skill 1.2: Reginald's refs.json has `closeup: null` (generated in the Task 16 rehearsal), so his clip is dropped; only Biscuit continues.
-`$ bin/studio clip list --character biscuit`  (step 1.3: nothing planned yet, EXCLUDE = {})
+Skill 3.2: Reginald's refs.json has `closeup: null` (generated in the Task 16 rehearsal), so his clip is dropped; only Biscuit continues.
+`$ bin/studio clip list --character biscuit`  (step 3.3: nothing planned yet, EXCLUDE = {})
 exit 0
 ```json
 []
 ```
 
-## 2. Scan (vidIQ is an MCP call: replaced by a fixture row)
+## 4. Concept
 
-Scan-day arithmetic for Tue 2026-10-06 (ISO week 41): slot = 4*41 + 0 = 164; two live characters sorted by slug (biscuit, reginald): character = 164 mod 2 = 0 -> biscuit, query = rotation[(164 div 2) mod 4] = rotation[2] (`hook`: "small dog in an outfit stares into the camera, then hits every beat of a high-energy track").
-The outlier below is a FIXTURE, not a real video; it stands in for one vidIQ result.
-
-`$ bin/studio fav pick --url https://www.tiktok.com/@rehearsal.fixture/video/1000000000000000001 --platform tiktok --views 900000 --outlier-x 40 --creator @rehearsal.fixture --character biscuit --proposal {"mode": "recreate", "hook": "fixture hook", "prop": "shades", "concept": "fixture concept"} --freshness 7 --fit 8 --feasibility 8 --saturation 6`  (fixture outlier, analyst band; selected fields)
-exit 0
-```json
-{
-  "id": "ca671490-5aa2-4195-a246-bab0b6fa34fc",
-  "character_slug": "biscuit",
-  "status": "new",
-  "scores": {
-    "virality": 5.3,
-    "reach": 3.5,
-    "freshness": 7.0,
-    "fit": 8.0,
-    "feasibility": 8.0,
-    "saturation": 6.0
-  },
-  "total_score": 65.0
-}
-```
-`$ bin/studio fav decide ca671490-5aa2-4195-a246-bab0b6fa34fc`  (the standing rule)
-exit 4
-```json
-{
-  "ok": false,
-  "needs": "analyst",
-  "id": "ca671490-5aa2-4195-a246-bab0b6fa34fc",
-  "total_score": 65.0,
-  "feasibility": 8.0,
-  "message": "favourite ca671490-5aa2-4195-a246-bab0b6fa34fc needs an analyst decision (total 65.0, feasibility 8.0) - rerun with --decision approve|skip --reason '...' --by analyst"
-}
-```
-`$ bin/studio fav decide ca671490-5aa2-4195-a246-bab0b6fa34fc --decision skip --reason fixture: rehearsal row, not a real trend --by analyst`  (exit 4 -> analyst decides with a one-line reason; selected fields)
-exit 0
-```json
-{
-  "id": "ca671490-5aa2-4195-a246-bab0b6fa34fc",
-  "status": "skipped",
-  "proposal": {
-    "mode": "recreate",
-    "hook": "fixture hook",
-    "prop": "shades",
-    "concept": "fixture concept",
-    "decision": {
-      "decision": "skip",
-      "by": "analyst",
-      "reason": "fixture: rehearsal row, not a real trend"
-    }
-  }
-}
-```
-`$ bin/studio fav pick --url https://www.tiktok.com/@rehearsal.fixture/video/1000000000000000002 --platform tiktok --views 500000 --outlier-x 12 --character biscuit --proposal {"mode": "recreate", "needs": "multi-body"} --freshness 7 --fit 8 --feasibility 8 --saturation 6`  (a misspelt needs is refused at the door)
-exit 2
-```
-error: proposal.needs must be one of or a list of {multi_body, talking_lane}, got 'multi-body'
-```
-
-## 3. Concept
-
-`$ bin/studio fav list --next 8`  (approved picks, oldest first; selected fields)
+`$ bin/studio fav list --next 1 --character biscuit`  (her own queue: every character gets its pick; selected fields)
 exit 0
 ```json
 [
   {
-    "id": "21bdc2d5-03d3-4a65-99c4-f588be7ca663",
-    "character_slug": "reginald",
-    "status": "approved",
-    "total_score": 92.0
-  },
-  {
-    "id": "4acffc54-0945-46b6-86cc-8193d1613b2a",
-    "character_slug": "reginald",
-    "status": "approved",
-    "total_score": 88.0
-  },
-  {
-    "id": "522e81cf-5057-4a84-84dd-4817581281cd",
+    "id": "8979b533-4fd9-473e-a130-af799f2e47c4",
     "character_slug": "biscuit",
     "status": "approved",
     "total_score": 85.0
-  },
+  }
+]
+```
+`$ bin/studio fav list --next 1 --character reginald`  (selected fields)
+exit 0
+```json
+[
   {
-    "id": "83da6efa-1200-42cf-908d-33a62e3a7ea4",
-    "character_slug": "biscuit",
+    "id": "bd1fba0c-df3f-4c2f-a4a5-b46451b4d329",
+    "character_slug": "reginald",
     "status": "approved",
-    "total_score": 80.0
-  },
-  {
-    "id": "4ea3467f-bc63-45af-91fe-a3af289d6c2a",
-    "character_slug": "biscuit",
-[... 235 more lines]
+    "total_score": 92.0
+  }
+]
 ```
 
-Biscuit's first pick: `he hits every single beat` (https://www.tiktok.com/@tillandsialover/video/7688386199270001953), status `approved`.
+Stand-in for vidIQ `watch_shortform_content` (10 credits): a fixture breakdown, passed through a file.
 
-Stand-in for vidIQ `watch_shortform_content` (10 credits): a fixture breakdown.
-
-`$ bin/studio fav mark 522e81cf-5057-4a84-84dd-4817581281cd --status analysed --breakdown FIXTURE breakdown. 0-2 s: static medium shot, kitchen at night. 2-8 s: upright paw hits on every snare. 8-10 s: final hit, hold. Camera static. Hook text top-centre. Audio: beat only.`  (selected fields)
+`$ bin/studio fav mark 8979b533-4fd9-473e-a130-af799f2e47c4 --status analysed --breakdown-file $WORK/renders/tmp/b.md`  (selected fields)
 exit 0
 ```json
 {
-  "id": "522e81cf-5057-4a84-84dd-4817581281cd",
+  "id": "8979b533-4fd9-473e-a130-af799f2e47c4",
   "status": "analysed",
   "breakdown_md": "FIXTURE breakdown. 0-2 s: static medium shot, kitchen at night. 2-8 s: upright paw hits on every snare. 8-10 s: final hit, hold. Camera static. Hook text top-centre. Audio: beat only."
 }
@@ -281,49 +311,16 @@ exit 0
 []
 ```
 
-## 4. Assets (Higgsfield is an MCP call: replaced by fixtures)
+## 5. Create, preflight, reserve
 
-`budget status` guard before any spend:
-
-`$ bin/studio budget status`
+`$ bin/studio clip new --character biscuit --mode recreate --features-file $WORK/renders/tmp/f.json`  (planned, no source yet (a synthetic driver does not exist); selected fields)
 exit 0
 ```json
 {
-  "month": "2026-10",
-  "cap": 6000,
-  "committed": 0,
-  "settled": 0,
-  "reserved": 0,
-  "remaining": 6000,
-  "kill_switch": false
-}
-```
-
-Round A (scene still + Seedance driver) is skipped here: no credits, no MCP. The driver job id below is a placeholder.
-
-`$ bin/studio source add --kind synthetic --url higgsfield-job:00000000-0000-0000-0000-0000000000d1 --body biped --bodies 1 --duration 10`  (selected fields)
-exit 0
-```json
-{
-  "id": "f7431ba7-69fa-490b-b6cd-66eedae6cd9e",
-  "kind": "synthetic",
-  "url": "higgsfield-job:00000000-0000-0000-0000-0000000000d1",
-  "body": "biped",
-  "bodies": 1,
-  "dropin_eligible": false
-}
-```
-
-## 5. Create and reserve
-
-`$ bin/studio clip new --character biscuit --mode recreate --source f7431ba7-69fa-490b-b6cd-66eedae6cd9e --features {"format_id": "B3", "hook_pattern": "gesture-routine", "hook_text": "he hits every single beat", "prop": "gold chain", "setting": "kitchen at night", "motion_type": "gesture", "audio_arm": "own_beat", "bodies_in_frame": 1, "seamless_loop": true, "eye_closeup_end": true, "trend_name": "evergreen", "fav_id": "522e81cf-5057-4a84-84dd-4817581281cd"}`  (selected fields)
-exit 0
-```json
-{
-  "id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
+  "id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
   "state": "planned",
   "mode": "recreate",
-  "source_id": "f7431ba7-69fa-490b-b6cd-66eedae6cd9e",
+  "source_id": null,
   "hf_job_id": null,
   "credits_reserved": 0,
   "credits_actual": null,
@@ -333,17 +330,21 @@ exit 0
   "hashtags": []
 }
 ```
-`$ bin/studio fav mark 522e81cf-5057-4a84-84dd-4817581281cd --status queued --clip 5c06b623-6a4c-4e7f-963f-a4d64193b29e`  (selected fields)
+`$ bin/studio fav mark 8979b533-4fd9-473e-a130-af799f2e47c4 --status queued --clip 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6`  (selected fields)
 exit 0
 ```json
 {
-  "id": "522e81cf-5057-4a84-84dd-4817581281cd",
+  "id": "8979b533-4fd9-473e-a130-af799f2e47c4",
   "character_slug": "biscuit",
   "status": "queued",
   "total_score": 85.0,
-  "clip_id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e"
+  "clip_id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
+  "note": null
 }
 ```
+
+Preflight (`get_cost: true`, an MCP call: stand-in numbers from the spike): scene still 1 + Seedance driver 70 + Genjutsu estimated 12 credits x 10 s = 120. Sum P = 191; the plan estimate for Recreate is 160, so the reserve is max(160, 191) = 191.
+
 `$ bin/studio budget status`
 exit 0
 ```json
@@ -357,28 +358,28 @@ exit 0
   "kill_switch": false
 }
 ```
-`$ bin/studio budget reserve 160 --clip 5c06b623-6a4c-4e7f-963f-a4d64193b29e`  (est_credits from the plan)
+`$ bin/studio budget reserve 191 --clip 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6`  (max(plan estimate for the ACTUAL mode, preflight sum))
 exit 0
 ```json
 {
-  "id": "ec0d9d8b-3e97-47b6-8046-c1a56ad912b5",
-  "clip_id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
+  "id": "ce8624e7-2e21-492d-9287-2a52a2b22d80",
+  "clip_id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
   "month": "2026-10",
   "kind": "reserve",
-  "credits": 160,
+  "credits": 191,
   "created_at": "2026-10-06T08:00:00+01:00"
 }
 ```
-`$ bin/studio clip set 5c06b623-6a4c-4e7f-963f-a4d64193b29e --state generating --credits-reserved 160`  (selected fields)
+`$ bin/studio clip set 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 --credits-reserved 191`  (selected fields)
 exit 0
 ```json
 {
-  "id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
-  "state": "generating",
+  "id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
+  "state": "planned",
   "mode": "recreate",
-  "source_id": "f7431ba7-69fa-490b-b6cd-66eedae6cd9e",
+  "source_id": null,
   "hf_job_id": null,
-  "credits_reserved": 160,
+  "credits_reserved": 191,
   "credits_actual": null,
   "master_path": null,
   "hook": null,
@@ -387,32 +388,91 @@ exit 0
 }
 ```
 
-## 6. Genjutsu (MCP stand-in: a local synthetic clip)
+## 6. Assets (Higgsfield is an MCP call: replaced by fixtures)
 
-`gen.mp4` is a 10 s 1080x1920 test pattern with a sine tone (stands in for the Genjutsu render).
+Round A (scene still, Seedance driver) is skipped: no MCP, no credits. The driver job id is a placeholder. The clip is still `planned` and holds an open reservation, so the source can be linked now:
 
-`$ bin/studio budget settle 5c06b623-6a4c-4e7f-963f-a4d64193b29e 181`  (actual = driver 70 + still 1 + Genjutsu 110, from get_cost preflights)
+`$ bin/studio source add --kind synthetic --url higgsfield-job:00000000-0000-0000-0000-0000000000d1 --body biped --bodies 1 --duration 10`  (selected fields)
 exit 0
 ```json
 {
-  "id": "dd2093c5-773f-4d74-9d20-cba28ff070a2",
-  "clip_id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
+  "id": "feb0193d-ea0d-4890-9ca2-58ed4b61a0a8",
+  "kind": "synthetic",
+  "url": "higgsfield-job:00000000-0000-0000-0000-0000000000d1",
+  "body": "biped",
+  "bodies": 1,
+  "dropin_eligible": false
+}
+```
+`$ bin/studio clip set 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 --source-id feb0193d-ea0d-4890-9ca2-58ed4b61a0a8`  (selected fields)
+exit 0
+```json
+{
+  "id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
+  "state": "planned",
+  "mode": "recreate",
+  "source_id": "feb0193d-ea0d-4890-9ca2-58ed4b61a0a8",
+  "hf_job_id": null,
+  "credits_reserved": 191,
+  "credits_actual": null,
+  "master_path": null,
+  "hook": null,
+  "caption": null,
+  "hashtags": []
+}
+```
+
+## 7. Genjutsu (MCP stand-in: a local synthetic clip)
+
+Exact preflight now that the driver exists: Genjutsu 110 + still 1 + driver 70 = 181 <= 191 reserved: no top-up.
+
+`$ bin/studio clip set 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 --state generating`  (selected fields)
+exit 0
+```json
+{
+  "id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
+  "state": "generating",
+  "mode": "recreate",
+  "source_id": "feb0193d-ea0d-4890-9ca2-58ed4b61a0a8",
+  "hf_job_id": null,
+  "credits_reserved": 191,
+  "credits_actual": null,
+  "master_path": null,
+  "hook": null,
+  "caption": null,
+  "hashtags": []
+}
+```
+`$ bin/studio clip set 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 --source-id feb0193d-ea0d-4890-9ca2-58ed4b61a0a8`  (the source is fixed again once the clip left planned)
+exit 2
+```
+error: the source can only change while the clip is planned (clip 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 is generating)
+```
+
+`gen.mp4` is a 10 s 1080x1920 test pattern with a sine tone (stands in for the Genjutsu render).
+
+`$ bin/studio budget settle 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 181`  (the summed actual of ALL the clip's jobs)
+exit 0
+```json
+{
+  "id": "2f52ca0c-ddde-4d88-80b7-a0f892f49da4",
+  "clip_id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
   "month": "2026-10",
   "kind": "settle",
   "credits": 181,
   "created_at": "2026-10-06T08:00:00.000001+01:00"
 }
 ```
-`$ bin/studio clip set 5c06b623-6a4c-4e7f-963f-a4d64193b29e --state generated --hf-job-id 00000000-0000-0000-0000-0000000000a1 --credits-actual 181`  (selected fields)
+`$ bin/studio clip set 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 --state generated --hf-job-id 00000000-0000-0000-0000-0000000000a1 --credits-actual 181`  (selected fields)
 exit 0
 ```json
 {
-  "id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
+  "id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
   "state": "generated",
   "mode": "recreate",
-  "source_id": "f7431ba7-69fa-490b-b6cd-66eedae6cd9e",
+  "source_id": "feb0193d-ea0d-4890-9ca2-58ed4b61a0a8",
   "hf_job_id": "00000000-0000-0000-0000-0000000000a1",
-  "credits_reserved": 160,
+  "credits_reserved": 191,
   "credits_actual": 181,
   "master_path": null,
   "hook": null,
@@ -421,9 +481,9 @@ exit 0
 }
 ```
 
-## 7. QA
+## 8. QA
 
-`$ bin/studio qa tech $WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/gen.mp4`  (selected fields)
+`$ bin/studio qa tech $WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/gen.mp4`  (selected fields)
 exit 0
 ```json
 {
@@ -436,45 +496,50 @@ exit 0
   "ok": true
 }
 ```
-`$ bin/studio qa frames $WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/gen.mp4 --out $WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/frames.jpg --n 6`
+`$ bin/studio qa frames $WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/gen.mp4 --out $WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/frames.jpg --n 6`
 exit 0
 ```json
 {
-  "out": "$WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/frames.jpg",
+  "out": "$WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/frames.jpg",
   "frames": 6,
   "frame_width": 270,
   "sheet_width": 1620
 }
 ```
 
-Visual QA (ODD EYES sides, outfit, hands, leakage) needs a real render: not applicable to a test pattern.
+Visual QA (ODD EYES sides, outfit, hands, leakage) needs a real render: not applicable to a test pattern. The QA record is a file:
 
-`$ bin/studio clip set 5c06b623-6a4c-4e7f-963f-a4d64193b29e --state qa_passed --qa {"tech": "ok", "visual": "n/a (dry rehearsal)"}`  (selected fields)
+`$ bin/studio clip set 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 --state qa_passed --qa-file $WORK/renders/tmp/qa.json`  (selected fields)
 exit 0
 ```json
 {
-  "id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
+  "id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
   "state": "qa_passed",
   "mode": "recreate",
-  "source_id": "f7431ba7-69fa-490b-b6cd-66eedae6cd9e",
+  "source_id": "feb0193d-ea0d-4890-9ca2-58ed4b61a0a8",
   "hf_job_id": "00000000-0000-0000-0000-0000000000a1",
-  "credits_reserved": 160,
+  "credits_reserved": 191,
   "credits_actual": 181,
   "master_path": null,
   "hook": null,
   "caption": null,
-  "hashtags": []
+  "hashtags": [],
+  "qa": {
+    "tech": "ok",
+    "problems": [],
+    "visual": "n/a (dry rehearsal)"
+  }
 }
 ```
 
-## 8. Master and queue
+## 9. Master and queue
 
 A placeholder PNG stands in for the Biscuit close-up (the real one is a Higgsfield job image). Spec, with `slowmo` placed late (near the end beat, at 8.0 s of 10 s):
 ```json
-{"dance": "$WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/gen.mp4", "closeup": "$WORK/renders/closeups/biscuit.png", "closeup_center": [536, 732], "blue_eye_xy": [301, 960], "hook1": ["he hits every", "single beat"], "hook2": ["find one he missed."], "hook2_until_s": 4.0, "audio": "$WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/gen.mp4", "audio_offset_s": 0, "out": "$WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/master.mp4", "preset": "veryfast", "enhancements": [{"type": "zoom_hit", "at_s": 3.0}, {"type": "slowmo", "at_s": 8.0, "dur_s": 1.0, "factor": 0.5}]}
+{"dance": "$WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/gen.mp4", "closeup": "$WORK/renders/closeups/biscuit.png", "closeup_center": [536, 732], "blue_eye_xy": [301, 960], "hook1": ["he hits every", "single beat"], "hook2": ["find one he missed."], "hook2_until_s": 4.0, "audio": "$WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/gen.mp4", "audio_offset_s": 0, "out": "$WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/master.mp4", "preset": "veryfast", "enhancements": [{"type": "zoom_hit", "at_s": 3.0}, {"type": "slowmo", "at_s": 8.0, "dur_s": 1.0, "factor": 0.5}]}
 ```
 
-`$ bin/studio master build --spec $WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/spec.json`  (selected fields)
+`$ bin/studio master build --spec $WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/spec.json`  (selected fields)
 exit 0
 ```json
 {
@@ -489,27 +554,27 @@ exit 0
   "ok": true
 }
 ```
-`$ bin/studio master upload 5c06b623-6a4c-4e7f-963f-a4d64193b29e $WORK/renders/5c06b623-6a4c-4e7f-963f-a4d64193b29e/master.mp4`
+`$ bin/studio master upload 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 $WORK/renders/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6/master.mp4`
 exit 0
 ```json
 {
-  "clip": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
-  "master_path": "biscuit/5c06b623-6a4c-4e7f-963f-a4d64193b29e.mp4",
+  "clip": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
+  "master_path": "biscuit/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6.mp4",
   "bucket": "clips"
 }
 ```
-`$ bin/studio clip set 5c06b623-6a4c-4e7f-963f-a4d64193b29e --state mastered --hook he hits every single beat --caption tracksuit on. worries off. 💙 --hashtag #dachshund --hashtag #dancingdog`  (selected fields)
+`$ bin/studio clip set 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 --state mastered --hook-file $WORK/renders/tmp/hook.txt --caption-file $WORK/renders/tmp/caption.txt --hashtag #dachshund --hashtag #dancingdog`  (selected fields)
 exit 0
 ```json
 {
-  "id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
+  "id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
   "state": "mastered",
   "mode": "recreate",
-  "source_id": "f7431ba7-69fa-490b-b6cd-66eedae6cd9e",
+  "source_id": "feb0193d-ea0d-4890-9ca2-58ed4b61a0a8",
   "hf_job_id": "00000000-0000-0000-0000-0000000000a1",
-  "credits_reserved": 160,
+  "credits_reserved": 191,
   "credits_actual": 181,
-  "master_path": "biscuit/5c06b623-6a4c-4e7f-963f-a4d64193b29e.mp4",
+  "master_path": "biscuit/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6.mp4",
   "hook": "he hits every single beat",
   "caption": "tracksuit on. worries off. 💙",
   "hashtags": [
@@ -518,18 +583,18 @@ exit 0
   ]
 }
 ```
-`$ bin/studio clip set 5c06b623-6a4c-4e7f-963f-a4d64193b29e --state awaiting_approval`  (selected fields)
+`$ bin/studio clip set 3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6 --state awaiting_approval`  (selected fields)
 exit 0
 ```json
 {
-  "id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e",
+  "id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
   "state": "awaiting_approval",
   "mode": "recreate",
-  "source_id": "f7431ba7-69fa-490b-b6cd-66eedae6cd9e",
+  "source_id": "feb0193d-ea0d-4890-9ca2-58ed4b61a0a8",
   "hf_job_id": "00000000-0000-0000-0000-0000000000a1",
-  "credits_reserved": 160,
+  "credits_reserved": 191,
   "credits_actual": 181,
-  "master_path": "biscuit/5c06b623-6a4c-4e7f-963f-a4d64193b29e.mp4",
+  "master_path": "biscuit/3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6.mp4",
   "hook": "he hits every single beat",
   "caption": "tracksuit on. worries off. 💙",
   "hashtags": [
@@ -538,38 +603,145 @@ exit 0
   ]
 }
 ```
-`$ bin/studio fav mark 522e81cf-5057-4a84-84dd-4817581281cd --status made`  (selected fields)
+`$ bin/studio fav mark 8979b533-4fd9-473e-a130-af799f2e47c4 --status made`  (selected fields)
 exit 0
 ```json
 {
-  "id": "522e81cf-5057-4a84-84dd-4817581281cd",
+  "id": "8979b533-4fd9-473e-a130-af799f2e47c4",
   "character_slug": "biscuit",
   "status": "made",
   "total_score": 85.0,
-  "clip_id": "5c06b623-6a4c-4e7f-963f-a4d64193b29e"
+  "clip_id": "3317f5ad-1f89-4e4f-89c0-28a6daf4f5d6",
+  "note": null
 }
 ```
 
-An out-of-order move is refused by the state machine (re-roll rule and table both live in code):
+## Crash recovery (a second clip whose run died)
 
-`$ bin/studio clip set 5c06b623-6a4c-4e7f-963f-a4d64193b29e --state generating`
-exit 2
-```
-error: clip 5c06b623-6a4c-4e7f-963f-a4d64193b29e: awaiting_approval -> generating is not allowed (from awaiting_approval: approved, rejected)
-```
+A second Biscuit pick is queued, its clip created and reserved, then the run 'dies' in Round A (planned, open reservation). Three hours later (the clip's `created_at` is moved back: stand-in for the clock) the next run's step 1 cleans up:
 
-## 9. Log
-
-`$ bin/studio run log --kind daily --status ok --summary dry rehearsal`  (Task 14 implements it; referenced as-is by the skill)
-exit 2
+`$ bin/studio fav list --next 1 --character biscuit`  (selected fields)
+exit 0
+```json
+[
+  {
+    "id": "48381ba8-7b00-479e-b617-59b6e6521d1f",
+    "character_slug": "biscuit",
+    "status": "approved"
+  }
+]
 ```
-Usage: studio [OPTIONS] COMMAND [ARGS]...
-Try 'studio --help' for help.
-╭─ Error ──────────────────────────────────────────────────────────────────────╮
-│ No such command 'run'.                                                       │
-╰──────────────────────────────────────────────────────────────────────────────╯
+`$ bin/studio clip new --character biscuit --mode recreate --features-file $WORK/renders/tmp/f2.json`  (selected fields)
+exit 0
+```json
+{
+  "id": "33ae00b4-1e2b-414f-96f3-bea149a6b075",
+  "state": "planned"
+}
 ```
-`$ bin/studio budget status`  (ledger after the run)
+`$ bin/studio fav mark 48381ba8-7b00-479e-b617-59b6e6521d1f --status queued --clip 33ae00b4-1e2b-414f-96f3-bea149a6b075`  (selected fields)
+exit 0
+```json
+{
+  "id": "48381ba8-7b00-479e-b617-59b6e6521d1f",
+  "character_slug": "biscuit",
+  "status": "queued",
+  "total_score": 80.0,
+  "clip_id": "33ae00b4-1e2b-414f-96f3-bea149a6b075",
+  "note": null
+}
+```
+`$ bin/studio budget reserve 160 --clip 33ae00b4-1e2b-414f-96f3-bea149a6b075`
+exit 0
+```json
+{
+  "id": "0a9090d9-6c21-4a98-9fcb-ddd44162316e",
+  "clip_id": "33ae00b4-1e2b-414f-96f3-bea149a6b075",
+  "month": "2026-10",
+  "kind": "reserve",
+  "credits": 160,
+  "created_at": "2026-10-06T08:00:00+01:00"
+}
+```
+`$ bin/studio clip set 33ae00b4-1e2b-414f-96f3-bea149a6b075 --credits-reserved 160`  (selected fields)
+exit 0
+```json
+{
+  "id": "33ae00b4-1e2b-414f-96f3-bea149a6b075",
+  "state": "planned",
+  "credits_reserved": 160
+}
+```
+`$ bin/studio budget status`  (160 reserved by the dead clip is part of `committed`)
+exit 0
+```json
+{
+  "month": "2026-10",
+  "cap": 6000,
+  "committed": 341,
+  "settled": 181,
+  "reserved": 160,
+  "remaining": 5659,
+  "kill_switch": false
+}
+```
+`$ bin/studio clip list --state planned`  (step 1.2: created over 2 h ago, credits_reserved > 0; selected fields)
+exit 0
+```json
+[
+  {
+    "id": "33ae00b4-1e2b-414f-96f3-bea149a6b075",
+    "state": "planned",
+    "credits_reserved": 160,
+    "created_at": "2026-10-06T05:00:00+01:00"
+  }
+]
+```
+`$ bin/studio budget release 33ae00b4-1e2b-414f-96f3-bea149a6b075`
+exit 0
+```json
+{
+  "id": "2ed8f1ac-a785-4921-a7e3-5418f1088508",
+  "clip_id": "33ae00b4-1e2b-414f-96f3-bea149a6b075",
+  "month": "2026-10",
+  "kind": "release",
+  "credits": 160,
+  "created_at": "2026-10-06T08:00:00.000001+01:00"
+}
+```
+`$ bin/studio clip set 33ae00b4-1e2b-414f-96f3-bea149a6b075 --state dropped`  (selected fields)
+exit 0
+```json
+{
+  "id": "33ae00b4-1e2b-414f-96f3-bea149a6b075",
+  "state": "dropped",
+  "credits_reserved": 160
+}
+```
+`$ bin/studio fav list --status queued`  (step 1.3; selected fields)
+exit 0
+```json
+[
+  {
+    "id": "48381ba8-7b00-479e-b617-59b6e6521d1f",
+    "status": "queued",
+    "clip_id": "33ae00b4-1e2b-414f-96f3-bea149a6b075"
+  }
+]
+```
+`$ bin/studio fav mark 48381ba8-7b00-479e-b617-59b6e6521d1f --status approved --note-file $WORK/renders/tmp/note.txt`  (selected fields)
+exit 0
+```json
+{
+  "id": "48381ba8-7b00-479e-b617-59b6e6521d1f",
+  "character_slug": "biscuit",
+  "status": "approved",
+  "total_score": 80.0,
+  "clip_id": "33ae00b4-1e2b-414f-96f3-bea149a6b075",
+  "note": "clip 33ae00b4-1e2b-414f-96f3-bea149a6b075 dropped: run crashed in round A (no QA failure)"
+}
+```
+`$ bin/studio budget status`  (the reservation is released: only the 181 settled remain)
 exit 0
 ```json
 {
@@ -583,9 +755,21 @@ exit 0
 }
 ```
 
+## 10. Log
+
+`$ bin/studio run log --kind daily --status ok --summary-file $WORK/renders/tmp/summary.txt`  (Task 14 implements it (with --summary-file); referenced as-is by the skill)
+exit 2
+```
+Usage: studio [OPTIONS] COMMAND [ARGS]...
+Try 'studio --help' for help.
+╭─ Error ──────────────────────────────────────────────────────────────────────╮
+│ No such command 'run'.                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+```
+
 ## Weekly review sequence (same harness)
 
-`$ bin/studio metrics pull`  (needs POSTIZ_API_KEY and the postiz binary (MemoryStore run has neither))
+`$ bin/studio metrics pull`  (needs POSTIZ_API_KEY and the postiz binary: the skill notes the exit 2 and continues)
 exit 2
 ```
 error: POSTIZ_API_KEY is not set. Run through bin/studio (Keychain item cs-postiz-api-key).
@@ -634,23 +818,27 @@ Fixed in this task (found while writing the skill or the rehearsal):
    `multi_body` / `talking_lane` (shown above: exit 2).
 3. `budget reserve|settle` write the ledger only, so `clip.credits_reserved` / `credits_actual` stayed 0 / null. The skill now sets
    them with `clip set --credits-reserved` / `--credits-actual`.
+4. **A synthetic driver's spend used to come before any reservation** (`clip.source_id` was fixed at creation). `clip set --source-id`
+   now works while the clip is `planned` (refused afterwards, unknown sources refused), so the order is clip, preflight, reserve,
+   then spend.
+5. **Free text never goes through the shell**: `--proposal-file`, `--breakdown-file`, `--note-file`, `--reason-file`, `--features-file`,
+   `--hook-file`, `--caption-file`, `--qa-file`, source flag `--reason-file`.
+6. `fav list --next 1 --character X` (a queue per character, so nobody is starved) and `fav seen` (newest 100 platform ids for vidIQ's
+   `excludeContentIds`).
 
 Open, not fixed here (each needs a decision or belongs to a later task):
 
-1. **`bin/studio run log` (Task 14) and `bin/studio review save` do not exist.** The skills call both as specified. Nothing writes
-   the `reviews` table yet; suggest adding `review save` next to `run log` (both need a Store method for their table).
+1. **`bin/studio run log` (Task 14) and `bin/studio review save` do not exist.** The skills call both as specified; `run log` is called
+   with `--summary-file F` (Task 14 should accept `--summary` and `--summary-file`). Nothing writes the `reviews` table yet; suggest
+   adding `review save` next to `run log` (both need a Store method for their table).
 2. **No CLI creates `posts`**, so a clip can only wait in `awaiting_approval` for the terminal's `approve_clip` RPC (Task 15).
    The skill stops there for every account, `auto` included; the brief's "scheduled if the account is auto" needs a post-creating command first.
-3. **`clip.source_id` is fixed at creation**, so a synthetic driver has to be rendered, and `source add`-ed, *before* `clip new`
-   and `budget reserve` (which needs the clip id). The skill guards the spend with `budget status` first (`kill_switch`, `remaining`
-   against the plan's `estimated`) and `budget settle` books the driver's credits afterwards. A run that dies between the driver and the
-   reserve leaves those credits unbooked; the run summary compares the ledger with `balance`.
-4. **No CLI hands an `owner_inbox` source (a bucket path) to Higgsfield** (no signed-URL command), so Drop-in from the inbox cannot
+3. **No CLI hands an `owner_inbox` source (a bucket path) to Higgsfield** (no signed-URL command), so Drop-in from the inbox cannot
    run yet; the skill takes the next row.
-5. Skipped by design: visual QA of a real render (ODD EYES sides, outfit, hands, leakage), the MCP calls, the Genjutsu `preset`
-   suggestion path, `jobs_wait` URL -> `curl`, the `jobs_wait` call with `timeout_seconds: 0` for resolving the close-up job id.
-   All of these are Task 16.
-6. As shipped, both characters are `designing`, so a scheduled `/daily-run` does nothing but log. Go-live = set `status: "live"` and the
+4. Skipped by design: visual QA of a real render (ODD EYES sides, outfit, hands, leakage), the MCP calls and the `get_cost` preflights,
+   the Genjutsu `preset` suggestion path, `jobs_wait` URL -> `curl`, the `jobs_wait` call with `timeout_seconds: 0` for resolving the
+   close-up job id, how a scheduled task really fires the skill. All of these are Task 16.
+5. As shipped, both characters are `designing`, so a scheduled `/daily-run` does nothing but log. Go-live = set `status: "live"` and the
    handles / Postiz ids in refs.json, then `bin/studio seed`. Reginald's `closeup` is null until the rehearsal generates it; the skill
    skips him until then. After the owner's top-up, D2 ("Biscuit #2, after the debut") would be produced before the planned debut under
    "picks first" unless the debut clip already exists: make the Task 16 debut re-render the first clip.
