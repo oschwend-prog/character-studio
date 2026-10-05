@@ -8,16 +8,23 @@ The logic lives in ``studio.publish.base`` (claim, cap, retry, stale handling) a
 an outcome could not be recorded (the post stays ``posting`` and becomes ``needs_check``); exit 2 for
 something the caller must fix (no ``DATABASE_URL``, Supabase or ``POSTIZ_API_KEY``, no ``postiz`` CLI).
 ``--dry-run`` claims and writes nothing, needs neither Storage nor Postiz, and prints what would go.
+With the kill switch on, ``due`` claims nothing and prints ``"paused": true``.
+
+``studio publish resolve <post>`` settles a ``needs_check`` / ``failed`` post by hand, with exactly one
+of ``--live --platform-post-id ID [--url U]``, ``--retry [--at ISO]``, ``--drop --reason-file F`` (see
+``studio.publish.resolve``); exit 2 for a wrong call, nothing written.
 """
 
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
 from shutil import which
 from typing import Annotated
 
 import typer
 
-from studio.cli_support import emit, fail, open_storage, open_store
+from studio.cli_support import emit, fail, open_storage, open_store, parse_when, text_option
 from studio.config import load, now_london
 from studio.publish.base import (
     PublishResult,
@@ -27,6 +34,7 @@ from studio.publish.base import (
     publish_due,
 )
 from studio.publish.postiz import PostizError, PostizPublisher
+from studio.publish.resolve import resolve_drop, resolve_live, resolve_retry
 
 __all__ = [
     "PostizError",
@@ -71,3 +79,44 @@ def due_command(
     emit(summary)
     if summary["errors"]:
         raise typer.Exit(1)
+
+
+@app.command("resolve")
+def resolve_command(
+    post: Annotated[str, typer.Argument(help="Post id (a needs_check or failed post).")],
+    live: Annotated[bool, typer.Option("--live", help="It is live on the platform: record it as posted.")] = False,
+    retry: Annotated[bool, typer.Option("--retry", help="It is NOT live: send it again.")] = False,
+    drop: Annotated[bool, typer.Option("--drop", help="Forget it: delete the never-posted row.")] = False,
+    platform_post_id: Annotated[
+        str | None, typer.Option("--platform-post-id", help="With --live: the Postiz post id (metrics use it).")
+    ] = None,
+    url: Annotated[str | None, typer.Option(help="With --live: the post's public URL.")] = None,
+    at: Annotated[
+        str | None, typer.Option(help="With --retry: ISO 8601 time to send it (no offset = London).")
+    ] = None,
+    reason_file: Annotated[
+        Path | None, typer.Option("--reason-file", help="With --drop: why, in a file (free text never inline).")
+    ] = None,
+) -> None:
+    """Settle a needs_check / failed post by hand, after looking at the platform. Exactly one of
+    --live, --retry, --drop."""
+    if [live, retry, drop].count(True) != 1:
+        fail("pass exactly one of --live, --retry, --drop")
+    store = open_store()
+    try:
+        if live:
+            if platform_post_id is None:
+                fail("--platform-post-id is required with --live")
+            emit(resolve_live(store, post, platform_post_id, url))
+        elif retry:
+            when: datetime | None = parse_when(at, "--at") if at is not None else None
+            emit(resolve_retry(store, post, when))
+        else:
+            reason = text_option(None, reason_file, "reason")
+            if reason is None:
+                fail("--reason-file is required with --drop")
+            emit(resolve_drop(store, post, reason))
+    except KeyError:
+        fail(f"unknown post {post}")
+    except ValueError as e:
+        fail(str(e))

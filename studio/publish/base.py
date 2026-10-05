@@ -9,6 +9,10 @@ minutes on GitHub Actions). The rules, in the order they run:
    ``now`` (or missing) becomes ``needs_check`` and is never retried automatically: the process that
    claimed it may have reached the platform before it died, so only a human can say whether the
    post is live. This runs *before* the claim, so a fresh claim is never judged stale.
+1b. **Kill switch.** With ``Settings.kill_switch`` on ("stop all new spend and posting") nothing is claimed
+   or published: the summary comes back with ``paused: true``, every due post stays ``scheduled`` and goes
+   out on the first run after the switch is lifted. Reconcile and stale handling above still ran, they
+   publish nothing.
 2. **Claim.** ``store.claim_due_posts(now)`` atomically flips due ``scheduled`` posts to ``posting``
    (one runner per post), earliest first.
 3. **Per post**, one at a time:
@@ -16,10 +20,13 @@ minutes on GitHub Actions). The rules, in the order they run:
    * the clip must still be ``scheduled`` (a rejected or dropped clip is never published; the post
      fails at once with the reason and no attempt is spent);
    * **at most 2 posted per account per London day.** A third due post goes back to ``scheduled``
-     at that account's character's next cadence slot (``slot_for`` with the real
-     ``Settings.cadence``, the next cadence day after today). A ``needs_check`` post counts like a
-     posted one: it may well be live. The in-run counter is bumped as soon as the publisher
-     returns, before any database write, so a lost write cannot let a third post out in that run.
+     at that account's character's first *free* cadence slot after today (``planning.free_slot``: the
+     first cadence day, from tomorrow, on which the account has no post in ``scheduled`` / ``posting`` /
+     ``posted`` / ``needs_check``, so a deferral never stacks a second post on a taken day). A
+     ``needs_check`` post counts like a posted one: it may well be live, and so does a fresh ``posting``
+     post (claimed within the last 30 minutes: another runner has it in flight). The in-run counter is
+     bumped as soon as the publisher returns, before any database write, so a lost write cannot let a
+     third post out in that run.
      The day of a posted post is the London date of its ``claimed_at`` (the posts table has no
      ``posted_at``), falling back to ``scheduled_for``;
    * the master's signed URL goes to ``publisher.publish(..., ai_label=True)`` (never without the AI
@@ -37,7 +44,7 @@ is reported under ``errors`` and leaves the post in ``posting``: 30 minutes late
 ``needs_check``. That is the whole crash story: a post can be late or need a human, never be posted
 twice. One post's failure never stops the others.
 
-``publish_due`` returns a JSON-friendly summary: ``stale``, ``posted``, ``retry``, ``failed``,
+``publish_due`` returns a JSON-friendly summary: ``paused`` (the kill switch is on), ``stale``, ``posted``, ``retry``, ``failed``,
 ``rescheduled``, ``needs_check`` (each a list of dicts with a ``post_id``), ``clips_posted`` (clip
 ids, reconciled ones included) and ``errors`` (outcomes that could not be recorded, each with a
 ``post_id`` or a ``clip_id``; the CLI exits 1 on any).
@@ -49,13 +56,13 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol, runtime_checkable
 
 from studio.clips import transition
 from studio.config import LONDON
 from studio.models import Account, Clip, ClipState, Platform, Post, PostStatus
-from studio.planning import WEEKDAYS, _cadence_days, slot_for
+from studio.planning import free_slot, taken_days
 from studio.storage import Storage
 from studio.store import Store, require_aware
 
@@ -110,30 +117,49 @@ def next_slot(character_slug: str, after: date, cadence: Any) -> datetime:
 
     ``ValueError`` when the character has no slot or no usable cadence days.
     """
-    days = _cadence_days(cadence.get(character_slug))
-    for offset in range(1, 8):
-        day = after + timedelta(days=offset)
-        if WEEKDAYS[day.weekday()] in days:
-            return slot_for(character_slug, day, cadence)
-    raise ValueError(f"no posting days configured for {character_slug!r}")
+    midnight = datetime.combine(after + timedelta(days=1), time(0), tzinfo=LONDON)
+    return free_slot(character_slug, midnight, cadence, set())
 
 
-def _deferred_slot(character_slug: str, post: Post, today: date, cadence: Any) -> datetime:
-    """Where a post that hit the daily cap goes: the next cadence slot, else tomorrow, same time."""
+def _deferred_slot(
+    store: Store,
+    account: Account,
+    post: Post,
+    today: date,
+    cadence: Any,
+    extra: dict[str, set[date]],
+) -> datetime:
+    """Where a post that hit the daily cap goes: the first free cadence slot after today, else tomorrow.
+
+    Free = a day on which the account has no post that holds a slot (``planning.taken_days``), plus the days
+    this run already deferred other posts of the account to (``extra``: a dry run writes nothing).
+    """
+    taken = taken_days(store, [account.id]) | extra.get(account.id, set())
+    midnight = datetime.combine(today + timedelta(days=1), time(0), tzinfo=LONDON)
     try:
-        return next_slot(character_slug, today, cadence)
-    except ValueError:
+        target = free_slot(account.character_slug, midnight, cadence, taken)
+    except ValueError:  # no slot or no free cadence day configured: tomorrow, at the post's own time
         wall = post.scheduled_for.astimezone(LONDON).timetz()
-        return datetime.combine(today + timedelta(days=1), wall)
+        target = datetime.combine(today + timedelta(days=1), wall)
+    extra.setdefault(account.id, set()).add(target.astimezone(LONDON).date())
+    return target
 
 
-def _posted_counts(store: Store, day: date) -> Counter[str]:
-    """Posts per account that count against the cap on ``day``: posted, or possibly live."""
+def _posted_counts(store: Store, day: date, now: datetime) -> Counter[str]:
+    """Posts per account that count against the cap on ``day``: posted, possibly live, or in flight.
+
+    In flight = ``posting`` and claimed within ``STALE_AFTER``: another runner is publishing it right
+    now. A stale ``posting`` post is not counted here: it is flagged ``needs_check`` first (which counts).
+    """
     counts: Counter[str] = Counter()
     for status in (PostStatus.posted, PostStatus.needs_check):
         for post in store.list_posts(status=status):
             if _post_day(post) == day:
                 counts[post.account_id] += 1
+    cutoff = now - STALE_AFTER
+    for post in store.list_posts(status=PostStatus.posting):
+        if post.claimed_at is not None and post.claimed_at >= cutoff and _post_day(post) == day:
+            counts[post.account_id] += 1
     return counts
 
 
@@ -173,7 +199,7 @@ def publish_due(
     """Run the publish job once; see the module docstring for the rules. Returns the summary."""
     require_aware(now, "publish_due(now)")
     out: dict[str, Any] = {
-        "stale": [], "posted": [], "retry": [], "failed": [],
+        "paused": False, "stale": [], "posted": [], "retry": [], "failed": [],
         "rescheduled": [], "needs_check": [], "clips_posted": [], "errors": [],
     }  # fmt: skip
 
@@ -187,14 +213,22 @@ def publish_due(
         store.update_post(post.id, status=PostStatus.needs_check, error=reason)
         out["stale"].append({"post_id": post.id, "claimed_at": post.claimed_at})
 
+    settings = store.get_settings()
+    if settings.kill_switch:  # "stop all new spend and posting": claim nothing, due posts keep waiting
+        out["paused"] = True
+        return out
+
     today = _day(now)
-    cadence = store.get_settings().cadence
+    cadence = settings.cadence
     accounts = {a.id: a for a in store.accounts()}
-    counts = _posted_counts(store, today)
+    counts = _posted_counts(store, today, now)
+    deferred_days: dict[str, set[date]] = {}
 
     for post in store.claim_due_posts(now):
         try:
-            _publish_one(store, storage, publisher, post, accounts, cadence, today, counts, out)
+            _publish_one(
+                store, storage, publisher, post, accounts, cadence, today, counts, deferred_days, out
+            )
         except Exception as e:  # noqa: BLE001 - one post must never stop the rest
             # Whatever happened, the post is still `posting`: it becomes needs_check, never a retry.
             out["errors"].append({"post_id": post.id, "error": _short(e)})
@@ -210,6 +244,7 @@ def _publish_one(
     cadence: Any,
     today: date,
     counts: Counter[str],
+    deferred_days: dict[str, set[date]],
     out: dict[str, Any],
 ) -> None:
     account = accounts.get(post.account_id)
@@ -222,7 +257,7 @@ def _publish_one(
         return
 
     if verdict == DEFER:
-        target = _deferred_slot(account.character_slug, post, today, cadence)
+        target = _deferred_slot(store, account, post, today, cadence, deferred_days)
         store.update_post(
             post.id, status=PostStatus.scheduled, claimed_at=None, scheduled_for=target
         )
@@ -317,12 +352,17 @@ def _row(post: Post, account: Account | None, clip: Clip | None) -> dict[str, An
 
 
 def preview_due(store: Store, now: datetime) -> dict[str, Any]:
-    """What ``publish_due`` would do right now, without claiming or writing anything."""
+    """What ``publish_due`` would do right now, without claiming or writing anything.
+
+    With the kill switch on it reports ``paused: true`` and nothing would be posted, deferred or failed.
+    """
     require_aware(now, "preview_due(now)")
     today = _day(now)
-    cadence = store.get_settings().cadence
+    settings = store.get_settings()
+    cadence = settings.cadence
     accounts = {a.id: a for a in store.accounts()}
-    counts = _posted_counts(store, today)
+    counts = _posted_counts(store, today, now)
+    deferred_days: dict[str, set[date]] = {}
 
     stale = stale_posts(store, now)
     for post in stale:  # they would be flagged first and count if they went out today
@@ -331,9 +371,12 @@ def preview_due(store: Store, now: datetime) -> dict[str, Any]:
 
     out: dict[str, Any] = {
         "now": now,
+        "paused": settings.kill_switch,
         "would_flag_needs_check": [{"post_id": p.id, "claimed_at": p.claimed_at} for p in stale],
         "would_post": [], "would_reschedule": [], "would_fail": [],
     }  # fmt: skip
+    if settings.kill_switch:  # nothing would be claimed
+        return out
     due = [p for p in store.list_posts(status=PostStatus.scheduled) if p.scheduled_for <= now]
     for post in due:  # list_posts is ordered by scheduled_for, like the claim
         account = accounts.get(post.account_id)
@@ -343,7 +386,7 @@ def preview_due(store: Store, now: datetime) -> dict[str, Any]:
         if verdict == REFUSE:
             out["would_fail"].append({**row, "reason": why})
         elif verdict == DEFER:
-            target = _deferred_slot(account.character_slug, post, today, cadence)
+            target = _deferred_slot(store, account, post, today, cadence, deferred_days)
             out["would_reschedule"].append({**row, "to": target, "reason": why})
         else:
             counts[post.account_id] += 1

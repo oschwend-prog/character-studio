@@ -21,14 +21,16 @@ from typer.testing import CliRunner
 from studio import publish
 from studio.cli import app
 from studio.config import LONDON
-from studio.models import Account, Character, Clip, ClipState, Platform, Post, PostStatus
+from studio.models import Account, Character, Clip, ClipState, Platform, Post, PostStatus, Snapshot
 from studio.publish import base, postiz
 from studio.publish.base import PublishResult, Publisher, UncertainPublish, preview_due, publish_due
 from studio.publish.postiz import (
     INSTAGRAM_SETTINGS,
     TIKTOK_SETTINGS,
+    CAPTION_LIMIT,
     PostizError,
     PostizPublisher,
+    caption_length,
     compose_content,
     download_media,
 )
@@ -561,6 +563,65 @@ def test_the_cap_counts_a_possibly_live_needs_check_post(rig):
     assert pub.calls == [] and rig.get(extra).status is PostStatus.scheduled
 
 
+def test_a_fresh_posting_post_counts_toward_the_cap_at_run_start(rig):
+    """Another runner has a post in flight: it may well be live in a minute, so it takes a slot."""
+    rig.post(status="posted", claimed_at=SLOT, platform_post_id="a")
+    inflight = rig.post(status="posting", claimed_at=NOW - timedelta(minutes=5))
+    extra = rig.post(when=SLOT + timedelta(minutes=10))
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert pub.calls == []
+    assert rig.get(extra).status is PostStatus.scheduled and rig.get(extra).scheduled_for > NOW
+    assert [x["post_id"] for x in summary["rescheduled"]] == [extra.id]
+    assert rig.get(inflight).status is PostStatus.posting  # left to its owner, as before
+
+
+def test_two_fresh_posting_posts_fill_the_cap(rig):
+    for minutes in (3, 4):
+        rig.post(status="posting", claimed_at=NOW - timedelta(minutes=minutes))
+    extra = rig.post(when=SLOT + timedelta(minutes=10))
+    pub = FakePublisher()
+    rig.run(pub)
+    assert pub.calls == [] and rig.get(extra).status is PostStatus.scheduled
+
+
+def test_one_fresh_posting_post_leaves_room_for_one_more(rig):
+    rig.post(status="posting", claimed_at=NOW - timedelta(minutes=3))
+    first = rig.post(when=SLOT + timedelta(minutes=10))
+    second = rig.post(when=SLOT + timedelta(minutes=11))
+    pub = FakePublisher()
+    rig.run(pub)
+    assert len(pub.calls) == 1
+    assert (rig.get(first).status, rig.get(second).status) == (PostStatus.posted, PostStatus.scheduled)
+
+
+def test_a_fresh_posting_post_of_another_account_does_not_count(rig):
+    for minutes in (3, 4):
+        rig.post("@reginald.tt", status="posting", claimed_at=NOW - timedelta(minutes=minutes))
+    mine = rig.post("@biscuit.tt", when=SLOT + timedelta(minutes=10))
+    rig.run(FakePublisher())
+    assert rig.get(mine).status is PostStatus.posted
+
+
+def test_a_stale_posting_post_is_counted_once_not_twice(rig):
+    """Stale -> needs_check (counted as possibly live); the new posting rule must not count it again."""
+    rig.post(status="posting", claimed_at=NOW - timedelta(minutes=31))
+    due = rig.post(when=SLOT + timedelta(minutes=10))
+    assert [x["post_id"] for x in preview_due(rig.store, NOW)["would_post"]] == [due.id]
+    pub = FakePublisher()
+    rig.run(pub)
+    assert len(pub.calls) == 1 and rig.get(due).status is PostStatus.posted
+
+
+def test_the_dry_run_counts_a_fresh_posting_post_too(rig):
+    rig.post(status="posted", claimed_at=SLOT, platform_post_id="a")
+    rig.post(status="posting", claimed_at=NOW - timedelta(minutes=5))
+    extra = rig.post(when=SLOT + timedelta(minutes=10))
+    out = preview_due(rig.store, NOW)
+    assert out["would_post"] == []
+    assert [x["post_id"] for x in out["would_reschedule"]] == [extra.id]
+
+
 def test_failed_and_yesterdays_posts_do_not_count(rig):
     yesterday = SLOT - timedelta(days=1)
     rig.post(status="posted", claimed_at=yesterday, platform_post_id="y1")
@@ -570,6 +631,95 @@ def test_failed_and_yesterdays_posts_do_not_count(rig):
     due = rig.post()
     rig.run(FakePublisher())
     assert rig.get(due).status is PostStatus.posted
+
+
+# ---- the kill switch stops posting (spec: "stops generation and posting") ----------------------------
+
+
+def test_kill_switch_on_claims_and_posts_nothing(rig):
+    rig.store.set_settings(kill_switch=True)
+    due = [rig.post(), rig.post("@reginald.tt")]
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert pub.calls == [] and summary["paused"] is True
+    assert [rig.get(p).status for p in due] == [PostStatus.scheduled, PostStatus.scheduled]
+    assert all(rig.get(p).claimed_at is None and rig.get(p).attempts == 0 for p in due)  # never claimed
+    assert summary["posted"] == [] and summary["errors"] == []
+
+
+def test_kill_switch_still_reconciles_clips_and_flags_stale_claims(rig):
+    """Bookkeeping that publishes nothing keeps running: only the posting stops."""
+    rig.store.set_settings(kill_switch=True)
+    stale = rig.post(status="posting", claimed_at=NOW - timedelta(hours=2))
+    done = rig.post(status="posted", claimed_at=SLOT, platform_post_id="a")
+    summary = rig.run(FakePublisher())
+    assert rig.get(stale).status is PostStatus.needs_check and [x["post_id"] for x in summary["stale"]] == [stale.id]
+    assert rig.store.get_clip(done.clip_id).state is ClipState.posted and summary["clips_posted"] == [done.clip_id]
+    assert summary["paused"] is True
+
+
+def test_kill_switch_off_posts_as_usual_and_says_so(rig):
+    p = rig.post()
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert summary["paused"] is False and len(pub.calls) == 1 and rig.get(p).status is PostStatus.posted
+
+
+def test_posts_wait_through_the_pause_and_go_out_when_it_lifts(rig):
+    rig.store.set_settings(kill_switch=True)
+    p = rig.post()
+    pub = FakePublisher()
+    rig.run(pub)
+    rig.store.set_settings(kill_switch=False)
+    rig.run(pub, NOW + timedelta(minutes=15))
+    assert len(pub.calls) == 1 and rig.get(p).status is PostStatus.posted
+
+
+def test_the_dry_run_with_the_kill_switch_on_would_post_nothing(rig):
+    rig.store.set_settings(kill_switch=True)
+    p = rig.post()
+    out = preview_due(rig.store, NOW)
+    assert out["paused"] is True and out["would_post"] == [] and out["would_reschedule"] == []
+    assert rig.get(p).status is PostStatus.scheduled
+    rig.store.set_settings(kill_switch=False)
+    assert [x["post_id"] for x in preview_due(rig.store, NOW)["would_post"]] == [p.id]
+
+
+# ---- a deferral lands on the first cadence day on which the account has no post ----------------------
+
+
+def test_a_deferred_post_skips_a_day_the_account_already_posts_on(rig):
+    for minutes in (0, 1):
+        rig.post(status="posted", claimed_at=SLOT + timedelta(minutes=minutes), platform_post_id=f"p{minutes}")
+    wed = datetime(2026, 10, 7, 19, 0, tzinfo=LONDON)
+    rig.post(when=wed)  # another clip is already scheduled for Wednesday
+    extra = rig.post(when=SLOT + timedelta(minutes=10))
+    summary = rig.run(FakePublisher())
+    thu = datetime(2026, 10, 8, 19, 0, tzinfo=LONDON)
+    assert rig.get(extra).scheduled_for == thu and summary["rescheduled"][0]["to"] == thu
+
+
+def test_two_deferrals_in_one_run_land_on_different_days(rig):
+    for minutes in (0, 1):
+        rig.post(status="posted", claimed_at=SLOT + timedelta(minutes=minutes), platform_post_id=f"p{minutes}")
+    a = rig.post(when=SLOT + timedelta(minutes=10))
+    b = rig.post(when=SLOT + timedelta(minutes=11))
+    rig.run(FakePublisher())
+    assert [rig.get(a).scheduled_for, rig.get(b).scheduled_for] == [
+        datetime(2026, 10, 7, 19, 0, tzinfo=LONDON), datetime(2026, 10, 8, 19, 0, tzinfo=LONDON)
+    ]
+
+
+def test_the_dry_run_predicts_the_same_deferral_days(rig):
+    for minutes in (0, 1):
+        rig.post(status="posted", claimed_at=SLOT + timedelta(minutes=minutes), platform_post_id=f"p{minutes}")
+    rig.post(when=datetime(2026, 10, 7, 19, 0, tzinfo=LONDON))
+    a = rig.post(when=SLOT + timedelta(minutes=10))
+    b = rig.post(when=SLOT + timedelta(minutes=11))
+    out = preview_due(rig.store, NOW)
+    assert [(x["post_id"], x["to"]) for x in out["would_reschedule"]] == [
+        (a.id, datetime(2026, 10, 8, 19, 0, tzinfo=LONDON)), (b.id, datetime(2026, 10, 13, 19, 0, tzinfo=LONDON)),
+    ]
 
 
 def test_the_cap_day_is_the_london_day_not_the_utc_day(rig):
@@ -800,6 +950,8 @@ def test_postiz_a_definite_4xx_is_a_plain_retriable_error(tmp_path, status):
         "❌ Failed to create post: Request failed: API Error (500): boom",
         "❌ Failed to create post: Request failed: API Error (503): unavailable",
         "❌ Failed to create post: Request failed: API Error (524): origin timed out",
+        "❌ Failed to create post: Request failed: API Error (408): Request Timeout",
+        "❌ Failed to create post: Request failed: API Error (409): Conflict",
         "❌ Failed to create post: Request failed: socket hang up",
         "❌ Failed to create post: Request failed: connect ECONNRESET 10.0.0.1:443",
         "❌ Failed to create post: fetch failed",
@@ -813,6 +965,33 @@ def test_postiz_anything_but_a_definite_4xx_is_uncertain(tmp_path, stderr):
     run = FakeRun(create=(1, "", stderr))
     with pytest.raises(UncertainPublish):
         publish_via_postiz(tmp_path, run)
+
+
+def test_postiz_a_408_is_uncertain_not_a_definite_rejection(tmp_path):
+    """408 Request Timeout: the server gave up waiting, but the create may have gone through."""
+    run = FakeRun(create=(1, "", "❌ Failed to create post: Request failed: API Error (408): timeout"))
+    with pytest.raises(UncertainPublish, match="408"):
+        publish_via_postiz(tmp_path, run)
+
+
+def test_postiz_a_409_is_uncertain_too(tmp_path):
+    """409 Conflict may be the post already existing: never retried."""
+    run = FakeRun(create=(1, "", "❌ Failed to create post: Request failed: API Error (409): conflict"))
+    with pytest.raises(UncertainPublish, match="409"):
+        publish_via_postiz(tmp_path, run)
+
+
+@pytest.mark.parametrize("status", [408, 409])
+def test_postiz_a_408_or_409_ends_in_needs_check_and_is_never_retried_end_to_end(tmp_path, status):
+    rig = Rig(tmp_path)
+    p = rig.post()
+    run = FakeRun(create=(1, "", f"Request failed: API Error ({status}): x"))
+    publisher = PostizPublisher(run)
+    rig.run(publisher)
+    rig.run(publisher, NOW + timedelta(minutes=15))
+    got = rig.get(p)
+    assert (got.status, got.attempts) == (PostStatus.needs_check, 0)
+    assert [c[1] for c in run.calls].count("posts:create") == 1
 
 
 def test_postiz_reads_the_status_from_stdout_when_stderr_is_empty(tmp_path):
@@ -971,14 +1150,98 @@ AI = "AI-generated character 🤖"
         ("", ["a"], f"{AI}\n\n#a"),
         ("hello", ["A", "a", "#A", " b ", ""], f"hello\n\n{AI}\n\n#A #b"),  # trimmed, de-duplicated
         ("  hello  ", ["#"], f"hello\n\n{AI}"),
-        # a caption that already says it is not told twice (any case); a hashtag does not count
-        ("Meet Biscuit, AI-generated since day one", ["a"], "Meet Biscuit, AI-generated since day one\n\n#a"),
-        ("an ai-generated dance", [], "an ai-generated dance"),
+        # only the EXACT disclosure line is not told twice; wording that merely mentions it does not count
+        (f"Meet Biscuit\n{AI}", ["a"], f"Meet Biscuit\n{AI}\n\n#a"),
+        ("an ai-generated dance", [], f"an ai-generated dance\n\n{AI}"),
         ("a dance", ["aigenerated"], f"a dance\n\n{AI}\n\n#aigenerated"),
     ],
 )
 def test_compose_content(caption, tags, expected):
     assert compose_content(caption, tags) == expected
+
+
+# ---- the disclosure is exact, and the 2,200 limit raises (never trims) --------------------------------
+
+
+def test_the_caption_limit_is_2200():
+    assert CAPTION_LIMIT == 2200
+
+
+@pytest.mark.parametrize(
+    "caption",
+    [
+        "AI-generated? Never.",  # says the words, not the line: still gets the disclosure
+        "Meet Biscuit, AI-generated since day one",
+        "an ai-generated dance",
+        "AI-generated character",  # close, but not the exact string (no emoji)
+    ],
+)
+def test_the_disclosure_is_appended_unless_the_exact_string_is_present(caption):
+    assert compose_content(caption, ["a"]) == f"{caption}\n\n{AI}\n\n#a"
+
+
+def test_a_caption_already_carrying_the_exact_disclosure_is_not_told_twice():
+    caption = f"the right eye is ice-blue\n{AI}"
+    out = compose_content(caption, ["a"])
+    assert out == f"{caption}\n\n#a" and out.count(AI) == 1
+
+
+def test_a_caption_that_fits_the_limit_exactly_is_untouched():
+    fixed = caption_length(f"\n\n{AI}\n\n#a")
+    body = "x" * (CAPTION_LIMIT - fixed)
+    out = compose_content(body, ["a"])
+    assert out == f"{body}\n\n{AI}\n\n#a" and caption_length(out) == CAPTION_LIMIT
+
+
+def test_one_char_over_the_limit_raises_with_the_composed_length_never_trims():
+    fixed = caption_length(f"\n\n{AI}\n\n#a")
+    body = "x" * (CAPTION_LIMIT - fixed + 1)  # the limit applies AFTER disclosure and hashtags
+    with pytest.raises(ValueError, match=r"2201 characters.*2200") as e:
+        compose_content(body, ["a"])
+    assert "shorten the caption by 1" in str(e.value)
+
+
+def test_the_limit_counts_hashtags_too():
+    with pytest.raises(ValueError, match="2200"):
+        compose_content("hello", [f"tag{i:03d}" + "z" * 30 for i in range(100)])
+
+
+def test_emoji_count_as_two_units_so_the_limit_holds_in_utf16_too():
+    assert caption_length("🐶") == 2
+    with pytest.raises(ValueError):
+        compose_content("🐶" * 1100, [])  # 1,100 code points, 2,200 units + the disclosure
+
+
+def test_an_over_long_caption_is_a_failed_attempt_with_nothing_fetched_or_uploaded(tmp_path):
+    run = FakeRun()
+    _, url = stored_master(tmp_path)
+    with pytest.raises(ValueError, match="2200"):
+        PostizPublisher(run).publish(
+            platform=Platform.tiktok, integration_id="int-bis-tt", media_url=url,
+            caption="z" * 5000, hashtags=["oddeyes"], ai_label=True,
+        )  # fmt: skip
+    assert run.calls == []
+
+
+def test_an_over_long_caption_fails_the_post_after_3_attempts_not_a_silent_trim(tmp_path):
+    rig = Rig(tmp_path)
+    clip = rig.clip()
+    rig.store.update_clip(clip.id, caption="z" * 5000)
+    p = rig.post(clip=clip)
+    run = FakeRun()
+    publisher = PostizPublisher(run)
+    for i in range(3):
+        rig.run(publisher, NOW + timedelta(minutes=15 * i))
+    got = rig.get(p)
+    assert got.status is PostStatus.failed and "2200" in got.error and run.calls == []
+
+
+def test_the_content_posted_ends_with_the_disclosure_then_the_hashtags_within_the_limit(tmp_path):
+    run = FakeRun()
+    publish_via_postiz(tmp_path, run)
+    content = run.option("posts:create", "-c")
+    assert caption_length(content) <= CAPTION_LIMIT
+    assert content == f"the right eye is ice-blue\n\n{AI}\n\n#oddeyes #biscuit"
 
 
 @pytest.mark.parametrize(
@@ -1065,6 +1328,145 @@ def cli(tmp_path, monkeypatch):
 
 def invoke(*args: str):
     return CliRunner().invoke(app, ["publish", *args])
+
+
+# ---- `studio publish resolve`: a human settles a needs_check / failed post ---------------------------
+
+
+def stuck(rig, status="needs_check", handle="@biscuit.tt", **kw):
+    return rig.post(handle, status=status, claimed_at=SLOT, **kw)
+
+
+@pytest.mark.parametrize("status", ["needs_check", "failed"])
+def test_resolve_live_marks_the_post_posted_with_its_id_and_url(cli, status):
+    p = stuck(cli, status, attempts=3, error="boom")
+    r = invoke("resolve", p.id, "--live", "--platform-post-id", "pz-77", "--url", "https://tiktok.test/v/1")
+    assert r.exit_code == 0, r.output
+    got = cli.get(p)
+    assert (got.status, got.platform_post_id, got.url, got.error) == (
+        PostStatus.posted, "pz-77", "https://tiktok.test/v/1", None,
+    )
+    assert json.loads(r.stdout)["post"]["status"] == "posted"
+
+
+def test_resolve_live_moves_the_clip_to_posted_once_all_its_posts_are(cli):
+    clip = cli.clip()
+    live = stuck(cli, "needs_check", clip=clip)  # its only post
+    r = invoke("resolve", live.id, "--live", "--platform-post-id", "pz-1")
+    assert r.exit_code == 0 and json.loads(r.stdout)["clip_posted"] is True
+    assert cli.store.get_clip(clip.id).state is ClipState.posted
+
+
+def test_resolve_live_leaves_the_clip_scheduled_while_a_sibling_is_unsettled(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, instagram=True)
+    monkeypatch.setattr(publish, "open_store", lambda: rig.store)
+    clip = rig.clip()
+    live = rig.post("@biscuit.tt", clip=clip, status="needs_check", claimed_at=SLOT)
+    rig.post("@biscuit.ig", clip=clip, status="needs_check", claimed_at=SLOT)
+    r = invoke("resolve", live.id, "--live", "--platform-post-id", "pz-1")
+    assert r.exit_code == 0 and json.loads(r.stdout)["clip_posted"] is False
+    assert rig.store.get_clip(clip.id).state is ClipState.scheduled
+
+
+def test_resolve_live_needs_the_platform_post_id(cli):
+    p = stuck(cli)
+    r = invoke("resolve", p.id, "--live")
+    assert r.exit_code == 2 and "--platform-post-id" in r.output
+    assert cli.get(p).status is PostStatus.needs_check
+
+
+@pytest.mark.parametrize("status", ["scheduled", "posting", "posted"])
+def test_resolve_only_touches_needs_check_or_failed_posts(cli, status):
+    p = cli.post(status=status, claimed_at=SLOT if status != "scheduled" else None, platform_post_id="x" if status == "posted" else None)
+    for flags in (["--live", "--platform-post-id", "pz-9"], ["--retry"]):
+        r = invoke("resolve", p.id, *flags)
+        assert r.exit_code == 2 and status in r.output
+    reason = cli.tmp / "r.txt"
+    reason.write_text("why", encoding="utf-8")
+    assert invoke("resolve", p.id, "--drop", "--reason-file", str(reason)).exit_code == 2
+    assert cli.get(p).status.value == status
+
+
+def test_resolve_wants_exactly_one_action(cli):
+    p = stuck(cli)
+    assert invoke("resolve", p.id).exit_code == 2
+    r = invoke("resolve", p.id, "--live", "--platform-post-id", "pz-1", "--retry")
+    assert r.exit_code == 2 and "exactly one" in r.output
+    assert cli.get(p).status is PostStatus.needs_check
+    assert invoke("resolve", "no-such-post", "--retry").exit_code == 2
+
+
+@pytest.mark.parametrize("status", ["needs_check", "failed"])
+def test_resolve_retry_puts_the_post_back_to_scheduled_for_the_next_run(cli, status):
+    p = stuck(cli, status, attempts=3, error="boom")
+    r = invoke("resolve", p.id, "--retry")
+    assert r.exit_code == 0, r.output
+    got = cli.get(p)
+    assert (got.status, got.claimed_at, got.attempts, got.error) == (PostStatus.scheduled, None, 0, None)
+    pub = FakePublisher()
+    cli.run(pub)  # the 15-minute job now publishes it
+    assert len(pub.calls) == 1 and cli.get(p).status is PostStatus.posted
+
+
+def test_resolve_retry_at_sets_the_time_and_needs_an_aware_or_london_time(cli):
+    p = stuck(cli)
+    r = invoke("resolve", p.id, "--retry", "--at", "2026-10-08T19:00")
+    assert r.exit_code == 0, r.output
+    assert cli.get(p).scheduled_for == datetime(2026, 10, 8, 19, 0, tzinfo=LONDON)
+    assert invoke("resolve", stuck(cli, handle="@reginald.tt").id, "--retry", "--at", "tomorrow").exit_code == 2
+
+
+def test_resolve_retry_refuses_a_clip_that_is_no_longer_scheduled(cli):
+    clip = cli.clip(state=ClipState.rejected)
+    p = stuck(cli, clip=clip)
+    r = invoke("resolve", p.id, "--retry")
+    assert r.exit_code == 2 and "rejected" in r.output and cli.get(p).status is PostStatus.needs_check
+
+
+def test_resolve_drop_deletes_the_row_and_rejects_a_clip_left_without_posts(cli):
+    clip = cli.clip()
+    p = stuck(cli, "failed", clip=clip, error="boom")
+    reason = cli.tmp / "reason.txt"
+    reason.write_text("the master was wrong; do not post $(rm -rf /)\n", encoding="utf-8")
+    r = invoke("resolve", p.id, "--drop", "--reason-file", str(reason))
+    assert r.exit_code == 0, r.output
+    assert cli.store.list_posts(id=p.id) == []
+    got = cli.store.get_clip(clip.id)
+    assert got.state is ClipState.rejected and got.reject_reason == "the master was wrong; do not post $(rm -rf /)"
+    out = json.loads(r.stdout)
+    assert out["dropped"] == p.id and out["clip_state"] == "rejected"
+
+
+def test_resolve_drop_keeps_the_clip_while_it_still_has_other_posts(tmp_path, monkeypatch):
+    rig = Rig(tmp_path, instagram=True)
+    monkeypatch.setattr(publish, "open_store", lambda: rig.store)
+    clip = rig.clip()
+    gone = rig.post("@biscuit.tt", clip=clip, status="needs_check", claimed_at=SLOT)
+    rig.post("@biscuit.ig", clip=clip)
+    reason = tmp_path / "r.txt"
+    reason.write_text("not live", encoding="utf-8")
+    r = invoke("resolve", gone.id, "--drop", "--reason-file", str(reason))
+    assert r.exit_code == 0 and json.loads(r.stdout)["clip_state"] == "scheduled"
+    assert rig.store.get_clip(clip.id).state is ClipState.scheduled and len(rig.store.list_posts(clip_id=clip.id)) == 1
+
+
+def test_resolve_drop_needs_a_reason_and_refuses_a_post_that_was_ever_live(cli):
+    p = stuck(cli)
+    assert invoke("resolve", p.id, "--drop").exit_code == 2  # no --reason-file
+    empty = cli.tmp / "e.txt"
+    empty.write_text("  \n", encoding="utf-8")
+    assert invoke("resolve", p.id, "--drop", "--reason-file", str(empty)).exit_code == 2
+    reason = cli.tmp / "r.txt"
+    reason.write_text("why", encoding="utf-8")
+    cli.store.add_snapshot(Snapshot(post_id=p.id, views=10))  # it has metrics: it was live
+    r = invoke("resolve", p.id, "--drop", "--reason-file", str(reason))
+    assert r.exit_code == 2 and "snapshot" in r.output
+    assert cli.store.list_posts(id=p.id) != []
+
+
+def test_resolve_is_in_the_publish_help():
+    r = invoke("--help")
+    assert r.exit_code == 0 and "resolve" in r.output
 
 
 def test_cli_lists_due_and_dry_run():

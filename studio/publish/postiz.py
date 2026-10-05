@@ -18,11 +18,14 @@ from the environment (``bin/studio`` exports it from the Keychain).
 
 **What is safe to retry.** A failed fetch and a failed or timed-out upload happen before any post
 exists: plain ``PostizError``, retried by ``publish_due``. So is a ``posts:create`` whose output shows
-a definite 4xx (``API Error (4xx)``): Postiz refused the request. Every other way ``posts:create`` can
-end may already have committed server-side, and Postiz has no idempotency key: a timeout, a 5xx
-(502, 524...), a network failure (``Request failed: socket hang up``), any other non-zero exit, and
-exit 0 without a post id we can read. Those raise ``UncertainPublish`` and end in ``needs_check``,
-never in a retry.
+a definite 4xx (``API Error (4xx)``, except 408 and 409): Postiz refused the request. Every other way
+``posts:create`` can end may already have committed server-side, and Postiz has no idempotency key: a
+timeout (408 Request Timeout too), a 409 Conflict, a 5xx (502, 524...), a network failure
+(``Request failed: socket hang up``), any other non-zero exit, and exit 0 without a post id we can read.
+Those raise ``UncertainPublish`` and end in ``needs_check``, never in a retry.
+
+A caption whose composed text (caption + AI disclosure + hashtags) is over 2,200 characters raises
+``ValueError`` before anything is fetched or uploaded (``studio.captions``): a plain failed attempt.
 
 The signed URL carries a token: it is never put in an error message.
 """
@@ -43,6 +46,13 @@ from urllib.request import url2pathname
 
 import httpx
 
+from studio.captions import (  # noqa: F401 - re-exported: the text rules live in studio.captions
+    AI_DISCLOSURE,
+    CAPTION_LIMIT,
+    caption_length,
+    clean_tags,
+    compose_content,
+)
 from studio.models import Platform
 from studio.publish.base import PublishResult, UncertainPublish
 
@@ -72,12 +82,10 @@ PLATFORM_SETTINGS: dict[Platform, dict[str, Any]] = {
     Platform.instagram: INSTAGRAM_SETTINGS,
 }
 
-# The Postiz CLI prints "Request failed: API Error (<status>): ..." for an HTTP error answer.
-_DEFINITE_REJECTION = re.compile(r"API Error \(4\d\d\)")
-
-# Every post carries a visible AI disclosure, whatever the platform: on Instagram it is the only one
-# (the label is not an API setting there); on TikTok it backs up ``video_made_with_ai``.
-AI_DISCLOSURE = "AI-generated character 🤖"
+# The Postiz CLI prints "Request failed: API Error (<status>): ..." for an HTTP error answer. A 4xx is a
+# definite refusal, except 408 (Request Timeout: the server gave up waiting, the create may have gone
+# through) and 409 (Conflict: it may be the post already existing): those stay uncertain.
+_DEFINITE_REJECTION = re.compile(r"API Error \((?!408\)|409\))4\d\d\)")
 
 UPLOAD_TIMEOUT_S = 900
 CREATE_TIMEOUT_S = 180
@@ -88,30 +96,6 @@ _FETCH_TIMEOUT = httpx.Timeout(30.0, read=600.0)
 
 class PostizError(RuntimeError):
     """A Postiz CLI step or the media fetch failed before anything was published."""
-
-
-def _clean_tags(hashtags: list[str]) -> list[str]:
-    tags: list[str] = []
-    seen: set[str] = set()
-    for raw in hashtags:
-        tag = raw.strip().lstrip("#").strip()
-        if tag and tag.lower() not in seen:
-            seen.add(tag.lower())
-            tags.append(f"#{tag}")
-    return tags
-
-
-def compose_content(caption: str, hashtags: list[str]) -> str:
-    """The post text: the caption ending in the AI disclosure, a blank line, then the hashtags.
-
-    The disclosure (``AI_DISCLOSURE``) is added unless the caption already says "AI-generated"
-    (any case); hashtags get their ``#`` and are de-duplicated.
-    """
-    text = caption.strip()
-    if "ai-generated" not in text.lower():
-        text = f"{text}\n\n{AI_DISCLOSURE}" if text else AI_DISCLOSURE
-    tags = _clean_tags(hashtags)
-    return f"{text}\n\n{' '.join(tags)}" if tags else text
 
 
 def download_media(
@@ -198,9 +182,9 @@ class PostizPublisher:
             raise ValueError("refusing to publish without the AI label")
         if not integration_id:
             raise ValueError("no Postiz integration id for this account")
-        if not caption.strip() and not _clean_tags(hashtags):
+        if not caption.strip() and not clean_tags(hashtags):
             raise ValueError("nothing to post: caption and hashtags are empty")
-        content = compose_content(caption, hashtags)
+        content = compose_content(caption, hashtags)  # ValueError when over the limit: nothing sent
         settings = PLATFORM_SETTINGS[platform]  # never mutated, only serialised
 
         with tempfile.TemporaryDirectory(prefix="studio-publish-") as tmp:
