@@ -57,8 +57,8 @@ def make_store(
     store = MemoryStore(
         settings=Settings(monthly_cap_credits=cap, kill_switch=kill_switch),
         characters=[
-            Character(slug="biscuit", name="Biscuit", bodies=[Body.quadruped]),
-            Character(slug="reginald", name="Reginald", bodies=[Body.biped]),
+            Character(slug="biscuit", name="Biscuit", bodies=[Body.quadruped], status="live"),
+            Character(slug="reginald", name="Reginald", bodies=[Body.biped], status="live"),
         ],
     )
     for slug in ("biscuit", "reginald"):
@@ -611,3 +611,29 @@ def test_plan_group_is_registered_once_and_has_today():
     assert r.exit_code == 0
     assert len(re.findall(r"^\W*plan\s", r.output, flags=re.MULTILINE)) == 1
     assert "today" in run("--help").output
+
+
+# ---- only live characters are planned ---------------------------------------------------------------------
+
+
+def test_a_character_that_is_not_live_is_never_due():
+    store = make_store()
+    store.upsert_character(Character(slug="reginald", name="Reginald", bodies=[Body.biped], status="designing"))
+    assert [d.character_slug for d in plan_today(store, TUE)] == ["biscuit"]
+    store.upsert_character(Character(slug="reginald", name="Reginald", bodies=[Body.biped], status="live"))
+    assert [d.character_slug for d in plan_today(store, TUE)] == ["biscuit", "reginald"]
+
+
+def test_nothing_is_due_when_no_character_is_live(cli_store):
+    for slug in ("biscuit", "reginald"):
+        cli_store.upsert_character(Character(slug=slug, name=slug.title(), bodies=[Body.biped], status="designing"))
+    out = json.loads(run("today").stdout)
+    assert out["due"] == [] and out["deferred_over_cap"] == []
+    assert out["skipped_not_live"] == ["biscuit", "reginald"]  # said out loud: a day with nothing due is not silent
+
+
+def test_a_not_live_character_does_not_use_up_the_cap():
+    store = make_store(cap=160)  # room for exactly one recreate clip
+    store.upsert_character(Character(slug="biscuit", name="Biscuit", bodies=[Body.quadruped], status="designing"))
+    due = plan_today(store, TUE)
+    assert [d.character_slug for d in due] == ["reginald"]

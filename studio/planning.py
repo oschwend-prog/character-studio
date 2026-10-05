@@ -6,7 +6,9 @@
 * it has no clip created today (London date) in any state beyond ``planned``: one plan per
   character per day, whatever became of today's clip (a dead one is not replaced until
   tomorrow), and
-* the kill switch is off.
+* the kill switch is off, and
+* its ``status`` is ``live`` (a character still being designed is never planned; ``studio plan today`` lists
+  those it skipped under ``skipped_not_live``, so a day with nothing due says why).
 
 Due characters are ordered by slot, then slug, and added one by one at an estimated cost
 (``EST_CREDITS``: recreate 160 including the amortised synthetic driver, drop-in 115). The plan
@@ -94,6 +96,7 @@ class Plan:
     committed: int  # settled + reserved credits of the month, before this plan
     due: list[DueClip] = field(default_factory=list)
     deferred: list[DueClip] = field(default_factory=list)  # due today, but past the cap
+    skipped_not_live: list[str] = field(default_factory=list)  # on today's cadence, but not ``live`` yet
 
 
 # ---- slots ---------------------------------------------------------------------------------
@@ -307,6 +310,9 @@ def _plan(store: Store, now: datetime) -> Plan:
         character = characters.get(slug)
         if character is None or weekday not in _cadence_days(entry):
             continue
+        if character.status != "live":  # a character still being designed has no avatar or accounts to post
+            plan.skipped_not_live.append(slug)
+            continue
         if _has_clip_today(store, slug, day):
             continue
         todo.append((slot_for(slug, day, settings.cadence), character))
@@ -362,5 +368,6 @@ def today_command() -> None:
             "estimated": estimated,
             "due": plan.due,
             "deferred_over_cap": plan.deferred,
+            "skipped_not_live": sorted(plan.skipped_not_live),
         }
     )
