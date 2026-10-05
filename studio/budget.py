@@ -26,6 +26,9 @@ Ordering: ``committed`` replays each clip's rows in ``created_at`` order, so a n
 stamped no earlier than the clip's last row (clock skew between machines, or two calls with the
 same ``now``, cannot reorder a reservation behind the settle that closes it).
 
+``open_reservations`` / ``studio budget open`` is the read-only list of clips that still hold credits
+(any month of the last 12), so a crashed run's reservation can be found and settled or released.
+
 CLI (``studio budget ...``) prints JSON on stdout. Exit codes: 0 ok, 3 refused by the budget
 (cap or kill switch), 2 anything the caller must fix (no ``DATABASE_URL``, unknown clip, no open
 reservation, bad number); an unexpected crash exits 1, so it is never mistaken for a refusal.
@@ -213,6 +216,58 @@ def release(store: Store, clip_id: str, now: datetime) -> LedgerEntry:
     return _close(store, clip_id, now, "release", None)
 
 
+def _open_in(entries: list[LedgerEntry]) -> dict[str, tuple[int, datetime | None]]:
+    """Per clip of one month's rows: (credits still held, when the oldest still-open reserve was made)."""
+    out: dict[str, tuple[int, datetime | None]] = {}
+    for e in entries:
+        held, since = out.get(e.clip_id, (0, None))
+        if e.kind == "reserve":
+            out[e.clip_id] = (held + e.credits, since or e.created_at)
+        else:  # settle / release close everything open for the clip
+            out[e.clip_id] = (0, None)
+    return {clip: (held, since) for clip, (held, since) in out.items() if held > 0}
+
+
+def open_reservations(store: Store, now: datetime) -> list[dict[str, Any]]:
+    """Clips that still hold credits, over the last ``LOOKBACK_MONTHS`` months, oldest reservation first.
+
+    Read-only. One row per clip: ``clip_id``, the clip's ``state`` / ``character`` / ``clip_created_at``
+    (``None`` for a ledger row whose clip is gone), ``held`` credits (summed over months), ``months`` that
+    hold some, ``oldest_reserved_at`` and ``age_hours`` of that reserve against ``now``. This is what
+    crash recovery iterates: a reservation that nothing settled or released is in this list however the
+    run died (including between ``budget reserve`` and ``clip set --credits-reserved``).
+    """
+    month_key(now)  # reject a naive ``now``
+    held: dict[str, int] = {}
+    oldest: dict[str, datetime] = {}
+    months: dict[str, list[str]] = {}
+    for month in sorted(_months_back(now, LOOKBACK_MONTHS)):  # oldest month first
+        for clip_id, (credits, since) in _open_in(store.ledger_month(month)).items():
+            held[clip_id] = held.get(clip_id, 0) + credits
+            months.setdefault(clip_id, []).append(month)
+            if since is not None and (clip_id not in oldest or since < oldest[clip_id]):
+                oldest[clip_id] = since
+    rows = []
+    for clip_id, credits in held.items():
+        clip = store.get_clip(clip_id)
+        since = oldest.get(clip_id)
+        rows.append(
+            {
+                "clip_id": clip_id,
+                "state": clip.state.value if clip else None,
+                "character": clip.character_slug if clip else None,
+                "clip_created_at": clip.created_at.isoformat() if clip and clip.created_at else None,
+                "held": credits,
+                "months": months[clip_id],
+                "oldest_reserved_at": since.isoformat() if since else None,
+                "age_hours": round((now - since).total_seconds() / 3600, 1) if since else None,
+            }
+        )
+    # by the real instants (the isoformat strings carry BST/GMT offsets that do not sort as text)
+    rows.sort(key=lambda r: (r["clip_id"] not in oldest, oldest.get(r["clip_id"], now), r["clip_id"]))
+    return rows
+
+
 # ---- CLI -----------------------------------------------------------------------------------
 
 EXIT_REFUSED = 3
@@ -309,3 +364,12 @@ def release_command(clip: Annotated[str, typer.Argument(help="Clip id.")]) -> No
     except NoOpenReservation as e:
         fail(str(e))
     emit(_entry_json(entry))
+
+
+@app.command("open")
+def open_command() -> None:
+    """List clips that still hold credits (read-only JSON): id, state, held, oldest reserve time, age.
+
+    Crash recovery walks this list: a clip here that is over 2 h old was left by a run that died.
+    """
+    emit(open_reservations(open_store(), now_london()))

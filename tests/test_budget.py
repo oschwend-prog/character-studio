@@ -416,3 +416,86 @@ def test_cli_budget_group_is_the_modules_own_app():
     assert r.exit_code == 0
     for cmd in ("status", "reserve", "settle", "release"):
         assert cmd in r.output
+
+
+# ---- budget open: which clips still hold credits (crash recovery reads this) ------------------------------
+
+
+def _clip(store, state="generating", **kw):
+    return store.add_clip(Clip(character_slug="biscuit", mode=Mode.recreate, state=state, **kw))
+
+
+def test_open_reservations_lists_a_held_clip_and_drops_it_once_settled_or_released():
+    store = make_store()
+    a, b = _clip(store), _clip(store, "planned")
+    reserve(store, a.id, 160, NOW - timedelta(hours=5))
+    reserve(store, b.id, 115, NOW - timedelta(hours=1))
+    rows = budget.open_reservations(store, NOW)
+    assert [(r["clip_id"], r["held"], r["state"]) for r in rows] == [(a.id, 160, "generating"), (b.id, 115, "planned")]
+    assert rows[0]["oldest_reserved_at"] == (NOW - timedelta(hours=5)).isoformat()
+    assert rows[0]["age_hours"] == 5.0 and rows[1]["age_hours"] == 1.0
+    settle(store, a.id, 120, NOW)
+    release(store, b.id, NOW)
+    assert budget.open_reservations(store, NOW) == []
+
+
+def test_two_reserves_add_up_and_the_oldest_time_is_the_first_still_open_one():
+    store = make_store()
+    a = _clip(store)
+    reserve(store, a.id, 100, NOW - timedelta(hours=9))
+    settle(store, a.id, 90, NOW - timedelta(hours=8))  # closed: not part of what is open now
+    reserve(store, a.id, 40, NOW - timedelta(hours=3))  # the re-roll's reserve
+    reserve(store, a.id, 20, NOW - timedelta(hours=2))  # a top-up
+    (row,) = budget.open_reservations(store, NOW)
+    assert row["held"] == 60 and row["oldest_reserved_at"] == (NOW - timedelta(hours=3)).isoformat()
+
+
+def test_open_reservations_look_back_across_months_and_sum_per_clip():
+    store = make_store()
+    a = _clip(store)
+    reserve(store, a.id, 100, datetime(2026, 8, 30, 12, 0, tzinfo=LONDON))
+    reserve(store, a.id, 50, datetime(2026, 10, 1, 9, 0, tzinfo=LONDON))
+    (row,) = budget.open_reservations(store, NOW)
+    assert row["held"] == 150 and row["oldest_reserved_at"].startswith("2026-08-30")
+    assert row["months"] == ["2026-08", "2026-10"]
+
+
+def test_open_reservations_outside_the_lookback_are_not_listed():
+    store = make_store()
+    a = _clip(store)
+    reserve(store, a.id, 100, datetime(2025, 6, 1, 12, 0, tzinfo=LONDON))  # > 12 months before NOW
+    assert budget.open_reservations(store, NOW) == []
+
+
+def test_open_reservations_carry_the_clip_context_and_sort_oldest_first():
+    store = make_store()
+    newer, older = _clip(store), _clip(store)
+    reserve(store, newer.id, 10, NOW - timedelta(hours=1))
+    reserve(store, older.id, 10, NOW - timedelta(hours=7))
+    rows = budget.open_reservations(store, NOW)
+    assert [r["clip_id"] for r in rows] == [older.id, newer.id]
+    assert rows[0]["character"] == "biscuit" and rows[0]["clip_created_at"] == store.get_clip(older.id).created_at.isoformat()
+
+
+def test_a_ledger_row_of_an_unknown_clip_is_still_listed_with_no_state():
+    store = make_store()
+    reserve(store, "ghost-clip", 30, NOW)
+    (row,) = budget.open_reservations(store, NOW)
+    assert row["clip_id"] == "ghost-clip" and row["state"] is None and row["held"] == 30
+
+
+def test_open_reservations_needs_an_aware_now():
+    with pytest.raises(ValueError):
+        budget.open_reservations(make_store(), datetime(2026, 10, 6, 12, 0))
+
+
+def test_cli_open_prints_the_list_and_writes_nothing(cli_store):
+    assert json.loads(run("open").stdout) == []
+    reserve(cli_store, cli_store.clip_id, 160, NOW - timedelta(hours=3))
+    before = list(cli_store.ledger_month(MONTH))
+    r = run("open")
+    assert r.exit_code == 0, r.output
+    (row,) = json.loads(r.stdout)
+    assert row["clip_id"] == cli_store.clip_id and row["held"] == 160 and row["age_hours"] == 3.0
+    assert cli_store.ledger_month(MONTH) == before  # read-only
+    assert "open" in run("--help").output
