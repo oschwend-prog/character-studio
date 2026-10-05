@@ -129,7 +129,6 @@ def test_short_links_are_rejected_with_a_request_for_the_full_url(url):
         "   ",
         "https://www.tiktok.com/@someone",
         "https://www.instagram.com/someone/",
-        "https://www.youtube.com/watch?v=aBc-dEf_123",
         "https://example.com/@x/video/1",
         "https://nottiktok.com/@x/video/1",
         "ftp://www.tiktok.com/@x/video/1",
@@ -1200,3 +1199,24 @@ def test_fav_pick_files_a_gallery_clip_from_the_proposal_file_without_a_url(cli_
     out = json.loads(r.stdout)
     assert out["url"] == "higgsfield-preset:hf-genjutsu-pets-04" and out["tier"] == "gallery" and out["duplicate"] is False
     assert out["proposal"]["preview_url"] == "https://d1.cloudfront.net/p/a.mp4"
+
+
+def test_a_regular_youtube_video_is_a_supported_url_for_an_iconic_clip():
+    from studio.favorites import parse_video_url
+    assert parse_video_url("https://www.youtube.com/watch?v=9bZkp7q19f0&t=42") == (
+        "youtube", "https://www.youtube.com/watch?v=9bZkp7q19f0")
+    with pytest.raises(ValueError):
+        parse_video_url("https://www.youtube.com/watch?v=short")
+
+
+def test_a_genjutsu_gallery_id_with_colons_is_a_valid_preset():
+    from studio.favorites import gallery_key
+    pid = "genjutsu:trending:c633bd7d-eb17-466d-87ca-a9ac3b9ecf49"
+    assert gallery_key({"preset_id": pid}, None) == f"higgsfield-preset:{pid}"
+
+
+def test_an_iconic_clip_scores_full_virality_whatever_its_outlier():
+    plain = score_pick(1, 6_000_000_000, 6, 9, 7, 8)
+    iconic = score_pick(1, 6_000_000_000, 6, 9, 7, 8, iconic=True)
+    assert plain["virality"] == 0 and iconic["virality"] == 10
+    assert iconic["total"] == plain["total"] + 25

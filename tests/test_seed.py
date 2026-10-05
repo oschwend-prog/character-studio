@@ -20,10 +20,10 @@ BISCUIT = {
     "slug": "biscuit",
     "name": "Biscuit",
     "bodies": ["biped", "quadruped"],
-    "masters": {"biped": "42f579b9-3da3-42ff-af47-98d758112743", "quadruped": "d863df81-54f8-45df-9676-cf44338d07fa"},
-    "closeup": "7798e2bc-d0bd-492d-8d7f-a96063150c4f",
-    "closeup_center": [536, 732],
-    "blue_eye_xy": [301, 960],
+    "masters": {"biped": "e07675a2-38a5-4325-8326-1de2e0d326ba", "quadruped": "d863df81-54f8-45df-9676-cf44338d07fa"},
+    "closeup": "4f7fc954-4dca-491a-bb72-d1781a063c06",
+    "closeup_center": [584, 738],
+    "blue_eye_xy": [251, 559],
     "avatar": "assets/avatars/biscuit.png",
     "accounts": [
         {"platform": "tiktok", "handle": None, "postiz_integration_id": None, "dropin_share": 0.70},
@@ -34,7 +34,7 @@ REGINALD = {
     "slug": "reginald",
     "name": "Reginald",
     "bodies": ["biped"],
-    "masters": {"biped": "6b1625b1-b2e3-4292-ba35-4aac86e6b6e4", "quadruped": None},
+    "masters": {"biped": "6c445225-cf07-462f-b5da-8494381e7e58", "quadruped": None},
     "closeup": None,
     "closeup_center": None,
     "blue_eye_xy": None,
@@ -359,9 +359,10 @@ def test_the_shipped_refs_files_load_and_match_the_brief():
     assert sorted(loaded) == ["biscuit", "reginald"]
     b, r = loaded["biscuit"], loaded["reginald"]
     assert b["masters"] == BISCUIT["masters"] and b["closeup"] == BISCUIT["closeup"]
-    assert (b["closeup_center"], b["blue_eye_xy"], b["bodies"]) == ([536, 732], [301, 960], ["biped", "quadruped"])
+    assert (b["closeup_center"], b["blue_eye_xy"], b["bodies"]) == ([584, 738], [251, 559], ["biped", "quadruped"])
     assert r["masters"]["biped"] == REGINALD["masters"]["biped"] and r["masters"]["quadruped"] is None
-    assert r["closeup"] is None and r["bodies"] == ["biped"]
+    assert r["closeup"] == "6bf83e23-8246-4b40-a747-ae4f2439bbfe" and r["bodies"] == ["biped"]
+    assert (r["closeup_center"], r["blue_eye_xy"]) == ([541, 800], [346, 968])
     for c in (b, r):
         assert c["status"] == "designing"  # flipped to live at go-live (Task 16)
         # owner decision 2026-10-05: Drop-in is the default for every video, so every account starts at 1.00

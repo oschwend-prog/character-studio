@@ -117,10 +117,11 @@ _SHORT_HOSTS = frozenset({"vm.tiktok.com", "vt.tiktok.com", "instagr.am", "youtu
 _TIKTOK_VIDEO = re.compile(r"/@([\w.\-]+)/video/(\d+)")
 _INSTAGRAM_REEL = re.compile(r"(?:/[\w.]+)?/reel/([\w\-]+)")
 _YOUTUBE_SHORT = re.compile(r"/shorts/([\w\-]+)")
+_YOUTUBE_ID = re.compile(r"[\w\-]{11}")
 
 _FULL_URL_HELP = (
     "https://www.tiktok.com/@user/video/<id>, https://www.instagram.com/reel/<code>/ "
-    "or https://www.youtube.com/shorts/<id>"
+    "https://www.youtube.com/shorts/<id> or https://www.youtube.com/watch?v=<id>"
 )
 
 
@@ -149,13 +150,18 @@ def parse_video_url(url: str) -> tuple[str, str]:
             return "instagram", f"https://www.instagram.com/reel/{m[1]}/"
         if host in _HOSTS["youtube"] and (m := _YOUTUBE_SHORT.fullmatch(path)):
             return "youtube", f"https://www.youtube.com/shorts/{m[1]}"
+        if host in _HOSTS["youtube"] and path == "/watch":
+            # a famous clip that lives as a regular video (an iconic music video or scene): the v= id is the video
+            vid = dict(p.split("=", 1) for p in parts.query.split("&") if "=" in p).get("v", "")
+            if _YOUTUBE_ID.fullmatch(vid):
+                return "youtube", f"https://www.youtube.com/watch?v={vid}"
     raise ValueError(f"not a supported video URL: expected {_FULL_URL_HELP}, got {raw!r}")
 
 
 # ---- Genjutsu gallery picks ---------------------------------------------------------------
 
 GALLERY_PLATFORM = "higgsfield"
-_PRESET_ID = re.compile(r"[\w.\-]{1,80}")
+_PRESET_ID = re.compile(r"[\w.:\-]{1,120}")  # Genjutsu ids look like genjutsu:trending:<uuid>
 
 
 def gallery_key(proposal: Mapping[str, Any], url: str | None) -> str:
@@ -166,7 +172,7 @@ def gallery_key(proposal: Mapping[str, Any], url: str | None) -> str:
     """
     preset = proposal.get("preset_id")
     if not isinstance(preset, str) or not _PRESET_ID.fullmatch(preset.strip()):
-        raise ValueError(f"a gallery pick needs proposal.preset_id (letters, digits, - _ .), got {preset!r}")
+        raise ValueError(f"a gallery pick needs proposal.preset_id (letters, digits, - _ . :), got {preset!r}")
     key = f"higgsfield-preset:{preset.strip()}"
     if url and url != key:
         raise ValueError(f"a gallery pick is keyed by its preset ({key}), not by a URL: got {url!r:.60}")
@@ -345,8 +351,13 @@ def score_pick(
     fit: float,
     feasibility: float,
     saturation: float,
+    *,
+    iconic: bool = False,
 ) -> dict[str, float]:
     """The six sub-scores (0-10) and ``total`` (0-100, whole number) of a pick, spec weights v1.
+
+    ``iconic`` ("Broke the internet": a famous moment everyone knows, owner rule 2026-10-05) scores full virality:
+    beating its uploader's median says nothing about a clip that is famous in its own right.
 
     ``virality`` and ``reach`` are returned to 1 decimal and ``total`` is computed from the
     returned values. ``outlier_x`` and ``views`` are scored here (an unknown or sub-1x outlier scores 0 virality,
@@ -357,6 +368,8 @@ def score_pick(
         if not 0 <= value <= 10:  # also false for NaN
             raise ValueError(f"{name} must be between 0 and 10, got {value!r}")
     virality = _clamp(math.log10(outlier_x) / 3 * 10) if outlier_x and outlier_x > 0 else 0.0
+    if iconic:
+        virality = 10.0
     reach = _clamp(math.log10(max(views or 0, 100_000) / 100_000) / math.log10(500) * 10)
     # Computed scores are kept to 1 decimal, and the total is taken from those stored values, so
     # anyone can recompute it from what the terminal shows (this reproduces every total of the
@@ -427,7 +440,7 @@ def _add_pick(
         _require_character(store, character_slug)
     validate_needs(proposal)
     validate_card(proposal)
-    scores = score_pick(outlier_x, views, **judged)
+    scores = score_pick(outlier_x, views, **judged, iconic=proposal.get("tier") == "iconic")
     existing = store.list_favorites(url=canonical)
     if existing:
         return existing[0], False
