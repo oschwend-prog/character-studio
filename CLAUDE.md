@@ -24,3 +24,5 @@ on TikTok + Instagram Reels, with a terminal to approve, track spend and see res
 - Spec: `docs/superpowers/specs/2026-10-04-character-studio-design.md`; plan: `docs/superpowers/plans/2026-10-04-character-studio-slice1.md` (Global Constraints + Review Focus at the top).
 - Character bibles: `characters/<name>/bible.md`. Strategy: `docs/launch/`, `docs/research/`, `docs/spike/`.
 - Scan settings: `config/scan.json`. Avatars: `assets/avatars/`.
+- Per character `characters/<slug>/refs.json` (Higgsfield masters, close-up, accounts, `status`): `bin/studio seed` upserts characters + accounts from it (go-live = `status: live` + handles + Postiz ids, then re-seed); `bin/studio seed picks <doc>` loads a Viral Picks batch.
+- Automation: `.claude/skills/daily-run` and `.claude/skills/weekly-review` (user-invoked, run by the scheduled tasks), allow list in `.claude/settings.json`. Dry run of the daily sequence: `docs/spike/daily-run-dry-rehearsal.md`.

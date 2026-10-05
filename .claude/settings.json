@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bin/studio:*)",
+      "Bash(uv run:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(ffprobe:*)",
+      "Bash(curl:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd",
+      "mcp__5d0eb7b3-1f89-4c02-b145-8199ffc4ed25"
+    ]
+  }
+}
