@@ -4,8 +4,13 @@ Every driving clip (Higgsfield library imports, owner inbox clips, our own synth
 catalogued here with the checks that decide whether it may be used as a **Drop-in** (our
 character swapped into the actual clip):
 
-* ``has_watermark`` / ``has_overlay`` / ``other_people`` start as ``None`` ("not checked yet");
+* ``has_watermark`` / ``has_overlay`` / ``has_minors`` / ``other_people`` start as ``None`` ("not checked yet");
   an unchecked source is never Drop-in eligible, and neither is a ``synthetic`` one.
+* **Owner decision 2026-10-05** ("Drop-in is the default for every video"): a source may be used for a Drop-in
+  when it is not synthetic, shows no platform watermark or other creator's handle (``has_watermark``), no
+  burned-in text overlay (``has_overlay``) and **no child** (``has_minors``, migration 0008). ``other_people``
+  (people in the background, who are replaced or left as the scene) is still recorded and shown but no longer
+  blocks a Drop-in; the real star is always replaced by our character, in the visual QA of the output.
 * ``flag_dirty`` is the late alarm (output QA spotted a leaked watermark): it sets
   ``has_watermark=True``, so the source drops out of Drop-in ranking at once.
 * **Recreate** only borrows the moves and replaces everything else, so any source whose body
@@ -26,6 +31,22 @@ unchecked, so it is not Drop-in eligible until Claude has looked at it and run `
 A file that cannot be ingested (not a readable video, or the upload failed) stays in ``inbox/``;
 the others still go through and ``IngestError`` reports both.
 
+**The owner's own clip for a pick.** A Drop-in needs the actual video file, and we never download from TikTok or
+Instagram, so the owner attaches it on the terminal's Make-it sheet: the browser uploads it to bucket ``sources`` at
+``owner/<pick id>/<timestamp>.<ext>`` and the ``studio.attach_clip`` RPC (migration 0008) stores that path as
+``proposal.owner_clip_path``. ``ingest_owner_clip`` (``studio source ingest-owner --pick <id>``) then reads that object
+from our own Storage, probes it (duration), and catalogues it as an ``owner_inbox`` source with ``storage_path``
+and the pick's creator as ``credit_handle``, unchecked (it is not Drop-in eligible until the visual check) and
+links the pick (``source_id``). Idempotent: the same path is one source, shared by a "Both" sibling pick.
+
+**Trim before generating** (owner decision 2026-10-05: Genjutsu is paid per second). ``trim_source`` (``studio source
+trim <id> --start S --duration D [--file LOCAL]``) cuts the best 6-9 s window (16 s at most) out of a source with
+ffmpeg (free, audio kept: a Drop-in keeps the original clip audio) and catalogues the result as a new
+``owner_inbox`` source in Storage, ready for ``source url`` and Higgsfield's ``media_import_url``. It inherits the
+parent's checks (watermark, overlay, people, children), credit handle, trend and body, so look at the whole clip
+first, then trim. A source that is not in Storage (a Genjutsu library one) is trimmed from ``--file``, its
+downloaded preview. The parent is left alone.
+
 **Handing a stored source to Higgsfield.** ``signed_source_url`` signs a source that lives in Storage
 (``storage_path`` in the ``sources`` bucket: an owner inbox clip) for ``expires_s`` seconds (default one
 hour), the URL the daily run gives to ``media_import_url``. ``studio source url <id> [--expires N]``
@@ -40,8 +61,10 @@ from __future__ import annotations
 
 import dataclasses
 import math
+import re
 import shutil
 import statistics
+import tempfile
 import uuid
 from enum import Enum
 from pathlib import Path
@@ -51,6 +74,7 @@ from urllib.parse import urlsplit
 import typer
 
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
+from studio.media.clipwork import ClipworkError, trim_clip
 from studio.media.qa import QAError, probe
 from studio.models import Body, Character, Mode, Source, SourceKind
 from studio.storage import Storage, StorageError
@@ -69,6 +93,9 @@ INBOX_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".webm"})
 SOURCES_BUCKET = "sources"
 INBOX_PREFIX = "owner_inbox"
 DEFAULT_URL_EXPIRES_S = 3600
+# What the terminal's "Attach clip" writes: bucket sources, owner/<pick id>/<file>; the sheet allows 60 s.
+OWNER_CLIP_PATH = re.compile(r"owner/[0-9a-fA-F-]{36}/[^/\s]+")
+OWNER_CLIP_MAX_S = 60.0
 
 _E = TypeVar("_E", bound=Enum)
 
@@ -94,12 +121,16 @@ def is_platform_page(url: str) -> bool:
 
 
 def dropin_eligible(s: Source) -> bool:
-    """May this source be used for a Drop-in? Only when every check was run and came back clean."""
+    """May this source be used for a Drop-in? Not synthetic, and the three blocking checks were run and are clean.
+
+    Blocking: ``has_watermark``, ``has_overlay`` and ``has_minors`` must each be ``False`` (``None`` = not
+    checked yet = not eligible). ``other_people`` does not gate any more (owner decision 2026-10-05).
+    """
     return (
         s.kind is not SourceKind.synthetic
         and s.has_watermark is False
         and s.has_overlay is False
-        and s.other_people == 0
+        and s.has_minors is False
     )
 
 
@@ -141,9 +172,18 @@ def add_source(
 
 
 def record_checks(
-    store: Store, id: str, has_watermark: bool, has_overlay: bool, other_people: int
+    store: Store,
+    id: str,
+    has_watermark: bool,
+    has_overlay: bool,
+    other_people: int,
+    has_minors: bool,
 ) -> Source:
-    """Store the result of the visual checks (6 frames: watermark, overlay, other people)."""
+    """Store the result of the visual checks (6 frames: watermark, overlay, other people, a child).
+
+    ``has_minors`` has no default on purpose: a check that forgets the child question must fail loudly,
+    never record a source as clean. People in the background (``other_people``) are only counted.
+    """
     if other_people < 0:
         raise ValueError(f"other_people must be 0 or more, got {other_people!r}")
     return store.update_source(
@@ -151,6 +191,7 @@ def record_checks(
         has_watermark=bool(has_watermark),
         has_overlay=bool(has_overlay),
         other_people=other_people,
+        has_minors=bool(has_minors),
     )
 
 
@@ -291,6 +332,83 @@ def ingest_inbox(store: Store, storage: Storage, inbox_dir: Path | str) -> list[
     return ingested
 
 
+def ingest_owner_clip(
+    store: Store, storage: Storage, pick_id: str, *, body: Body | str = Body.biped, bodies: int = 1
+) -> Source:
+    """Catalogue the clip the owner attached to a pick as an ``owner_inbox`` source and link the pick to it.
+
+    ``KeyError`` for an unknown pick; ``ValueError`` for a pick with no ``owner_clip_path``, a path the terminal
+    could not have written, a file that is not a readable video or is longer than 60 s; ``StorageError`` when
+    the object is not in the ``sources`` bucket. Idempotent (see the module doc).
+    """
+    pick = store.get_favorite(pick_id)
+    if pick is None:
+        raise KeyError(pick_id)
+    path = pick.proposal.get("owner_clip_path")
+    if not isinstance(path, str) or not path:
+        raise ValueError(f"no clip attached to pick {pick_id}: the owner attaches it on the Make-it sheet")
+    if not OWNER_CLIP_PATH.fullmatch(path):
+        raise ValueError(f"owner_clip_path {path!r} is not a path the terminal writes (owner/<pick id>/<file>)")
+    source = next(iter(store.list_sources(storage_path=path)), None)
+    if source is None:
+        with tempfile.TemporaryDirectory(prefix="studio-owner-clip-") as tmp:
+            local = storage.download(SOURCES_BUCKET, path, Path(tmp) / Path(path).name)
+            try:
+                duration = probe(local, loudness=False).duration_s
+            except QAError as e:
+                raise ValueError(f"the attached clip is not a readable video: {e}") from None
+        if not duration > 0:
+            raise ValueError("the attached clip is not a readable video: it has no duration")
+        if duration > OWNER_CLIP_MAX_S + 1:
+            raise ValueError(f"the attached clip is {duration:.0f} s long: the sheet takes at most {OWNER_CLIP_MAX_S:.0f} s")
+        source = add_source(
+            store, SourceKind.owner_inbox, path, body, bodies, duration,
+            credit_handle=pick.creator_handle, storage_path=path,
+        )
+    if pick.source_id != source.id:
+        store.update_favorite(pick.id, source_id=source.id)
+    return source
+
+
+def trim_source(
+    store: Store, storage: Storage, source_id: str, start_s: float, duration_s: float, *, file: Path | str | None = None
+) -> Source:
+    """Cut a window out of a source and catalogue it as a new ``owner_inbox`` source (see the module doc).
+
+    ``KeyError`` for an unknown source; ``ValueError`` for a window that makes no sense, a source that is not in
+    Storage (and no ``file``), or a missing ``file``; ``QAError`` / ``ClipworkError`` / ``StorageError`` when the
+    clip cannot be read, cut or stored. Nothing is catalogued unless the whole job worked.
+    """
+    parent = next(iter(store.list_sources(id=source_id)), None)
+    if parent is None:
+        raise KeyError(source_id)
+    with tempfile.TemporaryDirectory(prefix="studio-trim-source-") as tmp:
+        work = Path(tmp)
+        if file is not None:
+            local = Path(file)
+            if not local.is_file():
+                raise ValueError(f"no such file: {local}")
+        elif parent.storage_path:
+            local = storage.download(SOURCES_BUCKET, parent.storage_path, work / f"parent{Path(parent.storage_path).suffix or '.mp4'}")
+        else:
+            raise ValueError(
+                f"source {source_id} is not in Storage (a library source is used through its own url): "
+                "download its preview and pass it with --file"
+            )
+        trimmed = trim_clip(local, work / "window.mp4", start_s, duration_s)
+        seconds = probe(trimmed, loudness=False).duration_s
+        key = f"{INBOX_PREFIX}/{uuid.uuid4()}.mp4"
+        storage.upload(SOURCES_BUCKET, key, trimmed)
+    return store.add_source(
+        Source(
+            kind=SourceKind.owner_inbox, url=key, storage_path=key, preset_id=parent.preset_id, body=parent.body,
+            bodies=parent.bodies, duration_s=seconds, has_watermark=parent.has_watermark, has_overlay=parent.has_overlay,
+            other_people=parent.other_people, has_minors=parent.has_minors, trend=parent.trend,
+            credit_handle=parent.credit_handle,
+        )
+    )
+
+
 def signed_source_url(
     store: Store, storage: Storage, source_id: str, expires_s: int = DEFAULT_URL_EXPIRES_S
 ) -> str:
@@ -358,19 +476,24 @@ def add_command(
 def check_command(
     id: Annotated[str, typer.Argument(help="Source id.")],
     watermark: Annotated[
-        bool, typer.Option("--watermark/--no-watermark", help="A platform watermark is visible.")
+        bool,
+        typer.Option("--watermark/--no-watermark", help="A platform watermark or another creator's handle is visible."),
     ],
     overlay: Annotated[
-        bool, typer.Option("--overlay/--no-overlay", help="A creator handle or UI overlay is visible.")
+        bool, typer.Option("--overlay/--no-overlay", help="A burned-in text overlay is visible.")
     ],
     other_people: Annotated[
-        int, typer.Option(min=0, help="Identifiable people besides the main subject.")
+        int,
+        typer.Option(min=0, help="People besides the main subject (background people are fine: only counted)."),
+    ],
+    minors: Annotated[
+        bool, typer.Option("--minors/--no-minors", help="A child is visible anywhere in the clip (blocks the Drop-in).")
     ],
 ) -> None:
-    """Record the visual checks of a source."""
+    """Record the visual checks of a source (watermark, overlay, other people, a child)."""
     store = open_store()
     try:
-        s = record_checks(store, id, watermark, overlay, other_people)
+        s = record_checks(store, id, watermark, overlay, other_people, minors)
     except KeyError:
         fail(f"unknown source {id}")
     except ValueError as e:
@@ -455,6 +578,46 @@ def ingest_inbox_command(
             typer.echo(f"error: {problem}", err=True)
         raise typer.Exit(EXIT_USAGE) from None
     emit([_source_json(s) for s in made])
+
+
+@app.command("ingest-owner")
+def ingest_owner_command(
+    pick: Annotated[str, typer.Option("--pick", help="Pick id: its owner_clip_path (Make-it > Attach clip) is read.")],
+    body: Annotated[Body, typer.Option(help="Body type of the main performer in the clip.")] = Body.biped,
+    bodies: Annotated[int, typer.Option(min=1, help="How many bodies are in the clip.")] = 1,
+) -> None:
+    """Catalogue the clip the owner attached to a pick as an unchecked `owner_inbox` source and link the pick."""
+    store = open_store()
+    storage = open_storage()
+    try:
+        s = ingest_owner_clip(store, storage, pick, body=body, bodies=bodies)
+    except KeyError:
+        fail(f"unknown pick {pick}")
+    except (ValueError, StorageError) as e:
+        fail(str(e))
+    emit(_source_json(s, pick_id=pick))
+
+
+@app.command("trim")
+def trim_command(
+    id: Annotated[str, typer.Argument(help="Source id to cut a window from.")],
+    start: Annotated[float, typer.Option("--start", help="Where the window begins, in seconds.")],
+    duration: Annotated[float, typer.Option("--duration", help="Window length in seconds (6-9 s is the target, 16 s the maximum).")],
+    file: Annotated[
+        Path | None,
+        typer.Option("--file", help="The clip to cut, for a source that is not in Storage (a downloaded library preview)."),
+    ] = None,
+) -> None:
+    """Cut the best window out of a source (audio kept) as a new `owner_inbox` source: what Genjutsu is given."""
+    store = open_store()
+    storage = open_storage()
+    try:
+        child = trim_source(store, storage, id, start, duration, file=file)
+    except KeyError:
+        fail(f"unknown source {id}")
+    except (ValueError, QAError, ClipworkError, StorageError) as e:
+        fail(str(e))
+    emit(_source_json(child, parent_id=id))
 
 
 @app.command("url")

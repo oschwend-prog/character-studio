@@ -45,7 +45,7 @@ def new_source(store, *, kind="higgsfield_library", body="biped", url="https://c
 
 def clean_source(store, **kw):
     s = new_source(store, **kw)
-    return record_checks(store, s.id, False, False, 0)
+    return record_checks(store, s.id, False, False, 0, False)
 
 
 def made_from(store, source, *outliers, character_slug="reginald"):
@@ -67,14 +67,14 @@ def made_from(store, source, *outliers, character_slug="reginald"):
 def test_unchecked_source_not_dropin_eligible():
     store = make_store()
     s = new_source(store)
-    assert (s.has_watermark, s.has_overlay, s.other_people) == (None, None, None)
+    assert (s.has_watermark, s.has_overlay, s.other_people, s.has_minors) == (None, None, None, None)
     assert dropin_eligible(s) is False
 
 
 def test_clean_library_source_dropin_eligible():
     store = make_store()
     s = clean_source(store)
-    assert (s.has_watermark, s.has_overlay, s.other_people) == (False, False, 0)
+    assert (s.has_watermark, s.has_overlay, s.other_people, s.has_minors) == (False, False, 0, False)
     assert dropin_eligible(s) is True
     assert dropin_eligible(clean_source(store, kind="owner_inbox", url=None)) is True
 
@@ -87,17 +87,47 @@ def test_synthetic_never_dropin_eligible():
 
 
 @pytest.mark.parametrize(
-    "checks",
-    [(True, False, 0), (False, True, 0), (False, False, 1), (False, False, None),
-     (None, False, 0), (False, None, 0)],
+    "checks",  # (has_watermark, has_overlay, has_minors)
+    [(True, False, False), (False, True, False), (False, False, True),
+     (None, False, False), (False, None, False), (False, False, None)],
 )
-def test_any_failed_or_missing_check_blocks_dropin(checks):
+def test_any_failed_or_missing_blocking_check_blocks_dropin(checks):
     store = make_store()
     s = new_source(store)
     s = store.update_source(
-        s.id, has_watermark=checks[0], has_overlay=checks[1], other_people=checks[2]
+        s.id, has_watermark=checks[0], has_overlay=checks[1], other_people=0, has_minors=checks[2]
     )
     assert dropin_eligible(s) is False
+
+
+@pytest.mark.parametrize("background", [0, 1, 3, None])
+def test_people_in_the_background_no_longer_block_a_dropin(background):
+    """Owner decision 2026-10-05: other people are recorded and shown, but only watermark, overlay and children block."""
+    store = make_store()
+    s = new_source(store)
+    s = store.update_source(
+        s.id, has_watermark=False, has_overlay=False, other_people=background, has_minors=False
+    )
+    assert s.other_people == background
+    assert dropin_eligible(s) is True
+
+
+def test_a_child_in_the_clip_blocks_a_dropin_however_clean_the_rest_is():
+    store = make_store()
+    s = record_checks(store, new_source(store).id, False, False, 0, True)
+    assert s.has_minors is True and dropin_eligible(s) is False
+
+
+def test_a_source_whose_minors_check_was_never_run_is_not_eligible():
+    """A source checked before migration 0008 has has_minors NULL: it is not eligible until it is looked at again."""
+    store = make_store()
+    s = store.update_source(
+        new_source(store).id, has_watermark=False, has_overlay=False, other_people=0
+    )
+    assert s.has_minors is None
+    assert dropin_eligible(s) is False
+    assert rank_sources(store, character(store, "reginald"), Mode.dropin, set()) == []
+    assert [x.id for x in rank_sources(store, character(store, "reginald"), Mode.recreate, set())] == [s.id]
 
 
 def test_flag_dirty_makes_ineligible():
@@ -106,7 +136,7 @@ def test_flag_dirty_makes_ineligible():
     assert dropin_eligible(s) is True
     flagged = flag_dirty(store, s.id, "watermark visible in output frame 40")
     assert flagged.has_watermark is True
-    assert (flagged.has_overlay, flagged.other_people) == (False, 0)  # nothing else touched
+    assert (flagged.has_overlay, flagged.other_people, flagged.has_minors) == (False, 0, False)  # nothing else touched
     assert dropin_eligible(store.list_sources(id=s.id)[0]) is False
 
 
@@ -120,15 +150,15 @@ def test_flag_dirty_requires_a_reason_and_a_known_source():
         flag_dirty(store, "missing", "x")
 
 
-def test_record_checks_stores_the_three_checks():
+def test_record_checks_stores_the_four_checks():
     store = make_store()
     s = new_source(store)
-    got = record_checks(store, s.id, True, False, 2)
-    assert (got.has_watermark, got.has_overlay, got.other_people) == (True, False, 2)
+    got = record_checks(store, s.id, True, False, 2, False)
+    assert (got.has_watermark, got.has_overlay, got.other_people, got.has_minors) == (True, False, 2, False)
     with pytest.raises(ValueError, match="other_people"):
-        record_checks(store, s.id, False, False, -1)
+        record_checks(store, s.id, False, False, -1, False)
     with pytest.raises(KeyError):
-        record_checks(store, "missing", False, False, 0)
+        record_checks(store, "missing", False, False, 0, False)
 
 
 # ---- add_source ------------------------------------------------------------------------
@@ -143,7 +173,7 @@ def test_add_source_records_an_unchecked_source():
     assert s.id and s.created_at is not None
     assert (s.kind, s.body, s.bodies, s.duration_s) == (SourceKind.higgsfield_library, Body.biped, 1, 8.5)
     assert (s.preset_id, s.trend, s.credit_handle) == ("p1", "tea tuesday", "@creator")
-    assert (s.has_watermark, s.has_overlay, s.other_people) == (None, None, None)
+    assert (s.has_watermark, s.has_overlay, s.other_people, s.has_minors) == (None, None, None, None)
     assert store.list_sources() == [s]
 
 
@@ -249,7 +279,7 @@ def test_rank_orders_unproven_sources_last_then_newest_first():
         s = store.add_source(
             Source(
                 kind="higgsfield_library", body="biped", bodies=1, duration_s=8.0,
-                has_watermark=False, has_overlay=False, other_people=0,
+                has_watermark=False, has_overlay=False, other_people=0, has_minors=False,
                 created_at=T0 - timedelta(days=days_old), **kw,
             )
         )
@@ -266,11 +296,11 @@ def test_rank_ties_on_performance_fall_back_to_newest_first():
     store = make_store()
     older = store.add_source(
         Source(kind="owner_inbox", body="biped", bodies=1, duration_s=8.0, has_watermark=False,
-               has_overlay=False, other_people=0, created_at=T0 - timedelta(days=2))
+               has_overlay=False, other_people=0, has_minors=False, created_at=T0 - timedelta(days=2))
     )
     newer = store.add_source(
         Source(kind="owner_inbox", body="biped", bodies=1, duration_s=8.0, has_watermark=False,
-               has_overlay=False, other_people=0, created_at=T0)
+               has_overlay=False, other_people=0, has_minors=False, created_at=T0)
     )
     made_from(store, older, 2.0)
     made_from(store, newer, 2.0)
@@ -384,10 +414,10 @@ def test_cli_add_check_flag_roundtrip(cli_store):
     assert (out["has_watermark"], out["dropin_eligible"]) == (None, False)
     sid = out["id"]
 
-    r = run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "0")
+    r = run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "0", "--no-minors")
     assert r.exit_code == 0, r.output
     out = json.loads(r.stdout)
-    assert (out["has_watermark"], out["has_overlay"], out["other_people"]) == (False, False, 0)
+    assert (out["has_watermark"], out["has_overlay"], out["other_people"], out["has_minors"]) == (False, False, 0, False)
     assert out["dropin_eligible"] is True
 
     r = run("flag", sid, "--reason", "watermark in output frame 40")
@@ -446,16 +476,26 @@ def test_cli_add_refuses_a_platform_cdn_url(cli_store):
     assert r.exit_code == 2 and cli_store.list_sources() == []
 
 
-def test_cli_check_needs_all_three_checks(cli_store):
+def test_cli_check_needs_all_four_checks(cli_store):
     sid = json.loads(run("add", *add_args()).stdout)["id"]
-    assert run("check", sid, "--no-watermark", "--no-overlay").exit_code == 2
-    assert run("check", sid, "--no-watermark", "--other-people", "0").exit_code == 2
-    assert run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "-1").exit_code == 2
+    assert run("check", sid, "--no-watermark", "--no-overlay", "--no-minors").exit_code == 2  # no --other-people
+    assert run("check", sid, "--no-watermark", "--other-people", "0", "--no-minors").exit_code == 2  # no overlay
+    assert run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "0").exit_code == 2  # no child answer
+    assert run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "-1", "--no-minors").exit_code == 2
     assert cli_store.list_sources()[0].has_watermark is None
 
 
+def test_cli_check_records_a_child_and_background_people_with_the_verdict(cli_store):
+    sid = json.loads(run("add", *add_args()).stdout)["id"]
+    out = json.loads(run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "4", "--no-minors").stdout)
+    assert (out["other_people"], out["has_minors"], out["dropin_eligible"]) == (4, False, True)  # a crowd behind him is fine
+    out = json.loads(run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "0", "--minors").stdout)
+    assert (out["has_minors"], out["dropin_eligible"]) == (True, False)
+    assert "--minors" in run("check", "--help").output and "--no-minors" in run("check", "--help").output
+
+
 def test_cli_unknown_source_exits_2(cli_store):
-    r = run("check", "nope", "--no-watermark", "--no-overlay", "--other-people", "0")
+    r = run("check", "nope", "--no-watermark", "--no-overlay", "--other-people", "0", "--no-minors")
     assert r.exit_code == 2 and "unknown source" in r.output
     r = run("flag", "nope", "--reason", "x")
     assert r.exit_code == 2 and "unknown source" in r.output
@@ -904,3 +944,216 @@ def test_cli_source_url_without_supabase_env_exits_2_and_names_the_variables(cli
 def test_cli_source_help_lists_url():
     r = CliRunner().invoke(app, ["source", "--help"])
     assert r.exit_code == 0 and " url" in r.output
+
+
+# ---- the owner's own clip for a pick (Make-it "Attach clip": uploaded from the phone to our Storage) ---------------
+
+
+def owner_pick(store, storage, clip_file, *, creator="@eatfryhaven", attach=True, name="1759660000000.mp4"):
+    """A pick as the terminal leaves it: the browser uploaded the file, ``attach_clip`` stored the path."""
+    from studio.models import Favorite
+
+    f = store.add_favorite(Favorite(
+        url="https://www.instagram.com/reel/Dde-rPWCOC6/", platform="instagram", creator_handle=creator,
+        status="approved", character_slug="reginald", proposal={"mode": "dropin"},
+    ))
+    path = f"owner/{f.id}/{name}"
+    storage.upload("sources", path, clip_file)
+    if attach:
+        f = store.update_favorite(f.id, proposal={**f.proposal, "owner_clip_path": path})
+    return f, path
+
+
+def test_ingest_owner_clip_catalogues_the_attached_file_and_links_the_pick(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, path = owner_pick(store, storage, clip_file)
+
+    s = sources.ingest_owner_clip(store, storage, pick.id)
+
+    assert s.kind is SourceKind.owner_inbox and (s.body, s.bodies) == (Body.biped, 1)
+    assert s.storage_path == path and s.url == path  # the bucket path, never a platform URL
+    assert s.credit_handle == "@eatfryhaven"  # the pick's creator, credited in the caption
+    assert s.duration_s == pytest.approx(5.0, abs=0.1)
+    assert (s.has_watermark, s.has_overlay, s.has_minors) == (None, None, None) and dropin_eligible(s) is False  # looked at next
+    assert store.get_favorite(pick.id).source_id == s.id
+    assert fetch(storage, tmp_path, s.storage_path) == clip_file.read_bytes()  # still there, nothing moved
+
+
+def test_ingest_owner_clip_is_idempotent(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, _ = owner_pick(store, storage, clip_file)
+    first = sources.ingest_owner_clip(store, storage, pick.id)
+    again = sources.ingest_owner_clip(store, storage, pick.id)
+    assert again.id == first.id and len(store.list_sources()) == 1
+    store.update_source(first.id, has_watermark=False)  # what the visual check recorded must survive another call
+    assert sources.ingest_owner_clip(store, storage, pick.id).has_watermark is False
+
+
+def test_a_sibling_pick_for_the_other_character_reuses_the_same_source(tmp_path, clip_file):
+    """"Both" files a copy of the pick that carries the same owner_clip_path: one file, one source row."""
+    from studio.models import Favorite
+
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, path = owner_pick(store, storage, clip_file)
+    twin = store.add_favorite(Favorite(
+        url=pick.url, platform="instagram", creator_handle=pick.creator_handle, status="approved",
+        character_slug="biscuit", proposal=dict(pick.proposal),
+    ))
+    a, b = sources.ingest_owner_clip(store, storage, pick.id), sources.ingest_owner_clip(store, storage, twin.id)
+    assert a.id == b.id and len(store.list_sources()) == 1
+    assert store.get_favorite(twin.id).source_id == a.id
+
+
+def test_ingest_owner_clip_refuses_a_pick_without_an_attached_clip_and_an_unknown_pick(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, _ = owner_pick(store, storage, clip_file, attach=False)
+    with pytest.raises(ValueError, match="no clip attached"):
+        sources.ingest_owner_clip(store, storage, pick.id)
+    with pytest.raises(KeyError):
+        sources.ingest_owner_clip(store, storage, "missing")
+    assert store.list_sources() == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "inbox/clip.mp4", "owner/clip.mp4", "owner/not-a-uuid/clip.mp4", "owner/../x/clip.mp4",
+        "owner/12345678-1234-1234-1234-123456789abc/a/b.mp4", "https://www.tiktok.com/@x/video/1", "",
+    ],
+)
+def test_ingest_owner_clip_only_takes_a_path_the_terminal_could_have_written(tmp_path, clip_file, path):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, _ = owner_pick(store, storage, clip_file)
+    store.update_favorite(pick.id, proposal={**pick.proposal, "owner_clip_path": path})
+    with pytest.raises(ValueError, match="owner_clip_path|no clip attached"):
+        sources.ingest_owner_clip(store, storage, pick.id)
+    assert store.list_sources() == []
+
+
+def test_ingest_owner_clip_reports_a_missing_object_and_a_file_that_is_not_a_video(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, path = owner_pick(store, storage, clip_file)
+    store.update_favorite(pick.id, proposal={**pick.proposal, "owner_clip_path": path.replace(".mp4", ".mov")})
+    with pytest.raises(StorageError):
+        sources.ingest_owner_clip(store, storage, pick.id)
+
+    junk = tmp_path / "junk.mp4"
+    junk.write_text("not a video")
+    pick2, _ = owner_pick(store, storage, junk, name="2.mp4")
+    with pytest.raises(ValueError, match="not a readable video"):
+        sources.ingest_owner_clip(store, storage, pick2.id)
+    assert store.list_sources() == []
+
+
+def test_ingest_owner_clip_refuses_a_clip_longer_than_the_sheet_allows(tmp_path, clip_file, monkeypatch):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, _ = owner_pick(store, storage, clip_file)
+    long = type("R", (), {"duration_s": 75.0})()
+    monkeypatch.setattr(sources, "probe", lambda *a, **k: long)
+    with pytest.raises(ValueError, match="60"):
+        sources.ingest_owner_clip(store, storage, pick.id)
+
+
+def test_cli_ingest_owner_prints_the_source_and_links_the_pick(cli_store, cli_storage, clip_file):
+    pick, path = owner_pick(cli_store, cli_storage, clip_file)
+    r = run("ingest-owner", "--pick", pick.id)
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert (out["kind"], out["storage_path"], out["credit_handle"], out["pick_id"]) == ("owner_inbox", path, "@eatfryhaven", pick.id)
+    assert out["dropin_eligible"] is False
+    assert cli_store.get_favorite(pick.id).source_id == out["id"]
+    assert json.loads(run("ingest-owner", "--pick", pick.id).stdout)["id"] == out["id"]  # idempotent through the CLI too
+
+
+def test_cli_ingest_owner_takes_the_body_of_the_performer(cli_store, cli_storage, clip_file):
+    pick, _ = owner_pick(cli_store, cli_storage, clip_file)
+    out = json.loads(run("ingest-owner", "--pick", pick.id, "--body", "quadruped", "--bodies", "2").stdout)
+    assert (out["body"], out["bodies"]) == ("quadruped", 2)
+
+
+def test_cli_ingest_owner_exit_codes(cli_store, cli_storage, clip_file):
+    assert run("ingest-owner", "--pick", "nope").exit_code == 2
+    pick, _ = owner_pick(cli_store, cli_storage, clip_file, attach=False)
+    r = run("ingest-owner", "--pick", pick.id)
+    assert r.exit_code == 2 and "no clip attached" in r.output
+    assert run("ingest-owner").exit_code == 2  # --pick is required
+    assert "ingest-owner" in run("--help").output
+
+
+# ---- trim a catalogued source to its best window (Genjutsu is paid per second) -----------------------------------
+
+
+def stored_source(store, storage, clip_file):
+    key = "owner_inbox/aaaaaaaa-0000-4000-8000-000000000001.mp4"
+    storage.upload("sources", key, clip_file)
+    return add_source(
+        store, "owner_inbox", key, "biped", 1, 5.0, preset_id="p7", trend="tea tuesday", credit_handle="@eatfryhaven", storage_path=key
+    )
+
+
+def test_trim_source_makes_a_child_source_of_the_window_and_leaves_the_parent_alone(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    parent = record_checks(store, stored_source(store, storage, clip_file).id, False, False, 2, False)
+
+    child = sources.trim_source(store, storage, parent.id, 1.0, 3.0)
+
+    assert child.id != parent.id and len(store.list_sources()) == 2
+    assert child.kind is SourceKind.owner_inbox and child.storage_path == child.url and child.storage_path.startswith("owner_inbox/")
+    assert child.storage_path != parent.storage_path and child.storage_path.endswith(".mp4")
+    assert child.duration_s == pytest.approx(3.0, abs=0.25)
+    # what was looked at on the whole clip is true of its window: the child inherits the checks, the credit and the tags
+    assert (child.has_watermark, child.has_overlay, child.other_people, child.has_minors) == (False, False, 2, False)
+    assert (child.credit_handle, child.preset_id, child.trend, child.body, child.bodies) == ("@eatfryhaven", "p7", "tea tuesday", Body.biped, 1)
+    assert dropin_eligible(child) is True
+    assert fetch(storage, tmp_path, child.storage_path)[:4] != b""  # the window is really in the bucket
+    assert store.list_sources(id=parent.id)[0] == parent  # untouched
+    assert fetch(storage, tmp_path, parent.storage_path) == clip_file.read_bytes()
+
+
+def test_trim_source_of_an_unchecked_parent_is_unchecked(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    parent = stored_source(store, storage, clip_file)
+    child = sources.trim_source(store, storage, parent.id, 0.0, 2.0)
+    assert (child.has_watermark, child.has_minors) == (None, None) and dropin_eligible(child) is False
+
+
+def test_trim_source_takes_a_local_file_for_a_source_that_is_not_in_storage(tmp_path, clip_file):
+    """A Genjutsu library source has only a preview url: its downloaded preview is trimmed with --file."""
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    parent = new_source(store)  # higgsfield_library, no storage_path
+    with pytest.raises(ValueError, match="--file"):
+        sources.trim_source(store, storage, parent.id, 0.0, 2.0)
+    child = sources.trim_source(store, storage, parent.id, 0.0, 2.0, file=clip_file)
+    assert child.storage_path and child.kind is SourceKind.owner_inbox and child.body is Body.biped
+    assert child.duration_s == pytest.approx(2.0, abs=0.25)
+    with pytest.raises(ValueError, match="no such file"):
+        sources.trim_source(store, storage, parent.id, 0.0, 2.0, file=tmp_path / "nope.mp4")
+
+
+def test_trim_source_refuses_an_unknown_source_and_a_bad_window(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    parent = stored_source(store, storage, clip_file)
+    with pytest.raises(KeyError):
+        sources.trim_source(store, storage, "missing", 0.0, 2.0)
+    for start, duration in ((0, 0), (-1, 2), (0, 20), (4, 3)):
+        with pytest.raises(ValueError):
+            sources.trim_source(store, storage, parent.id, start, duration)
+    assert len(store.list_sources()) == 1  # nothing was catalogued
+
+
+def test_cli_trim_prints_the_child_source(cli_store, cli_storage, clip_file):
+    parent = stored_source(cli_store, cli_storage, clip_file)
+    r = run("trim", parent.id, "--start", "1", "--duration", "3")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert out["parent_id"] == parent.id and out["id"] != parent.id and out["credit_handle"] == "@eatfryhaven"
+    assert out["duration_s"] == pytest.approx(3.0, abs=0.25) and out["kind"] == "owner_inbox"
+    assert len(cli_store.list_sources()) == 2
+
+
+def test_cli_trim_exit_codes(cli_store, cli_storage, clip_file):
+    parent = stored_source(cli_store, cli_storage, clip_file)
+    assert run("trim", "nope", "--start", "0", "--duration", "2").exit_code == 2
+    assert run("trim", parent.id, "--start", "0", "--duration", "0").exit_code == 2
+    assert run("trim", parent.id, "--duration", "2").exit_code == 2  # --start is required
+    assert "trim" in run("--help").output

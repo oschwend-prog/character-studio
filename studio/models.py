@@ -81,12 +81,19 @@ class RunStatus(StrEnum):
 
 
 AccountMode = Literal["approval", "auto"]
+# Where a clip's music comes from (owner decisions 2026-10-05): ``in_app`` = the master is silent and the owner adds
+# the song in the Instagram app (the default); ``original`` = the Genjutsu output keeps the source's own audio, only
+# when the owner chose it for this video; ``ai_beat`` = our own Seedance beat render (~30 credits), for autopilot.
+MusicArm = Literal["in_app", "original", "ai_beat"]
+MUSIC_ARMS: tuple[str, ...] = get_args(MusicArm)
 LedgerKind = Literal["reserve", "settle", "release"]
 FavoriteOrigin = Literal["scan", "owner"]
 FavoriteStatus = Literal["new", "approved", "skipped", "analysed", "queued", "made"]
 
 # Drop-in targets per platform (plan Global Constraints); used when an Account sets none.
 DEFAULT_DROPIN_SHARE: dict[Platform, float] = {Platform.tiktok: 0.70, Platform.instagram: 0.40}
+# Owner decision 2026-10-05: Drop-in is the default for every video, so the launch accounts are seeded at 1.00
+# (characters/*/refs.json). 1.00 means "no cap": the planner treats a share of 1 as always under it.
 
 # Same JSON as the seed row in supabase/migrations/0001_studio.sql.
 DEFAULT_CADENCE: dict[str, Any] = {
@@ -159,7 +166,8 @@ class Source:
     duration_s: float
     has_watermark: bool | None = None  # None = not checked yet
     has_overlay: bool | None = None
-    other_people: int | None = None
+    other_people: int | None = None  # recorded and shown; people in the background no longer block a Drop-in
+    has_minors: bool | None = None  # a child is visible (migration 0008); None = not checked, which blocks a Drop-in
     trend: str | None = None
     credit_handle: str | None = None
     created_at: datetime | None = None
