@@ -84,9 +84,11 @@ export function postedLabel(days: number | null): string | null {
   return `posted ${years} ${years === 1 ? 'year' : 'years'} ago`;
 }
 
-/** "≈310K views/day". */
+/** "≈310K views/day": three digits above 100K (333K, not 333.3K), one decimal for the millions and the small numbers. */
 export function velocityLabel(v: number | null): string | null {
-  return v == null ? null : `≈${formatViews(v)} views/day`;
+  if (v == null) return null;
+  const words = v >= 100_000 && v < 1_000_000 ? `${Math.round(v / 1000)}K` : formatViews(v);
+  return `≈${words} views/day`;
 }
 
 /** 0.048 -> "4.8%", 0.12 -> "12%", 0.005 -> "0.5%". */

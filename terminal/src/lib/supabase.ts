@@ -95,7 +95,7 @@ export class LiveBackend implements Backend {
       sb.from('runs').select('id,kind,started_at,finished_at,status,summary,details').eq('kind', 'daily').order('started_at', { ascending: false }).limit(60),
     ]);
     for (const r of [channels, queue, library, budget, health, picks, history, characters, runs]) fail(r.error);
-    const num = ['views', 'outlier_x', 'total_score', 'virality', 'reach', 'freshness', 'fit', 'feasibility', 'saturation'];
+    const num = ['views', 'outlier_x', 'total_score', 'virality', 'reach', 'freshness', 'fit', 'feasibility', 'saturation', 'velocity', 'saturation_count'];
     return {
       channels: (channels.data ?? []).map((r) =>
         normalise(r, ['dropin_share', 'dropin_ratio', 'views_7d', 'follows', 'median_outlier_x', 'hit_rate', 'approved_posts']),

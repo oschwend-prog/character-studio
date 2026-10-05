@@ -59,7 +59,10 @@ describe('velocity (the same cases as studio.favorites.velocity_per_day)', () =>
     expect(pickVelocity({ velocity: null, views: 3_100_000, posted_at: ago(10) }, NOW)).toBe(310_000);
     expect(pickVelocity({ views: 3_100_000, posted_at: null }, NOW)).toBeNull();
     expect(velocityLabel(310_000)).toBe('≈310K views/day');
+    expect(velocityLabel(333_333)).toBe('≈333K views/day');
+    expect(velocityLabel(12_500)).toBe('≈12.5K views/day');
     expect(velocityLabel(1_240_000)).toBe('≈1.2M views/day');
+    expect(velocityLabel(850)).toBe('≈850 views/day');
     expect(velocityLabel(null)).toBeNull();
   });
 });

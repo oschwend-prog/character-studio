@@ -1,14 +1,16 @@
-// Viral Picks: the Scanner card, then the proposed videos by character (Biscuit, Reginald, then the unassigned ones), each
+// Viral Picks: the Scanner card and "How we scan", then the proposed videos by character (Biscuit, Reginald, then the unassigned ones), each
 // section grouped by category (Broke the internet, Viral now, Up and coming, Ready to drop in) or by theme, best first with
 // the Genjutsu gallery as the backup. Each card says plainly what the video is, then Make it / Skip; a paste box for the
 // owner's own links; the decided picks with what they became.
 import { Clapperboard, Crown, ExternalLink, Flame, Link2, Plus, TrendingUp } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
 import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
+import { HowWeScan } from '../components/HowWeScan';
 import { MakeItSheet } from '../components/MakeIt';
 import { PickThumb } from '../components/PickThumb';
 import { ScannerCard } from '../components/Scanner';
 import { Avatar, Flap, Livery, Section, Skeleton, Spinner, characterName } from '../components/ui';
+import { pickFacts } from '../lib/analyst';
 import { formatViews, outlierBadge, platformName } from '../lib/format';
 
 const formatOutlier = (x: number) => outlierBadge(x).label;
@@ -61,6 +63,7 @@ export function Picks() {
         </p>
       </div>
       <ScannerCard />
+      <HowWeScan />
       <PasteBox />
       <div className="pick-filters stack" style={{ gap: 10 }}>
         <CharacterSwitcher value={character} onChange={setCharacter} roster={roster} counts={counts} />
@@ -261,6 +264,8 @@ function PickCard({ pick }: { pick: Pick }) {
   const titleId = `pick-${pick.id}-t`;
   const { tier, derived } = tierOf(pick, now);
   const TierIcon = TIER_ICON[tier];
+  const facts = pickFacts(pick, now);
+  const hasFacts = Boolean(facts.posted || facts.velocity || facts.engagement || facts.shares || facts.saturation);
   const why = pick.hold_reason
     ? `Held by the rule${needs ? ` (needs ${needs.replace('_', ' ')})` : ''}: ${pick.hold_reason}`
     : pick.decision
@@ -301,6 +306,15 @@ function PickCard({ pick }: { pick: Pick }) {
               </span>
             )}
           </div>
+          {hasFacts && (
+            <div className="pick-facts" aria-label="How the video is doing">
+              {facts.posted && <span title="When the video was posted">{facts.posted}</span>}
+              {facts.velocity && <span className="num" title="Views per day since it was posted">{facts.velocity}</span>}
+              {facts.engagement && <span className="num" title="Likes, comments, shares and saves against views">{facts.engagement}</span>}
+              {facts.shares && <span className="num" title="Shares against views">{facts.shares}</span>}
+              {facts.saturation && <span title="Similar videos found in the last 7 days">{facts.saturation}</span>}
+            </div>
+          )}
         </div>
         <div className="pick-total">
           <Flap text={pick.total_score == null ? '--' : String(Math.round(pick.total_score))} label={`Total score ${pick.total_score ?? 'not scored'} of 100`} />
@@ -309,7 +323,30 @@ function PickCard({ pick }: { pick: Pick }) {
       </div>
 
       {pick.concept && <p className="pick-concept" style={{ margin: 0 }}>{pick.concept}</p>}
+      {facts.matches.length > 0 && (
+        <p className="pick-matches">
+          <b>Matches:</b> {facts.matches.join(' · ')}
+        </p>
+      )}
+      {facts.why && (
+        <p className="pick-why">
+          <b>Why:</b> {facts.why}
+        </p>
+      )}
       {why && <p className="pick-hold" style={{ margin: 0 }}>{why}</p>}
+      {facts.check && (
+        <div className="clip-check" role="group" aria-label="Clip check">
+          <span className="label">Clip check</span>
+          <ul className="chips">
+            {facts.check.map((c) => (
+              <li key={c.text} className={`tag check-${c.tone}`}>
+                {c.text}
+              </li>
+            ))}
+          </ul>
+          {facts.checkNotes && <span className="small muted">{facts.checkNotes}</span>}
+        </div>
+      )}
 
       <details className="pick-scores">
         <summary className="small muted">Sub-scores</summary>

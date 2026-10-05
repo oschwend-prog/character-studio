@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { DemoBackend } from '../demo/backend';
+import { pickFacts } from './analyst';
 import traitsJson from '../demo/traits.json';
 import { href, parseHash } from './hooks';
 import parity from './parity-cases.json';
@@ -526,6 +527,18 @@ describe('the demo data', () => {
       const last = s.picks.map((p) => tierOf(p, NOW_MS).tier);
       expect(last.indexOf('gallery')).toBeGreaterThan(Math.max(...last.map((t, i) => (t === 'gallery' ? -1 : i))));
     }
+  });
+
+  it('carries every field of the analyst’s data on some pick, and none of it on others', async () => {
+    const snap = await fresh();
+    const facts = snap.picks.map((p) => ({ p, f: pickFacts(p, NOW_MS) }));
+    expect(facts.some(({ f }) => f.posted && f.velocity && f.engagement && f.shares && f.saturation && f.matches.length > 0 && f.why && f.check)).toBe(true);
+    expect(facts.some(({ p }) => p.velocity != null) && facts.some(({ p }) => p.velocity == null)).toBe(true);
+    expect(facts.some(({ f }) => f.engagement && !f.shares)).toBe(true); // vidIQ gave no share count: no share rate invented
+    expect(facts.some(({ p }) => p.saturation_count === 0) && facts.some(({ p }) => (p.saturation_count ?? 0) >= 8)).toBe(true);
+    expect(facts.some(({ f }) => f.check?.some((c) => c.tone === 'bad'))).toBe(true); // a clip with a watermark
+    expect(facts.some(({ f }) => f.check?.some((c) => c.tone === 'warn'))).toBe(true); // a handheld camera
+    expect(facts.some(({ f }) => !f.why && !f.check && f.matches.length === 0)).toBe(true); // an unanalysed pick still renders
   });
 
   it('carries a theme on the scanned picks and gadgets on a proposed one', async () => {
