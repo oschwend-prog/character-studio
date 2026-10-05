@@ -11,8 +11,8 @@ export function useNow(ms = 15_000): number {
   return now;
 }
 
-export type Route = 'today' | 'picks' | 'queue' | 'channels' | 'library' | 'budget';
-export const ROUTES: Route[] = ['today', 'picks', 'queue', 'channels', 'library', 'budget'];
+export type Route = 'today' | 'picks' | 'works' | 'queue' | 'channels' | 'library' | 'budget';
+export const ROUTES: Route[] = ['today', 'picks', 'works', 'queue', 'channels', 'library', 'budget'];
 
 /** `#/queue/<clip id>` and `#/picks?c=biscuit`: the route, its one path parameter and the query of the hash. */
 export function parseHash(hash: string): { route: Route; param: string | null; query: string } {

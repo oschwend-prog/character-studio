@@ -1,5 +1,6 @@
 // The live backend: supabase-js with the publishable (anon) key, magic-link auth, RLS does the rest.
 // Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0008.
+// v_tracker (migration 0010) feeds "In the works"; a database without it yet shows that tab empty instead of failing the load.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { checkClipBasics, ownerClipPath } from './rules';
@@ -36,6 +37,10 @@ export const isSchemaNotExposed = (e: unknown) =>
 function fail(error: { message: string; code?: string } | null): void {
   if (error) throw new StudioError(error.message, error.code);
 }
+
+/** PostgREST's "no such table or view" (PGRST205; 42P01 from Postgres itself): a migration not applied yet. */
+export const isMissingRelation = (e: { code?: string; message?: string } | null | undefined) =>
+  Boolean(e && (e.code === 'PGRST205' || e.code === '42P01' || /could not find the table/i.test(e.message ?? '')));
 
 // numeric / bigint columns can arrive as strings; everything numeric goes through here.
 const n = (v: unknown): number | null => (v == null || v === '' ? null : Number(v));
@@ -82,7 +87,7 @@ export class LiveBackend implements Backend {
 
   async load(): Promise<Snapshot> {
     const sb = this.sb;
-    const [channels, queue, library, budget, health, picks, history, characters, runs] = await Promise.all([
+    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker] = await Promise.all([
       sb.from('v_channels').select('*'),
       sb.from('v_queue').select('*').order('created_at'),
       sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(300),
@@ -93,9 +98,14 @@ export class LiveBackend implements Backend {
       sb.from('v_characters').select('*').order('slug'),
       // the Scanner card: the daily run's rows (RLS: the owner's), newest first; a month of them is plenty
       sb.from('runs').select('id,kind,started_at,finished_at,status,summary,details').eq('kind', 'daily').order('started_at', { ascending: false }).limit(60),
+      sb.from('v_tracker').select('*'),
     ]);
     for (const r of [channels, queue, library, budget, health, picks, history, characters, runs]) fail(r.error);
-    const num = ['views', 'outlier_x', 'total_score', 'virality', 'reach', 'freshness', 'fit', 'feasibility', 'saturation', 'velocity', 'saturation_count'];
+    if (!isMissingRelation(tracker.error)) fail(tracker.error);
+    const num = [
+      'views', 'outlier_x', 'total_score', 'virality', 'reach', 'freshness', 'fit', 'feasibility', 'saturation', 'velocity', 'saturation_count',
+      'recognisability', 'original_views', 'est_credits',
+    ];
     return {
       channels: (channels.data ?? []).map((r) =>
         normalise(r, ['dropin_share', 'dropin_ratio', 'views_7d', 'follows', 'median_outlier_x', 'hit_rate', 'approved_posts']),
@@ -108,6 +118,9 @@ export class LiveBackend implements Backend {
       history: (history.data ?? []).map((r) => normalise(r, num)),
       characters: (characters.data ?? []).map((r) => ({ ...r, setup: r.setup ?? {}, accounts: r.accounts ?? [] })),
       runs: runs.data ?? [],
+      tracker: (tracker.error ? [] : tracker.data ?? []).map((r) =>
+        normalise(r, ['views', 'outlier_x', 'velocity', 'credits_spent', 'latest_views']),
+      ),
       loadedAt: Date.now(),
     } as Snapshot;
   }

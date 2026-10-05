@@ -6,10 +6,11 @@ import picksJson from './batch1-picks.json';
 import traitsJson from './traits.json';
 import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, checkClipBasics, ownerClipPath } from '../lib/rules';
 import { velocityPerDay } from '../lib/analyst';
+import { inTracker } from '../lib/tracker';
 import { londonDayKey, londonWallToIso } from '../lib/format';
 import type {
   Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, Engagement, HealthRow, LibraryClip, OwnerMusic,
-  Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, Tier,
+  Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow,
 } from '../lib/types';
 
 interface Account { id: string; character_slug: string; platform: Platform; handle: string; connected: boolean; mode: 'approval' | 'auto'; dropin_share: number }
@@ -17,6 +18,8 @@ interface Clip {
   id: string; character_slug: string; mode: 'dropin' | 'recreate'; state: ClipState; hook: string | null; caption: string | null;
   hashtags: string[]; master_path: string | null; cost: number | null; outlier_x: number | null; created_at: string;
   reject_reason: string | null; qa: QueueClip['qa']; features: Record<string, unknown>; source: { kind: string; url: string | null; credit: string | null; trend: string | null } | null;
+  /** When the clip last moved (v_tracker works it out from the ledger and the posts); the creation time when absent. */
+  state_since?: string;
 }
 interface Post { id: string; clip_id: string; account_id: string; scheduled_for: string; status: PostStatus; url: string | null; error: string | null; views: number | null; likes: number | null; comments: number | null; shares: number | null; saves: number | null; follows: number | null }
 interface Fav {
@@ -97,6 +100,15 @@ const ownerOf = (f: { proposal: Record<string, unknown> }) => ({
   trait_matches: Array.isArray(f.proposal.trait_matches) ? (f.proposal.trait_matches as string[]) : null,
   why: (f.proposal.why as string) ?? null,
   analysis: (f.proposal.analysis as ClipAnalysis) ?? null,
+  recognisability: typeof f.proposal.recognisability === 'number' ? f.proposal.recognisability : null,
+  original_views: typeof f.proposal.original_views === 'number' ? f.proposal.original_views : null,
+  original_url: (f.proposal.original_url as string) ?? null,
+  source_status: (f.proposal.source_status as string) ?? null,
+  audio_risk: (f.proposal.audio_risk as string) ?? null,
+  est_credits: typeof f.proposal.est_credits === 'number' ? f.proposal.est_credits : null,
+  season: (f.proposal.season as string) ?? null,
+  checks: Array.isArray(f.proposal.checks) ? (f.proposal.checks as string[]) : null,
+  source_candidates: Array.isArray(f.proposal.source_candidates) ? (f.proposal.source_candidates as SourceCandidate[]) : null,
 });
 
 export class DemoBackend implements Backend {
@@ -259,7 +271,10 @@ export class DemoBackend implements Backend {
     };
     card('B1', { theme: 'false premise, then the drop', posted_at: posted(21), thumbnail_url: demoThumb('DEMO', 215) });
     card('B2', { theme: 'deadpan at work', posted_at: posted(9), thumbnail_url: demoThumb('DEMO', 150) });
-    card('B3', { theme: 'deadpan at work', posted_at: posted(8), thumbnail_url: demoThumb('DEMO', 40) });
+    card('B3', {
+      theme: 'deadpan at work', posted_at: posted(8), thumbnail_url: demoThumb('DEMO', 40),
+      analysis: { people_count: 1, main_subject: 'a waiter with a tray', camera: 'static', watermark: false, overlay: false, minors: false, best_window: { start_s: 2, end_s: 9.5 }, bpm: 104 },
+    });
     card('D2', { theme: 'stare, then hits every beat', posted_at: posted(11), thumbnail_url: demoThumb('DEMO', 200) });
     card('D4', { theme: 'stare, then hits every beat', posted_at: posted(3), thumbnail_url: demoThumb('DEMO', 190) });
     card('D5', { theme: 'skilled upright dance', posted_at: posted(2), thumbnail_url: demoThumb('DEMO', 280) });
@@ -318,6 +333,16 @@ export class DemoBackend implements Backend {
     });
     card('O1', { velocity: vel(5_700_000, 12), saturation_count: 1 });
 
+    // The long list (migration 0010), SYNTHETIC: how recognisable an iconic moment is and its original's views, the clip and audio
+    // situation, the analyst's estimate, the season, the checks and the clean-clip candidates. Some picks have none of it, so the
+    // terminal's own estimate and the empty cells show too.
+    card('D1', {
+      recognisability: 7, est_credits: 160, source_status: 'needs a clean clip (recreate fallback)', audio_risk: 'original/low',
+      checks: ['four dancers: swap the lead only', 'credit the crew in the caption'],
+    });
+    card('B4', { source_status: 'clip itself is the source', audio_risk: 'unidentified track: check before posting, fallback in-app', est_credits: 91 });
+    card('B5', { source_status: 'needs a clean clip (recreate fallback)', checks: ['nine near copies this week: lead with the quiff'] });
+
     // Four stand-in picks (SYNTHETIC, like every clip here) so each tier has a card for both characters.
     const standIn = (n: number, slug: string, platform: string, handle: string, hook: string, concept: string, views: number, x: number, total: number, proposal: Record<string, unknown>): Fav => {
       const f: Fav = {
@@ -332,6 +357,7 @@ export class DemoBackend implements Backend {
     };
     standIn(1, 'biscuit', 'tiktok', '@demo.pawprint', 'tracksuit on. worries off.', 'Small dog in a tracksuit mouths the lyric, one paw on the beat; the caption gives him a job.', 3_100_000, 1240, 78, {
       theme: 'pet with a human job', posted_at: posted(3), thumbnail_url: demoThumb('DEMO', 300),
+      est_credits: 91, source_status: 'clip itself is the source', audio_risk: 'original/low', checks: ['credit the creator in the caption'],
       decision: { decision: 'approve', by: 'analyst', reason: 'Matches: wholesome ego, ego or job caption. Posted 3 days ago at 1,240x.' },
       velocity: vel(3_100_000, 3), engagement: { likes: 322_000, comments: 6_400, shares: 58_000, saves: 21_000 }, saturation_count: 3,
       trait_matches: ['wholesome ego', 'ego or job caption', 'slick upright dance'],
@@ -347,7 +373,14 @@ export class DemoBackend implements Backend {
       trait_matches: ['head-snap into the lens'],
     });
     standIn(3, 'reginald', 'youtube', '@demo.rainstreet', 'an umbrella. a puddle. no notes.', 'A formal figure dances with an umbrella in the rain, perfectly serious; a famous scene, played straight.', 12_000_000, 5.2, 69, {
-      tier: 'iconic', theme: 'one action, new location', posted_at: posted(400), thumbnail_url: demoWide('DEMO', 215),
+      mode: 'recreate', tier: 'iconic', theme: 'one action, new location', posted_at: posted(400), thumbnail_url: demoWide('DEMO', 215),
+      recognisability: 9, original_views: 1_359_825_767, original_url: 'https://www.youtube.com/watch?v=demoSynth03', est_credits: 160,
+      source_status: 'needs a clean clip (recreate fallback)', audio_risk: 'chart song: Instagram may mute it, fallback in-app', season: 'rainy autumn weeks',
+      checks: ['no real-person likeness: the moves only, never the original look', 'the same moment is Biscuit’s later pick: not in the same fortnight'],
+      source_candidates: [
+        { id: 'demoTut0001', views: 48_000, published: '2024-03-02', why: 'a solo tutorial: preview it for on-screen text' },
+        { id: 'demoTut0002', views: 2_100_000, published: '2019-11-20', why: 'probably carries a studio logo, so probably not clean' },
+      ],
       decision: { decision: 'approve', by: 'analyst', reason: 'Matches: deadpan under absurdity, black umbrella. A famous moment everyone knows.' },
       engagement: { likes: 410_000, comments: 8_800 },
       trait_matches: ['deadpan under absurdity', 'black umbrella'],
@@ -359,12 +392,74 @@ export class DemoBackend implements Backend {
 
     // Clips still being made: the "In production" stage of the pipeline.
     const hour = 3600_000;
-    clip('biscuit', 'smooth operator, small dog', 'recreate', 'generating', 0, { master_path: null, cost: 98, created_at: new Date(now - 2 * hour).toISOString() });
-    clip('biscuit', 'tiny tux, big feelings', 'dropin', 'planned', 0, { master_path: null, cost: null, created_at: new Date(now - 0.5 * hour).toISOString() });
-    clip('reginald', 'the quiff moved. we do not speak of it.', 'recreate', 'qa_failed', 0, {
+    const generating = clip('biscuit', 'smooth operator, small dog', 'recreate', 'generating', 0, { master_path: null, cost: 98, created_at: new Date(now - 2 * hour).toISOString() });
+    const planned = clip('biscuit', 'tiny tux, big feelings', 'dropin', 'planned', 0, { master_path: null, cost: null, created_at: new Date(now - 0.5 * hour).toISOString() });
+    const quiff = clip('reginald', 'the quiff moved. we do not speak of it.', 'recreate', 'qa_failed', 0, {
       master_path: null, cost: 162, created_at: new Date(now - 5 * hour).toISOString(),
       qa: { tech: 'ok', problems: ['the quiff moves at 4 s'], visual: 'quiff flickers, smile at 6 s' },
     });
+
+    // "In the works" (migration 0010): approved picks on their way to being posted, SYNTHETIC like every clip here. With the batch-1
+    // picks above (D2 approved a day ago with no clip yet, D5 a Recreate, B1/B2/D6 waiting for your OK, D4 booked for 19:00) they
+    // cover every step of the tracker and every flag: no clip yet, stuck, each failure, a dropped clip, and a post older than a week
+    // that has dropped off.
+    const at = (h: number) => new Date(now - h * hour).toISOString();
+    const work = (k: number, slug: string, status: string, hook: string, concept: string, approvedHoursAgo: number, proposal: Record<string, unknown> = {}): Fav => {
+      const f: Fav = {
+        id: uid(`fw${k}`), url: `https://www.instagram.com/reel/DemoWork${k}/`, platform: 'instagram', creator_handle: `@demo.work${k}`,
+        views: 1_200_000 + k * 310_000, outlier_x: 40 + k * 7, origin: 'scan', character_slug: slug,
+        scores: { virality: 8, reach: 7, freshness: 8, fit: 8, feasibility: 8, saturation: 8 }, total_score: 80 + (k % 7),
+        note: null, status, created_at: at(approvedHoursAgo), clip_id: null,
+        proposal: {
+          mode: 'dropin', hook, concept, posted_at: posted(3 + (k % 5)), thumbnail_url: demoThumb('DEMO', (k * 47) % 360),
+          theme: slug === 'biscuit' ? 'skilled upright dance' : 'deadpan at work',
+          decision: { decision: 'approve', by: 'rule', reason: 'rule: total 84 >= 80 and feasibility 8 >= 7' }, ...proposal,
+        },
+      };
+      this.favs.push(f);
+      return f;
+    };
+    const link = (f: Fav, c: Clip) => {
+      f.clip_id = c.id;
+      c.features = { ...c.features, fav_id: f.id };
+    };
+    const byHook = (hook: string) => this.clips.find((c) => c.hook === hook)!;
+    work(1, 'biscuit', 'approved', 'tracksuit, but make it formal', 'Small dog in a tiny tracksuit does the shoulder-shimmy trend on a sunlit rug.', 2);
+    work(2, 'reginald', 'approved', 'the gallery has spoken', 'A Genjutsu gallery clip: one dancer in a hallway, static camera; Reginald takes the moves.', 20, {
+      source_kind: 'higgsfield_library', preset_id: 'hf-genjutsu-hallway-07', tier: 'gallery', thumbnail_url: demoThumb('GENJUTSU', 120),
+    });
+    link(work(3, 'biscuit', 'queued', 'smooth operator, small dog', 'A slow strut down a pastel corridor, one eyebrow raised; the glint on the last beat.', 28, { mode: 'recreate' }), generating);
+    link(work(4, 'biscuit', 'queued', 'tiny tux, big feelings', 'Biscuit in a tiny tux takes the lead of a wedding dance-off.', 27), planned);
+    link(work(5, 'reginald', 'queued', 'the quiff moved. we do not speak of it.', 'The butler irons a newspaper, then the beat drops into a deadpan robot.', 30, { mode: 'recreate' }), quiff);
+    this.settled[quiff.id] = 162;
+    link(work(6, 'reginald', 'queued', 'polishing the beat', 'Silver polishing in time with the snare, never a smile.', 33),
+      clip('reginald', 'polishing the beat', 'dropin', 'generating', 0, { master_path: null, cost: 91, created_at: at(9), state_since: at(9) }));
+    link(work(7, 'biscuit', 'queued', 'paws up, chin up', 'Paws up on every chorus hit, chin to the lens on the last one.', 31),
+      clip('biscuit', 'paws up, chin up', 'dropin', 'gen_failed', 0, { master_path: null, cost: 91, created_at: at(4), state_since: at(3), qa: {} }));
+    const generated = clip('reginald', 'tea, then chaos', 'dropin', 'generated', 0, { master_path: null, cost: 91, created_at: at(8), state_since: at(7), qa: {} });
+    link(work(8, 'reginald', 'queued', 'tea, then chaos', 'He pours tea while the room behind him falls apart in time with the beat.', 34), generated);
+    this.settled[generated.id] = 91;
+    const built = clip('biscuit', 'one paw, one beat', 'dropin', 'mastered', 0, { cost: 91, created_at: at(3), state_since: at(1) });
+    link(work(9, 'biscuit', 'queued', 'one paw, one beat', 'One paw taps every snare, the tail keeps the hi-hat.', 26), built);
+    this.settled[built.id] = 91;
+    const rejected = clip('reginald', 'the bow that went too far', 'dropin', 'rejected', 0, {
+      cost: 91, created_at: at(30), state_since: at(6), reject_reason: 'the eyes are the wrong way round at 7 s',
+    });
+    link(work(10, 'reginald', 'made', 'the bow that went too far', 'A formal bow that turns into the trend’s floor move.', 50), rejected);
+    this.settled[rejected.id] = 91;
+    link(work(11, 'biscuit', 'made', 'going as myself this year', 'Biscuit in his hot-dog-bun costume does the spooky-season shuffle.', 60, { mode: 'recreate' }), byHook('going as myself this year'));
+    link(work(12, 'reginald', 'made', 'everything is fine, sir', 'He sets the table while the kitchen floods, in time with the beat.', 70, { mode: 'recreate' }), byHook('everything is fine, sir'));
+    const failedPost = clip('biscuit', 'sausage in a suit', 'dropin', 'scheduled', 1, { cost: 91, state_since: at(20) });
+    link(work(13, 'biscuit', 'made', 'sausage in a suit', 'A tiny suit, a big dance: the lead of the office-party trend.', 48), failedPost);
+    this.settled[failedPost.id] = 91;
+    post(failedPost, btt, 0, 'scheduled', null, { scheduled_for: at(2) });
+    post(failedPost, big, 0, 'failed', null, { scheduled_for: at(2), error: 'Instagram refused the upload twice (Postiz 500): retry or resolve it' });
+    const dropped = clip('reginald', 'a smile at 6 s', 'dropin', 'dropped', 1, {
+      master_path: null, cost: 91, state_since: at(22), qa: { tech: 'ok', problems: ['smile at 6 s', 'the quiff moves at 8 s'] },
+    });
+    link(work(14, 'reginald', 'approved', 'a smile at 6 s', 'Deadpan waltz with a mop; the second try keeps the straight face.', 40), dropped);
+    this.settled[dropped.id] = 182;
+    link(work(15, 'biscuit', 'made', "my eyes don't match. my moves do.", 'The first post: the eye close-up loop.', 24 * 14, { mode: 'recreate' }), byHook("my eyes don't match. my moves do."));
 
     // The run log: a finished scan on the latest scan day, an earlier one, and a day that did not scan.
     const scanDays = ['Tue', 'Thu', 'Sat', 'Sun'];
@@ -584,7 +679,45 @@ export class DemoBackend implements Backend {
       accounts: this.accounts.filter((a) => a.character_slug === slug).map((a) => ({ platform: a.platform, handle: a.handle, has_postiz: a.connected, mode: a.mode })),
     }));
 
-    return { channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), loadedAt: now };
+    const tracker: TrackerRow[] = this.favs
+      .filter((f) => ['approved', 'analysed', 'queued', 'made'].includes(f.status))
+      .map((f) => this.trackerRow(f, name(f.character_slug)))
+      .filter((r) => inTracker(r, now));
+
+    return { channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), tracker, loadedAt: now };
+  }
+
+  /** One v_tracker row (migration 0010): the pick, its newest clip, that clip's latest post (a problem first within a slot), the credits. */
+  private trackerRow(f: Fav, characterName: string | null): TrackerRow {
+    const mine = this.clips.filter((c) => c.id === f.clip_id || c.features.fav_id === f.id);
+    const c = [...mine].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id.localeCompare(a.id))[0] ?? null;
+    const rank: Record<PostStatus, number> = { failed: 0, needs_check: 1, posting: 2, scheduled: 3, posted: 4 };
+    const p = c
+      ? this.posts
+        .filter((x) => x.clip_id === c.id)
+        .sort((a, b) => Date.parse(b.scheduled_for) - Date.parse(a.scheduled_for) || rank[a.status] - rank[b.status] || a.id.localeCompare(b.id))[0] ?? null
+      : null;
+    const problems = c && Array.isArray(c.qa.problems) && c.qa.problems.length ? c.qa.problems.join(' / ') : null;
+    const error = c && typeof c.qa.error === 'string' && c.qa.error.trim() ? c.qa.error.trim() : null;
+    const o = ownerOf(f);
+    return {
+      pick_id: f.id, character_slug: f.character_slug, character_name: characterName, url: f.url, platform: f.platform,
+      creator_handle: f.creator_handle, views: f.views, outlier_x: f.outlier_x, tier: o.tier, theme: o.theme,
+      concept: (f.proposal.concept as string) ?? null, hook: (f.proposal.hook as string) ?? null, thumbnail_url: o.thumbnail_url,
+      preview_url: o.preview_url, gallery: o.gallery, posted_at: o.posted_at, velocity: o.velocity,
+      proposed_mode: (f.proposal.mode as string) ?? null, owner_mode: o.owner_mode, owner_presence: o.owner_presence,
+      owner_music: o.owner_music, owner_clip_path: o.owner_clip_path, status: f.status,
+      decision: (f.proposal.decision as TrackerRow['decision']) ?? null, approved_at: f.created_at, note: f.note,
+      source_id: (f.proposal.source_id as string) ?? null, analysis: o.analysis,
+      fetch_failed: (f.proposal.fetch_failed as TrackerRow['fetch_failed']) ?? null,
+      clip_id: c?.id ?? null, clip_state: c?.state ?? null, clip_mode: c?.mode ?? null,
+      clip_state_since: c ? c.state_since ?? c.created_at : null,
+      clip_failure: c ? c.reject_reason?.trim() || problems || error : null,
+      credits_spent: mine.reduce((sum, x) => sum + (this.settled[x.id] ?? 0), 0),
+      post_id: p?.id ?? null, post_status: p?.status ?? null, post_scheduled_for: p?.scheduled_for ?? null,
+      post_posted_at: p?.status === 'posted' ? p.scheduled_for : null, post_url: p?.url ?? null, post_error: p?.error ?? null,
+      latest_views: p?.views ?? null,
+    };
   }
 
   async approveClip(id: string, edits: { caption?: string | null; hook?: string | null; scheduleAt?: string | null } = {}) {

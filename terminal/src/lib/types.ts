@@ -1,4 +1,5 @@
-// Row shapes of the studio views (supabase/migrations/0004_terminal_rpc.sql, 0007_characters_view.sql, 0008_dropin_first.sql, 0009_analyst.sql). Numbers that Postgres
+// Row shapes of the studio views (supabase/migrations/0004_terminal_rpc.sql, 0007_characters_view.sql, 0008_dropin_first.sql, 0009_analyst.sql,
+// 0010_tracker.sql). Numbers that Postgres
 // returns as numeric/bigint may arrive as strings over PostgREST; `num()` in data.ts normalises them.
 
 export type Platform = 'tiktok' | 'instagram';
@@ -213,6 +214,34 @@ export interface Pick {
   why?: string | null;
   /** The local check of a fetched or attached clip. */
   analysis?: ClipAnalysis | null;
+  // The long list (migration 0010): absent on a database that has not had it yet; every reader treats absent like null.
+  /** 0-10: how instantly people know an iconic moment (only meaningful for tier iconic). */
+  recognisability?: number | null;
+  /** The famous original's views (an iconic moment's own video, which may not be the picked URL). */
+  original_views?: number | null;
+  original_url?: string | null;
+  /** One line on the clip that would drive a Drop-in ("clean clip found", "needs a clean clip (recreate fallback)"). */
+  source_status?: string | null;
+  /** One line on the audio ("chart song: Instagram may mute it, fallback in-app"). */
+  audio_risk?: string | null;
+  /** The analyst's credit estimate; null = the terminal works it out (`estimateCredits`). */
+  est_credits?: number | null;
+  /** When it peaks ("24-31 Oct"). */
+  season?: string | null;
+  /** What to watch for, one short sentence each. */
+  checks?: string[] | null;
+  /** Clean clips that might drive a Drop-in. */
+  source_candidates?: SourceCandidate[] | null;
+}
+
+/** A clean clip that might drive a Drop-in, as the analyst noted it (free keys; these are the usual ones). */
+export interface SourceCandidate {
+  id?: string;
+  url?: string;
+  views?: number | null;
+  published?: string;
+  why?: string;
+  [k: string]: unknown;
 }
 
 /** What vidIQ returned about a video's reactions; any count may be absent. */
@@ -274,6 +303,72 @@ export interface PickHistory {
   trait_matches?: string[] | null;
   why?: string | null;
   analysis?: ClipAnalysis | null;
+  recognisability?: number | null;
+  original_views?: number | null;
+  original_url?: string | null;
+  source_status?: string | null;
+  audio_risk?: string | null;
+  est_credits?: number | null;
+  season?: string | null;
+  checks?: string[] | null;
+  source_candidates?: SourceCandidate[] | null;
+}
+
+/**
+ * One row of v_tracker (migration 0010): an approved pick on its way to being posted. The pick's card, its newest clip,
+ * that clip's latest post and the credits settled on the pick so far. Times are ISO strings.
+ */
+export interface TrackerRow {
+  pick_id: string;
+  character_slug: string | null;
+  character_name: string | null;
+  url: string;
+  platform: string;
+  creator_handle: string | null;
+  views: number | null;
+  outlier_x: number | null;
+  tier: Tier | null;
+  theme: string | null;
+  concept: string | null;
+  hook: string | null;
+  thumbnail_url: string | null;
+  preview_url: string | null;
+  gallery: boolean | null;
+  /** When the original video was posted (what the derived tier reads), not our post. */
+  posted_at: string | null;
+  velocity: number | null;
+  proposed_mode: string | null;
+  owner_mode: OwnerMode | null;
+  owner_presence: OwnerPresence | null;
+  owner_music: OwnerMusic | null;
+  owner_clip_path: string | null;
+  /** The pick's status: approved, analysed, queued or made. */
+  status: string;
+  decision: Decision | null;
+  /** No decision time is stored: the pick's filing time stands in (migration 0010). */
+  approved_at: string;
+  note: string | null;
+  source_id: string | null;
+  analysis: ClipAnalysis | null;
+  /** Set when the clip could not be fetched (the pick is then made as a Recreate). */
+  fetch_failed: { reason?: string; at?: string } | null;
+  clip_id: string | null;
+  clip_state: ClipState | null;
+  clip_mode: 'dropin' | 'recreate' | null;
+  /** The latest known moment the clip moved (its creation, a ledger entry, a post's claim): best effort. */
+  clip_state_since: string | null;
+  /** The reject reason, else the QA problems, else the QA error. */
+  clip_failure: string | null;
+  /** Credits settled on every clip of the pick so far. */
+  credits_spent: number;
+  post_id: string | null;
+  post_status: PostStatus | null;
+  post_scheduled_for: string | null;
+  post_posted_at: string | null;
+  post_url: string | null;
+  post_error: string | null;
+  /** The views of the post's latest metric snapshot. */
+  latest_views: number | null;
 }
 
 /** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */
@@ -361,6 +456,8 @@ export interface Snapshot {
   history: PickHistory[];
   characters: Character[];
   runs: RunRow[];
+  /** "In the works": approved picks until they are posted (v_tracker, migration 0010). */
+  tracker: TrackerRow[];
   loadedAt: number;
 }
 

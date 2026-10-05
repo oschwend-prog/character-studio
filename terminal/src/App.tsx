@@ -1,6 +1,6 @@
 // The shell: demo or live backend, owner sign-in, top bar (mark + London clock), the page, the tab bar.
 import type { Session } from '@supabase/supabase-js';
-import { Clock3, Flame, Gauge, Library as LibraryIcon, ListChecks, Users } from 'lucide-react';
+import { Clapperboard, Clock3, Flame, Gauge, Library as LibraryIcon, ListChecks, Users } from 'lucide-react';
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Mark } from './components/ui';
 import { londonDate, londonTime } from './lib/format';
@@ -15,6 +15,7 @@ import { Library } from './pages/Library';
 import { Picks } from './pages/Picks';
 import { Queue } from './pages/Queue';
 import { Today } from './pages/Today';
+import { Works } from './pages/Works';
 
 export const isDemo = () =>
   new URLSearchParams(window.location.search).get('demo') === '1' || import.meta.env.VITE_DEMO === '1';
@@ -99,6 +100,7 @@ function LiveGate({ children }: { children: React.ReactNode }) {
 const TABS: { route: Route; label: string; Icon: ComponentType<{ 'aria-hidden'?: boolean }> }[] = [
   { route: 'today', label: 'Today', Icon: Clock3 },
   { route: 'picks', label: 'Picks', Icon: Flame },
+  { route: 'works', label: 'In the works', Icon: Clapperboard },
   { route: 'queue', label: 'Queue', Icon: ListChecks },
   { route: 'channels', label: 'Characters', Icon: Users },
   { route: 'library', label: 'Library', Icon: LibraryIcon },
@@ -142,6 +144,7 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
       <main id="main">
         {route === 'today' && <Today />}
         {route === 'picks' && <Picks />}
+        {route === 'works' && <Works />}
         {route === 'queue' && <Queue focus={param} />}
         {route === 'channels' && <Channels />}
         {route === 'library' && <Library focus={param} />}

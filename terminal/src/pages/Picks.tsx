@@ -1,20 +1,23 @@
 // Viral Picks: the Scanner card and "How we scan", then the proposed videos by character (Biscuit, Reginald, then the unassigned ones), each
 // section grouped by category (Broke the internet, Viral now, Up and coming, Ready to drop in) or by theme, best first with
 // the Genjutsu gallery as the backup. Each card says plainly what the video is, then Make it / Skip; a paste box for the
-// owner's own links; the decided picks with what they became.
+// owner's own links; the decided picks with what they became. A switch at the top shows the same picks as one sortable Long list
+// instead (components/LongList.tsx); a row opens the very same card in a sheet, so Make it and Skip work exactly as on the cards.
 import { Clapperboard, Crown, ExternalLink, Flame, Link2, Plus, TrendingUp } from 'lucide-react';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
 import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
 import { HowWeScan } from '../components/HowWeScan';
+import { LongList } from '../components/LongList';
 import { MakeItSheet } from '../components/MakeIt';
 import { PickThumb } from '../components/PickThumb';
 import { ScannerCard } from '../components/Scanner';
-import { Avatar, Flap, Livery, Section, Skeleton, Spinner, characterName } from '../components/ui';
+import { Avatar, Flap, Livery, Section, Sheet, Skeleton, Spinner, characterName } from '../components/ui';
 import { pickFacts } from '../lib/analyst';
 import { formatViews, outlierBadge, platformName } from '../lib/format';
 
 const formatOutlier = (x: number) => outlierBadge(x).label;
-import { href, useNow } from '../lib/hooks';
+import { href, useNow, useRoute } from '../lib/hooks';
+import { PICKS_VIEW_KEY, picksView, type PicksView } from '../lib/longlist';
 import {
   TIERS, TIER_HINTS, TIER_LABELS, canonicalVideoUrl, groupPicksByCharacter, modeLine, tierCounts, tierOf,
   type PickSection,
@@ -35,11 +38,38 @@ const SKIP_REASONS = ['Not our brand', 'Too hard to make now', 'Seen it everywhe
 
 const TIER_ICON: Record<Tier, typeof Flame> = { iconic: Crown, viral_now: Flame, rising: TrendingUp, gallery: Clapperboard };
 
+const storedView = (): string | null => {
+  try {
+    return window.localStorage.getItem(PICKS_VIEW_KEY);
+  } catch {
+    return null; // blocked site data: the page still works, it just forgets the choice
+  }
+};
+
+/** Cards or Long list: a `?view=` deep link, else the viewer's last choice (localStorage, guarded), else the cards. */
+function usePicksView(): [PicksView, (v: PicksView) => void] {
+  const { query } = useRoute();
+  const [view, setView] = useState<PicksView>(() => picksView(query, storedView()));
+  useEffect(() => setView(picksView(query, storedView())), [query]);
+  const choose = (v: PicksView) => {
+    setView(v);
+    try {
+      window.localStorage.setItem(PICKS_VIEW_KEY, v);
+    } catch {
+      /* not remembered */
+    }
+  };
+  return [view, choose];
+}
+
 export function Picks() {
   const { data } = useStudio();
   const now = useNow(60_000);
   const [character, setCharacter, roster] = useCharacterChoice();
   const [tier, setTier] = useState<Tier | 'all'>('all');
+  const [view, setView] = usePicksView();
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [making, setMaking] = useState<Pick | null>(null);
   if (!data) {
     return (
       <div className="page stack" aria-busy="true">
@@ -54,14 +84,52 @@ export function Picks() {
   const tiers = tierCounts(inScope, now);
   const sections = groupPicksByCharacter(data.picks, roster, { now, character, tier });
   const shown = sections.reduce((n, s) => n + s.picks.length, 0);
-  return (
-    <div className="page stack">
+  const openPick = openId ? data.picks.find((p) => p.id === openId) ?? null : null; // gone once decided: the sheet closes
+  const header = (
+    <>
       <div>
         <h1 className="h1">Viral Picks</h1>
         <p className="small muted" style={{ margin: '6px 0 0' }}>
           Best first, real viral clips before the Genjutsu gallery. The standing rule already approved anything 80+ with feasibility 7+; these wait for a call.
         </p>
       </div>
+      <div className="seg view-switch" role="group" aria-label="Show the picks as">
+        {(['cards', 'list'] as const).map((v) => (
+          <button key={v} type="button" aria-pressed={view === v} onClick={() => setView(v)}>
+            {v === 'cards' ? 'Cards' : 'Long list'}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+  if (view === 'list') {
+    return (
+      <div className="page stack">
+        {header}
+        <LongList picks={data.picks} roster={roster} character={character} onCharacter={setCharacter} now={now} onOpen={(p) => setOpenId(p.id)} />
+        {openPick && (
+          <Sheet title={openPick.character_name ? `${openPick.character_name}’s pick` : 'The pick'} onClose={() => setOpenId(null)}>
+            <PickCard
+              pick={openPick}
+              onMakeIt={() => {
+                setOpenId(null);
+                setMaking(openPick);
+              }}
+            />
+            <div className="sheet-actions">
+              <button type="button" className="btn ghost" onClick={() => setOpenId(null)}>
+                Close
+              </button>
+            </div>
+          </Sheet>
+        )}
+        {making && <MakeItSheet pick={making} onClose={() => setMaking(null)} />}
+      </div>
+    );
+  }
+  return (
+    <div className="page stack">
+      {header}
       <ScannerCard />
       <HowWeScan />
       <PasteBox />
@@ -251,7 +319,8 @@ function CharacterSeg({ value, onChange, label }: { value: string | null; onChan
   );
 }
 
-function PickCard({ pick }: { pick: Pick }) {
+/** One proposed pick. `onMakeIt`: who opens the Make-it sheet (the long list's sheet hands it over; the card opens its own). */
+function PickCard({ pick, onMakeIt }: { pick: Pick; onMakeIt?: () => void }) {
   const { backend, run, busy } = useStudio();
   const now = useNow(60_000);
   const slug = pick.character_slug;
@@ -401,7 +470,7 @@ function PickCard({ pick }: { pick: Pick }) {
             <button type="button" className="btn line" onClick={() => setSkipping(true)} disabled={working}>
               Skip
             </button>
-            <button type="button" className="btn primary" onClick={() => setMaking(true)} disabled={working} aria-busy={working} aria-haspopup="dialog">
+            <button type="button" className="btn primary" onClick={() => (onMakeIt ? onMakeIt() : setMaking(true))} disabled={working} aria-busy={working} aria-haspopup="dialog">
               {working && <Spinner />} Make it
             </button>
           </div>
