@@ -1,6 +1,6 @@
 // The shell: demo or live backend, owner sign-in, top bar (mark + London clock), the page, the tab bar.
 import type { Session } from '@supabase/supabase-js';
-import { Clock3, Flame, Gauge, Library as LibraryIcon, ListChecks, RadioTower } from 'lucide-react';
+import { Clock3, Flame, Gauge, Library as LibraryIcon, ListChecks, Users } from 'lucide-react';
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Mark } from './components/ui';
 import { londonDate, londonTime } from './lib/format';
@@ -100,7 +100,7 @@ const TABS: { route: Route; label: string; Icon: ComponentType<{ 'aria-hidden'?:
   { route: 'today', label: 'Today', Icon: Clock3 },
   { route: 'picks', label: 'Picks', Icon: Flame },
   { route: 'queue', label: 'Queue', Icon: ListChecks },
-  { route: 'channels', label: 'Channels', Icon: RadioTower },
+  { route: 'channels', label: 'Characters', Icon: Users },
   { route: 'library', label: 'Library', Icon: LibraryIcon },
   { route: 'budget', label: 'Budget', Icon: Gauge },
 ];

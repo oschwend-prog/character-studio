@@ -1,4 +1,8 @@
-import { londonDayKey, londonTime, londonWeekday } from './format';
+import { londonDate, londonDayKey, londonTime, londonWallToIso, londonWeekday } from './format';
+import type {
+  Channel, Character, DecideExtras, LibraryClip, OwnerMode, OwnerPresence, Pick as ViralPick, PickHistory, QueueClip, RunRow,
+  ScanDetails, Snapshot,
+} from './types';
 
 // The owner-facing rules the terminal applies on its own side. Each one mirrors a rule the database
 // (migration 0004) or the Python studio enforces; the server stays the authority, these only decide
@@ -309,4 +313,401 @@ export function boardRows(
       a.characterSlug.localeCompare(b.characterSlug) ||
       a.platform.localeCompare(b.platform),
   );
+}
+
+
+// ---- the Characters page --------------------------------------------------------------------------
+
+export interface ChecklistItem {
+  id: 'tiktok' | 'instagram' | 'postiz' | 'closeup' | 'live';
+  label: string;
+  done: boolean;
+  /** One short line under the label: the handle, what is planned, how many are connected. */
+  detail: string;
+}
+
+const hasHandle = (a: { handle: string | null }) => Boolean(a.handle?.trim());
+
+/**
+ * The go-live checklist of one character (the order of docs/launch/go-live.md): a TikTok account, an Instagram
+ * account, every account connected in Postiz, the eye close-up shot ready, and the character live. `ready` is
+ * everything before "Live" done: the owner may flip the status.
+ */
+export function goLiveChecklist(c: Pick<Character, 'status' | 'setup' | 'accounts'>): {
+  items: ChecklistItem[];
+  done: number;
+  total: number;
+  ready: boolean;
+} {
+  const accounts = c.accounts.filter(hasHandle);
+  const account = (platform: 'tiktok' | 'instagram', label: string): ChecklistItem => {
+    const found = accounts.find((a) => a.platform === platform);
+    const planned = c.setup?.planned_handles?.[platform];
+    return {
+      id: platform,
+      label,
+      done: Boolean(found),
+      detail: found ? found.handle!.trim() : planned ? `planned ${planned}` : 'not created yet',
+    };
+  };
+  const connected = accounts.filter((a) => a.has_postiz).length;
+  const items: ChecklistItem[] = [
+    account('tiktok', 'TikTok account'),
+    account('instagram', 'Instagram account'),
+    {
+      id: 'postiz',
+      label: 'Postiz connected',
+      done: accounts.length > 0 && connected === accounts.length,
+      detail: accounts.length ? `${connected} of ${accounts.length} connected` : 'no accounts yet',
+    },
+    {
+      id: 'closeup',
+      label: 'Close-up shot ready',
+      done: c.setup?.closeup === true,
+      detail: c.setup?.closeup === true ? 'ready' : 'not generated yet',
+    },
+    { id: 'live', label: 'Live', done: c.status === 'live', detail: c.status === 'live' ? 'posting' : c.status },
+  ];
+  const done = items.filter((i) => i.done).length;
+  return { items, done, total: items.length, ready: items.slice(0, 4).every((i) => i.done) };
+}
+
+export interface ChannelSlot {
+  platform: 'instagram' | 'tiktok';
+  /** The account's row of v_channels (today's ChannelPanel), or null: it does not exist yet. */
+  channel: Channel | null;
+  /** The handle planned for an account that does not exist yet. */
+  planned: string | null;
+}
+
+/** The two channel slots of a character, in the order the Channels page always sorted them (by platform name). */
+export function channelSlots(character: Pick<Character, 'slug' | 'setup'>, channels: ReadonlyArray<Channel>): ChannelSlot[] {
+  return (['instagram', 'tiktok'] as const).map((platform) => ({
+    platform,
+    channel: channels.find((c) => c.character_slug === character.slug && c.platform === platform) ?? null,
+    planned: character.setup?.planned_handles?.[platform] ?? null,
+  }));
+}
+
+// ---- the per-character pipeline -----------------------------------------------------------------
+
+export const PIPELINE_LIMITS = { proposed: 6, production: 8, waiting: 8, posted: 5 } as const;
+/** Clip states between "planned" and "awaiting approval": what is being made. */
+export const IN_PRODUCTION_STATES: ReadonlyArray<string> = [
+  'planned', 'generating', 'gen_failed', 'generated', 'qa_failed', 'qa_passed', 'mastered',
+];
+const FAILED_STATES: ReadonlyArray<string> = ['gen_failed', 'qa_failed'];
+
+export interface ProposedItem {
+  id: string;
+  hook: string | null;
+  score: number | null;
+  platform: string;
+  creator: string | null;
+  url: string;
+  status: 'new' | 'approved' | 'analysed';
+  /** Held by the standing rule (needs an untested capability). */
+  held: boolean;
+  ownerMode: OwnerMode | null;
+  ownerPresence: OwnerPresence | null;
+  ownerNote: string | null;
+  /** Only a pick still waiting for the owner can be made from the sheet. */
+  canMakeIt: boolean;
+  /** The whole pick, for the sheet (null for one already decided). */
+  pick: ViralPick | null;
+}
+export interface ProductionItem {
+  id: string;
+  hook: string | null;
+  state: string;
+  failed: boolean;
+  createdAt: string;
+  credits: number | null;
+}
+export interface WaitingItem {
+  id: string;
+  hook: string | null;
+  kind: 'awaiting_approval' | 'scheduled';
+  /** The slot it goes out at (London time on screen), or null when unknown. */
+  at: string | null;
+  platforms: string[];
+  blocked: string | null;
+}
+export interface PostedItem {
+  id: string;
+  hook: string | null;
+  postedAt: string | null;
+  platforms: string[];
+  views: number | null;
+  outlierX: number | null;
+}
+export interface Stage<T> {
+  items: T[];
+  /** Everything in the stage; `items` is capped (PIPELINE_LIMITS). */
+  total: number;
+}
+export type StageId = 'proposed' | 'production' | 'waiting' | 'posted';
+export interface Pipeline {
+  proposed: Stage<ProposedItem>;
+  production: Stage<ProductionItem>;
+  waiting: Stage<WaitingItem>;
+  posted: Stage<PostedItem>;
+  /** The first stage with anything in it, in pipeline order (the one the page opens); null when all are empty. */
+  firstOpen: StageId | null;
+}
+
+const uniqueSorted = (xs: ReadonlyArray<string>) => [...new Set(xs)].sort();
+const ts = (iso: string | null | undefined) => (iso ? Date.parse(iso) : Number.NaN);
+const byScoreThenAge = (a: { score: number | null; created: string }, b: { score: number | null; created: string }) => {
+  const an = a.score == null;
+  const bn = b.score == null;
+  if (an !== bn) return an ? 1 : -1;
+  return (b.score ?? 0) - (a.score ?? 0) || ts(a.created) - ts(b.created);
+};
+
+/**
+ * What one character has in flight, from the data the studio already loads: its picks waiting or approved
+ * (Proposed), its clips being made (In production), the ones waiting for the owner or booked (Waiting /
+ * scheduled) and the last posted ones (Posted). Pure: stage membership by state, ordering and limits live here.
+ */
+export function pipelineFor(slug: string, data: Pick<Snapshot, 'picks' | 'history' | 'queue' | 'library'>): Pipeline {
+  const asItem = (row: ViralPick | PickHistory, pick: ViralPick | null): ProposedItem => ({
+    id: row.id,
+    hook: row.hook,
+    score: row.total_score,
+    platform: row.platform,
+    creator: row.creator_handle,
+    url: row.url,
+    status: row.status as ProposedItem['status'],
+    held: pick?.hold_reason != null,
+    ownerMode: row.owner_mode ?? null,
+    ownerPresence: row.owner_presence ?? null,
+    ownerNote: row.owner_note ?? null,
+    canMakeIt: row.status === 'new',
+    pick,
+  });
+  // waiting for the owner first, then the approved ones; inside each group by score (unscored last), then oldest
+  const proposedRows: Array<{ row: ViralPick | PickHistory; pick: ViralPick | null }> = [
+    ...data.picks.filter((p) => p.character_slug === slug && p.status === 'new').map((p) => ({ row: p, pick: p })),
+    ...data.history
+      .filter((h) => h.character_slug === slug && (h.status === 'approved' || h.status === 'analysed'))
+      .map((h) => ({ row: h, pick: null })),
+  ];
+  const proposedAll = proposedRows
+    .sort(
+      (a, b) =>
+        Number(a.row.status !== 'new') - Number(b.row.status !== 'new') ||
+        byScoreThenAge({ score: a.row.total_score, created: a.row.created_at }, { score: b.row.total_score, created: b.row.created_at }),
+    )
+    .map(({ row, pick }) => asItem(row, pick));
+
+  const mine = (c: { character_slug: string }) => c.character_slug === slug;
+  const productionAll = data.library
+    .filter((c) => mine(c) && IN_PRODUCTION_STATES.includes(c.state))
+    .sort((a, b) => ts(b.created_at) - ts(a.created_at))
+    .map((c: LibraryClip): ProductionItem => ({
+      id: c.id, hook: c.hook, state: c.state, failed: FAILED_STATES.includes(c.state), createdAt: c.created_at, credits: c.cost_credits,
+    }));
+
+  const awaiting = data.queue
+    .filter(mine)
+    .sort((a, b) => ts(a.created_at) - ts(b.created_at))
+    .map((c: QueueClip): WaitingItem => ({
+      id: c.id, hook: c.hook, kind: 'awaiting_approval', at: c.next_slot, platforms: uniqueSorted(c.targets.map((t) => t.platform)),
+      blocked: c.blocked_reason,
+    }));
+  const scheduled = data.library
+    .filter((c) => mine(c) && (c.state === 'scheduled' || c.state === 'approved'))
+    .map((c: LibraryClip): WaitingItem => {
+      const live = c.posts.filter((p) => p.status === 'scheduled' || p.status === 'posting');
+      const slots = (live.length ? live : c.posts).map((p) => p.scheduled_for).sort();
+      return {
+        id: c.id, hook: c.hook, kind: 'scheduled', at: slots[0] ?? null, platforms: uniqueSorted(c.posts.map((p) => p.platform)), blocked: null,
+      };
+    })
+    .sort((a, b) => (Number.isNaN(ts(a.at)) ? Infinity : ts(a.at)) - (Number.isNaN(ts(b.at)) ? Infinity : ts(b.at)));
+  const waitingAll = [...awaiting, ...scheduled];
+
+  const postedAll = data.library
+    .filter((c) => mine(c) && c.state === 'posted')
+    .sort((a, b) => ts(b.posted_at ?? b.created_at) - ts(a.posted_at ?? a.created_at))
+    .map((c: LibraryClip): PostedItem => ({
+      id: c.id, hook: c.hook, postedAt: c.posted_at, platforms: uniqueSorted(c.platforms), views: c.views, outlierX: c.outlier_x,
+    }));
+
+  const stage = <T,>(all: T[], limit: number): Stage<T> => ({ items: all.slice(0, limit), total: all.length });
+  const out = {
+    proposed: stage(proposedAll, PIPELINE_LIMITS.proposed),
+    production: stage(productionAll, PIPELINE_LIMITS.production),
+    waiting: stage(waitingAll, PIPELINE_LIMITS.waiting),
+    posted: stage(postedAll, PIPELINE_LIMITS.posted),
+  };
+  const firstOpen = (['proposed', 'production', 'waiting', 'posted'] as const).find((k) => out[k].total > 0) ?? null;
+  return { ...out, firstOpen };
+}
+
+// ---- the "Make it" sheet ----------------------------------------------------------------------------
+
+/** The sheet's note limit; the database refuses more (decide_pick, migration 0007). */
+export const NOTE_MAX = 280;
+
+export interface MakeItChoice {
+  /** A character slug, 'both', or null while nothing is chosen. */
+  character: string | null;
+  note: string;
+  /** 'analyst' = the analyst decides (nothing is sent). */
+  mode: 'analyst' | OwnerMode;
+  /** His part in a Drop-in; only sent with mode 'dropin'. */
+  presence: OwnerPresence;
+}
+
+export type MakeItPayload =
+  | { ok: true; characterSlug: string; extras: Required<DecideExtras>; summary: string }
+  | { ok: false; reason: string };
+
+/**
+ * What Approve sends for the sheet's choices: the chosen character (Both = the pick's own character plus the
+ * other one as also_character, one clip each), the trimmed note (blank = none, 280 at most), the mode, and
+ * his part only for a Drop-in. The database validates the same things again.
+ */
+export function makeItPayload(
+  choice: MakeItChoice,
+  ctx: { pickCharacter: string | null; characters: ReadonlyArray<string>; names?: Readonly<Record<string, string>> },
+): MakeItPayload {
+  const nameOf = (slug: string) => ctx.names?.[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
+  if (!choice.character) return { ok: false, reason: 'Choose a character first' };
+  const note = choice.note.trim();
+  if (note.length > NOTE_MAX) return { ok: false, reason: `The note is limited to ${NOTE_MAX} characters (now ${note.length})` };
+
+  let characterSlug: string;
+  let also: string | null = null;
+  if (choice.character === 'both') {
+    if (ctx.characters.length !== 2) return { ok: false, reason: 'Both needs exactly two characters' };
+    characterSlug = ctx.pickCharacter && ctx.characters.includes(ctx.pickCharacter) ? ctx.pickCharacter : ctx.characters[0];
+    also = ctx.characters.find((c) => c !== characterSlug) ?? null;
+  } else {
+    if (!ctx.characters.includes(choice.character)) return { ok: false, reason: `Unknown character ${choice.character}` };
+    characterSlug = choice.character;
+  }
+  return {
+    ok: true,
+    characterSlug,
+    extras: {
+      alsoCharacter: also,
+      ownerNote: note || null,
+      ownerMode: choice.mode === 'analyst' ? null : choice.mode,
+      ownerPresence: choice.mode === 'dropin' ? choice.presence : null,
+    },
+    summary: also
+      ? `Approved for ${nameOf(characterSlug)} and ${nameOf(also)}: one clip each`
+      : `Approved for ${nameOf(characterSlug)}: it joins the production queue`,
+  };
+}
+
+/** Where Tab lands inside a dialog with `count` focusable elements: wraps; -1 (outside) enters at the first or last. */
+export function tabIndexAfter(current: number, count: number, shift: boolean): number {
+  if (count <= 0) return -1;
+  if (current < 0) return shift ? count - 1 : 0;
+  return (current + (shift ? -1 : 1) + count) % count;
+}
+
+// ---- the Scanner ----------------------------------------------------------------------------------------
+
+/** A run that has started and not finished is "stalled" from this age on (the daily run takes well under an hour). */
+export const SCAN_STALL_MS = 3 * 3_600_000;
+/** vidIQ credits per month of the owner's plan (config/scan.json budget.vidiq_monthly_credits). */
+export const VIDIQ_MONTHLY_CREDITS = 150;
+/** London weekdays the daily run scans on (the daily-run skill: at most 4 a week). */
+export const SCAN_DAYS: ReadonlyArray<string> = ['Tue', 'Thu', 'Sat', 'Sun'];
+
+export interface ScanNumbers {
+  queries: string[];
+  outliers: number;
+  picks_added: number;
+  auto_approved: number;
+  held: number;
+  skipped: number;
+  vidiq_credits: number;
+}
+export interface ScannerStatus {
+  state: 'scanning' | 'stalled' | 'finished' | 'none';
+  headline: string;
+  tone: 'live' | 'alert' | 'neutral' | 'muted';
+  /** When the run in progress (or stalled) started. */
+  startedAt: string | null;
+  /** The last finished run that scanned, with its numbers. */
+  last: { at: string; status: string; scan: ScanNumbers } | null;
+  /** vidIQ credits the last scan's run used. */
+  creditsRun: number | null;
+  /** vidIQ credits used this London month, against `creditsLimit`. */
+  creditsMonth: number;
+  creditsLimit: number;
+}
+
+const count = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : 0);
+const runCredits = (d: RunRow['details']) => (d?.scan ? count(d.scan.vidiq_credits) : count(d?.vidiq_credits));
+const scanNumbers = (scan: ScanDetails): ScanNumbers => ({
+  queries: Array.isArray(scan.queries) ? scan.queries.filter((q): q is string => typeof q === 'string') : [],
+  outliers: count(scan.outliers),
+  picks_added: count(scan.picks_added),
+  auto_approved: count(scan.auto_approved),
+  held: count(scan.held),
+  skipped: count(scan.skipped),
+  vidiq_credits: count(scan.vidiq_credits),
+});
+const RUN_ENDED: Record<string, string> = { ok: 'ok', budget_stop: 'stopped on the budget cap', error: 'failed' };
+
+/**
+ * The Scanner card's state from the run log (studio.runs): a daily run that started and has not finished is
+ * "Scanning now" (stalled from 3 hours on), else the last finished run that scanned, else "No scan yet". A run
+ * writes an open row first and a finished one with the same start last, so the newest daily row decides, and a
+ * finished row beats an open one with the same start. Credits are summed over this London month.
+ */
+export function scannerStatus(runs: ReadonlyArray<RunRow>, now: number): ScannerStatus {
+  const daily = runs
+    .filter((r) => r.kind === 'daily')
+    .sort((a, b) => ts(b.started_at) - ts(a.started_at) || Number(b.finished_at != null) - Number(a.finished_at != null));
+  const latest = daily[0];
+  const lastScan = daily.find((r) => r.finished_at != null && r.details?.scan);
+  const last = lastScan
+    ? { at: lastScan.finished_at!, status: lastScan.status, scan: scanNumbers(lastScan.details!.scan!) }
+    : null;
+  const month = londonDayKey(now).slice(0, 7);
+  const creditsMonth = daily
+    .filter((r) => londonDayKey(r.started_at).slice(0, 7) === month)
+    .reduce((sum, r) => sum + runCredits(r.details), 0);
+  const base = { last, creditsRun: last ? last.scan.vidiq_credits : null, creditsMonth, creditsLimit: VIDIQ_MONTHLY_CREDITS };
+
+  if (latest && latest.finished_at == null) {
+    const stalled = now - ts(latest.started_at) >= SCAN_STALL_MS;
+    return stalled
+      ? { ...base, state: 'stalled', headline: 'Scan stalled: the last run never finished', tone: 'alert', startedAt: latest.started_at }
+      : { ...base, state: 'scanning', headline: 'Scanning now', tone: 'live', startedAt: latest.started_at };
+  }
+  if (last) {
+    const ended = RUN_ENDED[last.status] ?? last.status;
+    return {
+      ...base, state: 'finished', startedAt: null, tone: last.status === 'error' ? 'alert' : 'neutral',
+      headline: `Last scan ${londonDate(last.at)} ${londonTime(last.at)} · ${ended}`,
+    };
+  }
+  return { ...base, state: 'none', headline: 'No scan yet', tone: 'muted', startedAt: null };
+}
+
+/** The next scheduled scan: the first 08:00 London after `now` on a scan day (Tue, Thu, Sat, Sun). */
+export function nextScanAt(now: number): string {
+  const [y, m, d] = londonDayKey(now).split('-').map(Number);
+  for (let i = 0; i < 9; i++) {
+    const day = new Date(Date.UTC(y, m - 1, d + i)).toISOString().slice(0, 10);
+    const iso = londonWallToIso(`${day}T08:00`);
+    if (Date.parse(iso) > now && SCAN_DAYS.includes(londonWeekday(iso))) return iso;
+  }
+  throw new Error('no scan day within nine days');
+}
+
+/** "Next scan Thu 8 Oct 08:00", or the static rule until a character is live (the schedule has no backend yet). */
+export function nextScanLabel(now: number, anyLive: boolean): string {
+  if (!anyLive) return 'Not scheduled yet: scans start when a character goes live (Tue, Thu, Sat and Sun at 08:00 London)';
+  const at = nextScanAt(now);
+  return `Next scan ${londonDate(at)} ${londonTime(at)}`;
 }

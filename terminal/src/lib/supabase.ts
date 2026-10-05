@@ -1,7 +1,7 @@
 // The live backend: supabase-js with the publishable (anon) key, magic-link auth, RLS does the rest.
-// Reads go to the studio views, writes only through the studio RPCs of migration 0004.
+// Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0007.
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Backend, ChangeKind, Snapshot } from './types';
+import type { Backend, ChangeKind, DecideExtras, Snapshot } from './types';
 
 const URL_ = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -50,7 +50,7 @@ export class LiveBackend implements Backend {
 
   async load(): Promise<Snapshot> {
     const sb = this.sb;
-    const [channels, queue, library, budget, health, picks, history] = await Promise.all([
+    const [channels, queue, library, budget, health, picks, history, characters, runs] = await Promise.all([
       sb.from('v_channels').select('*'),
       sb.from('v_queue').select('*').order('created_at'),
       sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(300),
@@ -58,8 +58,11 @@ export class LiveBackend implements Backend {
       sb.from('v_health').select('*'),
       sb.from('v_picks').select('*').order('total_score', { ascending: false, nullsFirst: false }).order('created_at'),
       sb.from('v_pick_history').select('*').order('created_at', { ascending: false }).limit(100),
+      sb.from('v_characters').select('*').order('slug'),
+      // the Scanner card: the daily run's rows (RLS: the owner's), newest first; a month of them is plenty
+      sb.from('runs').select('id,kind,started_at,finished_at,status,summary,details').eq('kind', 'daily').order('started_at', { ascending: false }).limit(60),
     ]);
-    for (const r of [channels, queue, library, budget, health, picks, history]) fail(r.error);
+    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs]) fail(r.error);
     const num = ['views', 'outlier_x', 'total_score', 'virality', 'reach', 'freshness', 'fit', 'feasibility', 'saturation'];
     return {
       channels: (channels.data ?? []).map((r) =>
@@ -71,6 +74,8 @@ export class LiveBackend implements Backend {
       health: health.data ?? [],
       picks: (picks.data ?? []).map((r) => normalise(r, num)),
       history: (history.data ?? []).map((r) => normalise(r, num)),
+      characters: (characters.data ?? []).map((r) => ({ ...r, setup: r.setup ?? {}, accounts: r.accounts ?? [] })),
+      runs: runs.data ?? [],
       loadedAt: Date.now(),
     } as Snapshot;
   }
@@ -98,8 +103,17 @@ export class LiveBackend implements Backend {
   async setAccountMode(accountId: string, mode: 'approval' | 'auto', dropinShare: number | null = null) {
     await this.rpc('set_account_mode', { account_id: accountId, mode, dropin_share: dropinShare });
   }
-  async decidePick(id: string, decision: 'approve' | 'skip', reason: string | null, characterSlug: string | null) {
-    await this.rpc('decide_pick', { pick_id: id, decision, reason, character_slug: characterSlug });
+  async decidePick(
+    id: string, decision: 'approve' | 'skip', reason: string | null, characterSlug: string | null, extras: DecideExtras = {},
+  ) {
+    await this.rpc('decide_pick', {
+      pick_id: id, decision, reason, character_slug: characterSlug,
+      // only what the owner set: a plain Approve or Skip sends exactly what it always did
+      ...(extras.alsoCharacter ? { also_character: extras.alsoCharacter } : {}),
+      ...(extras.ownerNote ? { owner_note: extras.ownerNote } : {}),
+      ...(extras.ownerMode ? { owner_mode: extras.ownerMode } : {}),
+      ...(extras.ownerPresence ? { owner_presence: extras.ownerPresence } : {}),
+    });
   }
   async addOwnerLink(url: string, characterSlug: string, note: string | null) {
     const r = await this.rpc('add_owner_link', { url, character_slug: characterSlug, note });
@@ -113,7 +127,7 @@ export class LiveBackend implements Backend {
 
   subscribe(onChange: (kind: ChangeKind) => void, onStatus: (up: boolean) => void) {
     const channel = this.sb.channel('studio-terminal');
-    for (const table of ['clips', 'posts', 'favorites'] as const) {
+    for (const table of ['clips', 'posts', 'favorites', 'characters', 'accounts', 'runs'] as const) {
       channel.on('postgres_changes', { event: '*', schema: 'studio', table }, () => onChange(table));
     }
     channel.subscribe((status) => onStatus(status === 'SUBSCRIBED'));

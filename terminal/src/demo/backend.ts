@@ -6,8 +6,8 @@ import picksJson from './batch1-picks.json';
 import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED } from '../lib/rules';
 import { londonDayKey, londonWallToIso } from '../lib/format';
 import type {
-  Backend, Budget, Channel, ChangeKind, ClipState, HealthRow, LibraryClip, Pick, PickHistory, Platform, PostStatus,
-  QueueClip, Snapshot,
+  Backend, Budget, Channel, ChangeKind, Character, ClipState, DecideExtras, HealthRow, LibraryClip, Pick, PickHistory, Platform,
+  PostStatus, QueueClip, RunRow, Snapshot,
 } from '../lib/types';
 
 interface Account { id: string; character_slug: string; platform: Platform; handle: string; connected: boolean; mode: 'approval' | 'auto'; dropin_share: number }
@@ -52,12 +52,19 @@ function upcomingSlot(slug: string, now: number): string {
 
 class DemoError extends Error {}
 
+const ownerOf = (f: { proposal: Record<string, unknown> }) => ({
+  owner_note: (f.proposal.owner_note as string) ?? null,
+  owner_mode: (f.proposal.owner_mode as 'dropin' | 'recreate') ?? null,
+  owner_presence: (f.proposal.owner_presence as 'cameo' | 'featured' | 'star') ?? null,
+});
+
 export class DemoBackend implements Backend {
   readonly kind = 'demo' as const;
   private accounts: Account[] = [];
   private clips: Clip[] = [];
   private posts: Post[] = [];
   private favs: Fav[] = [];
+  private runs: RunRow[] = [];
   private cap = 6000;
   private kill = false;
   private settled: Record<string, number> = {}; // clip id -> credits settled this month
@@ -186,6 +193,50 @@ export class DemoBackend implements Backend {
     if (d4) { d4.status = 'made'; d4.clip_id = eyeLoop.id; }
     const d5 = pickByRef.get('D5');
     if (d5) d5.status = 'analysed';
+
+    // What the owner said in the "Make it" sheet on a few picks that are approved and waiting to be made.
+    const said = (ref: string, owner: Record<string, string>) => {
+      const f = pickByRef.get(ref);
+      if (f) f.proposal = { ...f.proposal, ...owner };
+    };
+    said('D2', { owner_mode: 'dropin', owner_presence: 'featured', owner_note: 'keep the snare hits on the beat' });
+    said('B3', { owner_mode: 'dropin', owner_presence: 'cameo', owner_note: 'the tea stays in frame' });
+    said('D5', { owner_mode: 'recreate' });
+
+    // Clips still being made: the "In production" stage of the pipeline.
+    const hour = 3600_000;
+    clip('biscuit', 'smooth operator, small dog', 'recreate', 'generating', 0, { master_path: null, cost: 98, created_at: new Date(now - 2 * hour).toISOString() });
+    clip('biscuit', 'tiny tux, big feelings', 'dropin', 'planned', 0, { master_path: null, cost: null, created_at: new Date(now - 0.5 * hour).toISOString() });
+    clip('reginald', 'the quiff moved. we do not speak of it.', 'recreate', 'qa_failed', 0, {
+      master_path: null, cost: 162, created_at: new Date(now - 5 * hour).toISOString(),
+      qa: { tech: 'ok', problems: ['the quiff moves at 4 s'], visual: 'quiff flickers, smile at 6 s' },
+    });
+
+    // The run log: a finished scan on the latest scan day, an earlier one, and a day that did not scan.
+    const scanDays = ['Tue', 'Thu', 'Sat', 'Sun'];
+    const at0800 = (back: number) => londonWallToIso(`${londonDayKey(now - back * DAY)}T08:00`);
+    const weekday = (iso: string) => new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', weekday: 'short' }).format(new Date(iso));
+    const past = [0, 1, 2, 3, 4, 5, 6, 7].map(at0800).filter((iso) => Date.parse(iso) + 45 * 60_000 < now);
+    const scanAt = past.filter((iso) => scanDays.includes(weekday(iso)));
+    const run = (started: string, minutes: number, details: RunRow['details'], summary: string): RunRow => ({
+      id: uid('r'), kind: 'daily', started_at: started, finished_at: new Date(Date.parse(started) + minutes * 60_000).toISOString(),
+      status: 'ok', summary, details,
+    });
+    if (scanAt[0]) {
+      this.runs.push(run(scanAt[0], 41, {
+        scan: {
+          queries: ['biscuit #2 concept', 'reginald #1 concept'], outliers: 9, picks_added: 4, auto_approved: 1, held: 1, skipped: 2,
+          vidiq_credits: 15,
+        },
+      }, 'SYNTHETIC: 2 clips made, 4 picks filed'));
+    }
+    if (scanAt[1]) {
+      this.runs.push(run(scanAt[1], 33, {
+        scan: { queries: ['biscuit #1 format', 'reginald #4 concept'], outliers: 7, picks_added: 3, auto_approved: 2, held: 0, skipped: 1, vidiq_credits: 15 },
+      }, 'SYNTHETIC: 2 clips made, 3 picks filed'));
+    }
+    const noScan = past.find((iso) => !scanDays.includes(weekday(iso)));
+    if (noScan) this.runs.push(run(noScan, 22, {}, 'SYNTHETIC: 1 clip made'));
   }
 
   // ---- helpers mirroring the SQL ------------------------------------------------------------------
@@ -356,7 +407,7 @@ export class DemoBackend implements Backend {
         prop: (f.proposal.prop as string) ?? null, concept: (f.proposal.concept as string) ?? null,
         enhancement: (f.proposal.enhancement as string) ?? null, needs: (f.proposal.needs as string) ?? null,
         decision: (f.proposal.decision as Pick['decision']) ?? null, hold_reason: (f.proposal.hold_reason as string) ?? null,
-        note: f.note, status: f.status, created_at: f.created_at,
+        note: f.note, status: f.status, created_at: f.created_at, ...ownerOf(f),
       }));
     const history: PickHistory[] = this.favs
       .filter((f) => f.status !== 'new')
@@ -366,10 +417,16 @@ export class DemoBackend implements Backend {
         origin: f.origin, character_slug: f.character_slug, character_name: name(f.character_slug), total_score: f.total_score,
         hook: (f.proposal.hook as string) ?? null, concept: (f.proposal.concept as string) ?? null,
         decision: (f.proposal.decision as PickHistory['decision']) ?? null, note: f.note, status: f.status, created_at: f.created_at,
-        clip_id: f.clip_id, clip_state: f.clip_id ? this.clips.find((c) => c.id === f.clip_id)?.state ?? null : null,
+        clip_id: f.clip_id, clip_state: f.clip_id ? this.clips.find((c) => c.id === f.clip_id)?.state ?? null : null, ...ownerOf(f),
       }));
 
-    return { channels, queue, library, budget, health, picks, history, loadedAt: now };
+    const characters: Character[] = Object.keys(NAMES).map((slug) => ({
+      slug, name: NAMES[slug], status: 'live', bodies: slug === 'biscuit' ? ['biped', 'quadruped'] : ['biped'],
+      setup: { closeup: true, planned_handles: Object.fromEntries(this.accounts.filter((a) => a.character_slug === slug).map((a) => [a.platform, a.handle])) },
+      accounts: this.accounts.filter((a) => a.character_slug === slug).map((a) => ({ platform: a.platform, handle: a.handle, has_postiz: a.connected, mode: a.mode })),
+    }));
+
+    return { channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), loadedAt: now };
   }
 
   async approveClip(id: string, edits: { caption?: string | null; hook?: string | null; scheduleAt?: string | null } = {}) {
@@ -437,17 +494,62 @@ export class DemoBackend implements Backend {
     this.emit('accounts');
   }
 
-  async decidePick(id: string, decision: 'approve' | 'skip', reason: string | null, characterSlug: string | null) {
+  /** decide_pick of migration 0007: the same refusals, in the same order, and the same writes. */
+  async decidePick(
+    id: string, decision: 'approve' | 'skip', reason: string | null, characterSlug: string | null, extras: DecideExtras = {},
+  ) {
+    const note = extras.ownerNote?.trim() || null;
+    const mode = extras.ownerMode?.trim() || null;
+    const presence = extras.ownerPresence?.trim() || null;
+    const also = extras.alsoCharacter?.trim() || null;
+    if (decision !== 'approve' && decision !== 'skip') throw new DemoError(`decision must be approve or skip, got ${decision}`);
+    if (note && note.length > 280) throw new DemoError(`the note is limited to 280 characters, got ${note.length}`);
+    if (mode && mode !== 'dropin' && mode !== 'recreate') throw new DemoError(`owner_mode must be dropin or recreate, got ${mode}`);
+    if (presence && !['cameo', 'featured', 'star'].includes(presence)) {
+      throw new DemoError(`owner_presence must be cameo, featured or star, got ${presence}`);
+    }
+    if (also && decision !== 'approve') throw new DemoError('also_character only applies when approving');
     const f = this.favs.find((x) => x.id === id);
     if (!f) throw new DemoError(`unknown pick ${id}`);
     if (f.status === 'queued' || f.status === 'made') throw new DemoError(`pick ${id} is already ${f.status}: too late to decide`);
-    const slug = characterSlug || f.character_slug;
+    const slug = characterSlug?.trim() || f.character_slug;
+    if (slug && !(slug in NAMES)) throw new DemoError(`unknown character ${slug}`);
     if (decision === 'approve' && !slug) throw new DemoError('choose a character before approving this pick');
+    if (also) {
+      if (!(also in NAMES)) throw new DemoError(`unknown character ${also}`);
+      if (also === slug) throw new DemoError(`also_character must be a different character from ${slug}`);
+    }
+
+    const owner: Record<string, string> = {};
+    if (decision === 'approve') {
+      if (note) owner.owner_note = note;
+      if (mode) owner.owner_mode = mode;
+      if (presence && (mode ?? (f.proposal.owner_mode as string | undefined)) === 'dropin') owner.owner_presence = presence;
+    }
+    const record = { decision, by: 'owner', reason: reason?.trim() || null };
     const { hold_reason: _drop, ...rest } = f.proposal;
     void _drop;
-    f.proposal = { ...rest, decision: { decision, by: 'owner', reason: reason?.trim() || null } };
+    f.proposal = { ...rest, ...owner, decision: record };
     f.character_slug = slug;
     f.status = decision === 'skip' ? 'skipped' : f.status === 'analysed' || f.status === 'approved' ? f.status : 'approved';
+
+    if (also) {
+      const sib = this.favs.find((x) => x.url === f.url && x.character_slug === also && x.id !== f.id);
+      if (sib) {
+        if (sib.status !== 'queued' && sib.status !== 'made') {
+          const { hold_reason: _h, ...sibRest } = sib.proposal;
+          void _h;
+          sib.proposal = { ...sibRest, ...owner, decision: record };
+          if (sib.status !== 'approved' && sib.status !== 'analysed') sib.status = 'approved';
+        }
+      } else {
+        this.favs.push({
+          id: uid('fs'), url: f.url, platform: f.platform, creator_handle: f.creator_handle, views: f.views, outlier_x: f.outlier_x,
+          origin: f.origin, character_slug: also, proposal: { ...f.proposal }, scores: { ...f.scores }, total_score: f.total_score,
+          note: null, status: 'approved', created_at: new Date(this.now()).toISOString(), clip_id: null,
+        });
+      }
+    }
     this.emit('favorites');
   }
 

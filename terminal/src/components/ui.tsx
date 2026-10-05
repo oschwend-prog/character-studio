@@ -1,6 +1,7 @@
 // The board's parts: split-flap text, the two-dot mark, liveries, switches, badges, meters.
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { autopilotState } from '../lib/rules';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
+import { autopilotState, tabIndexAfter } from '../lib/rules';
 import { outlierBadge, platformName } from '../lib/format';
 
 const DRUM = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:-.';
@@ -183,4 +184,103 @@ export function Spinner() {
 
 export function Skeleton({ h = 56 }: { h?: number }) {
   return <div className="skeleton" style={{ height: h }} aria-hidden="true" />;
+}
+
+/** A character's picture (terminal/public/avatars/<slug>.png); an unknown slug, or a picture that fails, shows initials. */
+export function Avatar({ slug, name, size = 48 }: { slug: string; name?: string; size?: number }) {
+  const [broken, setBroken] = useState(false);
+  const label = name ?? characterName(slug);
+  const initials = label
+    .split(/\s+/)
+    .map((w) => w.charAt(0))
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+  const style = { width: size, height: size, fontSize: Math.round(size * 0.38) };
+  if (broken)
+    return (
+      <span className={`avatar initials ${slug in LIVERY ? slug : 'none'}`} style={style} aria-hidden="true">
+        {initials}
+      </span>
+    );
+  return (
+    <img
+      className="avatar"
+      src={`/avatars/${encodeURIComponent(slug)}.png`}
+      alt=""
+      width={size}
+      height={size}
+      style={style}
+      onError={() => setBroken(true)}
+    />
+  );
+}
+
+const FOCUSABLE =
+  'a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+/**
+ * A modal sheet (bottom sheet on a phone, centred from tablet width): labelled by its title, Escape and a tap on
+ * the backdrop close it, Tab stays inside, the page behind is inert and does not scroll, and focus goes back to
+ * what opened it. Content is rendered in a portal so no page layout can clip it.
+ */
+export function Sheet({ title, onClose, children }: { title: ReactNode; onClose(): void; children: ReactNode }) {
+  const titleId = useId();
+  const box = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
+
+  useEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const root = document.getElementById('root');
+    root?.setAttribute('inert', '');
+    const overflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const items = () => Array.from(box.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
+    (items().find((el) => el.getAttribute('aria-pressed') === 'true') ?? items()[0] ?? box.current)?.focus();
+
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close.current();
+        return;
+      }
+      if (e.key !== 'Tab') return;
+      const list = items();
+      if (!list.length) return e.preventDefault();
+      const at = list.indexOf(document.activeElement as HTMLElement);
+      const next = tabIndexAfter(at, list.length, e.shiftKey);
+      const wraps = at < 0 || (e.shiftKey ? at === 0 : at === list.length - 1);
+      if (wraps) {
+        e.preventDefault();
+        list[next]?.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      root?.removeAttribute('inert');
+      document.body.style.overflow = overflow;
+      if (opener && document.contains(opener)) opener.focus();
+    };
+  }, []);
+
+  return createPortal(
+    <div
+      className="sheet-backdrop"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div ref={box} className="sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+        <div className="sheet-head">
+          <h2 className="h2" id={titleId}>
+            {title}
+          </h2>
+        </div>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
 }

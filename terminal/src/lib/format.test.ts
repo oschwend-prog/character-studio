@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   clipCode,
+  formatAge,
   formatCountdown,
   formatCredits,
   formatViews,
@@ -103,5 +104,21 @@ describe('London wall time for the schedule picker', () => {
   });
   it('refuses a malformed value', () => {
     expect(() => londonWallToIso('tomorrow')).toThrow();
+  });
+});
+
+describe('formatAge', () => {
+  const now = Date.parse('2026-10-06T12:00:00Z');
+  const ago = (ms: number) => new Date(now - ms).toISOString();
+  it('says how long ago, in the largest two units that matter', () => {
+    expect(formatAge(ago(20_000), now)).toBe('just now');
+    expect(formatAge(ago(30 * 60_000), now)).toBe('30m ago');
+    expect(formatAge(ago(2 * 3_600_000 + 5 * 60_000), now)).toBe('2h ago');
+    expect(formatAge(ago(26 * 3_600_000), now)).toBe('1d 2h ago');
+    expect(formatAge(ago(3 * 86_400_000), now)).toBe('3d ago');
+  });
+  it('a moment in the future (clock skew) is just now; no moment is a dash', () => {
+    expect(formatAge(new Date(now + 60_000).toISOString(), now)).toBe('just now');
+    expect(formatAge(null, now)).toBe('—');
   });
 });

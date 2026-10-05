@@ -1,7 +1,10 @@
-// Viral Picks: new picks best-first with their six sub-scores, Approve / Skip (with reason) and a
-// character override; a paste box for the owner's own links; the decided picks with what they became.
+// Viral Picks: the Scanner card, new picks best-first with their six sub-scores, Approve (opens the "Make it"
+// sheet: character or Both, a note, how to loop him in) / Skip (with reason); a paste box for the owner's own
+// links; the decided picks with what they became.
 import { ExternalLink, Link2, Plus } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
+import { MakeItSheet } from '../components/MakeIt';
+import { ScannerCard } from '../components/Scanner';
 import { Flap, Livery, Section, Skeleton, Spinner, characterName } from '../components/ui';
 import { formatViews, outlierBadge, platformName } from '../lib/format';
 
@@ -41,6 +44,7 @@ export function Picks() {
           Best first. The standing rule already approved anything 80+ with feasibility 7+; these wait for a call.
         </p>
       </div>
+      <ScannerCard />
       <PasteBox />
       <Section id="new-picks" title={`New · ${picks.length}`} aside="sorted by total score">
         {picks.length === 0 ? (
@@ -161,7 +165,8 @@ function CharacterSeg({ value, onChange, label }: { value: string | null; onChan
 
 function PickCard({ pick }: { pick: Pick }) {
   const { backend, run, busy } = useStudio();
-  const [slug, setSlug] = useState<string | null>(pick.character_slug);
+  const slug = pick.character_slug;
+  const [making, setMaking] = useState(false);
   const [skipping, setSkipping] = useState(false);
   const [reason, setReason] = useState('');
   const key = `pick-${pick.id}`;
@@ -169,8 +174,6 @@ function PickCard({ pick }: { pick: Pick }) {
   const needs = Array.isArray(pick.needs) ? pick.needs.join(', ') : pick.needs;
   const titleId = `pick-${pick.id}-t`;
 
-  const approve = () =>
-    run(key, () => backend.decidePick(pick.id, 'approve', null, slug !== pick.character_slug ? slug : null), `Approved for ${characterName(slug)}: it joins the production queue`);
   const skip = (e: FormEvent) => {
     e.preventDefault();
     void run(key, () => backend.decidePick(pick.id, 'skip', reason.trim() || null, null), 'Skipped');
@@ -264,7 +267,6 @@ function PickCard({ pick }: { pick: Pick }) {
         </form>
       ) : (
         <div className="pick-actions">
-          <CharacterSeg value={slug} onChange={setSlug} label="Which character makes it" />
           <span className="grow" />
           <a className="btn ghost" href={pick.url} target="_blank" rel="noopener noreferrer" aria-label={`Open the original on ${platformName(pick.platform)} (new tab)`}>
             Original <ExternalLink aria-hidden="true" />
@@ -273,19 +275,13 @@ function PickCard({ pick }: { pick: Pick }) {
           <button type="button" className="btn line" onClick={() => setSkipping(true)} disabled={working}>
             Skip
           </button>
-          <button
-            type="button"
-            className="btn primary"
-            onClick={approve}
-            disabled={!slug || working}
-            aria-busy={working}
-            title={slug ? undefined : 'Choose a character first'}
-          >
-            {working && <Spinner />} {slug ? 'Approve' : 'Choose a character'}
+          <button type="button" className="btn primary" onClick={() => setMaking(true)} disabled={working} aria-busy={working} aria-haspopup="dialog">
+            {working && <Spinner />} Approve
           </button>
           </div>
         </div>
       )}
+      {making && <MakeItSheet pick={pick} onClose={() => setMaking(false)} />}
     </article>
   );
 }

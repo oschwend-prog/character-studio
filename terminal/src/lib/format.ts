@@ -46,6 +46,19 @@ export function formatCountdown(target: number | string, now: number = Date.now(
   return `${rest}m`;
 }
 
+/** How long ago a moment was: "just now", "30m ago", "2h ago", "1d 2h ago", "3d ago". No moment -> an em dash. */
+export function formatAge(from: string | number | null | undefined, now: number = Date.now()): string {
+  if (from == null) return '—';
+  const ms = now - (typeof from === 'string' ? Date.parse(from) : from);
+  const mins = Math.floor(ms / 60_000);
+  if (!(mins >= 1)) return 'just now';
+  const days = Math.floor(mins / 1440);
+  const hours = Math.floor((mins % 1440) / 60);
+  if (days > 0) return hours > 0 ? `${days}d ${hours}h ago` : `${days}d ago`;
+  if (hours > 0) return `${hours}h ago`;
+  return `${mins}m ago`;
+}
+
 const timeFmt = new Intl.DateTimeFormat('en-GB', { timeZone: LONDON, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const dayKeyFmt = new Intl.DateTimeFormat('en-CA', { timeZone: LONDON, year: 'numeric', month: '2-digit', day: '2-digit' });
 const dateFmt = new Intl.DateTimeFormat('en-GB', { timeZone: LONDON, weekday: 'short', day: 'numeric', month: 'short' });

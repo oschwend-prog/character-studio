@@ -2,6 +2,7 @@
 // owner (Approve all), picks, spend, autopilot and alerts. Every action is one or two taps from here.
 import { AlertTriangle, ArrowRight, CircleCheck, OctagonAlert } from 'lucide-react';
 import { useMemo } from 'react';
+import { ScannerLine } from '../components/Scanner';
 import { AutopilotSwitch, Flap, Livery, PlatformCode, Section, Skeleton, Spinner, characterName } from '../components/ui';
 import { clipCode, formatCountdown, formatCredits, londonDate, platformName } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
@@ -185,6 +186,7 @@ function PicksLine() {
           )}
         </span>
       </a>
+      <ScannerLine />
       <p className="small muted" style={{ margin: 0 }}>
         Picks autopilot is on: the standing rule approves 80+ with feasibility 7+ and skips under 65. The rest waits here.
       </p>
