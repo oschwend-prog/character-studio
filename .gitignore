@@ -18,3 +18,4 @@ terminal/.env*.local
 !docs/**/*.png
 .impeccable/review/
 .impeccable/live/
+.impeccable/hook.cache.json

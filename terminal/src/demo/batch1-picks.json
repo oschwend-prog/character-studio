@@ -1,0 +1,579 @@
+[
+ {
+  "ref": "B1",
+  "rank": 1,
+  "url": "https://www.instagram.com/reel/Dde-rPWCOC6/",
+  "platform": "instagram",
+  "creator_handle": "@eatfryhaven",
+  "views": 43400000,
+  "outlier_x": 1393.0,
+  "origin": "scan",
+  "character_slug": "reginald",
+  "proposal": {
+   "mode": "recreate",
+   "hook": "first day as head butler",
+   "concept": "Pours tea with spy gravity, glances left/right, epic orchestral swell → afro-house drop → flawless routine → resumes pouring",
+   "prop": "silver tray + teapot",
+   "enhancement": "Epic orchestral swell → afro-house drop on the cut; slow-mo on the hardest hit with the quiff perfectly rigid; resumes pouring without spilling; ODD EYES glint on the final look",
+   "decision": {
+    "decision": "approve",
+    "by": "rule",
+    "reason": "Biggest outlier in every scan (1,393×); the premise structure is deadpan by design"
+   }
+  },
+  "scores": {
+   "virality": 10.0,
+   "reach": 9.8,
+   "freshness": 8.0,
+   "fit": 10.0,
+   "feasibility": 9.0,
+   "saturation": 7.0
+  },
+  "total_score": 92,
+  "status": "approved"
+ },
+ {
+  "ref": "B2",
+  "rank": 2,
+  "url": "https://www.instagram.com/reel/DdZCANpDgI2/",
+  "platform": "instagram",
+  "creator_handle": "@drink321coffee",
+  "views": 5600000,
+  "outlier_x": 3475.0,
+  "origin": "scan",
+  "character_slug": "reginald",
+  "proposal": {
+   "mode": "recreate",
+   "hook": "POV: you rang for tea",
+   "concept": "\"POV: you rang for tea but the butler's favourite song is on\" — he dances while making tea, ignoring the bell",
+   "prop": "handbell + teacup",
+   "enhancement": "Bell counter text (\"bell rung: 3… 7… 12 times\") while he dances serenely; serves the tea exactly on the last beat",
+   "decision": {
+    "decision": "approve",
+    "by": "rule",
+    "reason": "3,475× — the strongest per-creator outlier we have; solo, cheap"
+   }
+  },
+  "scores": {
+   "virality": 10.0,
+   "reach": 6.5,
+   "freshness": 8.0,
+   "fit": 9.0,
+   "feasibility": 9.0,
+   "saturation": 8.0
+  },
+  "total_score": 88,
+  "status": "approved"
+ },
+ {
+  "ref": "D2",
+  "rank": 3,
+  "url": "https://www.tiktok.com/@tillandsialover/video/7688386199270001953",
+  "platform": "tiktok",
+  "creator_handle": "@tillandsialover",
+  "views": 7400000,
+  "outlier_x": 1177.0,
+  "origin": "scan",
+  "character_slug": "biscuit",
+  "proposal": {
+   "mode": "dropin",
+   "mode_note": "Drop-in if clean, else Recreate",
+   "hook": "he hits every single beat",
+   "concept": "Upright paw hits on every snare, kitchen at night",
+   "prop": "gold chain",
+   "enhancement": "Impact SFX + micro-zoom on every paw hit, slow-mo on the final hit, caption \"find one he missed. you can't 🌭\" (rewatch bait)",
+   "decision": {
+    "decision": "approve",
+    "by": "rule",
+    "reason": "1,177×, solo gesture choreography — the ideal Genjutsu input"
+   }
+  },
+  "scores": {
+   "virality": 10.0,
+   "reach": 6.9,
+   "freshness": 7.0,
+   "fit": 9.0,
+   "feasibility": 9.0,
+   "saturation": 7.0
+  },
+  "total_score": 85,
+  "status": "approved"
+ },
+ {
+  "ref": "D6",
+  "rank": 4,
+  "url": "https://www.instagram.com/reel/Dd1koUkoXgq/",
+  "platform": "instagram",
+  "creator_handle": "@mrcharliebrowne",
+  "views": 12800000,
+  "outlier_x": 550.0,
+  "origin": "scan",
+  "character_slug": "biscuit",
+  "proposal": {
+   "mode": "recreate",
+   "hook": "official taste inspector",
+   "concept": "\"Official taste inspector\": tastes a croissant in a bakery, approves, victory routine",
+   "prop": "tiny chef hat",
+   "enhancement": "Tastes the croissant, stamps a tiny \"APPROVED\" card, then the victory routine; crumbs on the onesie",
+   "decision": {
+    "decision": "approve",
+    "by": "rule",
+    "reason": "Dachshund ego-caption format at 550× — our exact breed and voice"
+   }
+  },
+  "scores": {
+   "virality": 9.1,
+   "reach": 7.8,
+   "freshness": 6.0,
+   "fit": 8.0,
+   "feasibility": 8.0,
+   "saturation": 8.0
+  },
+  "total_score": 80,
+  "status": "approved"
+ },
+ {
+  "ref": "D4",
+  "rank": 5,
+  "url": "https://www.tiktok.com/@banana.the.wiener/video/7673905586383113503",
+  "platform": "tiktok",
+  "creator_handle": "@banana.the.wiener",
+  "views": 1400000,
+  "outlier_x": 131.8,
+  "origin": "scan",
+  "character_slug": "biscuit",
+  "proposal": {
+   "mode": "recreate",
+   "hook": "eyes don't match. moves do.",
+   "concept": "6–8 s stare → head-snap → loop on the mismatched eyes",
+   "enhancement": "Beat-synced head-snap, catch-light glint on the blue eye, perfect loop seam",
+   "decision": {
+    "decision": "approve",
+    "by": "analyst",
+    "reason": "79 — cheapest clip and the ODD EYES signature; loops drive watch time > 100%"
+   }
+  },
+  "scores": {
+   "virality": 7.1,
+   "reach": 4.2,
+   "freshness": 6.0,
+   "fit": 10.0,
+   "feasibility": 10.0,
+   "saturation": 8.0
+  },
+  "total_score": 79,
+  "status": "approved"
+ },
+ {
+  "ref": "D1",
+  "rank": 6,
+  "url": "https://www.instagram.com/reel/Dd9QM6WKSfJ/",
+  "platform": "instagram",
+  "creator_handle": "@muduronline",
+  "views": 2000000,
+  "outlier_x": 997.0,
+  "origin": "scan",
+  "character_slug": "biscuit",
+  "proposal": {
+   "mode": "recreate",
+   "mode_note": "Recreate (3 bodies — needs the multi-body test)",
+   "needs": "multi_body",
+   "hook": "lead dancer. obviously.",
+   "concept": "Biscuit leads two AI backup dancers in baby-blue, \"Single Ladies\" choreography, mirrored studio",
+   "prop": "tiny crown",
+   "enhancement": "Backup dancers are two more baby-blue dachshund silhouettes, Biscuit out-dances them",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "997× and the trend is live, but 3 bodies are untested; deadline ~12 Oct; approve if the multi-body test passes by 10 Oct"
+   },
+   "hold_reason": "997× and the trend is live, but 3 bodies are untested; deadline ~12 Oct; approve if the multi-body test passes by 10 Oct"
+  },
+  "scores": {
+   "virality": 10.0,
+   "reach": 4.8,
+   "freshness": 9.0,
+   "fit": 10.0,
+   "feasibility": 4.0,
+   "saturation": 5.0
+  },
+  "total_score": 76,
+  "status": "new"
+ },
+ {
+  "ref": "B3",
+  "rank": 7,
+  "url": "https://www.instagram.com/reel/DcREZSzowjZ/",
+  "platform": "instagram",
+  "creator_handle": "@augustdrews",
+  "views": 5200000,
+  "outlier_x": 422.0,
+  "origin": "scan",
+  "character_slug": "reginald",
+  "proposal": {
+   "mode": "dropin",
+   "mode_note": "Drop-in if clean (single performer), else Recreate",
+   "hook": "Tuesday. 4pm. Tea.",
+   "concept": "Same lobby routine, Reginald swapped in — or recreated in the grand hall as \"Tea Tuesday\"",
+   "prop": "tea towel over the arm",
+   "enhancement": "Recurring title card \"Tuesday. 4pm. Tea.\" in the serif brand style",
+   "decision": {
+    "decision": "approve",
+    "by": "analyst",
+    "reason": "76 — weekday series converts viewers to followers; Drop-in if a clean copy appears"
+   }
+  },
+  "scores": {
+   "virality": 8.8,
+   "reach": 6.4,
+   "freshness": 6.0,
+   "fit": 8.0,
+   "feasibility": 8.0,
+   "saturation": 7.0
+  },
+  "total_score": 76,
+  "status": "approved"
+ },
+ {
+  "ref": "D5",
+  "rank": 8,
+  "url": "https://www.tiktok.com/@lola.thestaffy/video/7679128537311251734",
+  "platform": "tiktok",
+  "creator_handle": "@lola.thestaffy",
+  "views": 2800000,
+  "outlier_x": 221.8,
+  "origin": "scan",
+  "character_slug": "biscuit",
+  "proposal": {
+   "mode": "recreate",
+   "mode_note": "Recreate (quadruped → biped)",
+   "hook": "forgot I'm a dog for a sec",
+   "concept": "Sits like a normal dog, beat drops, stands into a full routine",
+   "prop": "shades",
+   "enhancement": "The stand-up happens exactly on the drop, ears flip, text pop \"professional mode\"",
+   "decision": {
+    "decision": "approve",
+    "by": "analyst",
+    "reason": "74 — uses both pose masters; strong caption pattern (221.8×)"
+   }
+  },
+  "scores": {
+   "virality": 7.8,
+   "reach": 5.4,
+   "freshness": 6.0,
+   "fit": 9.0,
+   "feasibility": 7.0,
+   "saturation": 8.0
+  },
+  "total_score": 74,
+  "status": "approved"
+ },
+ {
+  "ref": "O1",
+  "rank": 9,
+  "url": "https://www.instagram.com/reel/Dc_OfoQIii5/",
+  "platform": "instagram",
+  "creator_handle": "@maksatadiele",
+  "views": 5700000,
+  "outlier_x": 420.8,
+  "origin": "scan",
+  "character_slug": null,
+  "proposal": {
+   "needs": "talking_lane",
+   "button_line": "I requested it flat. It arrived round.",
+   "hook": "1852 man orders a flat white",
+   "concept": "Orders a flat white in a London coffee shop, in full Victorian register",
+   "intended_character": "outsider",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Origin episode (pin) + strongest talking outlier (421×); pre-approved for the Outsider launch"
+   },
+   "hold_reason": "Origin episode (pin) + strongest talking outlier (421×); pre-approved for the Outsider launch"
+  },
+  "scores": {
+   "virality": 8.7,
+   "reach": 6.5,
+   "freshness": 6.0,
+   "fit": 10.0,
+   "feasibility": 3.0,
+   "saturation": 9.0
+  },
+  "total_score": 72,
+  "status": "new"
+ },
+ {
+  "ref": "O5",
+  "rank": 10,
+  "url": "https://www.instagram.com/reel/Dc1ZM7LIKMg/",
+  "platform": "instagram",
+  "creator_handle": "@fruitgram.tv",
+  "views": 4300000,
+  "outlier_x": 236.3,
+  "origin": "scan",
+  "character_slug": null,
+  "proposal": {
+   "needs": "talking_lane",
+   "button_line": "Episode 1. I appear to be in the future.",
+   "hook": "Day 1 in 2026. Send help.",
+   "concept": "Origin episode: wakes on the steps of Trafalgar Square, filming himself on a phone he found",
+   "intended_character": "outsider",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Origin episode (pin) + strongest talking outlier (421×); pre-approved for the Outsider launch"
+   },
+   "hold_reason": "Origin episode (pin) + strongest talking outlier (421×); pre-approved for the Outsider launch"
+  },
+  "scores": {
+   "virality": 7.9,
+   "reach": 6.1,
+   "freshness": 6.0,
+   "fit": 10.0,
+   "feasibility": 3.0,
+   "saturation": 9.0
+  },
+  "total_score": 70,
+  "status": "new"
+ },
+ {
+  "ref": "D3",
+  "rank": 11,
+  "url": "https://www.instagram.com/reel/DdtbbsNrvu/",
+  "platform": "instagram",
+  "creator_handle": "@bellvtrix.ai",
+  "views": 17400000,
+  "outlier_x": 44.6,
+  "origin": "scan",
+  "character_slug": "biscuit",
+  "proposal": {
+   "mode": "recreate",
+   "mode_note": "Recreate (2 bodies)",
+   "needs": "multi_body",
+   "hook": "two of me is illegal",
+   "concept": "Biscuit and his own ODD EYES twin dancing in perfect sync",
+   "prop": "matching shades",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Strong crossovers, blocked on 2–5 bodies"
+   },
+   "hold_reason": "Strong crossovers, blocked on 2–5 bodies"
+  },
+  "scores": {
+   "virality": 5.5,
+   "reach": 8.3,
+   "freshness": 8.0,
+   "fit": 8.0,
+   "feasibility": 6.0,
+   "saturation": 6.0
+  },
+  "total_score": 68,
+  "status": "new"
+ },
+ {
+  "ref": "B4",
+  "rank": 12,
+  "url": "https://www.tiktok.com/@camilla/video/7676630835327405326",
+  "platform": "tiktok",
+  "creator_handle": "@camilla",
+  "views": 22300000,
+  "outlier_x": 14.9,
+  "origin": "scan",
+  "character_slug": "reginald",
+  "proposal": {
+   "mode": "recreate",
+   "mode_note": "Recreate (crossover, 2 bodies)",
+   "needs": "multi_body",
+   "hook": "everything is fine, sir",
+   "concept": "Reginald stands motionless holding a tray while Biscuit dances, then they swap",
+   "prop": "silver tray",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Strong crossovers, blocked on 2–5 bodies"
+   },
+   "hold_reason": "Strong crossovers, blocked on 2–5 bodies"
+  },
+  "scores": {
+   "virality": 3.9,
+   "reach": 8.7,
+   "freshness": 8.0,
+   "fit": 8.0,
+   "feasibility": 6.0,
+   "saturation": 6.0
+  },
+  "total_score": 64,
+  "status": "new"
+ },
+ {
+  "ref": "B5",
+  "rank": 13,
+  "url": "https://www.tiktok.com/@blakemcgrathofficial/video/7671687450737118478",
+  "platform": "tiktok",
+  "creator_handle": "@blakemcgrathofficial",
+  "views": 2900000,
+  "outlier_x": 18.8,
+  "origin": "scan",
+  "character_slug": "reginald",
+  "proposal": {
+   "mode": "recreate",
+   "mode_note": "Recreate (crossover, 2 bodies)",
+   "needs": "multi_body",
+   "hook": "he was asked to stop",
+   "concept": "Biscuit dances in the hall; Reginald strides over stone-faced… then out-dances him",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Strong crossovers, blocked on 2–5 bodies"
+   },
+   "hold_reason": "Strong crossovers, blocked on 2–5 bodies"
+  },
+  "scores": {
+   "virality": 4.2,
+   "reach": 5.4,
+   "freshness": 6.0,
+   "fit": 9.0,
+   "feasibility": 6.0,
+   "saturation": 8.0
+  },
+  "total_score": 63,
+  "status": "new"
+ },
+ {
+  "ref": "B6",
+  "rank": 14,
+  "url": "https://www.tiktok.com/@realmrmotivator/video/7669427457178488086",
+  "platform": "tiktok",
+  "creator_handle": "@realmrmotivator",
+  "views": 349700,
+  "outlier_x": 291.0,
+  "origin": "scan",
+  "character_slug": "reginald",
+  "proposal": {
+   "mode": "recreate",
+   "mode_note": "Recreate (4–5 bodies)",
+   "needs": "multi_body",
+   "hook": "the staff party. 11pm.",
+   "concept": "Servants' hall party: young AI staff dancing, Reginald steps to the front and leads",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Strong crossovers, blocked on 2–5 bodies"
+   },
+   "hold_reason": "Strong crossovers, blocked on 2–5 bodies"
+  },
+  "scores": {
+   "virality": 8.2,
+   "reach": 2.0,
+   "freshness": 5.0,
+   "fit": 8.0,
+   "feasibility": 4.0,
+   "saturation": 8.0
+  },
+  "total_score": 62,
+  "status": "new"
+ },
+ {
+  "ref": "O3",
+  "rank": 15,
+  "url": "https://www.tiktok.com/@george_olney/video/7671329075935415574",
+  "platform": "tiktok",
+  "creator_handle": "@george_olney",
+  "views": 5200000,
+  "outlier_x": 18.3,
+  "origin": "scan",
+  "character_slug": null,
+  "proposal": {
+   "needs": "talking_lane",
+   "button_line": "The child is named after a car.",
+   "hook": "baby names: 1852 vs now",
+   "concept": "Reads 2026 baby names aloud, appalled but polite",
+   "intended_character": "outsider",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Talking lane not built"
+   },
+   "hold_reason": "Talking lane not built"
+  },
+  "scores": {
+   "virality": 4.2,
+   "reach": 6.4,
+   "freshness": 6.0,
+   "fit": 8.0,
+   "feasibility": 3.0,
+   "saturation": 8.0
+  },
+  "total_score": 56,
+  "status": "new"
+ },
+ {
+  "ref": "O2",
+  "rank": 16,
+  "url": "https://www.instagram.com/reel/Dc_RQsIMoxO/",
+  "platform": "instagram",
+  "creator_handle": "@samzreacts",
+  "views": 1100000,
+  "outlier_x": 14.5,
+  "origin": "scan",
+  "character_slug": null,
+  "proposal": {
+   "needs": "talking_lane",
+   "button_line": "I am a gentleman. There is nothing unexpected about me.",
+   "hook": "he's arguing with a machine",
+   "concept": "Argues with a self-checkout (\"unexpected item in the bagging area\")",
+   "intended_character": "outsider",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Talking lane not built"
+   },
+   "hold_reason": "Talking lane not built"
+  },
+  "scores": {
+   "virality": 3.9,
+   "reach": 3.9,
+   "freshness": 6.0,
+   "fit": 8.0,
+   "feasibility": 3.0,
+   "saturation": 8.0
+  },
+  "total_score": 53,
+  "status": "new"
+ },
+ {
+  "ref": "O4",
+  "rank": 17,
+  "url": "https://www.instagram.com/reel/DcWMn6QOckQ/",
+  "platform": "instagram",
+  "creator_handle": "@theeuropeankid",
+  "views": 1100000,
+  "outlier_x": 3.8,
+  "origin": "scan",
+  "character_slug": null,
+  "proposal": {
+   "needs": "talking_lane",
+   "button_line": "For that sum one could purchase a county.",
+   "hook": "1852 man reacts to UK rent",
+   "concept": "Escalating reactions 1→5 to London rents in an estate-agent window",
+   "intended_character": "outsider",
+   "decision": {
+    "decision": "hold",
+    "by": "rule",
+    "reason": "Talking lane not built"
+   },
+   "hold_reason": "Talking lane not built"
+  },
+  "scores": {
+   "virality": 1.9,
+   "reach": 3.9,
+   "freshness": 6.0,
+   "fit": 8.0,
+   "feasibility": 3.0,
+   "saturation": 8.0
+  },
+  "total_score": 48,
+  "status": "new"
+ }
+]

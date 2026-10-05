@@ -1,0 +1,539 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-05T02:39:41.093702+00:00",
+  "title": "Design System: ODD EYES terminal",
+  "extensions": {
+    "colorMeta": {
+      "board": {
+        "role": "neutral",
+        "displayName": "Board",
+        "canonical": "oklch(16.8% 0.004 264.4)",
+        "tonalRamp": [
+          "#0a0b0d",
+          "#232426",
+          "#3e4042",
+          "#5c5e60",
+          "#7c7d80",
+          "#9d9ea1",
+          "#c6c7ca",
+          "#edeef1"
+        ]
+      },
+      "panel": {
+        "role": "neutral",
+        "displayName": "Panel",
+        "canonical": "oklch(20.4% 0.007 258.4)",
+        "tonalRamp": [
+          "#090b0e",
+          "#222427",
+          "#3e4043",
+          "#5b5e61",
+          "#7b7d81",
+          "#9c9fa3",
+          "#c5c7cc",
+          "#eceff3"
+        ]
+      },
+      "panel-2": {
+        "role": "neutral",
+        "displayName": "Panel 2",
+        "canonical": "oklch(23.4% 0.009 255.6)",
+        "tonalRamp": [
+          "#090b0f",
+          "#212428",
+          "#3d4044",
+          "#5a5e63",
+          "#7a7e83",
+          "#9b9fa4",
+          "#c3c8cd",
+          "#ebeff5"
+        ]
+      },
+      "tile": {
+        "role": "neutral",
+        "displayName": "Tile",
+        "canonical": "oklch(25.5% 0.010 260.7)",
+        "tonalRamp": [
+          "#090b10",
+          "#212429",
+          "#3d4045",
+          "#5a5e64",
+          "#7a7d84",
+          "#9b9fa5",
+          "#c3c7ce",
+          "#eaeff6"
+        ]
+      },
+      "tile-top": {
+        "role": "neutral",
+        "displayName": "Tile Top",
+        "canonical": "oklch(27.5% 0.011 254.0)",
+        "tonalRamp": [
+          "#080b10",
+          "#202429",
+          "#3c4046",
+          "#595e64",
+          "#797e84",
+          "#9a9fa5",
+          "#c3c8ce",
+          "#eaeff6"
+        ]
+      },
+      "rule": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "oklch(30.4% 0.012 258.4)",
+        "tonalRamp": [
+          "#080b10",
+          "#20242a",
+          "#3c4046",
+          "#595e65",
+          "#797e85",
+          "#9a9fa6",
+          "#c2c8cf",
+          "#eaeff7"
+        ]
+      },
+      "rule-strong": {
+        "role": "neutral",
+        "displayName": "Rule Strong",
+        "canonical": "oklch(36.9% 0.014 256.8)",
+        "tonalRamp": [
+          "#080b11",
+          "#20242b",
+          "#3b4047",
+          "#595e66",
+          "#787e86",
+          "#999fa7",
+          "#c2c8d0",
+          "#e9eff8"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "oklch(93.2% 0.014 84.6)",
+        "tonalRamp": [
+          "#0e0b05",
+          "#27241c",
+          "#433f37",
+          "#615d55",
+          "#817d74",
+          "#a39e95",
+          "#ccc7bd",
+          "#f3eee4"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink 2",
+        "canonical": "oklch(75.5% 0.015 84.6)",
+        "tonalRamp": [
+          "#0e0b05",
+          "#27241c",
+          "#433f37",
+          "#625d54",
+          "#817d73",
+          "#a39e94",
+          "#ccc7bc",
+          "#f3eee3"
+        ]
+      },
+      "ink-3": {
+        "role": "neutral",
+        "displayName": "Ink 3",
+        "canonical": "oklch(63.1% 0.014 86.9)",
+        "tonalRamp": [
+          "#0e0b05",
+          "#27241c",
+          "#433f37",
+          "#615d55",
+          "#817d74",
+          "#a29e95",
+          "#cbc7bd",
+          "#f2eee4"
+        ]
+      },
+      "ice": {
+        "role": "secondary",
+        "displayName": "Ice",
+        "canonical": "oklch(83.7% 0.092 237.7)",
+        "tonalRamp": [
+          "#000b2c",
+          "#00274a",
+          "#00456a",
+          "#1d648b",
+          "#4285ae",
+          "#64a7d1",
+          "#8dd1fc",
+          "#b3f8ff"
+        ]
+      },
+      "ice-track": {
+        "role": "neutral",
+        "displayName": "Ice Track",
+        "canonical": "oklch(33.6% 0.038 236.2)",
+        "tonalRamp": [
+          "#000d19",
+          "#102734",
+          "#2c4351",
+          "#496170",
+          "#688191",
+          "#89a3b3",
+          "#b1ccdd",
+          "#d7f3ff"
+        ]
+      },
+      "amber": {
+        "role": "primary",
+        "displayName": "Amber",
+        "canonical": "oklch(81.5% 0.152 71.4)",
+        "tonalRamp": [
+          "#260000",
+          "#451100",
+          "#6e2800",
+          "#904900",
+          "#b46a00",
+          "#d88c00",
+          "#ffb546",
+          "#ffe192"
+        ]
+      },
+      "amber-ink": {
+        "role": "neutral",
+        "displayName": "Amber Ink",
+        "canonical": "oklch(19.1% 0.033 78.2)",
+        "tonalRamp": [
+          "#130900",
+          "#2d2211",
+          "#493e2c",
+          "#685c49",
+          "#887b68",
+          "#aa9c88",
+          "#d3c5b0",
+          "#fbecd7"
+        ]
+      },
+      "amber-track": {
+        "role": "neutral",
+        "displayName": "Amber Track",
+        "canonical": "oklch(30.7% 0.047 76.0)",
+        "tonalRamp": [
+          "#160700",
+          "#312006",
+          "#4e3c22",
+          "#6d5a3f",
+          "#8e7a5e",
+          "#b09b7e",
+          "#d9c4a6",
+          "#ffebcc"
+        ]
+      },
+      "red": {
+        "role": "tertiary",
+        "displayName": "Vermilion",
+        "canonical": "oklch(70.9% 0.184 28.7)",
+        "tonalRamp": [
+          "#2d0000",
+          "#4f0000",
+          "#870000",
+          "#ae1712",
+          "#d44337",
+          "#fc6858",
+          "#ff9380",
+          "#ffd0c0"
+        ]
+      },
+      "red-ink": {
+        "role": "neutral",
+        "displayName": "Vermilion Ink",
+        "canonical": "oklch(17.2% 0.048 29.2)",
+        "tonalRamp": [
+          "#1b0302",
+          "#381a16",
+          "#573631",
+          "#77534e",
+          "#98736d",
+          "#bb948d",
+          "#e5bcb5",
+          "#ffe3dc"
+        ]
+      },
+      "red-track": {
+        "role": "neutral",
+        "displayName": "Vermilion Track",
+        "canonical": "oklch(29.1% 0.055 27.7)",
+        "tonalRamp": [
+          "#1d0101",
+          "#3a1815",
+          "#59342f",
+          "#7a524c",
+          "#9b716b",
+          "#be928c",
+          "#e9bbb4",
+          "#ffe1da"
+        ]
+      },
+      "biscuit": {
+        "role": "brand",
+        "displayName": "Biscuit Blue",
+        "canonical": "oklch(81.7% 0.057 248.5)",
+        "tonalRamp": [
+          "#000b22",
+          "#0a263e",
+          "#26425d",
+          "#44607d",
+          "#63819e",
+          "#83a2c1",
+          "#abcbeb",
+          "#d2f3ff"
+        ]
+      },
+      "biscuit-ink": {
+        "role": "brand",
+        "displayName": "Biscuit Ink",
+        "canonical": "oklch(23.9% 0.044 251.3)",
+        "tonalRamp": [
+          "#000b1d",
+          "#132539",
+          "#2e4156",
+          "#4b6076",
+          "#6a8097",
+          "#8ba1b9",
+          "#b3cae4",
+          "#daf1ff"
+        ]
+      },
+      "reginald": {
+        "role": "brand",
+        "displayName": "Racing Green",
+        "canonical": "oklch(32.3% 0.058 168.3)",
+        "tonalRamp": [
+          "#001207",
+          "#002d1f",
+          "#1a4a3a",
+          "#3a6857",
+          "#5a8977",
+          "#7bab98",
+          "#a3d4c0",
+          "#c9fce7"
+        ]
+      },
+      "reginald-gold": {
+        "role": "brand",
+        "displayName": "Reginald Gold",
+        "canonical": "oklch(72.8% 0.138 89.7)",
+        "tonalRamp": [
+          "#1e0200",
+          "#3a1c00",
+          "#5c3800",
+          "#7c5700",
+          "#9d7700",
+          "#c09917",
+          "#eac350",
+          "#ffeb8d"
+        ]
+      },
+      "series-biscuit": {
+        "role": "brand",
+        "displayName": "Biscuit Series",
+        "canonical": "oklch(66.2% 0.110 250.6)",
+        "tonalRamp": [
+          "#000337",
+          "#002256",
+          "#004177",
+          "#256099",
+          "#4681bc",
+          "#68a3e1",
+          "#90cdff",
+          "#b6f4ff"
+        ]
+      },
+      "series-reginald": {
+        "role": "brand",
+        "displayName": "Reginald Series",
+        "canonical": "oklch(65.6% 0.126 89.0)",
+        "tonalRamp": [
+          "#1e0200",
+          "#3b1c00",
+          "#5a3900",
+          "#7a5800",
+          "#9b7800",
+          "#be9a30",
+          "#e8c35e",
+          "#ffeb8d"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "flap-display": {
+        "displayName": "Flap display",
+        "purpose": "The next departure time on Today; one per screen. font-stretch 70%."
+      },
+      "flap": {
+        "displayName": "Flap",
+        "purpose": "Split-flap tiles: times, statuses, gate codes, counts, scores. font-stretch 70%, uppercase, tabular."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Page names. font-stretch 78%."
+      },
+      "section": {
+        "displayName": "Section",
+        "purpose": "Section heads over a hairline. Uppercase, font-stretch 78%."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Reading text and values."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Column heads and form labels only, never above a heading."
+      }
+    },
+    "shadows": [
+      {
+        "name": "float",
+        "value": "0 10px 28px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.35)",
+        "purpose": "The needs plate and toasts, which float over scrolling content."
+      }
+    ],
+    "motion": [
+      {
+        "name": "flap-step",
+        "value": "60ms per drum step, 5 steps; cell turn 70ms steps(2, end)",
+        "purpose": "Split-flap change: the signature state change."
+      },
+      {
+        "name": "plate-in",
+        "value": "180ms steps(3, end) clip-path reveal",
+        "purpose": "Needs plate and toasts appearing."
+      },
+      {
+        "name": "control",
+        "value": "150-160ms ease-out",
+        "purpose": "Button and switch state."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "phone",
+        "value": "< 720px"
+      },
+      {
+        "name": "tablet",
+        "value": "720px"
+      },
+      {
+        "name": "desktop",
+        "value": "960px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one amber action in a region: Approve, Approve all, Add.",
+      "html": "<button class=\"ds-btn-primary\">Approve</button>",
+      "css": ".ds-btn-primary{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border:0;border-radius:4px;background:#ffb040;color:#1c1203;font:700 14px/1 'Archivo Variable',system-ui,sans-serif;font-stretch:80%;letter-spacing:.06em;text-transform:uppercase;cursor:pointer;transition:background-color 150ms ease-out}.ds-btn-primary:hover{background:#ffc266}.ds-btn-primary:focus-visible{outline:2px solid #8fd3ff;outline-offset:2px}"
+    },
+    {
+      "name": "Line Button",
+      "kind": "button",
+      "refersTo": "button-line",
+      "description": "Every secondary action: Skip, Schedule, Remake, Save cap.",
+      "html": "<button class=\"ds-btn-line\">Schedule</button>",
+      "css": ".ds-btn-line{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border:0;border-radius:4px;background:transparent;color:#ede8de;box-shadow:inset 0 0 0 1px #3b4047;font:700 14px/1 'Archivo Variable',system-ui,sans-serif;font-stretch:80%;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}.ds-btn-line:hover{box-shadow:inset 0 0 0 1px #b4afa5}.ds-btn-line:focus-visible{outline:2px solid #8fd3ff;outline-offset:2px}"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Reject and the kill switch; solid only for the final confirm.",
+      "html": "<button class=\"ds-btn-danger\">Reject</button>",
+      "css": ".ds-btn-danger{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border:0;border-radius:4px;background:transparent;color:#ff6b5b;box-shadow:inset 0 0 0 1px #43201c;font:700 14px/1 'Archivo Variable',system-ui,sans-serif;font-stretch:80%;letter-spacing:.06em;text-transform:uppercase;cursor:pointer}.ds-btn-danger:hover{background:#ff6b5b;color:#210604}.ds-btn-danger:focus-visible{outline:2px solid #8fd3ff;outline-offset:2px}"
+    },
+    {
+      "name": "Split-flap",
+      "kind": "custom",
+      "refersTo": "flap-cell",
+      "description": "Signature: one tile per character with a hinge line; changed cells step through the drum.",
+      "html": "<span class=\"ds-flap\"><span>1</span><span>9</span><span>:</span><span>0</span><span>0</span></span>",
+      "css": ".ds-flap{display:inline-flex;gap:2px}.ds-flap span{position:relative;display:inline-grid;place-items:center;width:13px;height:22px;border-radius:2px;background:linear-gradient(#24282d 0 50%,#202328 50% 100%);color:#ede8de;font:620 15px/1 'Archivo Variable',system-ui,sans-serif;font-stretch:70%;font-variant-numeric:tabular-nums}.ds-flap span::after{content:'';position:absolute;left:0;right:0;top:calc(50% - .5px);height:1px;background:#08090a;opacity:.55}"
+    },
+    {
+      "name": "Livery",
+      "kind": "chip",
+      "refersTo": "livery-biscuit",
+      "description": "Character identity plate, like an airline column on a departures board.",
+      "html": "<span class=\"ds-livery ds-bsc\">BSC</span> <span class=\"ds-livery ds-rgn\">RGN</span>",
+      "css": ".ds-livery{display:inline-grid;place-items:center;height:22px;padding:0 6px;border-radius:2px;font:760 12px/1 'Archivo Variable',system-ui,sans-serif;font-stretch:75%;letter-spacing:.08em}.ds-bsc{background:#a7c7e7;color:#0e2033}.ds-rgn{background:#0b3d2e;color:#c9a227;box-shadow:inset 0 0 0 1px #1d5a46}"
+    },
+    {
+      "name": "Needs plate",
+      "kind": "custom",
+      "refersTo": "needs-plate",
+      "description": "Signature: the one lit plate on Today while clips wait.",
+      "html": "<div class=\"ds-plate\"><b>3</b><span>clips wait for you</span><button>Approve all 3</button></div>",
+      "css": ".ds-plate{display:flex;align-items:center;gap:12px;padding:12px;border-radius:4px;background:#ffb040;color:#1c1203;box-shadow:0 10px 28px rgba(0,0,0,.45),0 2px 6px rgba(0,0,0,.35);font:560 14px/1.3 'Archivo Variable',system-ui,sans-serif}.ds-plate b{font-size:40px;font-weight:640;font-stretch:70%;line-height:.9}.ds-plate button{margin-left:auto;min-height:44px;padding:0 16px;border:0;border-radius:4px;background:#1c1203;color:#ffb040;font:700 14px/1 'Archivo Variable',system-ui,sans-serif;font-stretch:80%;letter-spacing:.06em;text-transform:uppercase}"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Text and number fields.",
+      "html": "<input class=\"ds-input\" placeholder=\"https://www.tiktok.com/@creator/video/…\">",
+      "css": ".ds-input{min-height:44px;width:100%;padding:10px 12px;border-radius:4px;background:#0e0f11;border:1px solid #3b4047;color:#ede8de;caret-color:#ffb040;font:400 15px/1.4 'Archivo Variable',system-ui,sans-serif}.ds-input:focus-visible{outline:none;border-color:#8fd3ff;box-shadow:0 0 0 1px #8fd3ff}"
+    },
+    {
+      "name": "Tab bar",
+      "kind": "nav",
+      "refersTo": "",
+      "description": "Six tabs at the bottom on phones, a rail on desktop.",
+      "html": "<nav class=\"ds-tabs\"><a aria-current=\"page\">Today</a><a>Picks</a><a>Queue<i>3</i></a></nav>",
+      "css": ".ds-tabs{display:grid;grid-template-columns:repeat(3,1fr);height:64px;background:#15171a;border-top:1px solid #2b2f35}.ds-tabs a{position:relative;display:grid;place-items:center;color:#8d8980;font:640 10.5px/1 'Archivo Variable',system-ui,sans-serif;font-stretch:80%;letter-spacing:.06em;text-transform:uppercase}.ds-tabs a[aria-current]{color:#ede8de;box-shadow:inset 0 2px 0 #ede8de}.ds-tabs i{position:absolute;top:8px;right:22%;min-width:18px;height:18px;border-radius:9px;background:#ffb040;color:#1c1203;font:700 11px/18px system-ui;font-style:normal;text-align:center}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Departures Board",
+    "overview": "The terminal is a split-flap departures board for a studio that posts on its own. Every channel's 19:00 / 19:30 London slot is a departure with a clip, a livery and a status. The owner reads it top-down in a few seconds on a phone, one-handed, and the one thing that needs him is the only lit plate on the screen.\n\nIt refuses the KPI-tile dashboard: no big-number cards with sparklines, no glow, no glass panels for their own sake. Density is a virtue; legibility comes from a fixed grid of tiles, weight and case, not from size inflation.",
+    "keyCharacteristics": [
+      "Matte charcoal board, off-white characters on split-flap tiles with a hinge line.",
+      "One family (Archivo, width axis): condensed for tiles and labels, normal width for reading.",
+      "Character liveries as airline plates: Biscuit baby blue, Reginald racing green with gold.",
+      "Ice-blue means live or posted; amber means it needs you or can be pressed; vermilion means failed or stopped.",
+      "Motion is stepped, like the machine it borrows from."
+    ],
+    "rules": [
+      {
+        "name": "The One Lit Plate Rule",
+        "body": "At most one amber filled plate or primary per screen region that competes for the thumb. A second action next to it is a line button.",
+        "section": "colors"
+      },
+      {
+        "name": "The Meaning Rule",
+        "body": "Ice, amber and vermilion carry state. They are never decoration, and a coloured mark always has a word or number beside it.",
+        "section": "colors"
+      },
+      {
+        "name": "The Rank by Weight Rule",
+        "body": "Hierarchy comes from weight, width and case inside a tight scale (11 / 13 / 15 / 24 and one display size), not from many sizes.",
+        "section": "typography"
+      }
+    ],
+    "dos": [
+      "Do lead every screen with what needs the owner, then what is running.",
+      "Do keep every action within two taps and the common one within one.",
+      "Do show the rule with the number (autopilot 4 of 6, \"held by the rule: needs multi body\").",
+      "Do label demo or synthetic data where a visitor could mistake it for the real thing."
+    ],
+    "donts": [
+      "Don't add KPI hero tiles, sparklines or gradient text.",
+      "Don't put a label above a heading (eyebrow); put the code or icon inline instead.",
+      "Don't use ice, amber or vermilion for decoration.",
+      "Don't ease or fade state changes on the board; flaps step."
+    ]
+  }
+}
