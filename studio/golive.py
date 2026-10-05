@@ -9,7 +9,7 @@ What is checked, in the order the owner's checklist (``docs/launch/go-live.md``)
 
 * Keychain items ``cs-database-url``, ``cs-supabase-url``, ``cs-supabase-service-key``,
   ``cs-postiz-api-key``: present or absent. The probe never reads a value.
-* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0007.
+* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0008.
 * The Supabase Data API exposes schema ``studio`` (the terminal and the owner RPCs need it).
 * Characters: at least one is ``live``; each launch character has masters, a close-up and an account
   with a Postiz integration id (``characters/*/refs.json`` plus the database).
@@ -99,6 +99,13 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("column", "setup"), ("column", "details"), ("view", "v_characters"), ("view", "v_picks"),
         ("view", "v_pick_history"), ("function", "decide_pick"),
     ),
+    # 0008 (Drop-in first): sources.has_minors (the column the CLI now writes), accounts_for_clip with "a share of 1 is
+    # no cap", decide_pick with owner_props / owner_music (the one function of that name), attach_clip (the owner's own
+    # clip for a Drop-in) and the picks views with the card appended.
+    "0008": (
+        ("column", "has_minors"), ("function", "accounts_for_clip"), ("function", "decide_pick"),
+        ("function", "attach_clip"), ("view", "v_picks"), ("view", "v_pick_history"),
+    ),
 }
 
 PROBE_SQL = """
@@ -112,7 +119,7 @@ join pg_class c on c.oid = a.attrelid
 join pg_namespace n on n.oid = c.relnamespace
 where n.nspname = 'studio' and a.attnum > 0 and not a.attisdropped
   and ((c.relname = 'snapshots') or (c.relname = 'characters' and a.attname = 'setup')
-       or (c.relname = 'runs' and a.attname = 'details'))
+       or (c.relname = 'runs' and a.attname = 'details') or (c.relname = 'sources' and a.attname = 'has_minors'))
 union all
 select 'index', indexname::text from pg_indexes where schemaname = 'studio'
 union all

@@ -154,15 +154,17 @@ def test_seed_matches_in_code_defaults():
     assert json.loads(m.group(3)) == settings.cadence == DEFAULT_CADENCE
 
 
-# The one statement of the migrations that removes anything: 0007 replaces decide_pick by a function with more
-# (defaulted) parameters, and a second overload would make the call ambiguous for PostgREST. No data goes.
+# The only statements of the migrations that remove anything: 0007 and then 0008 replace decide_pick by a function with
+# more (defaulted) parameters, and a second overload would make the call ambiguous for PostgREST. No data goes.
 SANCTIONED_DROP = "drop function if exists studio.decide_pick(uuid, text, text, text);"
+SANCTIONED_DROP_0008 = "drop function if exists studio.decide_pick(uuid, text, text, text, text, text, text, text);"
 
 
 def test_migrations_are_additive_and_stay_inside_schema_studio():
     statements_only = re.sub(r"--[^\n]*", "", ALL_SQL)  # the words in a comment are not statements
-    assert statements_only.count(SANCTIONED_DROP) == 1
-    assert not re.search(r"\b(drop|truncate)\b", statements_only.replace(SANCTIONED_DROP, ""), re.I)
+    assert statements_only.count(SANCTIONED_DROP) == 1 and statements_only.count(SANCTIONED_DROP_0008) == 1
+    remaining = statements_only.replace(SANCTIONED_DROP, "").replace(SANCTIONED_DROP_0008, "")
+    assert not re.search(r"\b(drop|truncate)\b", remaining, re.I)
     assert not re.search(r"\balter\s+column\b|\brename\b", ALL_SQL, re.I)
     # the only references outside schema studio: auth.jwt() for RLS, the Storage buckets, and (0004)
     # one read policy on storage.objects so the owner's browser can sign URLs for the clips bucket
@@ -504,3 +506,165 @@ def test_0007_stays_inside_schema_studio_and_grants_nothing_to_anon():
     assert re.findall(r"\b(?:public|auth|storage|extensions)\.[a-z_]+", CHAR_CODE) == []
     for stmt in re.findall(r"^(?:create table|alter table|create index \w+ on)\s+(\S+)", CHAR_CODE, re.M):
         assert stmt.startswith("studio."), stmt
+
+
+# ---- 0008: Drop-in first -----------------------------------------------------------------------------------
+
+DROPIN_PATH = MIGRATIONS / "0008_dropin_first.sql"
+DROPIN_SQL = DROPIN_PATH.read_text()
+DROPIN_CODE = re.sub(r"--[^\n]*", "", DROPIN_SQL)
+OLD_DECIDE_ARGS = "uuid, text, text, text, text, text, text, text"
+NEW_DECIDE_ARGS = "uuid, text, text, text, text, text, text, text, text[], text"
+
+
+def _dropin_function(name: str) -> str:
+    m = re.search(rf"create or replace function studio\.{name}\((.*?)\$\$;", DROPIN_SQL, re.S)
+    assert m, f"no function studio.{name} in 0008"
+    return m.group(0)
+
+
+def test_0008_adds_the_minors_check_to_sources_and_the_model_writes_it():
+    assert "alter table studio.sources add column if not exists has_minors boolean;" in DROPIN_SQL  # nullable: null = not checked
+    assert "has_minors" in columns("sources")  # models.Source.has_minors has its column
+    assert Source(kind="owner_inbox", body="biped", bodies=1, duration_s=5.0).has_minors is None
+
+
+def test_0008_a_share_of_one_is_no_cap_in_accounts_for_clip_as_in_planning():
+    body = _dropin_function("accounts_for_clip")
+    old = _function_sql("accounts_for_clip")
+    assert "(c.mode = 'recreate' or a.dropin_share >= 1 or studio.dropin_ratio(a.id, c.id) < a.dropin_share)" in body
+    assert "returns setof studio.accounts" in body and "security invoker" in body and "set search_path = ''" in body
+    # nothing else of the rule moved: same joins, same connected test, same order
+    for part in ("join studio.accounts a on a.character_slug = c.character_slug", "coalesce(a.postiz_integration_id, '') <> ''",
+                 "order by a.character_slug, a.platform"):
+        assert part in old and part in body, part
+
+
+def test_0008_decide_pick_replaces_the_8_argument_function_with_one_that_adds_props_and_music():
+    body = _dropin_function("decide_pick")
+    assert (
+        "owner_presence text default null,\n  owner_props text[] default null,\n  owner_music text default null\n)" in body
+    )  # the eight parameters of 0007 first, in order, then the two new ones, both optional
+    assert "security invoker" in body and "set search_path = ''" in body and "security definer" not in body
+    assert SANCTIONED_DROP_0008 in DROPIN_SQL
+    assert DROPIN_SQL.index(SANCTIONED_DROP_0008) < DROPIN_SQL.index("create or replace function studio.decide_pick")
+    assert f"revoke all on function studio.decide_pick({NEW_DECIDE_ARGS}) from public;" in DROPIN_SQL
+    assert f"grant execute on function studio.decide_pick({NEW_DECIDE_ARGS}) to authenticated;" in DROPIN_SQL
+    assert OLD_DECIDE_ARGS + ")" not in DROPIN_CODE.replace(SANCTIONED_DROP_0008, "")  # the old signature is only dropped
+
+
+def test_0008_decide_pick_keeps_every_refusal_and_effect_of_0007():
+    new = _dropin_function("decide_pick")
+    old = _decide_pick()
+    for message in re.findall(r"raise exception '([^']*)'", old):
+        assert f"raise exception '{message}'" in new, f"the refusal {message!r} of 0007 is gone"
+    for part in (
+        "'by', 'owner'", "- 'hold_reason'", "('queued', 'made')", "for update", "char_length(clean_note) > 280",
+        "clean_mode not in ('dropin', 'recreate')", "clean_presence not in ('cameo', 'featured', 'star')",
+        "coalesce(clean_mode, f.proposal ->> 'owner_mode') = 'dropin'", "jsonb_build_object('owner_presence', clean_presence)",
+        "when f.status in ('approved', 'analysed') then f.status", "when decide_pick.decision = 'skip' then 'skipped'",
+        "if decide_pick.decision = 'approve' then", "proposal = (fa.proposal - 'hold_reason') || owner || jsonb_build_object('decision', record_)",
+        "fa.url = f.url and fa.character_slug = also and fa.id <> f.id", "limit 1 for update",
+        "to_jsonb(f) || jsonb_build_object('sibling', to_jsonb(sib))", "if sib.status not in ('queued', 'made') then",
+    ):
+        assert part in old and part in new, part
+    cols_old = re.search(r"insert into studio\.favorites\s*\((.*?)\)", old, re.S).group(1)
+    assert re.search(r"insert into studio\.favorites\s*\((.*?)\)", new, re.S).group(1) == cols_old  # the sibling copies the same columns
+
+
+def test_0008_gadgets_are_at_most_three_items_of_one_to_forty_characters_and_blank_keeps_what_is_stored():
+    body = _dropin_function("decide_pick")
+    assert "clean_props jsonb := '[]'::jsonb;" in body
+    assert "coalesce(jsonb_agg(btrim(p) order by ord), '[]'::jsonb)" in body  # trimmed, order kept
+    assert "if jsonb_array_length(clean_props) > 3 then" in body and "owner_props takes at most 3 items" in body
+    assert "t is null or char_length(t) not between 1 and 40" in body and "each of owner_props must be 1 to 40 characters" in body
+    # written only when approving, and only when something is left after trimming (an empty array keeps what is stored)
+    approve = body.split("if decide_pick.decision = 'approve' then", 1)[1].split("record_ :=", 1)[0]
+    assert "if jsonb_array_length(clean_props) > 0 then" in approve
+    assert "owner := owner || jsonb_build_object('owner_props', clean_props);" in approve
+    assert "owner_props" not in body.split("record_ :=", 1)[1].replace("owner || jsonb", "")  # nowhere else is it written
+
+
+def test_0008_music_is_one_of_three_arms_and_original_is_refused_for_a_recreate():
+    body = _dropin_function("decide_pick")
+    assert "clean_music not in ('in_app', 'original', 'ai_beat')" in body and "owner_music must be in_app, original or ai_beat" in body
+    assert "nullif(btrim(decide_pick.owner_music), '')" in body
+    # a Recreate has no original audio: refused whether the mode is given now or was stored earlier, before anything is written
+    refusal = "if clean_music = 'original' and coalesce(clean_mode, f.proposal ->> 'owner_mode') = 'recreate' then"
+    assert refusal in body and "owner_music original needs the dropin mode" in body
+    assert body.index(refusal) < body.index("update studio.favorites fa")
+    approve = body.split("if decide_pick.decision = 'approve' then", 1)[1].split("record_ :=", 1)[0]
+    assert "if clean_music is not null then" in approve and "jsonb_build_object('owner_music', clean_music)" in approve
+    from studio.models import MUSIC_ARMS
+
+    assert set(MUSIC_ARMS) == {"in_app", "original", "ai_beat"}  # the same three the Python side knows
+
+
+def test_0008_both_hands_the_sibling_the_same_props_and_music():
+    body = _dropin_function("decide_pick")
+    # `owner` carries every instruction of the call; the sibling is updated or inserted with it, or copies the proposal
+    assert body.count("|| owner ||") == 2  # the pick itself and an existing sibling
+    assert "f.proposal, f.scores" in body  # a new sibling copies the pick's proposal, which already holds `owner`
+
+
+def test_0008_attach_clip_stores_the_path_of_the_owners_upload_in_the_proposal():
+    body = _dropin_function("attach_clip")
+    assert "attach_clip(pick_id uuid, storage_path text)" in body and "returns jsonb" in body
+    assert "security invoker" in body and "set search_path = ''" in body and "security definer" not in body
+    # the path must be exactly what the browser writes for THIS pick, so nothing else of the bucket can be linked
+    assert "clean !~ ('^owner/' || attach_clip.pick_id::text || '/[^/[:space:]]+$')" in body
+    assert "storage_path must be owner/<pick id>/<file>" in body
+    assert "unknown pick" in body and "no_data_found" in body and "for update" in body
+    assert "('queued', 'made')" in body and "too late to attach a clip" in body
+    assert "proposal = fa.proposal || jsonb_build_object('owner_clip_path', clean)" in body
+    assert "source_id = case when fa.proposal ->> 'owner_clip_path' is distinct from clean then null else fa.source_id end" in body
+    assert "return to_jsonb(f);" in body
+    assert "revoke all on function studio.attach_clip(uuid, text) from public;" in DROPIN_SQL
+    assert "grant execute on function studio.attach_clip(uuid, text) to authenticated;" in DROPIN_SQL
+
+
+def test_0008_the_owner_may_insert_and_read_only_under_sources_owner():
+    for name, action, clause in (
+        ("odd_eyes_owner_uploads_sources", "for insert", "with check"),
+        ("odd_eyes_owner_reads_sources", "for select", "using"),
+    ):
+        m = re.search(rf"create policy {name} on storage\.objects {action} to authenticated\s+{clause} \((.*?)\);", DROPIN_SQL, re.S)
+        assert m, name
+        rule = m.group(1)
+        assert "bucket_id = 'sources'" in rule and "name like 'owner/%'" in rule
+        assert "(select auth.jwt() ->> 'email') = 'o.schwend@gmail.com'" in rule  # the owner rule of 0004's clips policy
+        assert f"policyname = '{name}'" in DROPIN_SQL  # idempotent: created only when missing
+    assert "to_regclass('storage.objects') is not null" in DROPIN_SQL
+    assert not re.search(r"create policy [^;]*?\bfor (update|delete|all)\b", DROPIN_CODE)  # no rewrite or removal of objects
+    assert not re.search(r"\banon\b", DROPIN_CODE)
+    # the bucket rule it mirrors
+    assert "(select auth.jwt() ->> 'email') = 'o.schwend@gmail.com'" in TERMINAL_SQL
+
+
+def test_0008_picks_views_keep_every_column_and_append_the_card():
+    cols = lambda text: re.findall(r"\bas (\w+),?\s*$", text, re.M)  # noqa: E731
+    appended = [
+        "owner_props", "owner_music", "owner_clip_path", "tier", "theme", "posted_at", "gallery", "thumbnail_url", "preview_url",
+    ]
+    for view in ("v_picks", "v_pick_history"):
+        new = re.search(rf"create or replace view studio\.{view} .*?from studio\.favorites f", DROPIN_SQL, re.S).group(0)
+        old = re.search(rf"create or replace view studio\.{view} .*?from studio\.favorites f", CHAR_SQL, re.S).group(0)
+        assert "with (security_invoker = true)" in new
+        assert cols(new)[: len(cols(old))] == cols(old), f"{view}: create or replace view may only append columns"
+        assert cols(new)[len(cols(old)) :] == appended
+        for key in ("owner_music", "owner_clip_path", "tier", "theme", "thumbnail_url", "preview_url", "posted_at"):
+            assert f"f.proposal ->> '{key}' as {key}" in new
+        assert "f.proposal -> 'owner_props' as owner_props" in new  # a JSON array, as the terminal wants it
+        assert "'higgsfield_library'" in new and "preset_id" in new and "as gallery" in new
+        assert f"grant select on studio.{view} to authenticated;" in DROPIN_SQL
+    # the where clauses and joins of 0007 are unchanged
+    assert "where f.status = 'new'" in DROPIN_SQL and "where f.status <> 'new'" in DROPIN_SQL
+
+
+def test_0008_stays_inside_schema_studio_apart_from_its_storage_policies_and_grants_nothing_to_anon():
+    assert not re.search(r"\banon\b", DROPIN_CODE)
+    assert set(re.findall(r"\b(?:public|auth|storage|extensions)\.[a-z_]+", DROPIN_CODE)) == {"auth.jwt", "storage.objects"}
+    for stmt in re.findall(r"^(?:create table|alter table|create index \w+ on)\s+(\S+)", DROPIN_CODE, re.M):
+        assert stmt.startswith("studio."), stmt
+    assert not re.search(r"\b(truncate|delete|update studio\.(?!favorites))\b", DROPIN_CODE, re.I)
+    assert not re.search(r"\balter\s+column\b|\brename\b", DROPIN_CODE, re.I)

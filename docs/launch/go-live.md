@@ -32,7 +32,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
   - `security add-generic-password -s cs-supabase-service-key -a "$USER" -w`: Settings > API > service_role key.
   - (`cs-postiz-api-key` was stored in step 3.)
 - [ ] Now run `bin/studio seed` (step 3's last action) and `bin/studio seed status`.
-- Turns ✅: `keychain: cs-database-url`, `keychain: cs-supabase-url`, `keychain: cs-supabase-service-key`, `database: reachable`, `database: schema studio, migrations 0001-0007` (if ❌ its fix names the migration file to apply).
+- Turns ✅: `keychain: cs-database-url`, `keychain: cs-supabase-url`, `keychain: cs-supabase-service-key`, `database: reachable`, `database: schema studio, migrations 0001-0008` (if ❌ its fix names the migration file to apply; 0008 is the Drop-in first migration, apply it before the next daily run).
 
 ## 5. Supabase dashboard
 - [ ] Project Settings > Data API (older UI: Settings > API) > **Exposed schemas**: add `studio`, Save.
