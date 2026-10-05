@@ -17,7 +17,7 @@ Session 2026-10-04 (evening). Built on `docs/research/2026-10-04-niche-playbook.
 
 ## 2. Content mix per channel
 
-**Viral mode (owner: "hybrid but more drop-in"):** target Drop-in ~70% TikTok / ~40% Instagram, Recreate the rest. **Reality check for weeks 1–2:** Drop-in needs a clean, watermark-free source with no other identifiable people (guardrails, spec §4.4b). Many viral pet/dance clips fail that (TikTok downloads carry a watermark; "Single Ladies" and "Be OK" have real people in frame). So weeks 1–2 are Recreate-heavy by necessity; the share rises as the inbox and library supply clean sources. The daily run reports why each Drop-in candidate was rejected so the owner sees the trade-off.
+**Viral mode (owner 2026-10-05: "Drop-in is the default for every video"):** every video is a Drop-in when a usable clip exists (a Higgsfield Genjutsu gallery clip, or a file the owner attaches in the terminal), else an automatic Recreate. Shares are 1.00 per account (no cap; the Instagram guard still cuts an account to 0.20 on a reach drop). Guardrails (spec §4.4b amendment): no watermark or other creator's handle, no burned-in overlay, no children, the real star always replaced; background people and famous clips are fine. The daily run files 2-4 gallery clips per character as backup picks, and the terminal lists real viral clips first, ranked by score, the gallery last.
 
 **Format portfolio (weekly, per channel):** 60% proven · 30% challenger · 10% wild-card (playbook §5.3). In weeks 1–2 everything is a challenger — the point is to learn.
 
@@ -89,7 +89,7 @@ Mode key: **R** = Recreate (our scene, viral moves via synthetic driver) · **D*
 **Weeks 3–4 (13–31 Oct, 5/week):** Halloween — Biscuit "going as myself this year" (hot-dog bun), Reginald "the quiff could not be hidden" (sheet ghost). "You pick the prop" and "Until the Duke notices: Day N" series begin.
 
 ## 6. What it costs
-Weeks 1–2: 12 clips ≈ 12 × ~145 credits ≈ **1,750 credits** (+ ~5 % stills). From week 3 (10 clips/week): ≈ **6,000 credits/month** (~$300 at Plus rates) — top-up or a bigger plan before week 3. vidIQ: daily scan (5) + ~1 deep-dive watch (10) per week ≈ 190/month → exceeds the 150 plan; drop to scans 3×/week (playbook §4.7) or upgrade vidIQ.
+Weeks 1–2: 12 clips ≈ 12 × ~91 credits (a Drop-in of 8 s, `ceil(8 × 11) + 3`; a Recreate is 160) ≈ **1,100–1,900 credits** (+ ~5 % stills). From week 3 (10 clips/week): ≈ **6,000 credits/month** (~$300 at Plus rates) — top-up or a bigger plan before week 3. vidIQ: daily scan (5) + ~1 deep-dive watch (10) per week ≈ 190/month → exceeds the 150 plan; drop to scans 3×/week (playbook §4.7) or upgrade vidIQ.
 
 ## 7. Before launch (blocking)
 1. Higgsfield credits (≈ 1,800 for weeks 1–2).
