@@ -212,6 +212,14 @@ export class DemoBackend implements Backend {
     return c.mode === 'recreate' ? connected : connected.filter((a) => this.dropinRatio(a.id, c.id) < a.dropin_share);
   }
 
+  /** queue_block_reason (migration 0005). */
+  private blockReason(c: Clip): string | null {
+    if (!c.master_path) return 'no master file yet';
+    if (!this.connectedFor(c.character_slug).length) return `no connected account for ${c.character_slug}`;
+    if (!this.targetsFor(c).length) return `no account of ${c.character_slug} may take this ${c.mode} clip`;
+    return null;
+  }
+
   private approvedPosts(accountId: string) {
     return this.posts.filter((p) => p.account_id === accountId).length;
   }
@@ -274,6 +282,7 @@ export class DemoBackend implements Backend {
           source_credit: c.source?.credit ?? null, source_trend: c.source?.trend ?? null,
           targets: this.targetsFor(c).map((a) => ({ account_id: a.id, platform: a.platform, handle: a.handle, mode: a.mode })),
           next_slot: upcomingSlot(c.character_slug, now), pick_id: fav?.id ?? null, pick_url: fav?.url ?? null,
+          blocked_reason: this.blockReason(c),
         };
       });
 
@@ -368,12 +377,12 @@ export class DemoBackend implements Backend {
     if (c.state !== 'awaiting_approval' && c.state !== 'approved') {
       throw new DemoError(`clip ${id} is ${c.state}: only a clip awaiting approval can be approved`);
     }
-    if (!this.connectedFor(c.character_slug).length) throw new DemoError(`no connected account for ${c.character_slug}`);
+    const blocked = this.blockReason(c);
+    if (blocked) throw new DemoError(`cannot approve clip ${id}: ${blocked}`);
     const targets = this.targetsFor(c);
-    if (!targets.length) throw new DemoError(`no account of ${c.character_slug} may take this ${c.mode} clip`);
     const at = edits.scheduleAt ?? upcomingSlot(c.character_slug, this.now());
-    if (edits.caption != null) c.caption = edits.caption;
-    if (edits.hook != null) c.hook = edits.hook;
+    if (edits.caption?.trim()) c.caption = edits.caption.trim(); // blank keeps what is there
+    if (edits.hook?.trim()) c.hook = edits.hook.trim();
     for (const a of targets) {
       if (!this.posts.some((p) => p.clip_id === c.id && p.account_id === a.id)) {
         this.posts.push({

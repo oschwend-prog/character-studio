@@ -5,12 +5,14 @@ import { useMemo } from 'react';
 import { AutopilotSwitch, Flap, Livery, PlatformCode, Section, Skeleton, Spinner, characterName } from '../components/ui';
 import { clipCode, formatCountdown, formatCredits, londonDate, platformName } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
+import { useApproveAll } from '../lib/actions';
 import { boardRows, selectApprovable, spendState, type BoardRow } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import type { Channel } from '../lib/types';
 
 export function Today() {
-  const { data, backend, run, busy } = useStudio();
+  const { data, busy } = useStudio();
+  const approveAllClips = useApproveAll();
   const now = useNow(15_000);
   const rows = useMemo(() => (data ? boardRows(data.channels, data.queue, now) : []), [data, now]);
 
@@ -27,22 +29,7 @@ export function Today() {
   const together = next ? rows.filter((r) => r.at === next.at) : [];
   const inFlight = new Set([...busy].filter((k) => k.startsWith('clip-')).map((k) => k.slice(5)));
   const approvable = selectApprovable(data.queue, inFlight);
-  const approveAll = () =>
-    run(
-      'approve-all',
-      async () => {
-        const failed: string[] = [];
-        for (const id of approvable.ids) {
-          try {
-            await backend.approveClip(id);
-          } catch (e) {
-            failed.push(e instanceof Error ? e.message : String(e));
-          }
-        }
-        if (failed.length) throw new Error(`${approvable.ids.length - failed.length} approved, ${failed.length} refused: ${failed[0]}`);
-      },
-      `${approvable.ids.length} approved: each posts at its next slot`,
-    );
+  const approveAll = () => approveAllClips(approvable.ids);
 
   return (
     <div className="page">
@@ -81,7 +68,7 @@ export function Today() {
                 <span>
                   {approvable.skipped.length
                     ? `${approvable.skipped.length} can't go yet: ${approvable.skipped[0].reason}`
-                    : 'QA passed · each posts at its next slot'}
+                    : 'QA passed · next slot; a 3rd for one character that day waits a slot'}
                 </span>
               </div>
               <div className="go">
@@ -151,16 +138,26 @@ function Board({ rows }: { rows: BoardRow[] }) {
             </span>
             <span role="cell" className="sub">
               {r.clipId && <span className="code">{clipCode(r.clipId, r.characterSlug)}</span>}
-              <span className="hook">
-                {r.hook ?? (r.status === 'NEXT' ? `${r.day} ${r.time} · ${r.handle ?? 'no handle yet'}` : r.handle ?? 'no handle yet')}
-              </span>
+              {target ? (
+                <a
+                  className="hook row-link"
+                  href={target}
+                  aria-label={`${r.status === 'NEEDS YOU' ? 'Review' : 'Open'} ${clipCode(r.clipId!, r.characterSlug)}: ${r.hook ?? ''}`}
+                >
+                  {r.hook ?? r.handle ?? 'open'}
+                </a>
+              ) : (
+                <span className="hook">
+                  {r.hook ?? (r.status === 'NEXT' ? `${r.day} ${r.time} · ${r.handle ?? 'no handle yet'}` : r.handle ?? 'no handle yet')}
+                </span>
+              )}
             </span>
           </>
         );
         return target ? (
-          <a key={r.accountId} role="row" className="board-row tappable" href={target}>
+          <div key={r.accountId} role="row" className="board-row tappable">
             {cells}
-          </a>
+          </div>
         ) : (
           <div key={r.accountId} role="row" className={`board-row${r.status === 'NEXT' || r.status === 'NOT LINKED' ? ' dim' : ''}`}>
             {cells}
@@ -261,6 +258,7 @@ function AutopilotBlock({ channels }: { channels: Channel[] }) {
                   key={c.account_id}
                   compact
                   channel={c}
+                  allConnectedAuto={list.filter((x) => x.connected).every((x) => x.mode === 'auto')}
                   busy={busy.has(`mode-${c.account_id}`)}
                   onToggle={(mode) =>
                     run(

@@ -62,7 +62,7 @@ export function Picks() {
 }
 
 function PasteBox() {
-  const { backend, run, busy } = useStudio();
+  const { backend, run, busy, toast } = useStudio();
   const [url, setUrl] = useState('');
   const [slug, setSlug] = useState<string>('biscuit');
   const [note, setNote] = useState('');
@@ -78,14 +78,14 @@ function PasteBox() {
       return;
     }
     setError(null);
-    const ok = await run(
-      'paste',
-      async () => {
-        const r = await backend.addOwnerLink(canonical, slug, note.trim() || null);
-        if (r.duplicate) throw new Error('Already in the list: approved it for you if it was waiting or skipped.');
-      },
-      `Added for ${characterName(slug)}: the next daily run makes it`,
-    );
+    const ok = await run('paste', async () => {
+      const r = await backend.addOwnerLink(canonical, slug, note.trim() || null);
+      toast(
+        r.duplicate
+          ? 'Already in your picks: approved for you if it was waiting or skipped'
+          : `Added for ${characterName(slug)}: the next daily run makes it`,
+      );
+    });
     if (ok) {
       setUrl('');
       setNote('');

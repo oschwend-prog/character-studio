@@ -16,7 +16,7 @@
 
   --ink: #ede8de;
   --ink-2: #b4afa5;
-  --ink-3: #8d8980;
+  --ink-3: #99958c;
 
   --ice: #8fd3ff;
   --ice-track: #233a48;
@@ -195,7 +195,11 @@ a { color: var(--ice); text-underline-offset: 3px; text-decoration-thickness: 1p
 .board-row .sub { grid-column: 2 / -1; display: flex; gap: 8px; align-items: baseline; min-width: 0; }
 .board-row .sub .hook { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-size: 13px; }
 .board-row .sub .code { flex: none; font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
-.board-row.tappable { cursor: pointer; }
+.board-row.tappable { cursor: pointer; position: relative; }
+.row-link { color: inherit; text-decoration: none; }
+.row-link::after { content: ''; position: absolute; inset: 0; }
+.row-link:focus-visible { outline: none; }
+.board-row.tappable:focus-within { outline: 2px solid var(--ice); outline-offset: 2px; border-radius: 2px; }
 .board-row.tappable:hover { background: color-mix(in srgb, var(--panel) 60%, transparent); }
 .board-row.dim .flap { opacity: 0.55; }
 

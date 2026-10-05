@@ -15,17 +15,27 @@ export interface AutopilotState {
   reason: string;
 }
 
-/** Whether an account's autopilot is on, locked, and what the switch may do. Switching OFF is always allowed. */
-export function autopilotState(a: { mode: string; approved_posts: number | null | undefined }): AutopilotState {
+/**
+ * Whether an account's autopilot is on, locked, and what the switch may do. Switching OFF is always
+ * allowed. The daily run only skips the approval queue when EVERY connected account of the character is
+ * on autopilot, so the copy says so when a sibling channel is still on approval (`ctx`).
+ */
+export function autopilotState(
+  a: { mode: string; approved_posts: number | null | undefined },
+  ctx: { characterName?: string; allConnectedAuto?: boolean } = {},
+): AutopilotState {
   const approved = Math.max(0, a.approved_posts ?? 0);
   const remaining = Math.max(0, AUTOPILOT_MIN_APPROVED - approved);
   const locked = remaining > 0;
   const on = a.mode === 'auto';
-  const reason = locked
-    ? `Unlocks after ${AUTOPILOT_MIN_APPROVED} approved posts · ${approved} of ${AUTOPILOT_MIN_APPROVED} so far`
-    : on
-      ? 'Clips that pass QA post at the next slot without asking'
-      : 'Unlocked: clips that pass QA can post without asking';
+  const who = ctx.characterName ?? 'this character';
+  const theirs = ctx.characterName ? `${ctx.characterName} clips` : 'clips';
+  let reason: string;
+  if (locked) reason = `Unlocks after ${AUTOPILOT_MIN_APPROVED} approved posts · ${approved} of ${AUTOPILOT_MIN_APPROVED} so far`;
+  else if (on && ctx.allConnectedAuto === false)
+    reason = `On, but ${theirs} still wait for you until every connected ${who} channel is on autopilot`;
+  else if (on) reason = `On: ${theirs} that pass QA post at the next slot without asking`;
+  else reason = `Unlocked. Posting is automatic only when every connected ${who} channel is on autopilot`;
   return { on, locked, remaining, canToggle: on || !locked, reason };
 }
 
@@ -34,6 +44,8 @@ export interface Approvable {
   state: string;
   master_path: string | null;
   targets: ReadonlyArray<unknown> | null;
+  /** The database's own answer (v_queue.blocked_reason, migration 0005): NULL when it can be approved. */
+  blocked_reason?: string | null;
 }
 
 /**
@@ -50,11 +62,63 @@ export function selectApprovable(
   const skipped: { id: string; reason: string }[] = [];
   for (const c of queue) {
     if (c.state !== 'awaiting_approval' || inFlight.has(c.id)) continue;
-    if (!c.master_path) skipped.push({ id: c.id, reason: 'no master file yet' });
+    if (c.blocked_reason) skipped.push({ id: c.id, reason: c.blocked_reason });
+    else if (!c.master_path) skipped.push({ id: c.id, reason: 'no master file yet' });
     else if (!c.targets || c.targets.length === 0) skipped.push({ id: c.id, reason: 'no connected account can take it' });
     else ids.push(c.id);
   }
   return { ids, skipped };
+}
+
+/**
+ * Approve clips one by one (the RPC is per clip), never stopping at a refusal: one bad clip must not
+ * hold back the others. Returns the count and the refusals for one toast.
+ */
+export async function approveAll(
+  backend: { approveClip(id: string): Promise<unknown> },
+  ids: ReadonlyArray<string>,
+): Promise<{ approved: number; refused: string[]; summary: string }> {
+  let approved = 0;
+  const refused: string[] = [];
+  for (const id of ids) {
+    try {
+      await backend.approveClip(id);
+      approved += 1;
+    } catch (e) {
+      refused.push(e instanceof Error ? e.message : String(e));
+    }
+  }
+  const summary = refused.length ? `${approved} approved, ${refused.length} refused: ${refused[0]}` : `${approved} approved`;
+  return { approved, refused, summary };
+}
+
+/**
+ * Where the queue pager stands after a reload: on the clip being viewed if it is still waiting,
+ * else on whatever took its place (same position, clamped), else the first clip.
+ */
+export function queuePosition(ids: ReadonlyArray<string>, currentId: string | null, lastIndex: number): number {
+  if (!ids.length) return 0;
+  const at = currentId == null ? -1 : ids.indexOf(currentId);
+  if (at >= 0) return at;
+  return currentId == null ? 0 : Math.max(0, Math.min(lastIndex, ids.length - 1));
+}
+
+/**
+ * The deep link (#/queue/<id>) is applied once per link: a reload of the same queue must never pull the
+ * pager back to it after the owner moved on. Returns the id to jump to, or null.
+ */
+export function focusToApply(focus: string | null, lastApplied: string | null, ids: ReadonlyArray<string>): string | null {
+  return focus && focus !== lastApplied && ids.includes(focus) ? focus : null;
+}
+
+/** What one approval does with the slot: the publisher posts at most 2 per channel per London day. */
+export const SLOT_RULE = 'Each posts at its next slot; a 3rd clip for the same character that day waits for the slot after';
+
+/** A caption or hook edit for approve_clip: the trimmed text when it changed, else null (keep). Never ''. */
+export function captionEdit(value: string, original: string | null): string | null {
+  const v = value.trim();
+  if (!v || v === (original ?? '').trim()) return null;
+  return v;
 }
 
 /** Viral Picks order (studio fav list): total score high to low, unscored last, older first on ties. */

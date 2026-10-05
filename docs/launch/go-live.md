@@ -36,7 +36,8 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 ## 5. Supabase dashboard
 - [ ] Project Settings > Data API (older UI: Settings > API) > **Exposed schemas**: add `studio`, Save.
 - [ ] Authentication > URL Configuration > Redirect URLs: add the terminal URL (you get it in step 8, come back for this).
-- [ ] After your first magic-link login to the terminal (step 8): Authentication > Sign In / Providers, turn **off** "Allow new users to sign up".
+- [ ] Authentication > Emails > **Magic Link** template: make sure the body includes `{{ .Token }}` (the 6-digit code) next to the link. The installed iPhone app signs in with the code; a link opened from Mail lands in Safari, which cannot finish an app sign-in.
+- [ ] After your first sign-in to the terminal (step 8: the link in a browser, or the code in the installed app): Authentication > Sign In / Providers, turn **off** "Allow new users to sign up".
 - Turns ✅: `data api: schema studio exposed`.
 
 ## 6. GitHub secrets and workflows

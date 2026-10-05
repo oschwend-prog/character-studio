@@ -38,7 +38,11 @@ export function Channels() {
               .filter((c) => c.character_slug === slug)
               .sort((a, b) => a.platform.localeCompare(b.platform))
               .map((c) => (
-                <ChannelPanel key={c.account_id} channel={c} />
+                <ChannelPanel
+                  key={c.account_id}
+                  channel={c}
+                  allConnectedAuto={data.channels.filter((x) => x.character_slug === slug && x.connected).every((x) => x.mode === 'auto')}
+                />
               ))}
           </div>
         </Section>
@@ -47,7 +51,7 @@ export function Channels() {
   );
 }
 
-function ChannelPanel({ channel: c }: { channel: Channel }) {
+function ChannelPanel({ channel: c, allConnectedAuto }: { channel: Channel; allConnectedAuto: boolean }) {
   const { backend, run, busy } = useStudio();
   const key = `mode-${c.account_id}`;
   const ratioPct = Math.round((c.dropin_ratio ?? 0) * 100);
@@ -112,6 +116,7 @@ function ChannelPanel({ channel: c }: { channel: Channel }) {
       <div style={{ borderTop: '1px solid var(--rule)' }}>
         <AutopilotSwitch
           channel={c}
+          allConnectedAuto={allConnectedAuto}
           busy={busy.has(key)}
           onToggle={(mode) =>
             run(key, () => backend.setAccountMode(c.account_id, mode), mode === 'auto' ? `Autopilot on for ${c.handle}` : `Autopilot off for ${c.handle}`)

@@ -119,14 +119,16 @@ export function PlatformCode({ platform }: { platform: string }) {
 
 /** Posting autopilot for one channel, with the lock rule spelled out. */
 export function AutopilotSwitch({
-  channel, busy, onToggle, compact,
+  channel, busy, onToggle, compact, allConnectedAuto,
 }: {
-  channel: { account_id: string; handle: string | null; platform: string; mode: string; approved_posts: number | null };
+  channel: { account_id: string; character_slug: string; handle: string | null; platform: string; mode: string; approved_posts: number | null };
   busy: boolean;
   onToggle(next: 'auto' | 'approval'): void;
   compact?: boolean;
+  /** Every connected account of this character is on autopilot (only then does posting skip the queue). */
+  allConnectedAuto?: boolean;
 }) {
-  const s = autopilotState(channel);
+  const s = autopilotState(channel, { characterName: characterName(channel.character_slug), allConnectedAuto });
   const id = `ap-${channel.account_id}`;
   const approved = Math.min(channel.approved_posts ?? 0, 6);
   return (

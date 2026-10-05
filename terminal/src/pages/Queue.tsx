@@ -1,29 +1,47 @@
 // Queue: one finished clip at a time, thumb-reachable. Watch it, edit hook and caption, then Approve
 // (next slot), Schedule (a time you pick), Reject (with a reason) or Regenerate (a note for tomorrow).
 import { CalendarClock, ChevronLeft, ChevronRight, ExternalLink, RotateCcw, X } from 'lucide-react';
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { Flap, Livery, Skeleton, Spinner, characterName } from '../components/ui';
 import { clipCode, formatCredits, isoToLondonWall, londonStamp, londonWallToIso, platformName } from '../lib/format';
 import { href } from '../lib/hooks';
-import { selectApprovable } from '../lib/rules';
+import { useApproveAll } from '../lib/actions';
+import { SLOT_RULE, captionEdit, focusToApply, queuePosition, selectApprovable } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import type { QueueClip } from '../lib/types';
 
 const REJECT_REASONS = ['Eyes swapped', 'Outfit or identity off', 'Hands or paws melt', 'Source leaked through', 'Hook is weak'];
 
 export function Queue({ focus }: { focus: string | null }) {
-  const { data, backend, run, busy } = useStudio();
-  const [index, setIndex] = useState(0);
+  const { data, backend, busy } = useStudio();
+  const approveAll = useApproveAll();
   const queue = data?.queue ?? [];
-
+  const ids = queue.map((c) => c.id);
+  // The clip on screen is tracked by id, so a reload (Realtime, focus, the minute poll) never moves the
+  // pager or unmounts a half-edited caption. The deep link is applied once per link (focusToApply).
+  const [currentId, setCurrentId] = useState<string | null>(null);
+  const appliedFocus = useRef<string | null>(null);
+  const lastIndex = useRef(0);
+  const idKey = ids.join('|');
   useEffect(() => {
-    if (!focus) return;
-    const i = queue.findIndex((c) => c.id === focus);
-    if (i >= 0) setIndex(i);
-  }, [focus, queue]);
+    const jump = focusToApply(focus, appliedFocus.current, idKey ? idKey.split('|') : []);
+    if (jump) {
+      appliedFocus.current = jump;
+      setCurrentId(jump);
+    }
+  }, [focus, idKey]);
+  const index = queuePosition(ids, currentId, lastIndex.current);
+  const clip = queue[index];
   useEffect(() => {
-    if (index > queue.length - 1) setIndex(Math.max(0, queue.length - 1));
-  }, [index, queue.length]);
+    lastIndex.current = index;
+    if (clip && clip.id !== currentId) setCurrentId(clip.id); // latch onto the clip that took the place
+  }, [index, clip, currentId]);
+  const go = (i: number) => {
+    const next = queue[i];
+    if (!next) return;
+    setCurrentId(next.id);
+    window.history.replaceState(null, '', href('queue', next.id)); // a reload reopens this clip
+  };
 
   if (!data) {
     return (
@@ -35,7 +53,6 @@ export function Queue({ focus }: { focus: string | null }) {
 
   const inFlight = new Set([...busy].filter((k) => k.startsWith('clip-')).map((k) => k.slice(5)));
   const approvable = selectApprovable(queue, inFlight);
-  const clip = queue[index];
 
   return (
     <div className="page stack">
@@ -49,15 +66,7 @@ export function Queue({ focus }: { focus: string | null }) {
             className="btn line"
             disabled={!approvable.ids.length || busy.has('approve-all')}
             aria-busy={busy.has('approve-all')}
-            onClick={() =>
-              run(
-                'approve-all',
-                async () => {
-                  for (const id of approvable.ids) await backend.approveClip(id);
-                },
-                `${approvable.ids.length} approved: each posts at its next slot`,
-              )
-            }
+            onClick={() => approveAll(approvable.ids)}
           >
             {busy.has('approve-all') && <Spinner />} Approve all {approvable.ids.length}
           </button>
@@ -77,13 +86,13 @@ export function Queue({ focus }: { focus: string | null }) {
       ) : (
         <>
           <div className="pager">
-            <button type="button" className="btn ghost" onClick={() => setIndex((i) => Math.max(0, i - 1))} disabled={index === 0} aria-label="Previous clip">
+            <button type="button" className="btn ghost" onClick={() => go(index - 1)} disabled={index === 0} aria-label="Previous clip">
               <ChevronLeft aria-hidden="true" /> Prev
             </button>
             <span className="pos" aria-live="polite">
               {clipCode(clip.id, clip.character_slug)} · {index + 1} of {queue.length}
             </span>
-            <button type="button" className="btn ghost" onClick={() => setIndex((i) => Math.min(queue.length - 1, i + 1))} disabled={index >= queue.length - 1} aria-label="Next clip">
+            <button type="button" className="btn ghost" onClick={() => go(index + 1)} disabled={index >= queue.length - 1} aria-label="Next clip">
               Next <ChevronRight aria-hidden="true" />
             </button>
           </div>
@@ -146,16 +155,15 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
   const [reason, setReason] = useState('');
   const key = `clip-${clip.id}`;
   const working = busy.has(key);
-  const edits = {
-    hook: hook !== (clip.hook ?? '') ? hook : null,
-    caption: caption !== (clip.caption ?? '') ? caption : null,
-  };
+  // Never '' over the wire: a blank field means "keep what is there" (approve_clip does the same).
+  const edits = { hook: captionEdit(hook, clip.hook), caption: captionEdit(caption, clip.caption) };
   const targets = clip.targets.map((t) => `${platformName(t.platform)} ${t.handle ?? ''}`.trim()).join(' · ');
   const noTarget = clip.targets.length === 0;
+  const blocked = clip.blocked_reason ?? (!clip.master_path ? 'no master file yet' : noTarget ? 'no connected account can take it' : null);
   const qaProblems = clip.qa?.problems?.length ? clip.qa.problems.join('; ') : null;
 
   const approve = () =>
-    run(key, () => backend.approveClip(clip.id, edits), `Approved: posts ${clip.next_slot ? londonStamp(clip.next_slot) : 'at the next slot'}`);
+    run(key, () => backend.approveClip(clip.id, edits), `Approved for ${clip.next_slot ? londonStamp(clip.next_slot) : 'the next slot'}. ${SLOT_RULE}.`);
   const schedule = (e: FormEvent) => {
     e.preventDefault();
     let at: string;
@@ -220,12 +228,14 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
         <div className="field">
           <label className="label" htmlFor={`hook-${clip.id}`}>Hook on screen</label>
           <input id={`hook-${clip.id}`} className="input" value={hook} onChange={(e) => setHook(e.target.value)} />
-          <span className="hint">The hook is burnt into the master; an edit here is stored for the record and the caption.</span>
+          <span className="hint">
+            {hook.trim() ? 'The hook is burnt into the master; an edit here is stored for the record and the caption.' : 'Empty: the original hook is kept.'}
+          </span>
         </div>
         <div className="field">
           <label className="label" htmlFor={`cap-${clip.id}`}>Caption</label>
           <textarea id={`cap-${clip.id}`} className="textarea" value={caption} onChange={(e) => setCaption(e.target.value)} />
-          <span className="hint">The AI-generated label is added when it posts.</span>
+          <span className="hint">{caption.trim() ? 'The AI-generated label is added when it posts.' : 'Empty: the original caption is kept.'}</span>
         </div>
 
         {mode === 'schedule' && (
@@ -235,7 +245,7 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
             <span className="hint">At most 2 posts per channel per day: a third waits for the next slot.</span>
             <div className="row">
               <button type="button" className="btn ghost" onClick={() => setMode(null)}>Cancel</button>
-              <button type="submit" className="btn primary" disabled={working || noTarget} aria-busy={working}>
+              <button type="submit" className="btn primary" disabled={working || Boolean(blocked)} aria-busy={working}>
                 {working && <Spinner />} Approve for this time
               </button>
             </div>
@@ -270,11 +280,16 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
 
         {mode === null && (
           <div className="dock">
+          {blocked && (
+            <p className="error-text" role="status" style={{ margin: '0 0 8px' }}>
+              Can't approve yet: {blocked}.
+            </p>
+          )}
           <div className="actions">
-            <button type="button" className="btn primary wide" onClick={approve} disabled={working || noTarget || !clip.master_path} aria-busy={working}>
+            <button type="button" className="btn primary wide" onClick={approve} disabled={working || Boolean(blocked)} aria-busy={working}>
               {working && <Spinner />} Approve · next slot
             </button>
-            <button type="button" className="btn line" onClick={() => setMode('schedule')} disabled={working || noTarget}>
+            <button type="button" className="btn line" onClick={() => setMode('schedule')} disabled={working || Boolean(blocked)}>
               <CalendarClock aria-hidden="true" /> Schedule
             </button>
             <button type="button" className="btn line" onClick={() => { setReason(''); setMode('regenerate'); }} disabled={working} aria-label="Regenerate: remake it in the next daily run">

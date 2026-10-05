@@ -1,6 +1,6 @@
 // ODD EYES terminal service worker: installable shell, offline fallback, never caches Supabase.
 // Hashed build assets are cache-first; the page itself is network-first so a deploy shows at once.
-const CACHE = 'odd-eyes-v1';
+const CACHE = 'odd-eyes-v2';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './favicon.svg', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -25,8 +25,10 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE).then((c) => c.put('./index.html', copy));
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then((c) => c.put('./index.html', copy));
+          }
           return res;
         })
         .catch(() => caches.match('./index.html')),

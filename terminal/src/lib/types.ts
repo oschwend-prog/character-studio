@@ -73,6 +73,8 @@ export interface QueueClip {
   next_slot: string | null;
   pick_id: string | null;
   pick_url: string | null;
+  /** Why it cannot be approved yet (migration 0005), or null. */
+  blocked_reason: string | null;
 }
 
 export interface LibraryPost {

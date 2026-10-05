@@ -11,7 +11,7 @@ colors:
   rule-strong: "#3b4047"
   ink: "#ede8de"
   ink-2: "#b4afa5"
-  ink-3: "#8d8980"
+  ink-3: "#99958c"
   ice: "#8fd3ff"
   ice-track: "#233a48"
   amber: "#ffb040"
@@ -152,7 +152,7 @@ Restrained: a neutral board plus two brand signals taken from the ODD EYES mark 
 
 ### Neutral
 - **Board** (#0e0f11) page ground; **Panel** (#15171a) and **Panel 2** (#1b1e22) for grouped surfaces; **Tile** (#202328) / **Tile Top** (#24282d) for flap cells; **Rule** (#2b2f35) hairlines.
-- **Ink** (#ede8de) primary text, **Ink 2** (#b4afa5) secondary, **Ink 3** (#8d8980) muted (4.5:1 or better on every surface it sits on).
+- **Ink** (#ede8de) primary text, **Ink 2** (#b4afa5) secondary, **Ink 3** (#99958c) muted (4.5:1 or better on every surface it sits on).
 - Character colours are identity only: liveries use the bible colours (#a7c7e7, #0b3d2e + #c9a227); charts use the validated series steps (#5c97d4, #b08c1c), checked with the dataviz validator on the board.
 
 ### Named Rules

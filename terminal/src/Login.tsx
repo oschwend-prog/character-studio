@@ -1,15 +1,19 @@
-// Owner sign-in: a magic link to the owner's email. RLS only lets the owner's email see anything, so
-// another address signs in to an empty terminal; the page does not reveal which address that is.
+// Owner sign-in: one email carrying a magic link and a 6-digit code (the Supabase email template must
+// include {{ .Token }}). In the installed app the code is the primary route. RLS only lets the owner's
+// email see anything, so another address signs in to an empty terminal; the page does not say which.
 import { useState, type FormEvent } from 'react';
 import { Mark, Spinner } from './components/ui';
+import { isStandalone, normaliseOtpCode } from './lib/auth';
 import { supabase, hasLiveConfig } from './lib/supabase';
 
 export function Login() {
+  const standalone = isStandalone();
   const [email, setEmail] = useState('');
-  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
+  const [code, setCode] = useState('');
+  const [state, setState] = useState<'idle' | 'sending' | 'sent' | 'verifying' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
 
-  const submit = async (e: FormEvent) => {
+  const send = async (e: FormEvent) => {
     e.preventDefault();
     setState('sending');
     setError(null);
@@ -25,6 +29,25 @@ export function Login() {
     }
   };
 
+  // The 6-digit code works everywhere; in the installed app it is the only route that works, because a
+  // link from Mail opens Safari, whose storage is not the app's (the PKCE verifier stays behind).
+  const verify = async (e: FormEvent) => {
+    e.preventDefault();
+    const token = normaliseOtpCode(code);
+    if (!token) {
+      setError('Enter the 6-digit code from the email.');
+      return;
+    }
+    setState('verifying');
+    setError(null);
+    const { error } = await supabase().auth.verifyOtp({ email: email.trim(), token, type: 'email' });
+    if (error) {
+      setState('sent');
+      setError(error.message);
+    }
+  };
+
+  const sent = state === 'sent' || state === 'verifying';
   return (
     <main className="gate">
       <div className="gate-box">
@@ -40,18 +63,46 @@ export function Login() {
             This build has no Supabase settings (<code>VITE_SUPABASE_URL</code>, <code>VITE_SUPABASE_ANON_KEY</code>). Open the{' '}
             <a href="?demo=1">demo</a> instead.
           </p>
-        ) : state === 'sent' ? (
-          <div className="stack" style={{ gap: 10 }} role="status">
-            <p style={{ margin: 0 }}>Check your inbox: the sign-in link is on its way to {email}.</p>
-            <p className="small muted" style={{ margin: 0 }}>
-              Open it on this device. On the installed app, open the link in the browser once; the app picks the session up.
+        ) : sent ? (
+          <form className="stack" style={{ gap: 12 }} onSubmit={verify}>
+            <p style={{ margin: 0 }} role="status">
+              {standalone
+                ? `Enter the code we emailed to ${email}.`
+                : `Check ${email}: tap the link in the email, or enter its code here.`}
             </p>
-            <button type="button" className="btn ghost" onClick={() => setState('idle')}>
+            <div className="field">
+              <label className="label" htmlFor="otp">Code from the email</label>
+              <input
+                id="otp"
+                className="input num"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9 -]*"
+                maxLength={12}
+                value={code}
+                onChange={(e) => setCode(e.target.value)}
+                aria-invalid={error ? true : undefined}
+                aria-describedby={error ? 'login-err' : 'otp-hint'}
+                autoFocus={standalone}
+              />
+              <span className="hint" id="otp-hint">
+                {standalone ? 'The link in the email opens Safari, not this app: use the code here.' : 'The link works in this browser; the code works anywhere.'}
+              </span>
+            </div>
+            <button type="submit" className={`btn ${standalone ? 'primary' : 'line'} block`} disabled={state === 'verifying' || !code.trim()} aria-busy={state === 'verifying'}>
+              {state === 'verifying' && <Spinner />} Sign in with the code
+            </button>
+            {error && (
+              <span id="login-err" className="error-text" role="alert">
+                {error}
+              </span>
+            )}
+            <button type="button" className="btn ghost" onClick={() => { setState('idle'); setCode(''); setError(null); }}>
               Use another address
             </button>
-          </div>
+          </form>
         ) : (
-          <form className="stack" style={{ gap: 12 }} onSubmit={submit}>
+          <form className="stack" style={{ gap: 12 }} onSubmit={send}>
             <div className="field">
               <label className="label" htmlFor="email">Owner email</label>
               <input
@@ -68,7 +119,7 @@ export function Login() {
               />
             </div>
             <button type="submit" className="btn primary block" disabled={state === 'sending' || !email.trim()} aria-busy={state === 'sending'}>
-              {state === 'sending' && <Spinner />} Email me a sign-in link
+              {state === 'sending' && <Spinner />} {standalone ? 'Email me a sign-in code' : 'Email me a sign-in link'}
             </button>
             {error && (
               <span id="login-err" className="error-text" role="alert">
