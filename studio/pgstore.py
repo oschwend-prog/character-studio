@@ -214,7 +214,7 @@ class PostgresStore:
         params = [self._to_db(table, c, getattr(obj, c)) for c in cols]
         try:
             rows = self._execute(query, params)
-        except CheckViolation as e:
+        except (CheckViolation, UniqueViolation) as e:  # a bad value, or a handle another account holds
             raise ValueError(str(e)) from e
         return self._from_row(table, rows[0])
 

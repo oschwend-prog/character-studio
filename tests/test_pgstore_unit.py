@@ -390,3 +390,14 @@ def test_upsert_account_turns_a_check_violation_into_a_value_error(db, monkeypat
         PostgresStore(DSN).upsert_account(
             Account(character_slug="biscuit", platform="tiktok", handle="b", dropin_share=7)
         )
+
+
+def test_upsert_account_turns_a_taken_handle_into_a_value_error(db, monkeypatch):
+    from psycopg.errors import UniqueViolation
+
+    def boom(self, query, params=()):
+        raise UniqueViolation('duplicate key value violates unique constraint "accounts_platform_handle_key"')
+
+    monkeypatch.setattr(FakeCursor, "execute", boom)
+    with pytest.raises(ValueError, match="duplicate key"):
+        PostgresStore(DSN).upsert_account(Account(character_slug="reginald", platform="tiktok", handle="@biscuit"))
