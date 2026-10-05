@@ -380,7 +380,7 @@ def _fav(total, feasibility=None, needs=None):
         (95, 9, "multi_body", "hold"),  # hold is checked first, whatever the total
         (10, 3, "talking_lane", "hold"),  # ... even below the skip line
         (95, 9, ["x", "talking_lane"], "hold"),
-        (95, 9, "something_else", "approve"),
+        (95, 9, "something_else", "hold"),  # unreadable (add_pick refuses it): fail closed, never approve
     ],
 )
 def test_auto_decision_edges(total, feasibility, needs, expected):
@@ -743,6 +743,33 @@ def test_cli_pick_rejects_a_misspelt_needs(cli_store):
     r = run("pick", *pick_args(**{"--proposal": json.dumps({"mode": "recreate", "needs": "multibody"})}))
     assert r.exit_code == 2 and "needs" in r.output
     assert cli_store.list_favorites() == []
+
+
+# Belt and braces: a malformed `needs` that got into the database some other way (an older row, a hand
+# edit, `mark_favorite(proposal=...)`) must hold the pick, never approve it and never break `fav list`.
+
+
+@pytest.mark.parametrize("needs", [5, {"multi_body": True}, ["multi-body"], ["multi_body", 3], "multibody", ""])
+def test_a_malformed_stored_needs_holds_the_pick_instead_of_failing_open_or_raising(cli_store, needs):
+    store = cli_store
+    f = store.add_favorite(
+        Favorite(url="https://www.instagram.com/reel/Zz9/", platform="instagram", status="new",
+                 total_score=95.0, scores={"feasibility": 10.0}, proposal={"mode": "recreate", "needs": needs})
+    )  # fmt: skip
+    assert auto_decision(f) == "hold"
+    r = run("list")  # `fav list` prints every new pick with its auto_decision: it must not raise
+    assert r.exit_code == 0, r.output
+    assert [row["auto_decision"] for row in json.loads(r.stdout)] == ["hold"]
+
+
+def test_mark_favorite_validates_a_proposal_it_is_given():
+    store = make_store()
+    f = pick(store, B1)
+    with pytest.raises(ValueError, match="needs"):
+        favorites.mark_favorite(store, f.id, "approved", proposal={"mode": "recreate", "needs": 5})
+    assert store.get_favorite(f.id).proposal.get("needs") is None
+    ok = favorites.mark_favorite(store, f.id, "approved", proposal={"mode": "recreate", "needs": "multi_body"})
+    assert ok.proposal["needs"] == "multi_body"
 
 
 # ---- a pick that is not matched to a seeded character yet -----------------------------------

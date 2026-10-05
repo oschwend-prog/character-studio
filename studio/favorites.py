@@ -28,9 +28,10 @@ The standing rule (``auto_decision``, owner 2026-10-04: "approve for me"), check
 ``talking_lane``); ``approve`` when total >= 80 and feasibility >= 7; ``skip`` when total < 65;
 otherwise ``analyst`` (Claude decides and must write a reason). ``decide`` records every decision
 as ``proposal['decision'] = {decision, by, reason}``; a hold also stores ``proposal['hold_reason']``
-and leaves the status ``new`` so it is re-checked when the capability lands. ``add_pick`` refuses any
-other ``needs`` token (``validate_needs``): the rule ignores unknown ones, so a misspelling would
-otherwise approve a blocked pick.
+and leaves the status ``new`` so it is re-checked when the capability lands. ``add_pick`` and
+``mark_favorite`` refuse any other ``needs`` value (``validate_needs``: an unknown token, a dict, an int, a
+list with a bad item), and a malformed one that is stored anyway holds the pick (``_needs``) rather than
+approving it or breaking ``fav list``.
 
 CLI (``studio fav ...``) prints JSON on stdout. Exit codes: 0 ok, 2 anything the caller must fix,
 4 ``fav decide`` found the pick needs an analyst decision (JSON on stdout says so).
@@ -152,7 +153,17 @@ def _record(decision: Decision, by: DecidedBy, reason: str) -> dict[str, Any]:
     return {"decision": decision, "by": by, "reason": reason or None}
 
 
+MALFORMED_NEEDS = "unreadable"
+
+
 def _needs(proposal: dict[str, Any]) -> list[str]:
+    """The untested capabilities a pick names. A value ``validate_needs`` would refuse (an old row, a hand
+    edit) is never read as "needs nothing" and never raises: it counts as one unreadable need, so the
+    standing rule holds the pick (fail closed)."""
+    try:
+        validate_needs(proposal)
+    except ValueError:
+        return [MALFORMED_NEEDS]
     needs = proposal.get("needs")
     items = [needs] if isinstance(needs, str) else list(needs or [])
     return [n for n in items if n in HOLD_NEEDS]
@@ -470,6 +481,8 @@ def mark_favorite(store: Store, id: str, status: str, **fields: Any) -> Favorite
         raise TypeError(f"mark_favorite: unknown field(s) {unknown}; allowed: {sorted(MARKABLE_FIELDS)}")
     if fields.get("character_slug") is not None:
         _require_character(store, fields["character_slug"])
+    if fields.get("proposal") is not None:
+        validate_needs(fields["proposal"])  # the same door as add_pick: needs can never be written malformed
     if status in PRODUCTION_STATUSES:
         f = store.get_favorite(id)
         if f is None:
