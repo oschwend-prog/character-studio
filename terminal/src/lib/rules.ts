@@ -93,22 +93,22 @@ export async function approveAll(
 }
 
 /**
- * Where the queue pager stands after a reload: on the clip being viewed if it is still waiting,
- * else on whatever took its place (same position, clamped), else the first clip.
+ * Which clip the queue pager shows: the one decision, so no two effects race.
+ * 1. A deep link (#/queue/<id>) not applied yet wins once its clip is in the queue (it stays pending
+ *    while the queue loads).
+ * 2. Otherwise the clip being viewed stays, whatever reloads happen (Realtime, focus, the minute poll).
+ * 3. Otherwise (nothing chosen, or the clip left the queue) the first clip; null for an empty queue.
+ * Returns the id to show and the deep link now counted as applied.
  */
-export function queuePosition(ids: ReadonlyArray<string>, currentId: string | null, lastIndex: number): number {
-  if (!ids.length) return 0;
-  const at = currentId == null ? -1 : ids.indexOf(currentId);
-  if (at >= 0) return at;
-  return currentId == null ? 0 : Math.max(0, Math.min(lastIndex, ids.length - 1));
-}
-
-/**
- * The deep link (#/queue/<id>) is applied once per link: a reload of the same queue must never pull the
- * pager back to it after the owner moved on. Returns the id to jump to, or null.
- */
-export function focusToApply(focus: string | null, lastApplied: string | null, ids: ReadonlyArray<string>): string | null {
-  return focus && focus !== lastApplied && ids.includes(focus) ? focus : null;
+export function nextCurrentId(s: {
+  ids: ReadonlyArray<string>;
+  currentId: string | null;
+  focus: string | null;
+  appliedFocus: string | null;
+}): { id: string | null; appliedFocus: string | null } {
+  if (s.focus && s.focus !== s.appliedFocus && s.ids.includes(s.focus)) return { id: s.focus, appliedFocus: s.focus };
+  if (s.currentId && s.ids.includes(s.currentId)) return { id: s.currentId, appliedFocus: s.appliedFocus };
+  return { id: s.ids[0] ?? null, appliedFocus: s.appliedFocus };
 }
 
 /** What one approval does with the slot: the publisher posts at most 2 per channel per London day. */

@@ -6,7 +6,7 @@ import { Flap, Livery, Skeleton, Spinner, characterName } from '../components/ui
 import { clipCode, formatCredits, isoToLondonWall, londonStamp, londonWallToIso, platformName } from '../lib/format';
 import { href } from '../lib/hooks';
 import { useApproveAll } from '../lib/actions';
-import { SLOT_RULE, captionEdit, focusToApply, queuePosition, selectApprovable } from '../lib/rules';
+import { SLOT_RULE, captionEdit, nextCurrentId, selectApprovable } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import type { QueueClip } from '../lib/types';
 
@@ -17,25 +17,17 @@ export function Queue({ focus }: { focus: string | null }) {
   const approveAll = useApproveAll();
   const queue = data?.queue ?? [];
   const ids = queue.map((c) => c.id);
-  // The clip on screen is tracked by id, so a reload (Realtime, focus, the minute poll) never moves the
-  // pager or unmounts a half-edited caption. The deep link is applied once per link (focusToApply).
+  // Which clip is on screen is decided by nextCurrentId alone: computed during render (so the very first
+  // render of a deep link already shows that clip) and written back in a single effect.
   const [currentId, setCurrentId] = useState<string | null>(null);
   const appliedFocus = useRef<string | null>(null);
-  const lastIndex = useRef(0);
-  const idKey = ids.join('|');
+  const shown = nextCurrentId({ ids, currentId, focus, appliedFocus: appliedFocus.current });
   useEffect(() => {
-    const jump = focusToApply(focus, appliedFocus.current, idKey ? idKey.split('|') : []);
-    if (jump) {
-      appliedFocus.current = jump;
-      setCurrentId(jump);
-    }
-  }, [focus, idKey]);
-  const index = queuePosition(ids, currentId, lastIndex.current);
+    appliedFocus.current = shown.appliedFocus;
+    if (shown.id !== currentId) setCurrentId(shown.id);
+  }, [shown.id, shown.appliedFocus, currentId]);
+  const index = Math.max(0, shown.id ? ids.indexOf(shown.id) : 0);
   const clip = queue[index];
-  useEffect(() => {
-    lastIndex.current = index;
-    if (clip && clip.id !== currentId) setCurrentId(clip.id); // latch onto the clip that took the place
-  }, [index, clip, currentId]);
   const go = (i: number) => {
     const next = queue[i];
     if (!next) return;

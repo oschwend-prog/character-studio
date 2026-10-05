@@ -77,7 +77,6 @@ export function Login() {
                 className="input num"
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                pattern="[0-9 -]*"
                 maxLength={12}
                 value={code}
                 onChange={(e) => setCode(e.target.value)}

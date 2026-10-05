@@ -2,31 +2,30 @@
 // muted-text contrast.
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { approveAll, autopilotState, captionEdit, focusToApply, queuePosition, selectApprovable } from './rules';
+import { approveAll, autopilotState, captionEdit, nextCurrentId, selectApprovable } from './rules';
 import { isStandalone, normaliseOtpCode } from './auth';
 
-describe('queue position survives refreshes (the deep-linked clip no longer snaps back)', () => {
+describe('the queue pager: one decision for which clip is on screen', () => {
   const ids = ['a', 'b', 'c'];
-  it('keeps the clip being viewed wherever it sits after a reload', () => {
-    expect(queuePosition(ids, 'b', 0)).toBe(1);
-    expect(queuePosition(['x', 'a', 'b', 'c'], 'b', 1)).toBe(2); // a new clip arrived in front
+  it('first render with a deep link to a non-first clip shows that clip', () => {
+    expect(nextCurrentId({ ids, currentId: null, focus: 'b', appliedFocus: null })).toEqual({ id: 'b', appliedFocus: 'b' });
+    expect(nextCurrentId({ ids, currentId: null, focus: 'c', appliedFocus: null })).toEqual({ id: 'c', appliedFocus: 'c' });
   });
-  it('shows the clip that took its place when the viewed one left the queue', () => {
-    expect(queuePosition(['a', 'c'], 'b', 1)).toBe(1);
-    expect(queuePosition(['a'], 'c', 2)).toBe(0);
-    expect(queuePosition([], 'c', 2)).toBe(0);
+  it('a pending deep link waits for the queue to load, then wins', () => {
+    expect(nextCurrentId({ ids: [], currentId: null, focus: 'c', appliedFocus: null })).toEqual({ id: null, appliedFocus: null });
+    expect(nextCurrentId({ ids, currentId: 'a', focus: 'c', appliedFocus: null })).toEqual({ id: 'c', appliedFocus: 'c' });
   });
-  it('starts at the first clip with nothing chosen', () => {
-    expect(queuePosition(ids, null, 0)).toBe(0);
+  it('a refresh keeps the clip being viewed once the link was applied (no snap back)', () => {
+    expect(nextCurrentId({ ids, currentId: 'c', focus: 'b', appliedFocus: 'b' })).toEqual({ id: 'c', appliedFocus: 'b' });
+    expect(nextCurrentId({ ids: ['x', ...ids], currentId: 'c', focus: null, appliedFocus: null }).id).toBe('c');
   });
-});
-
-describe('the deep link is applied once, not on every reload', () => {
-  it('jumps to a new link, then never again for the same link', () => {
-    expect(focusToApply('b', null, ['a', 'b'])).toBe('b');
-    expect(focusToApply('b', 'b', ['a', 'b'])).toBeNull(); // a refresh after the owner pressed Next
-    expect(focusToApply('c', 'b', ['a', 'b'])).toBeNull(); // not (yet) in the queue
-    expect(focusToApply(null, null, ['a'])).toBeNull();
+  it('a removed clip falls back to the first one; nothing chosen starts at the first; empty is null', () => {
+    expect(nextCurrentId({ ids: ['a', 'c'], currentId: 'b', focus: 'b', appliedFocus: 'b' }).id).toBe('a');
+    expect(nextCurrentId({ ids, currentId: null, focus: null, appliedFocus: null }).id).toBe('a');
+    expect(nextCurrentId({ ids: [], currentId: 'b', focus: null, appliedFocus: null }).id).toBeNull();
+  });
+  it('a new deep link (a different clip) wins again', () => {
+    expect(nextCurrentId({ ids, currentId: 'c', focus: 'a', appliedFocus: 'b' })).toEqual({ id: 'a', appliedFocus: 'a' });
   });
 });
 
