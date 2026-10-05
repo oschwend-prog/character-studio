@@ -45,7 +45,7 @@ def test_emit_handles_lists_and_dataclasses(capsys):
 
     emit([Character(slug="biscuit", name="Biscuit", bodies=["quadruped"])])
     assert json.loads(capsys.readouterr().out) == [
-        {"slug": "biscuit", "name": "Biscuit", "status": "designing", "bodies": ["quadruped"]}
+        {"slug": "biscuit", "name": "Biscuit", "status": "designing", "bodies": ["quadruped"], "setup": {}}
     ]
 
 

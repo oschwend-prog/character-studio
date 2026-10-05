@@ -936,3 +936,60 @@ def test_cli_decide_reason_from_a_file(cli_store, tmp_path):
     assert r.exit_code == 2 and "--reason" in r.output
     r = run("decide", o4.id, "--reason-file", str(f))  # a reason without --decision means nothing
     assert r.exit_code == 2
+
+
+# ---- the owner's instructions from the terminal's "Make it" sheet (migration 0007 decide_pick) -------------
+
+OWNER = {"owner_note": "slow-mo on the drop", "owner_mode": "dropin", "owner_presence": "star"}
+
+
+def owner_approved(store, spec=B1, slug=None):
+    """What decide_pick writes: an approved pick whose proposal carries the owner's note, mode and presence."""
+    f = pick(store, spec, **({"character_slug": slug} if slug else {}))
+    return store.update_favorite(
+        f.id, status="approved",
+        proposal={**f.proposal, **OWNER, "decision": {"decision": "approve", "by": "owner", "reason": None}},
+    )
+
+
+def test_fav_list_next_hands_the_daily_run_the_owners_note_mode_and_presence(cli_store):
+    f = owner_approved(cli_store)
+    (row,) = json.loads(run("list", "--next", "1", "--character", "reginald").stdout)
+    assert row["id"] == f.id
+    assert {k: row["proposal"][k] for k in OWNER} == OWNER  # the skill reads proposal.owner_note / owner_mode / owner_presence
+    (same,) = json.loads(run("list", "--status", "approved").stdout)
+    assert same["proposal"]["owner_note"] == "slow-mo on the drop"
+
+
+def test_a_decision_after_the_owners_sheet_keeps_the_owners_instructions():
+    store = make_store()
+    f = owner_approved(store)
+    again = decide(store, f.id, "approve", "", "rule")
+    assert {k: again.proposal[k] for k in OWNER} == OWNER
+    held = mark_favorite(store, f.id, "analysed", breakdown_md="beats")
+    assert {k: held.proposal[k] for k in OWNER} == OWNER  # a status change never rewrites the proposal
+
+
+def test_both_makes_one_clip_per_character_from_the_same_video():
+    """decide_pick(also_character) files a sibling row for the other character: each has its own queue."""
+    store = make_store()
+    mine = owner_approved(store, B1, "reginald")
+    twin = store.add_favorite(Favorite(
+        url=mine.url, platform=mine.platform, creator_handle=mine.creator_handle, views=mine.views, outlier_x=mine.outlier_x,
+        origin=mine.origin, character_slug="biscuit", proposal=dict(mine.proposal), scores=dict(mine.scores),
+        total_score=mine.total_score, status="approved",
+    ))
+    assert [f.id for f in next_favorites(store, 5, "reginald")] == [mine.id]
+    assert [f.id for f in next_favorites(store, 5, "biscuit")] == [twin.id]
+    assert twin.proposal["owner_note"] == "slow-mo on the drop"
+    # two rows, one video: vidIQ's exclude list names it once, so the 100-id cap is not wasted on duplicates
+    assert seen_ids(store, 100) == ["Dde-rPWCOC6"]
+
+
+def test_seen_ids_cap_counts_distinct_videos():
+    store = make_store()
+    a, b = pick(store, B1), pick(store, D2)
+    twin = store.add_favorite(Favorite(url=a.url, platform=a.platform, character_slug="biscuit", status="approved"))
+    for f, days in ((b, 3), (a, 2), (twin, 1)):
+        aged(store, f.id, days)
+    assert seen_ids(store, 2) == ["Dde-rPWCOC6", "7688386199270001953"]  # not [a, a]: the twin adds no new id

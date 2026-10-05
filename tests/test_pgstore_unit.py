@@ -366,20 +366,23 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
 
 
 def test_upsert_character_is_one_insert_on_conflict_do_update(db):
-    db.queue([{"slug": "biscuit", "name": "Biscuit", "status": "live", "bodies": ["biped", "quadruped"]}])
+    setup = {"closeup": True, "planned_handles": {"tiktok": "@biscuit.moves", "instagram": None}}
+    db.queue([{"slug": "biscuit", "name": "Biscuit", "status": "live", "bodies": ["biped", "quadruped"], "setup": setup}])
     got = PostgresStore(DSN).upsert_character(
-        Character(slug="biscuit", name="Biscuit", status="live", bodies=["biped", "quadruped"])
+        Character(slug="biscuit", name="Biscuit", status="live", bodies=["biped", "quadruped"], setup=setup)
     )
     assert len(db.statements) == 1
     query, params = db.statements[0]
-    assert query.startswith('insert into "studio"."characters" ("slug", "name", "status", "bodies") values')
+    assert query.startswith('insert into "studio"."characters" ("slug", "name", "status", "bodies", "setup") values')
     assert 'on conflict ("slug") do update set' in query
-    for col in ("name", "status", "bodies"):
+    for col in ("name", "status", "bodies", "setup"):  # the seed refreshes the setup too (migration 0007)
         assert f'"{col}" = excluded."{col}"' in query
     assert "returning" in query
-    assert params == ["biscuit", "Biscuit", "live", ["biped", "quadruped"]]  # enums as text[], bound
+    assert params[:4] == ["biscuit", "Biscuit", "live", ["biped", "quadruped"]]  # enums as text[], bound
+    assert isinstance(params[4], Jsonb) and params[4].obj == setup  # setup goes in as jsonb
     assert db.connections[0].outcome == "commit"
     assert isinstance(got, Character) and got.status == "live" and got.bodies[0].value == "biped"
+    assert got.setup == setup
 
 
 def test_upsert_account_conflicts_on_character_and_platform_and_spares_mode_and_share(db):
@@ -439,7 +442,7 @@ WEEK = date(2026, 10, 5)
 def run_row(**over):
     row = {
         "id": uuid.uuid4(), "kind": "daily", "started_at": NOW, "finished_at": NOW,
-        "status": "ok", "summary": None,
+        "status": "ok", "summary": None, "details": {},
     }
     return row | over
 
@@ -456,11 +459,21 @@ def test_add_run_binds_enums_and_leaves_id_and_started_at_to_the_database(db):
     db.queue([run_row(status="budget_stop", summary="stopped")])
     got = PostgresStore(DSN).add_run(Run(kind="daily", status="budget_stop", finished_at=NOW, summary="stopped"))
     query, params = db.statements[0]
-    assert query.startswith('insert into "studio"."runs" ("kind", "finished_at", "status", "summary") values')
+    assert query.startswith('insert into "studio"."runs" ("kind", "finished_at", "status", "summary", "details") values')
     assert "returning" in query
-    assert params == ["daily", NOW, "budget_stop", "stopped"]
+    assert params[:4] == ["daily", NOW, "budget_stop", "stopped"]
+    assert isinstance(params[4], Jsonb) and params[4].obj == {}  # details: jsonb, empty unless the run logged some
     assert (got.kind, got.status, got.summary) == (RunKind.daily, RunStatus.budget_stop, "stopped")
-    assert isinstance(got.id, str) and got.started_at == NOW
+    assert isinstance(got.id, str) and got.started_at == NOW and got.details == {}
+
+
+def test_add_run_carries_the_structured_details_as_jsonb(db):
+    scan = {"scan": {"queries": ["biscuit #1 format"], "outliers": 7, "picks_added": 3, "vidiq_credits": 5}}
+    db.queue([run_row(details=scan)])
+    got = PostgresStore(DSN).add_run(Run(kind="daily", status="ok", finished_at=NOW, details=scan))
+    _, params = db.statements[0]
+    assert isinstance(params[-1], Jsonb) and params[-1].obj == scan
+    assert got.details == scan
 
 
 def test_add_run_sends_started_at_when_given_and_refuses_a_naive_time(db):

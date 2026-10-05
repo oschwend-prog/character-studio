@@ -461,13 +461,15 @@ def seen_ids(store: Store, limit: int) -> list[str]:
     """Platform ids of the ``limit`` newest favourites of any status, newest first.
 
     Feeds vidIQ's ``excludeContentIds`` (which takes at most 100) so a scan never resurfaces a video
-    that was already picked, produced or skipped.
+    that was already picked, produced or skipped. Each video is named once, however many rows it has.
     """
     if limit < 0:
         raise ValueError(f"limit must be 0 or more, got {limit!r}")
     rows = store.list_favorites()
     rows.sort(key=lambda f: f.created_at.timestamp() if f.created_at else 0.0, reverse=True)
-    return [content_id(f.url) for f in rows[:limit]]
+    # one video can be two rows (the terminal's "Both" files a sibling for the other character): name it once
+    ids = list(dict.fromkeys(content_id(f.url) for f in rows))
+    return ids[:limit]
 
 
 def mark_favorite(store: Store, id: str, status: str, **fields: Any) -> Favorite:

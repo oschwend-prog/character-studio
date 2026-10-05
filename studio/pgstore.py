@@ -66,7 +66,7 @@ class _Table:
 
 
 _SETTINGS = _Table("settings", Settings, json_cols=frozenset({"cadence"}), db_default=frozenset())
-_CHARACTERS = _Table("characters", Character, db_default=frozenset())
+_CHARACTERS = _Table("characters", Character, json_cols=frozenset({"setup"}), db_default=frozenset())
 _ACCOUNTS = _Table("accounts", Account)
 _SOURCES = _Table("sources", Source)
 _CLIPS = _Table("clips", Clip, json_cols=frozenset({"qa", "features"}))
@@ -74,7 +74,7 @@ _POSTS = _Table("posts", Post)
 _SNAPSHOTS = _Table("snapshots", Snapshot, db_default=frozenset({"captured_at"}))
 _LEDGER = _Table("ledger", LedgerEntry)
 _FAVORITES = _Table("favorites", Favorite, json_cols=frozenset({"proposal", "scores"}))
-_RUNS = _Table("runs", Run, db_default=frozenset({"id", "started_at"}))
+_RUNS = _Table("runs", Run, json_cols=frozenset({"details"}), db_default=frozenset({"id", "started_at"}))
 _REVIEWS = _Table("reviews", Review)
 
 
@@ -404,7 +404,7 @@ class PostgresStore:
         return self._list(_CHARACTERS, {}, ["slug"])
 
     def upsert_character(self, c: Character) -> Character:
-        return self._upsert(_CHARACTERS, c, ["slug"], ["name", "status", "bodies"])
+        return self._upsert(_CHARACTERS, c, ["slug"], ["name", "status", "bodies", "setup"])
 
     def upsert_account(self, a: Account) -> Account:
         # Needs the unique index of migration 0003. Only the identity is refreshed on conflict:

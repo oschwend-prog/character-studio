@@ -17,9 +17,20 @@ with the problems printed. The three checks, in this order:
    rounding: 4,800 of 6,000 is a problem, 4,799 is not. A cap of 0 has no percentage and is not flagged.
 
 ``studio run log --kind daily|weekly|publish|metrics --status ok|budget_stop|error [--summary TEXT |
---summary-file PATH] [--started-at ISO] [--finished-at ISO]`` appends one ``runs`` row. The end
-defaults to now and the start to the end; a time without an offset is read as Europe/London. The skills pass the summary through
-``--summary-file`` (free text never goes through the shell).
+--summary-file PATH] [--details-file PATH] [--started-at ISO] [--finished-at ISO | --open]`` appends one
+``runs`` row. The end defaults to now and the start to the end; a time without an offset is read as
+Europe/London. The skills pass the summary through ``--summary-file`` (free text never goes through the shell).
+
+``--details-file`` is a JSON object stored in ``runs.details`` (migration 0007): the structured numbers the
+terminal's Scanner card shows. ``{"scan": {queries, outliers, picks_added, auto_approved, held, skipped,
+vidiq_credits}}`` says what a scan did; ``{"vidiq_credits": n}`` is the vidIQ spend of a run that did not
+scan. Known keys are type-checked (``validate_details``), others are kept as they are. There is no inline
+``--details``: the details may hold text that came from a tool.
+
+``--open`` logs a run that has started and not ended (``finished_at`` stays empty): the daily run writes
+one first, so the terminal can say "Scanning now", and its closing row (same ``--started-at``, printed by
+the first call) ends it. An open row never counts as a finished run for the check above, so a run that
+dies without its closing row is reported exactly as a missing run is.
 
 CLI output is JSON on stdout. Exit codes: ``health`` 0 healthy, 1 problems, 2 caller error (no
 ``DATABASE_URL``); ``run log`` 0 written, 2 caller error.
@@ -27,9 +38,10 @@ CLI output is JSON on stdout. Exit codes: ``health`` 0 healthy, 1 problems, 2 ca
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import typer
 
@@ -111,6 +123,48 @@ def health_command() -> None:
         raise typer.Exit(1)
 
 
+SCAN_COUNTERS = ("outliers", "picks_added", "auto_approved", "held", "skipped", "vidiq_credits")
+
+
+def _count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def validate_details(details: Any) -> dict[str, Any]:
+    """``details`` as the object ``runs.details`` takes; ``ValueError`` names what the Scanner card could not read.
+
+    ``scan`` (when present) is an object whose counters are whole numbers of 0 or more and whose ``queries``
+    is a list of strings; a top-level ``vidiq_credits`` is a count too. Anything else is kept untouched.
+    """
+    if not isinstance(details, dict):
+        raise ValueError(f"details must be a JSON object, got {type(details).__name__}")
+    if "vidiq_credits" in details and not _count(details["vidiq_credits"]):
+        raise ValueError(f"details.vidiq_credits must be a whole number of 0 or more, got {details['vidiq_credits']!r}")
+    if "scan" in details:
+        scan = details["scan"]
+        if not isinstance(scan, dict):
+            raise ValueError(f"details.scan must be an object, got {scan!r}")
+        queries = scan.get("queries", [])
+        if not isinstance(queries, list) or not all(isinstance(q, str) for q in queries):
+            raise ValueError("details.scan.queries must be a list of strings")
+        for key in SCAN_COUNTERS:
+            if key in scan and not _count(scan[key]):
+                raise ValueError(f"details.scan.{key} must be a whole number of 0 or more, got {scan[key]!r}")
+    return details
+
+
+def _read_details(file: Path | None) -> dict[str, Any]:
+    if file is None:
+        return {}
+    text = text_option(None, file, "details") or ""
+    try:
+        return validate_details(json.loads(text))
+    except json.JSONDecodeError as e:
+        fail(f"--details-file {file} is not valid JSON: {e}")
+    except ValueError as e:
+        fail(str(e))
+
+
 run_app = typer.Typer(
     help="The scheduled-run log: `run log` appends a line that `studio health` reads. Prints JSON.",
     no_args_is_help=True,
@@ -125,20 +179,33 @@ def log_command(
     summary_file: Annotated[
         Path | None, typer.Option("--summary-file", help="The summary, read from a file (use for free text).")
     ] = None,
+    details_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--details-file",
+            help='A JSON object of structured numbers, e.g. {"scan": {"outliers": 9, "picks_added": 4}} (a file, never inline).',
+        ),
+    ] = None,
     started_at: Annotated[
         str | None, typer.Option("--started-at", help="ISO 8601 start (default: now; no offset = London).")
     ] = None,
     finished_at: Annotated[
         str | None, typer.Option("--finished-at", help="ISO 8601 end (default: now; no offset = London).")
     ] = None,
+    open_: Annotated[
+        bool, typer.Option("--open", help="The run has started and not ended: no end time is stored (its closing row ends it).")
+    ] = False,
 ) -> None:
     """Record a scheduled run (the daily-run and weekly-review skills call this last)."""
     text = text_option(summary, summary_file, "summary")
+    details = _read_details(details_file)
+    if open_ and finished_at is not None:
+        fail("--open and --finished-at cannot be combined: an open run has no end yet")
     now = now_london()
     given_start = parse_when(started_at, "--started-at") if started_at is not None else None
     given_end = parse_when(finished_at, "--finished-at") if finished_at is not None else None
-    end = given_end if given_end is not None else now
-    start = given_start if given_start is not None else end  # only an end given: an instant, not a negative span
-    if end < start:
+    end = None if open_ else (given_end if given_end is not None else now)
+    start = given_start if given_start is not None else (now if end is None else end)  # only an end given: an instant
+    if end is not None and end < start:
         fail(f"--finished-at ({end.isoformat()}) is before --started-at ({start.isoformat()})")
-    emit(open_store().add_run(Run(kind=kind, status=status, started_at=start, finished_at=end, summary=text)))
+    emit(open_store().add_run(Run(kind=kind, status=status, started_at=start, finished_at=end, summary=text, details=details)))

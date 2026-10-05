@@ -121,6 +121,9 @@ class Character:
     name: str
     status: str = "designing"
     bodies: list[Body] = field(default_factory=list)
+    # What the terminal's Characters page shows beside the accounts (migration 0007), written by
+    # `studio seed` from refs.json: {"closeup": bool, "planned_handles": {"tiktok": str | None, "instagram": ...}}.
+    setup: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.bodies = [Body(b) for b in self.bodies]
@@ -287,6 +290,8 @@ class Run:
     finished_at: datetime | None = None
     status: RunStatus
     summary: str | None = None
+    # Structured numbers of the run (migration 0007), e.g. {"scan": {...}}; the terminal's Scanner card reads them.
+    details: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.kind = _enum(RunKind, self.kind, "Run.kind")

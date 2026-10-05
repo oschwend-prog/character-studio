@@ -154,8 +154,15 @@ def test_seed_matches_in_code_defaults():
     assert json.loads(m.group(3)) == settings.cadence == DEFAULT_CADENCE
 
 
+# The one statement of the migrations that removes anything: 0007 replaces decide_pick by a function with more
+# (defaulted) parameters, and a second overload would make the call ambiguous for PostgREST. No data goes.
+SANCTIONED_DROP = "drop function if exists studio.decide_pick(uuid, text, text, text);"
+
+
 def test_migrations_are_additive_and_stay_inside_schema_studio():
-    assert not re.search(r"\b(drop|truncate)\b", ALL_SQL, re.I)
+    statements_only = re.sub(r"--[^\n]*", "", ALL_SQL)  # the words in a comment are not statements
+    assert statements_only.count(SANCTIONED_DROP) == 1
+    assert not re.search(r"\b(drop|truncate)\b", statements_only.replace(SANCTIONED_DROP, ""), re.I)
     assert not re.search(r"\balter\s+column\b|\brename\b", ALL_SQL, re.I)
     # the only references outside schema studio: auth.jwt() for RLS, the Storage buckets, and (0004)
     # one read policy on storage.objects so the owner's browser can sign URLs for the clips bucket
@@ -383,3 +390,117 @@ def test_0006_grants_the_new_functions_to_authenticated_only():
         assert f"revoke all on function studio.{sig} from public;" in SLOT_SQL
         assert f"grant execute on function studio.{sig} to authenticated;" in SLOT_SQL
     assert "grant select on studio.v_queue to authenticated;" in SLOT_SQL
+
+
+# ---- 0007: characters view, the Make-it sheet, the Scanner card -------------------------------------------
+
+CHAR_PATH = MIGRATIONS / "0007_characters_view.sql"
+CHAR_SQL = CHAR_PATH.read_text()
+CHAR_CODE = re.sub(r"--[^\n]*", "", CHAR_SQL)  # statements without their comments
+
+
+def test_0007_adds_the_two_json_columns_the_python_side_writes():
+    assert "alter table studio.characters add column if not exists setup jsonb not null default '{}'::jsonb;" in CHAR_SQL
+    assert "alter table studio.runs add column if not exists details jsonb not null default '{}'::jsonb;" in CHAR_SQL
+    assert {"setup"} <= columns("characters") and {"details"} <= columns("runs")  # models.Character.setup / Run.details
+
+
+def test_0007_v_characters_lists_every_character_with_its_accounts():
+    view = re.search(r"create or replace view studio\.v_characters .*?order by ch\.slug;", CHAR_SQL, re.S).group(0)
+    assert "with (security_invoker = true)" in view  # the owner's RLS on characters and accounts applies
+    for col in ("ch.slug", "ch.name", "ch.status", "ch.bodies", "ch.setup"):
+        assert col in view
+    assert "from studio.characters ch" in view and "left join" not in view  # a character with no account is still a row
+    # the same notion of "connected" as v_channels: a missing or empty Postiz id is not a connection
+    assert "'has_postiz', coalesce(a.postiz_integration_id, '') <> ''" in view
+    assert "'platform', a.platform" in view and "'handle', a.handle" in view and "'mode', a.mode" in view
+    assert "coalesce((" in view and "'[]'::jsonb) as accounts" in view
+    assert "grant select on studio.v_characters to authenticated;" in CHAR_SQL
+    assert not re.search(r"\banon\b", CHAR_CODE)
+
+
+def test_0007_picks_views_keep_every_column_and_append_the_owner_instructions():
+    cols = lambda text: re.findall(r"\bas (\w+),?\s*$", text, re.M)  # noqa: E731
+    for view, base in (("v_picks", "from studio.favorites f"), ("v_pick_history", "from studio.favorites f")):
+        new = re.search(rf"create or replace view studio\.{view} .*?{base}", CHAR_SQL, re.S).group(0)
+        old = re.search(rf"create or replace view studio\.{view} .*?{base}", TERMINAL_SQL, re.S).group(0)
+        assert "with (security_invoker = true)" in new
+        assert cols(new)[: len(cols(old))] == cols(old), f"{view}: create or replace view may only append columns"
+        assert cols(new)[len(cols(old)) :] == ["owner_note", "owner_mode", "owner_presence"]
+        for key in ("owner_note", "owner_mode", "owner_presence"):
+            assert f"f.proposal ->> '{key}' as {key}" in new
+        assert f"grant select on studio.{view} to authenticated;" in CHAR_SQL
+
+
+def _decide_pick() -> str:
+    m = re.search(r"create or replace function studio\.decide_pick\((.*?)\$\$;", CHAR_SQL, re.S)
+    assert m
+    return m.group(0)
+
+
+def test_0007_decide_pick_has_one_signature_and_keeps_the_function_rules():
+    body = _decide_pick()
+    sig = (
+        "pick_id uuid,\n  decision text,\n  reason text default null,\n  character_slug text default null,\n"
+        "  also_character text default null,\n  owner_note text default null,\n  owner_mode text default null,\n"
+        "  owner_presence text default null\n"
+    )
+    assert sig in body  # the old four parameters first, in order, then the four new ones, all optional
+    assert "security invoker" in body and "set search_path = ''" in body and "security definer" not in body
+    # the 4-argument function of 0004 goes, so PostgREST resolves ONE function for every call
+    assert SANCTIONED_DROP in CHAR_SQL and CHAR_SQL.index(SANCTIONED_DROP) < CHAR_SQL.index("create or replace function studio.decide_pick")
+    assert "revoke all on function studio.decide_pick(uuid, text, text, text, text, text, text, text) from public;" in CHAR_SQL
+    assert "grant execute on function studio.decide_pick(uuid, text, text, text, text, text, text, text) to authenticated;" in CHAR_SQL
+
+
+def test_0007_decide_pick_keeps_every_refusal_and_effect_of_0004():
+    old = _function_sql("decide_pick")
+    new = _decide_pick()
+    for message in re.findall(r"raise exception '([^']*)'", old):
+        assert f"raise exception '{message}'" in new, f"the refusal {message!r} of 0004 is gone"
+    for part in (
+        "'by', 'owner'", "- 'hold_reason'", "('queued', 'made')", "for update",
+        "when f.status in ('approved', 'analysed') then f.status", "when decide_pick.decision = 'skip' then 'skipped'",
+    ):
+        assert part in old and part in new, part
+
+
+def test_0007_decide_pick_stores_the_owner_instructions_in_the_proposal():
+    body = _decide_pick()
+    assert "char_length(clean_note) > 280" in body and "nullif(btrim(decide_pick.owner_note), '')" in body
+    assert "jsonb_build_object('owner_note', clean_note)" in body
+    assert "clean_mode not in ('dropin', 'recreate')" in body and "jsonb_build_object('owner_mode', clean_mode)" in body
+    assert "clean_presence not in ('cameo', 'featured', 'star')" in body
+    # his part only counts in a Drop-in, whether the mode is given now or was stored earlier
+    assert "coalesce(clean_mode, f.proposal ->> 'owner_mode') = 'dropin'" in body
+    assert "jsonb_build_object('owner_presence', clean_presence)" in body
+    assert "if decide_pick.decision = 'approve' then" in body  # a skip carries no instructions
+    assert "proposal = (fa.proposal - 'hold_reason') || owner || jsonb_build_object('decision', record_)" in body
+
+
+def test_0007_both_files_one_idempotent_sibling_for_the_other_character():
+    body = _decide_pick()
+    assert "also is not null and decide_pick.decision <> 'approve'" in body  # approve only
+    assert "if also = new_slug then" in body and "unknown character" in body  # known, and not the chosen one
+    # reuse before insert: the same url under that character, never the pick itself, oldest first, locked
+    assert "fa.url = f.url and fa.character_slug = also and fa.id <> f.id" in body and "limit 1 for update" in body
+    insert = re.search(r"insert into studio\.favorites\s*\((.*?)\)\s*values\s*\((.*?)\)\s*returning", body, re.S)
+    assert insert
+    cols = [c.strip() for c in insert.group(1).split(",")]
+    assert cols == ["url", "platform", "creator_handle", "views", "outlier_x", "origin", "character_slug", "proposal", "scores", "total_score", "status"]
+    assert [v.strip() for v in insert.group(2).split(",")][-1] == "'approved'"
+    assert "to_jsonb(f) || jsonb_build_object('sibling', to_jsonb(sib))" in body  # both rows come back
+    assert "if sib.status not in ('queued', 'made') then" in body  # a sibling already in production is left alone
+
+
+def test_0007_realtime_follows_characters_accounts_and_runs_without_touching_anything_else():
+    for table in ("characters", "accounts", "runs"):
+        assert f"tablename = '{table}') then\n      alter publication supabase_realtime add table studio.{table};" in CHAR_SQL
+    assert "if exists (select 1 from pg_publication where pubname = 'supabase_realtime')" in CHAR_SQL
+
+
+def test_0007_stays_inside_schema_studio_and_grants_nothing_to_anon():
+    assert not re.search(r"\banon\b", CHAR_CODE)
+    assert re.findall(r"\b(?:public|auth|storage|extensions)\.[a-z_]+", CHAR_CODE) == []
+    for stmt in re.findall(r"^(?:create table|alter table|create index \w+ on)\s+(\S+)", CHAR_CODE, re.M):
+        assert stmt.startswith("studio."), stmt

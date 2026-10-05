@@ -9,7 +9,7 @@ What is checked, in the order the owner's checklist (``docs/launch/go-live.md``)
 
 * Keychain items ``cs-database-url``, ``cs-supabase-url``, ``cs-supabase-service-key``,
   ``cs-postiz-api-key``: present or absent. The probe never reads a value.
-* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0006.
+* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0007.
 * The Supabase Data API exposes schema ``studio`` (the terminal and the owner RPCs need it).
 * Characters: at least one is ``live``; each launch character has masters, a close-up and an account
   with a Postiz integration id (``characters/*/refs.json`` plus the database).
@@ -93,6 +93,12 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("function", "free_slot"), ("function", "next_free_slot"), ("function", "approve_clip"),
         ("view", "v_queue"), ("index", "reviews_week_character_slug_key"),
     ),
+    # 0007: characters.setup and runs.details (columns), the Characters view, the picks views with the owner's
+    # instructions and decide_pick with its four new parameters (the one function of that name).
+    "0007": (
+        ("column", "setup"), ("column", "details"), ("view", "v_characters"), ("view", "v_picks"),
+        ("view", "v_pick_history"), ("function", "decide_pick"),
+    ),
 }
 
 PROBE_SQL = """
@@ -104,7 +110,9 @@ select 'column', a.attname::text
 from pg_attribute a
 join pg_class c on c.oid = a.attrelid
 join pg_namespace n on n.oid = c.relnamespace
-where n.nspname = 'studio' and c.relname = 'snapshots' and a.attnum > 0 and not a.attisdropped
+where n.nspname = 'studio' and a.attnum > 0 and not a.attisdropped
+  and ((c.relname = 'snapshots') or (c.relname = 'characters' and a.attname = 'setup')
+       or (c.relname = 'runs' and a.attname = 'details'))
 union all
 select 'index', indexname::text from pg_indexes where schemaname = 'studio'
 union all

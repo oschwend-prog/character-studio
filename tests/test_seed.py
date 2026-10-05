@@ -70,6 +70,47 @@ def refs(base: dict, **over) -> dict:
 # ---- characters and accounts -------------------------------------------------------------------
 
 
+def test_seed_writes_the_setup_the_terminal_shows(tmp_path):
+    """characters.setup = {closeup: bool, planned_handles: {tiktok, instagram}} straight from refs.json (migration 0007)."""
+    store = MemoryStore()
+    biscuit = refs(BISCUIT, accounts=[
+        {"platform": "tiktok", "handle": None, "planned_handle": "@biscuit.moves", "postiz_integration_id": None},
+        {"platform": "instagram", "handle": None, "postiz_integration_id": None},
+    ])
+    seed.seed_characters(store, write_refs(tmp_path, biscuit, REGINALD))
+    by = {c.slug: c for c in store.characters()}
+    assert by["biscuit"].setup == {"closeup": True, "planned_handles": {"tiktok": "@biscuit.moves", "instagram": None}}
+    assert by["reginald"].setup == {"closeup": False, "planned_handles": {"tiktok": None, "instagram": None}}
+
+
+def test_the_setup_names_the_real_handle_once_the_account_exists_and_follows_the_closeup(tmp_path):
+    store = MemoryStore()
+    accounts = [
+        {"platform": "tiktok", "handle": "@real.one", "planned_handle": "@first.choice", "postiz_integration_id": "pz"},
+        {"platform": "instagram", "handle": None, "planned_handle": "plan.ig", "postiz_integration_id": None},
+    ]
+    d = write_refs(tmp_path, refs(REGINALD, closeup=None, accounts=accounts))
+    seed.seed_characters(store, d)
+    assert store.characters()[0].setup == {"closeup": False, "planned_handles": {"tiktok": "@real.one", "instagram": "plan.ig"}}
+    write_refs(tmp_path, refs(REGINALD, closeup="cu-job", accounts=accounts))  # the close-up lands: a re-seed flips it
+    seed.seed_characters(store, tmp_path)
+    assert store.characters()[0].setup["closeup"] is True
+
+
+def test_a_planned_handle_must_be_a_string_or_null(tmp_path):
+    bad = refs(BISCUIT, accounts=[{"platform": "tiktok", "handle": None, "planned_handle": 7, "postiz_integration_id": None}])
+    with pytest.raises(ValueError, match="planned_handle"):
+        seed.seed_characters(MemoryStore(), write_refs(tmp_path, bad))
+
+
+def test_the_repos_own_refs_plan_the_first_choice_handles_of_the_social_pages_kit():
+    """docs/launch/social-pages.md: first choice for each character; the file is the single source for the terminal."""
+    by = {r["slug"]: r for r in seed.load_refs()}
+    planned = {s: {a["platform"]: a.get("planned_handle") for a in by[s]["accounts"]} for s in by}
+    assert planned["biscuit"] == {"tiktok": "@biscuit.moves", "instagram": "biscuit.moves"}
+    assert planned["reginald"] == {"tiktok": "@reginald.thebutler", "instagram": "reginald.thebutler"}
+
+
 def test_seed_creates_characters_and_skips_null_accounts(tmp_path):
     store = MemoryStore()
     report = seed.seed_characters(store, write_refs(tmp_path, BISCUIT, REGINALD))
@@ -198,15 +239,20 @@ def test_the_shipped_refs_files_load_and_match_the_brief():
     for c in (b, r):
         assert c["status"] == "designing"  # flipped to live at go-live (Task 16)
         assert {a["platform"]: a["dropin_share"] for a in c["accounts"]} == {"tiktok": 0.70, "instagram": 0.40}
-        assert all(a["handle"] is None and a["postiz_integration_id"] is None for a in c["accounts"])
+        # an account the owner has created carries its real handle (and, once connected, its Postiz id); the rest stay null
+        assert all(a["handle"] is None or isinstance(a["handle"], str) for a in c["accounts"])
+        assert all(a["handle"] for a in c["accounts"] if a["postiz_integration_id"])  # an id without a handle would not seed
         assert (ROOT / c["avatar"]).parent.is_dir()
 
 
-def test_seeding_the_shipped_refs_creates_two_characters_and_no_accounts():
+def test_seeding_the_shipped_refs_creates_two_characters_and_exactly_the_accounts_that_have_a_handle():
+    refs_ = seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)
+    with_handle = {(r["slug"], a["platform"]) for r in refs_ for a in r["accounts"] if a["handle"]}
     store = MemoryStore()
     report = seed.seed_characters(store, seed.DEFAULT_CHARACTERS_DIR)
     assert [c.slug for c in store.characters()] == ["biscuit", "reginald"]
-    assert store.accounts() == [] and len(report.skipped) == 4
+    assert {(a.character_slug, a.platform.value) for a in store.accounts()} == with_handle
+    assert len(store.accounts()) + len(report.skipped) == 4  # every account is either seeded or reported as not there yet
 
 
 # ---- CLI: seed + seed status -----------------------------------------------------------------

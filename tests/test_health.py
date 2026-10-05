@@ -295,3 +295,115 @@ def test_a_logged_daily_run_satisfies_health(cli_store, monkeypatch):
     assert run("health").exit_code == 1  # nothing logged yet
     assert run("run", "log", "--kind", "daily", "--status", "ok", "--summary", "2 clips").exit_code == 0
     assert run("health").exit_code == 0
+
+
+# ---- run log --details-file and --open (migration 0007: the Scanner card's data) ---------------------------
+
+
+SCAN = {
+    "scan": {
+        "queries": ["biscuit #2 concept", "reginald #1 concept"],
+        "outliers": 9, "picks_added": 4, "auto_approved": 1, "held": 1, "skipped": 2, "vidiq_credits": 15,
+    }
+}
+
+
+def details_file(tmp_path, payload) -> str:
+    f = tmp_path / "details.json"
+    f.write_text(payload if isinstance(payload, str) else json.dumps(payload), encoding="utf-8")
+    return str(f)
+
+
+def test_run_log_stores_the_structured_details_from_a_file(cli_store, tmp_path, monkeypatch):
+    monkeypatch.setattr(health, "now_london", lambda: NOW)
+    r = run("run", "log", "--kind", "daily", "--status", "ok", "--summary", "2 clips", "--details-file", details_file(tmp_path, SCAN))
+    assert r.exit_code == 0, r.output
+    (row,) = cli_store.list_runs(kind="daily", summary="2 clips")
+    assert row.details == SCAN
+    assert json.loads(r.stdout)["details"] == SCAN  # the printed row carries them too
+    plain = run("run", "log", "--kind", "weekly", "--status", "ok")
+    assert plain.exit_code == 0 and cli_store.list_runs(kind="weekly")[0].details == {}
+
+
+def test_details_never_travel_inline_in_the_shell(cli_store, tmp_path):
+    assert run("run", "log", "--kind", "daily", "--status", "ok", "--details", '{"scan": {}}').exit_code == 2  # no such option
+    ok = tmp_path / "ok.json"
+    ok.write_text("{}")
+    assert run("run", "log", "--kind", "daily", "--status", "ok", "--details-file", str(ok)).exit_code == 0
+
+
+@pytest.mark.parametrize(
+    ("payload", "why"),
+    [
+        ("not json", "JSON"),
+        ("[1, 2]", "object"),
+        ({"scan": "5 picks"}, "scan"),
+        ({"scan": {"queries": "biscuit"}}, "queries"),
+        ({"scan": {"queries": [1]}}, "queries"),
+        ({"scan": {"picks_added": -1}}, "picks_added"),
+        ({"scan": {"outliers": 2.5}}, "outliers"),
+        ({"scan": {"held": True}}, "held"),
+        ({"scan": {"vidiq_credits": "15"}}, "vidiq_credits"),
+        ({"vidiq_credits": -5}, "vidiq_credits"),
+    ],
+)
+def test_run_log_refuses_details_the_terminal_could_not_read(cli_store, tmp_path, payload, why):
+    before = len(cli_store.list_runs())
+    r = run("run", "log", "--kind", "daily", "--status", "ok", "--details-file", details_file(tmp_path, payload))
+    assert r.exit_code == 2 and why in r.output
+    assert len(cli_store.list_runs()) == before  # nothing written
+
+
+def test_run_log_details_file_missing_or_unreadable_is_a_caller_error(cli_store, tmp_path):
+    r = run("run", "log", "--kind", "daily", "--status", "ok", "--details-file", str(tmp_path / "nope.json"))
+    assert r.exit_code == 2 and "no such file" in r.output
+
+
+def test_extra_keys_in_the_details_are_kept(cli_store, tmp_path):
+    payload = {"scan": {"outliers": 1, "note": "free"}, "clips": [{"id": "c1"}]}
+    assert run("run", "log", "--kind", "daily", "--status", "ok", "--details-file", details_file(tmp_path, payload)).exit_code == 0
+    assert any(r.details == payload for r in cli_store.list_runs(kind="daily"))
+
+
+def test_run_log_open_records_a_run_that_has_started_and_not_ended(cli_store, monkeypatch):
+    monkeypatch.setattr(health, "now_london", lambda: NOW)
+    r = run("run", "log", "--kind", "daily", "--status", "ok", "--open")
+    assert r.exit_code == 0, r.output
+    open_row = next(x for x in cli_store.list_runs(kind="daily") if x.finished_at is None)
+    assert open_row.started_at == NOW
+    out = json.loads(r.stdout)
+    assert out["finished_at"] is None and out["started_at"] == NOW.isoformat()  # the skill keeps this for its closing row
+
+
+def test_an_open_run_never_counts_as_a_finished_daily_run(monkeypatch):
+    store = MemoryStore()
+    monkeypatch.setattr(health, "open_store", lambda: store)
+    monkeypatch.setattr(health, "now_london", lambda: NOW)
+    assert run("run", "log", "--kind", "daily", "--status", "ok", "--open").exit_code == 0
+    problems = check(store, NOW)
+    assert len(problems) == 1 and "never finished" in problems[0]  # the watchdog still says the run did not report in
+
+
+def test_run_log_open_refuses_a_finish_time_and_takes_a_start_time(cli_store):
+    both = run("run", "log", "--kind", "daily", "--status", "ok", "--open", "--finished-at", "2026-10-07T03:00:00+00:00")
+    assert both.exit_code == 2 and "--open" in both.output
+    ok = run("run", "log", "--kind", "daily", "--status", "ok", "--open", "--started-at", "2026-10-07T03:00:00+00:00")
+    assert ok.exit_code == 0
+    (row,) = [r for r in cli_store.list_runs(kind="daily") if r.finished_at is None]
+    assert row.started_at == datetime(2026, 10, 7, 3, 0, tzinfo=timezone.utc)
+
+
+def test_a_closing_row_with_the_same_start_shares_it_with_the_open_one(cli_store, tmp_path, monkeypatch):
+    """The skill logs the open row first and the closing one last with --started-at <the first's started_at>."""
+    monkeypatch.setattr(health, "now_london", lambda: NOW)
+    first = json.loads(run("run", "log", "--kind", "daily", "--status", "ok", "--open").stdout)
+    monkeypatch.setattr(health, "now_london", lambda: NOW + timedelta(minutes=40))
+    closing = run(
+        "run", "log", "--kind", "daily", "--status", "ok", "--started-at", first["started_at"],
+        "--details-file", details_file(tmp_path, SCAN),
+    )
+    assert closing.exit_code == 0, closing.output
+    rows = [r for r in cli_store.list_runs(kind="daily") if r.started_at == NOW]
+    assert sorted(r.finished_at is None for r in rows) == [False, True]  # one open marker, one finished row
+    (done,) = [r for r in rows if r.finished_at is not None]
+    assert done.finished_at == NOW + timedelta(minutes=40) and done.details == SCAN

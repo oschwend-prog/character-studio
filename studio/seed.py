@@ -12,6 +12,10 @@
   both); an existing row only has its identity (``handle``, ``postiz_integration_id``) refreshed, so a
   re-seed never undoes what the Instagram guard or the autopilot toggle set (``dropin_share``, ``mode``).
   An account with no ``postiz_integration_id`` is seeded but planning treats it as not connected.
+* ``setup`` (``characters.setup``, migration 0007) is what the terminal's Characters page shows beside the
+  accounts: ``{"closeup": <the close-up shot exists>, "planned_handles": {"tiktok": .., "instagram": ..}}``.
+  A planned handle is the account's real ``handle`` once it exists, else the file's optional
+  ``planned_handle`` (the first choice of ``docs/launch/social-pages.md``), else null.
 * ``studio seed status`` prints every character with its status and accounts (what the daily run reads).
 
 **Picks** (``studio seed picks FILE``) loads ``docs/launch/viral-picks-2026-10-04.md``. The document is
@@ -120,6 +124,10 @@ def _validate_ref(ref: Any, path: Path) -> dict[str, Any]:
         seen.add(platform)
         _require(a.get("handle") is None or _is_str(a["handle"]), path, f"{platform} handle must be a string or null")
         _require(
+            a.get("planned_handle") is None or _is_str(a["planned_handle"]),
+            path, f"{platform} planned_handle must be a string or null",
+        )
+        _require(
             a.get("postiz_integration_id") is None or _is_str(a["postiz_integration_id"]),
             path, f"{platform} postiz_integration_id must be a string or null",
         )
@@ -147,6 +155,14 @@ def load_refs(characters_dir: Path | str = DEFAULT_CHARACTERS_DIR) -> list[dict[
     return loaded
 
 
+def character_setup(ref: dict[str, Any]) -> dict[str, Any]:
+    """``characters.setup`` for a validated refs.json: the close-up flag and the planned handle per platform."""
+    planned: dict[str, str | None] = {p.value: None for p in Platform}
+    for a in ref.get("accounts", []):
+        planned[a["platform"]] = a.get("handle") or a.get("planned_handle")
+    return {"closeup": bool(ref.get("closeup")), "planned_handles": planned}
+
+
 @dataclass
 class SeedReport:
     characters: list[Character] = field(default_factory=list)
@@ -163,7 +179,10 @@ def seed_characters(store: Store, characters_dir: Path | str = DEFAULT_CHARACTER
             slug = ref["slug"]
             report.characters.append(
                 store.upsert_character(
-                    Character(slug=slug, name=ref["name"], status=ref["status"], bodies=ref["bodies"])
+                    Character(
+                        slug=slug, name=ref["name"], status=ref["status"], bodies=ref["bodies"],
+                        setup=character_setup(ref),
+                    )
                 )
             )
             for a in ref.get("accounts", []):
@@ -468,7 +487,10 @@ def seed_command(
     emit(
         {
             "characters": [
-                {"slug": c.slug, "name": c.name, "status": c.status, "bodies": [b.value for b in c.bodies]}
+                {
+                    "slug": c.slug, "name": c.name, "status": c.status, "bodies": [b.value for b in c.bodies],
+                    "setup": c.setup,
+                }
                 for c in report.characters
             ],
             "accounts": [{"character": a.character_slug, **_account_json(a)} for a in report.accounts],

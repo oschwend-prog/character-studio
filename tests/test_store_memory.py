@@ -342,6 +342,30 @@ def test_upsert_character_inserts_then_updates_in_place():
     assert [c.slug for c in store.characters()] == ["biscuit"]  # one row, not two
 
 
+def test_upsert_character_replaces_the_setup_the_seed_writes_and_returns_copies():
+    store = MemoryStore()
+    setup = {"closeup": False, "planned_handles": {"tiktok": "@biscuit.moves", "instagram": None}}
+    store.upsert_character(Character(slug="biscuit", name="Biscuit", setup=setup))
+    got = store.characters()[0]
+    assert got.setup == setup
+    got.setup["closeup"] = True  # a copy: the stored setup is not touched
+    assert store.characters()[0].setup["closeup"] is False
+    store.upsert_character(Character(slug="biscuit", name="Biscuit", setup={"closeup": True, "planned_handles": {}}))
+    assert store.characters()[0].setup == {"closeup": True, "planned_handles": {}}
+    assert Character(slug="x", name="X").setup == {}  # a character built without one has an empty setup
+
+
+def test_a_run_keeps_its_structured_details():
+    store = MemoryStore()
+    details = {"scan": {"queries": ["reginald #2 hook"], "outliers": 4, "picks_added": 2, "vidiq_credits": 5}}
+    store.add_run(Run(kind="daily", status="ok", summary="s", details=details))
+    store.add_run(Run(kind="weekly", status="ok"))
+    daily, weekly = store.list_runs(kind="daily")[0], store.list_runs(kind="weekly")[0]
+    assert daily.details == details and weekly.details == {}
+    daily.details["scan"]["outliers"] = 99  # a copy
+    assert store.list_runs(kind="daily")[0].details["scan"]["outliers"] == 4
+
+
 def test_upsert_character_returns_a_copy():
     store = MemoryStore()
     got = store.upsert_character(Character(slug="biscuit", name="Biscuit"))

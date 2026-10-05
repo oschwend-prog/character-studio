@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references and account links for Reginald. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). closeup, closeup_center and blue_eye_xy stay null until the eye close-up is generated in the rehearsal (Task 16). An account with a null handle is not seeded yet; an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value: the Instagram guard and the terminal change it later and a re-seed leaves it alone.",
+  "_doc": "Identity-lock references and account links for Reginald. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). closeup, closeup_center and blue_eye_xy stay null until the eye close-up is generated in the rehearsal (Task 16). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value: the Instagram guard and the terminal change it later and a re-seed leaves it alone.",
   "slug": "reginald",
   "name": "Reginald",
   "status": "designing",
@@ -13,7 +13,7 @@
   "blue_eye_xy": null,
   "avatar": "assets/avatars/reginald.png",
   "accounts": [
-    {"platform": "tiktok", "handle": null, "postiz_integration_id": null, "dropin_share": 0.70},
-    {"platform": "instagram", "handle": null, "postiz_integration_id": null, "dropin_share": 0.40}
+    {"platform": "tiktok", "handle": null, "planned_handle": "@reginald.thebutler", "postiz_integration_id": null, "dropin_share": 0.70},
+    {"platform": "instagram", "handle": null, "planned_handle": "reginald.thebutler", "postiz_integration_id": null, "dropin_share": 0.40}
   ]
 }
