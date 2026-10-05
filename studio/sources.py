@@ -17,7 +17,9 @@ character swapped into the actual clip):
   type fits the character may drive it: watermarked, unchecked and synthetic ones included.
 
 We never scrape or download from TikTok or Instagram: a platform page URL is not a source
-(``add_source`` refuses it). Favourites (``studio.favorites``) are the lane for those links.
+(``add_source`` refuses it). Favourites (``studio.favorites``) are the lane for those links. The one owner-allowed exception
+(2026-10-05) is ``studio.fetch``: the public clip of ONE approved pick, fetched once with yt-dlp into our own Storage and
+deleted after posting; what it stores is a bucket path, never a platform URL.
 
 ``rank_sources`` orders the usable sources by how well the clips made from them performed
 (median ``features['outlier_x']``, best first, never-measured last), newest source first on ties.

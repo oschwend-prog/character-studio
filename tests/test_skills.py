@@ -189,7 +189,9 @@ def test_the_playbook_names_the_five_rules_in_the_owners_words():
 
 def test_the_modes_the_skill_uses_are_the_effective_mode_and_never_wait_on_a_download():
     body = text("daily-run")
-    assert "NEVER download from TikTok or Instagram and never ask the owner for a clip" in body
+    assert "The one download from TikTok, Instagram or YouTube is `bin/studio source fetch --pick <id>`" in body  # owner allowed it 2026-10-05
+    assert "for ONE APPROVED pick at a time, never in bulk" in body and "(no yt-dlp or `curl` of your own)" in body
+    assert "never ask the owner for a clip" in body
     assert "**Effective mode.**" in body and "logs which one it used and why" in body
     step = body.split("5. **Effective mode.**", 1)[1].split("## 5. Create", 1)[0]
     # a usable source is a gallery preset or an attached clip; anything else is an automatic Recreate
@@ -256,3 +258,79 @@ def test_scan_json_has_a_theme_per_rotation_entry_and_fit_rules_that_reference_t
     for slug in ("biscuit", "reginald"):
         assert any("traits card" in rule for rule in scan["characters"][slug]["fit_rules"]), slug
     assert "tier" in scan["pick_card_fields"] and "theme" in scan["pick_card_fields"] and "thumbnail_url" in scan["pick_card_fields"]
+
+
+# ---- the analyst upgrade (owner request 2026-10-05): analyse before filing, fetch, look, check, trim, purge ----------------------
+
+
+def json_span(name: str, marker: str) -> dict:
+    """The JSON object in the code span that contains ``marker``."""
+    span = next(s for s in spans(name) if marker in s and s.startswith("{"))
+    return json.loads(span)
+
+
+def test_the_scan_analyses_the_survivors_before_filing_and_inside_the_vidiq_budget():
+    scan = text("daily-run").split("## 2. Scan", 1)[1].split("Part B", 1)[0]
+    for part in (
+        "`saturation_count`", "near-duplicates", "8 or more copies 3, 4-7 5, 1-3 8, none 10", "**Velocity**", "views per day since `posted_at`",
+        "`watch_shortform_content`", "the TOP 3 of each", "BEFORE filing", "measured, not guessed",
+        "`watches_per_character`", "`breakdowns_per_week`", "`balance_floor`", "`bin/studio fav mark <id> --breakdown-file renders/tmp/b.md`",
+        "`trait_matches`", "`why`", "`engagement`", "never guess a count", "`config/scan.json` `tier_rules`",
+    ):  # fmt: skip
+        assert part in scan, part
+    assert scan.index("**Saturation**") < scan.index("**Watch the best ones**") < scan.index("**Fit**") < scan.index("File each:")
+    budget = json.loads((ROOT / "config" / "scan.json").read_text())["budget"]
+    for key in ("watches_per_character", "breakdowns_per_week", "balance_floor", "credits_per_watch", "credits_per_scan"):
+        assert isinstance(budget[key], int), key
+
+
+def test_the_card_json_the_skill_shows_is_accepted_by_the_door():
+    from studio.favorites import validate_analysis, validate_card, validate_needs
+
+    for marker in ('"url": "<video URL>"', '"preset_id": "<preset id>"'):
+        proposal = json_span("daily-run", marker)
+        proposal.pop("url", None)
+        proposal.pop("creator", None)
+        validate_needs(proposal)
+        for key, real in (("thumbnail_url", "https://t.example/a.jpg"), ("preview_url", "https://t.example/a.mp4")):
+            if key in proposal:
+                proposal[key] = real  # the skill shows a placeholder where a tool's URL goes
+        validate_card(proposal)
+        assert isinstance(proposal["trait_matches"], list) and isinstance(proposal["why"], str)
+    scan_card = json_span("daily-run", '"url": "<video URL>"')
+    assert {"engagement", "saturation_count", "trait_matches", "why", "tier", "theme", "posted_at"} <= set(scan_card)
+    analysis = json_span("daily-run", '"people_count"')
+    validate_analysis(analysis)
+    assert set(analysis) == {"people_count", "main_subject", "camera", "watermark", "overlay", "minors", "best_window", "bpm", "notes"}
+
+
+def test_the_clip_is_fetched_looked_at_checked_trimmed_and_purged_in_that_order():
+    body = text("daily-run")
+    step = body.split("5. **Effective mode.**", 1)[1].split("## 5. Create", 1)[0]
+    assert step.index("**Fetch**") < step.index("**Look at the clip**") < step.index("Then **trim**")
+    for part in (
+        "`bin/studio source fetch --pick <id> --body B --bodies N`", "approved picks only, public, no login, no cookies, one clip",
+        "Exit 0:", "`already: true`", "Exit 1: yt-dlp could not", "the pick was marked Recreate", "Exit 2: the call was refused or Storage failed",
+        "`bin/studio source analyze <source id>`", "`renders/<id>/analysis.png`", "Read tool", "a child anywhere",
+        "`bin/studio fav mark <pick> --analysis-file renders/tmp/a.json`", '"Clip check" row', "the analysis' `best_window`",
+    ):  # fmt: skip
+        assert part in step, part
+    assert "no `preset_id`, no `owner_clip_path`, and the owner did not choose Recreate" in step  # the cases that need no fetch
+    # the tidy-up: a sweep at the start of every run, and the clip itself once it is scheduled
+    orient = body.split("## 1. Orient", 1)[1].split("## 2. Scan", 1)[0]
+    assert "`bin/studio source purge --pending`" in orient and "never touched" in orient
+    master = body.split("## 9. Master", 1)[1].split("## 10.", 1)[0]
+    assert "`bin/studio source purge --clip <id>`" in master and "`scheduled`" in master
+
+
+def test_the_fetch_never_runs_outside_the_cli_and_the_skill_never_names_a_social_download_tool():
+    body = text("daily-run")
+    assert "yt-dlp inside the CLI" in body
+    assert not re.search(r"`yt-dlp[^`]*`", body)  # no yt-dlp command of its own: only the CLI wraps it
+    for curl in re.findall(r"curl [^`]+", body):
+        assert not re.search(r"tiktok|instagram|youtube", curl, re.I), curl
+
+
+def test_the_breakdown_bought_before_filing_is_not_bought_twice():
+    body = text("daily-run")
+    assert "(watched before filing, step 2), has its breakdown: no second purchase" in body
