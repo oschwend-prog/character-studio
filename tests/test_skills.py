@@ -184,7 +184,8 @@ def test_the_playbook_names_the_five_rules_in_the_owners_words():
     playbook = body.split("## Drop-in playbook", 1)[1].split("## 1. Orient", 1)[0]
     for rule in ("Pick swap-friendly clips", "Trim before generating", "Transform", "Credit and cleanliness", "Music"):
         assert f"**{rule}" in playbook, rule
-    assert "6-9 s" in playbook and "16 s the hard maximum" in playbook and "paid per second" in playbook
+    # owner 2026-10-05, prefers longer: classics 12-14 s windows / 12-15 s masters, other clips 7-9 s / 8-10 s
+    assert "12-14 s" in playbook and "12-15 s for a classic" in playbook and "16 s the hard maximum" in playbook and "paid per second" in playbook
     assert "`original` is the default of a Drop-in" in playbook and "`in_app`" in playbook and "`ai_beat`" in playbook
     assert "Never put in audio that the clip did not carry" in playbook
 
