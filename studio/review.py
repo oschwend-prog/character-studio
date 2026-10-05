@@ -47,24 +47,32 @@ rests on data that is not there yet):
 CLI (``studio review data``) prints the payload as JSON on stdout and, when the Instagram guard
 fires, applies it (writes ``dropin_share``) and says so under ``ig_guard``. Exit 0 normally, exit 2
 for anything the caller must fix (no ``DATABASE_URL``).
+
+``studio review save --week W --character SLUG --report-file PATH --bar-status TEXT`` stores the
+written report in ``reviews``, one row per (week, character): saving the same week again rewrites
+that row, never adds a second. ``W`` is an ISO week (``2026-W41``) or any ``YYYY-MM-DD`` date in the
+week; both are stored as the Monday of the week. The report is read from a file (free text never goes
+through the shell). Exit 2 for an unknown character, a bad week or an empty report.
 """
 
 from __future__ import annotations
 
 import json
 import math
+import re
 import statistics
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Literal
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+from typing import Annotated, Any, Literal
 
 import typer
 
-from studio.cli_support import emit, open_store
+from studio.cli_support import emit, fail, open_store, text_option
 from studio.clips import REQUIRED_FEATURES
 from studio.config import now_london
 from studio.metrics import posted_at, views_at_7d
-from studio.models import Account, Clip, ClipState, Platform, PostStatus, Snapshot
+from studio.models import Account, Clip, ClipState, Platform, PostStatus, Review, Snapshot
 from studio.store import Store, require_aware
 
 # ---- the pre-registered bars (binding: change nothing here without the owner) -----------------------
@@ -521,6 +529,46 @@ def review_payload(store: Store, now: datetime, *, apply_guard: bool = False) ->
     }
 
 
+# ---- saving the written report --------------------------------------------------------------------
+
+_ISO_WEEK = re.compile(r"(\d{4})-W(\d{2})", re.IGNORECASE)
+
+
+def parse_week(value: str) -> date:
+    """The Monday of an ISO week (``2026-W41``) or of the week a ``YYYY-MM-DD`` date falls in.
+
+    ``ValueError`` for anything else, including a week the year does not have (``2025-W53``).
+    """
+    raw = value.strip()
+    try:
+        match = _ISO_WEEK.fullmatch(raw)
+        if match:
+            return date.fromisocalendar(int(match[1]), int(match[2]), 1)
+        day = date.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(
+            f"week must be an ISO week like 2026-W41 or a YYYY-MM-DD date, got {value!r}"
+        ) from None
+    return day - timedelta(days=day.weekday())
+
+
+def save_review(
+    store: Store, week: date, character_slug: str, report_md: str, bar_status: str | None
+) -> Review:
+    """Store (or rewrite) the report of ``character_slug`` for the ISO week containing ``week``.
+
+    ``ValueError`` for an empty report or an unknown character; nothing is written then.
+    """
+    if not report_md.strip():
+        raise ValueError("the report is empty")
+    if character_slug not in {c.slug for c in store.characters()}:
+        raise ValueError(f"unknown character {character_slug!r}")
+    monday = week - timedelta(days=week.weekday())
+    return store.upsert_review(
+        Review(week=monday, character_slug=character_slug, report_md=report_md, bar_status=bar_status)
+    )
+
+
 # ---- CLI ------------------------------------------------------------------------------------------
 
 app = typer.Typer(
@@ -533,3 +581,38 @@ app = typer.Typer(
 def data_command() -> None:
     """Print the weekly review data; applies the Instagram guard (dropin_share 0.20) when it fires."""
     emit(review_payload(open_store(), now_london(), apply_guard=True))
+
+
+@app.command("save")
+def save_command(
+    week: Annotated[str, typer.Option(help="ISO week like 2026-W41, or any YYYY-MM-DD date in it.")],
+    character: Annotated[str, typer.Option(help="Character slug (biscuit, reginald).")],
+    report_file: Annotated[
+        Path, typer.Option("--report-file", help="The markdown report (written with the Write tool).")
+    ],
+    bar_status: Annotated[
+        str, typer.Option("--bar-status", help="The character bar: not_yet, continue, promote or kill.")
+    ],
+) -> None:
+    """Save a character's weekly report; the same week and character is rewritten, not duplicated."""
+    try:
+        monday = parse_week(week)
+    except ValueError as e:
+        fail(str(e))
+    report = text_option(None, report_file, "report")
+    status = bar_status.strip()
+    if not status:
+        fail("--bar-status must not be empty")
+    try:
+        saved = save_review(open_store(), monday, character, report or "", status)
+    except ValueError as e:
+        fail(str(e))
+    emit(
+        {
+            "id": saved.id,
+            "week": saved.week,
+            "character_slug": saved.character_slug,
+            "bar_status": saved.bar_status,
+            "report_chars": len(saved.report_md),
+        }
+    )

@@ -1,0 +1,50 @@
+# The watchdog, hourly (`studio health`): exits 1, so GitHub emails the owner, when no daily run
+# finished in the last 26 h, a post is `failed` or `needs_check`, or the month's committed credits
+# reached 80 % of the cap.
+#
+# Secrets (repo secrets, added by the owner at go-live): DATABASE_URL, SUPABASE_URL,
+# SUPABASE_SERVICE_KEY, POSTIZ_API_KEY. Until DATABASE_URL exists the job prints a notice and
+# every later step is skipped, so the schedule never fails (and never emails) before go-live.
+# Only the database is read here: no apt packages, no Node, no Postiz CLI.
+name: health
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  health:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check secrets
+        id: gate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "secrets not configured — skipping"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.configured == 'true'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.configured == 'true'
+      - name: Health check
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
+        run: uv run studio health

@@ -8,7 +8,7 @@ threshold is tested at its exact boundary: 1.5 / 0.7 with n 5 / 8, the 20 posts 
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -26,7 +26,9 @@ from studio.review import (
     format_verdicts,
     hook_proven,
     ig_guard,
+    parse_week,
     review_payload,
+    save_review,
 )
 from studio.store import MemoryStore
 
@@ -708,3 +710,110 @@ def test_review_data_without_a_database_url_is_a_caller_error(monkeypatch):
     r = CliRunner().invoke(app, ["review", "data"])
     assert r.exit_code == 2
     assert "DATABASE_URL" in r.output
+
+
+# ---- review save -------------------------------------------------------------------------------
+
+
+def test_review_help_lists_save():
+    r = CliRunner().invoke(app, ["review", "--help"])
+    assert r.exit_code == 0 and "save" in r.output
+
+
+@pytest.mark.parametrize(
+    ("raw", "monday"),
+    [
+        ("2026-W41", date(2026, 10, 5)),
+        ("2026-w41", date(2026, 10, 5)),
+        ("2026-W01", date(2025, 12, 29)),  # ISO week 1 of 2026 starts in December
+        ("2020-W53", date(2020, 12, 28)),  # a 53-week year
+        ("2026-10-05", date(2026, 10, 5)),  # a Monday as a date: what the weekly-review skill passes
+        ("2026-10-08", date(2026, 10, 5)),  # any other day lands on its Monday
+        ("2026-10-11", date(2026, 10, 5)),  # Sunday still belongs to that week
+    ],
+)
+def test_parse_week_gives_the_monday_of_the_iso_week(raw, monday):
+    assert parse_week(raw) == monday
+
+
+@pytest.mark.parametrize("raw", ["2026-W54", "2026-W00", "2025-W53", "W41", "next week", "2026-13-01", ""])
+def test_parse_week_refuses_what_is_not_a_week(raw):
+    with pytest.raises(ValueError, match="week"):
+        parse_week(raw)
+
+
+def reviews_store() -> MemoryStore:
+    return MemoryStore(characters=[Character(slug="biscuit", name="Biscuit"), Character(slug="reginald", name="Reginald")])
+
+
+def test_save_review_inserts_and_then_rewrites_the_same_week_and_character():
+    store = reviews_store()
+    first = save_review(store, date(2026, 10, 5), "biscuit", "# v1", "not_yet")
+    again = save_review(store, date(2026, 10, 5), "biscuit", "# v2", "continue")
+    assert again.id == first.id and (again.report_md, again.bar_status) == ("# v2", "continue")
+    save_review(store, date(2026, 10, 5), "reginald", "# r", None)
+    assert len(store.list_reviews()) == 2
+
+
+def test_save_review_refuses_an_unknown_character_and_an_empty_report():
+    store = reviews_store()
+    with pytest.raises(ValueError, match="unknown character"):
+        save_review(store, date(2026, 10, 5), "nobody", "# x", None)
+    with pytest.raises(ValueError, match="empty"):
+        save_review(store, date(2026, 10, 5), "biscuit", "  \n", None)
+    assert store.list_reviews() == []
+
+
+@pytest.fixture
+def save_store(monkeypatch) -> MemoryStore:
+    store = reviews_store()
+    monkeypatch.setattr(review, "open_store", lambda: store)
+    return store
+
+
+def save(tmp_path, *args: str, text: str = "# Biscuit\n\nweek 41 report\n"):
+    report = tmp_path / "report.md"
+    report.write_text(text, encoding="utf-8")
+    return CliRunner().invoke(app, ["review", "save", *args, "--report-file", str(report)])
+
+
+def test_cli_review_save_writes_one_row_and_is_idempotent(save_store, tmp_path):
+    args = ("--week", "2026-W41", "--character", "biscuit", "--bar-status", "continue")
+    r = save(tmp_path, *args)
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert (out["week"], out["character_slug"], out["bar_status"]) == ("2026-10-05", "biscuit", "continue")
+    (row,) = save_store.list_reviews()
+    assert row.report_md == "# Biscuit\n\nweek 41 report" and out["id"] == row.id  # one trailing newline dropped
+
+    r = save(tmp_path, *args, text="# Biscuit\n\nrevised\n")
+    assert r.exit_code == 0, r.output
+    (row2,) = save_store.list_reviews()  # still one row for (week, character)
+    assert row2.id == row.id and row2.report_md.endswith("revised")
+
+
+def test_cli_review_save_accepts_a_monday_date_like_the_skill_passes(save_store, tmp_path):
+    r = save(tmp_path, "--week", "2026-10-05", "--character", "reginald", "--bar-status", "not_yet")
+    assert r.exit_code == 0, r.output
+    assert [(x.week, x.character_slug) for x in save_store.list_reviews()] == [(date(2026, 10, 5), "reginald")]
+
+
+def test_cli_review_save_takes_the_report_literally(save_store, tmp_path):
+    nasty = "it's $(echo pwned) `x` \"q\" ; && | > \U0001F499"
+    r = save(tmp_path, "--week", "2026-W41", "--character", "biscuit", "--bar-status", "kill", text=nasty + "\n")
+    assert r.exit_code == 0, r.output
+    assert save_store.list_reviews()[0].report_md == nasty
+
+
+def test_cli_review_save_refuses_bad_calls_without_writing(save_store, tmp_path):
+    ok = ("--week", "2026-W41", "--character", "biscuit", "--bar-status", "continue")
+    assert save(tmp_path, "--week", "soon", "--character", "biscuit", "--bar-status", "x").exit_code == 2
+    r = save(tmp_path, "--week", "2026-W41", "--character", "nobody", "--bar-status", "x")
+    assert r.exit_code == 2 and "unknown character" in r.output
+    r = CliRunner().invoke(app, ["review", "save", *ok, "--report-file", str(tmp_path / "missing.md")])
+    assert r.exit_code == 2 and "no such file" in r.output
+    assert CliRunner().invoke(app, ["review", "save", *ok]).exit_code == 2  # --report-file is required
+    assert CliRunner().invoke(app, ["review", "save", "--week", "2026-W41", "--character", "biscuit",
+                                    "--report-file", str(tmp_path / "x")]).exit_code == 2  # --bar-status too
+    assert save(tmp_path, *ok, text="\n").exit_code == 2  # an empty report
+    assert save_store.list_reviews() == []

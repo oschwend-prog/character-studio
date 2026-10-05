@@ -1,0 +1,58 @@
+# Pull post metrics from Postiz, every 6 hours (`studio metrics pull`). The windows are catch-up
+# windows (a reading is taken once its age is reached, with no upper bound), so a 6-hourly or a
+# skipped run never loses data.
+#
+# Secrets (repo secrets, added by the owner at go-live): DATABASE_URL, SUPABASE_URL,
+# SUPABASE_SERVICE_KEY, POSTIZ_API_KEY. Until DATABASE_URL exists the job prints a notice and
+# every later step is skipped, so the schedule never fails (and never emails) before go-live.
+# No apt packages are needed here (nothing in this job touches media); if one is ever added, run
+# `sudo apt-get update` first, as ci.yml does.
+name: metrics
+
+on:
+  schedule:
+    - cron: '7 */6 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: metrics
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  metrics:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check secrets
+        id: gate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "secrets not configured — skipping"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.configured == 'true'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.configured == 'true'
+      - uses: actions/setup-node@v4
+        if: steps.gate.outputs.configured == 'true'
+        with:
+          node-version: '20'
+      - name: Install the Postiz CLI
+        if: steps.gate.outputs.configured == 'true'
+        run: npm i -g postiz
+      - name: Pull metrics
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
+        run: uv run studio metrics pull

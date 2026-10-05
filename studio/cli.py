@@ -9,6 +9,7 @@ from studio import (
     budget,
     clips,
     favorites,
+    health,
     metrics,
     planning,
     publish,
@@ -42,6 +43,8 @@ app.add_typer(publish.app, name="publish")
 app.add_typer(metrics.app, name="metrics")
 app.add_typer(review.app, name="review")
 app.add_typer(seed.app, name="seed")
+app.add_typer(health.run_app, name="run")
+app.command("health")(health.health_command)
 
 for _name, _help in SUBAPPS.items():
     app.add_typer(typer.Typer(help=_help, no_args_is_help=True), name=_name)
