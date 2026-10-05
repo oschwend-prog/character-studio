@@ -126,3 +126,49 @@ def test_the_skill_names_a_beat_that_is_not_the_sources_soundtrack():
     assert "Beat render" in body and "generate_audio: true" in body
     assert "Never the audio of `gen.mp4` or of the source file" in body
     assert "`generate_audio` with" not in body.replace("generate_audio: true", "")  # the speech-only tool is not used
+
+
+# ---- the owner's "Make it" sheet and the Scanner card: what the daily run reads and writes -----------------
+
+
+def test_the_run_opens_a_log_row_first_and_closes_it_with_the_same_start_and_the_scan_numbers():
+    body = text("daily-run")
+    calls = studio_calls("daily-run")
+    assert "run log --kind daily --status ok --open" in calls  # "Scanning now" while the row is open
+    closing = next(c for c in calls if c.startswith("run log --kind daily --status ok|budget_stop|error"))
+    for option in ("--summary-file", "--started-at", "--details-file renders/tmp/details.json"):
+        assert option in closing, option
+    assert body.index("--open") < body.index("1. `bin/studio seed status`")  # before anything can fail
+    # the scan step writes the exact shape studio.health.validate_details accepts and the card reads
+    assert '{"scan": {"queries": ["biscuit #2 concept"], "outliers": 9, "picks_added": 4, "auto_approved": 1, "held": 1, "skipped": 2, "vidiq_credits": 5}}' in body
+    from studio.health import validate_details
+
+    validate_details(json.loads(re.search(r"`(\{\"scan\": \{\"queries\".*?\}\})`", body).group(1)))
+    assert 'write `{"vidiq_credits": 10}`' in body  # a day without a scan that bought a breakdown still counts toward the 150
+
+
+def test_the_skill_follows_the_owners_note_mode_and_presence_inside_the_guardrails():
+    body = text("daily-run")
+    assert "`proposal.owner_note`, follow it (hook, caption, prop, timing) unless it breaks a guardrail" in body
+    assert "say in the run log how it was applied" in body
+    # mode: the owner's choice, but Drop-in still needs an eligible source (and the share rule) or it is made as Recreate
+    assert "`proposal.owner_mode`" in body and "`recreate` → Recreate whatever the plan says" in body
+    assert "Drop-in only when BOTH hold" in body and "make it as Recreate and say why in the run log" in body
+    assert "The owner's choice never lifts a rule" in body
+    # presence: mapped into the replace-object prompt, `featured` when absent
+    prompt = body.split("`hf_mult_replace_object` for Drop-in", 1)[1].split("`jobs_wait`", 1)[0]
+    assert "`proposal.owner_presence` (absent = `featured`)" in prompt
+    assert "`cameo` = replace a secondary element" in prompt and "keep his motion minimal" in prompt
+    assert "`featured` = replace the main performer and follow their motion" in prompt
+    assert "`star` = replace the main performer and push the performance" in prompt
+    assert "his hook in the first second" in prompt and "eye close-up with the glint" in prompt
+
+
+def test_the_values_the_skill_names_are_the_ones_the_database_accepts():
+    sql = (ROOT / "supabase" / "migrations" / "0007_characters_view.sql").read_text()
+    body = text("daily-run")
+    for value in ("cameo", "featured", "star"):
+        assert f"'{value}'" in sql and f"`{value}`" in body
+    for value in ("dropin", "recreate"):
+        assert f"'{value}'" in sql
+    assert "owner_note" in sql and "owner_mode" in sql and "owner_presence" in sql
