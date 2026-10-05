@@ -9,6 +9,7 @@ from studio import (
     budget,
     clips,
     favorites,
+    golive,
     health,
     metrics,
     planning,
@@ -43,6 +44,7 @@ app.add_typer(publish.app, name="publish")
 app.add_typer(metrics.app, name="metrics")
 app.add_typer(review.app, name="review")
 app.add_typer(seed.app, name="seed")
+app.add_typer(golive.app, name="golive")
 app.add_typer(health.run_app, name="run")
 app.command("health")(health.health_command)
 

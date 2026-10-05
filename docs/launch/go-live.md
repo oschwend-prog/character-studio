@@ -1,0 +1,88 @@
+# Go-live checklist (owner, in order)
+
+Run `bin/studio golive check` after any step: it prints a line per prerequisite (✅ done, ❌ with a one-line fix,
+➖ not applicable here) and exits 0 only when nothing is ❌. Steps 1, 2, 8, 12 have no check line (they happen
+outside the repo). Secrets only ever go into the Keychain or GitHub secrets: never into a file, a chat or a command line.
+
+## 1. Top up Higgsfield credits
+- [ ] Higgsfield > Plans & credits: buy about 1,800 credits (weeks 1-2 plus tests; the monthly cap is 6,000).
+- [ ] Tell Claude: it reads the balance with the Higgsfield `balance` tool.
+
+## 2. Create the social accounts
+- [ ] Create 4 accounts: TikTok and Instagram for Biscuit and for Reginald. All 4 must be **Creator**, not Business.
+- [ ] Instagram: Edit profile, turn on the **AI-generated profile** label (name may vary by app version). TikTok's per-post label is set by the publisher.
+- [ ] Bios, handles and display names: `docs/launch/social-pages.md`. Avatars: `assets/avatars/biscuit.png`; `reginald.png` is not in the repo yet (Quiff avatar job `ecaf6a89-77ff-4d5a-bf92-24beb2b20c93` in Higgsfield, or ask Claude).
+- [ ] 2-factor on everywhere. Note the 4 final handles for step 3.
+
+## 3. Postiz Cloud
+- [ ] Sign up at postiz.com (Standard plan), Add channel x4: TikTok and Instagram for each character (for Instagram use the standalone login if both are offered).
+- [ ] Settings > Public API: copy the key. Store it now (paste when prompted, input is hidden):
+  `security add-generic-password -s cs-postiz-api-key -a "$USER" -w`
+- [ ] Install the CLI and list the channel ids:
+  `npm i -g postiz` then `POSTIZ_API_KEY="$(security find-generic-password -s cs-postiz-api-key -w)" postiz integrations:list`
+- [ ] Put each channel's id in `characters/<slug>/refs.json` (`postiz_integration_id`) with its `handle` (null until the account exists).
+- [ ] `bin/studio seed` loads them. It needs step 4's database item, so run it at the end of step 4.
+- Turns ✅: `keychain: cs-postiz-api-key`, `postiz: CLI installed and authenticated`.
+
+## 4. Keychain items
+- [ ] One command each, paste the value when prompted (`bin/studio` reads them; nothing is written to a file):
+  - `security add-generic-password -s cs-database-url -a "$USER" -w`: Supabase project hkcafvzjwkeibbmvskko > Connect > **session pooler** string.
+  - `security add-generic-password -s cs-supabase-url -a "$USER" -w`: Settings > API > Project URL.
+  - `security add-generic-password -s cs-supabase-service-key -a "$USER" -w`: Settings > API > service_role key.
+  - (`cs-postiz-api-key` was stored in step 3.)
+- [ ] Now run `bin/studio seed` (step 3's last action) and `bin/studio seed status`.
+- Turns ✅: `keychain: cs-database-url`, `keychain: cs-supabase-url`, `keychain: cs-supabase-service-key`, `database: reachable`, `database: schema studio, migrations 0001-0004` (if ❌ its fix names the migration file to apply).
+
+## 5. Supabase dashboard
+- [ ] Project Settings > Data API (older UI: Settings > API) > **Exposed schemas**: add `studio`, Save.
+- [ ] Authentication > URL Configuration > Redirect URLs: add the terminal URL (you get it in step 8, come back for this).
+- [ ] After your first magic-link login to the terminal (step 8): Authentication > Sign In / Providers, turn **off** "Allow new users to sign up".
+- Turns ✅: `data api: schema studio exposed`.
+
+## 6. GitHub secrets and workflows
+- [ ] Set the 4 secrets, piped from the Keychain so no value is typed or shown:
+  - `printf %s "$(security find-generic-password -s cs-database-url -w)" | gh secret set DATABASE_URL`
+  - `printf %s "$(security find-generic-password -s cs-supabase-url -w)" | gh secret set SUPABASE_URL`
+  - `printf %s "$(security find-generic-password -s cs-supabase-service-key -w)" | gh secret set SUPABASE_SERVICE_KEY`
+  - `printf %s "$(security find-generic-password -s cs-postiz-api-key -w)" | gh secret set POSTIZ_API_KEY`
+- [ ] Enable publishing and metrics: `for w in publish metrics; do gh workflow enable $w.yml; done`
+- [ ] **Hold `health.yml` until step 11**: it fails, and GitHub emails you hourly, until the first daily run is logged.
+- Schedules run from the repo's default branch (today `build/slice1`); if you merge to `main` and change the default, they follow.
+- Turns ✅: `github: secret DATABASE_URL`, `... SUPABASE_URL`, `... SUPABASE_SERVICE_KEY`, `... POSTIZ_API_KEY`, `github: workflow publish enabled`, `github: workflow metrics enabled`, `repo: no secret files tracked`.
+
+## 7. Approve the permission proposal
+- [ ] Read it: `diff .claude/settings.json .claude/settings.json.proposed`. It denies every publish/upload/update tool of the Higgsfield and vidIQ MCPs and allows what an unattended run needs (renders, playbook edits, the humanizer and last30days skills).
+- [ ] If happy: `cp .claude/settings.json.proposed .claude/settings.json`
+- Turns ✅: `permissions: proposed deny rules applied`.
+
+## 8. Vercel (the terminal)
+- [ ] Vercel > Add New > Project > import `oschwend-prog/character-studio`. Root Directory `terminal`. Production branch `build/slice1` (or `main` after the merge).
+- [ ] Environment variables: `VITE_SUPABASE_URL` (the project URL) and `VITE_SUPABASE_ANON_KEY` (the anon / publishable key, Settings > API; it is safe in a browser). Deploy.
+- [ ] Open the URL, log in by magic link (only `o.schwend@gmail.com` can see data), then finish step 5's two items.
+
+## 9. Flip the characters to live
+- [ ] In `characters/biscuit/refs.json` and `characters/reginald/refs.json` set `"status": "live"` (there is no separate CLI; seeding is how status changes), with the handles and Postiz ids from step 3.
+- [ ] `bin/studio seed`, then `bin/studio seed status` (each character shows `live: true`). Commit and push the refs files (ids are not secrets).
+- The daily run skips Reginald until his close-up exists (step 10).
+- Turns ✅: `characters: at least one live`, `characters: refs.json valid`, `characters: biscuit ready`.
+
+## 10. Rehearsal (Claude runs it with you present, about 260 credits)
+- [ ] Genjutsu multi-body test with 3 dancers: decides the held picks D1, D3, B4, B5, B6.
+- [ ] Quiff Butler dance on the slick driver; generate Reginald's close-up and set `closeup` in his refs.json, re-seed.
+- [ ] Cute-Biscuit debut re-render. Make it the first clip, or "picks first" would produce D2 before the debut.
+- [ ] `postiz integrations:settings <id>` for one TikTok and one Instagram channel: compare with `TIKTOK_SETTINGS` / `INSTAGRAM_SETTINGS` in `studio/publish/postiz.py` (unknown keys are silently dropped).
+- [ ] `postiz analytics:post <id> -d 7` on a real post: compare with `POSTIZ_METRIC_LABELS` / `POSTIZ_SERIES_MODE` in `studio/metrics.py` (cumulative or per-day).
+- [ ] vidIQ Instagram insights (connect the 2 Instagram accounts to vidIQ first): compare the keys with the `IG_*` constants and check the `platform_post_id` match.
+- [ ] Integration tests: `DATABASE_URL_TEST="$(security find-generic-password -s cs-database-url -w)" uv run pytest tests/integration -v` (builds and drops its own `studio_test` schema; never touches `studio`).
+- Turns ✅: `characters: reginald ready`.
+
+## 11. Scheduled tasks (Claude creates them from this project folder)
+- [ ] `studio-daily-run`: daily 08:00 Europe/London, Sonnet, prompt `/daily-run`. `studio-weekly-review`: Mondays 09:00, Opus, prompt `/weekly-review`. Claude records both ids in `CLAUDE.md`.
+- [ ] Claude triggers one daily run and checks it finishes without stalling on a permission prompt, and that `bin/studio health` exits 0 (a `daily` row in `runs`).
+- [ ] Now enable the watchdog: `gh workflow enable health.yml`
+- Turns ✅: `github: workflow health enabled`. Everything green means `bin/studio golive check` ends with "Ready to go live."
+
+## 12. First posts
+- [ ] Approve the first queued clips in the terminal (Today or Queue). Until an account has 6 approved posts, every post needs your approval.
+- [ ] The next `publish.yml` run (every 15 min) posts them at the slot (Biscuit 19:00, Reginald 19:30 London).
+- [ ] Open each post on TikTok and Instagram: AI label visible, 1080p, post URL stored (Queue / Library).
