@@ -137,6 +137,9 @@ def fetch_pick_clip(
     """
     run = runner if runner is not None else _run_ytdlp
     folder = Path(out_dir) if out_dir is not None else FETCHED_DIR
+    body = Body(body)  # a bad body type is refused before anything is downloaded, not after the upload
+    if bodies < 1:
+        raise ValueError(f"bodies must be at least 1, got {bodies!r}")
     pick = store.get_favorite(pick_id)
     if pick is None:
         raise KeyError(pick_id)
@@ -169,7 +172,8 @@ def fetch_pick_clip(
 
     try:
         try:
-            done = run(ytdlp_command(canonical, str(folder / f"{pick.id}.%(ext)s")))
+            template = f"{str(folder).replace('%', '%%')}/{pick.id}.%(ext)s"  # a % in the path is not a template field
+            done = run(ytdlp_command(canonical, template))
         except FileNotFoundError:
             raise FetchFailed("yt-dlp is not installed") from None
         except subprocess.TimeoutExpired:
@@ -218,7 +222,7 @@ def _done_pick(store: Store, pick: Favorite) -> bool:
     return clip is not None and clip.state.value in PURGE_CLIP_STATES
 
 
-def _still_needed(store: Store, source_id: str | None, pick: Favorite, clip_id: str) -> bool:
+def _still_needed(store: Store, source_id: str | None, pick: Favorite, clip_id: str | None) -> bool:
     """Does another unfinished pick or clip still use this source?"""
     if source_id is None:
         return False
@@ -244,6 +248,18 @@ def _purge_pick(
     if local.is_file():
         local.unlink()
         out["files_deleted"].append(str(local))
+
+    def drop_sheet(name: str) -> None:  # `source analyze` writes renders/<source id or file name>/analysis.png
+        sheet = renders / name / "analysis.png"
+        if sheet.is_file():
+            sheet.unlink()
+            out["sheets_deleted"].append(str(sheet))
+            try:
+                sheet.parent.rmdir()  # only when nothing else is in it
+            except OSError:
+                pass
+
+    drop_sheet(pick.id)  # the sheet of an analysis run on the downloaded file itself
     targets: list[tuple[str | None, str | None]] = [(marker.get("source_id"), marker.get("storage_path"))]
     if clip is not None and clip.source_id and clip.source_id != marker.get("source_id"):  # the trimmed child it was made from
         child = next(iter(store.list_sources(id=clip.source_id)), None)
@@ -259,14 +275,7 @@ def _purge_pick(
         out["storage_deleted"].append(key)
         if source_id is not None:
             store.update_source(source_id, storage_path=None)
-            sheet = renders / source_id / "analysis.png"
-            if sheet.is_file():
-                sheet.unlink()
-                out["sheets_deleted"].append(str(sheet))
-                try:
-                    sheet.parent.rmdir()  # only when nothing else is in it
-                except OSError:
-                    pass
+            drop_sheet(source_id)
     store.update_favorite(pick.id, proposal={**pick.proposal, "fetched": {**marker, "purged_at": now_london().isoformat()}})
 
 

@@ -262,6 +262,8 @@ def analyze_clip(path: str | Path, sheet: str | Path) -> dict[str, Any]:
     cannot decode; ``ValueError`` for a bad sheet extension.
     """
     path = Path(path)
+    if Path(sheet).suffix.lower() not in {".png", ".jpg", ".jpeg"}:  # before the minutes of work, not after them
+        raise ValueError(f"the contact sheet must be a .png or .jpg file, got {Path(sheet).name!r}")
     report: TechReport = probe(path, loudness=False)
     if report.duration_s > MAX_ANALYSIS_SECONDS:
         raise AnalysisError(f"the clip is {report.duration_s:.0f} s long: the analysis takes at most {MAX_ANALYSIS_SECONDS:.0f} s")

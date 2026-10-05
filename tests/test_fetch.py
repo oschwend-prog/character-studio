@@ -50,7 +50,7 @@ class FakeYtDlp:
             raise self.raises
         if self.write and self.clip is not None and self.returncode == 0:
             template = cmd[cmd.index("-o") + 1]
-            target = Path(template.replace("%(ext)s", "mp4"))
+            target = Path(template.replace("%(ext)s", "mp4").replace("%%", "%"))
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(self.clip, target)
         return subprocess.CompletedProcess(cmd, self.returncode, "", self.stderr)
@@ -108,6 +108,27 @@ def test_fetching_an_approved_pick_downloads_catalogues_and_links_it(world, clip
     assert marker["source_id"] == source.id and marker["storage_path"] == source.storage_path and "at" in marker and "purged_at" not in marker
     assert linked.proposal["hook"] == "he hits every beat"  # the rest of the proposal is untouched
     assert result["source_id"] == source.id and result["pick_id"] == pick.id and result["duration_s"] == pytest.approx(5.0, abs=0.1)
+
+
+def test_a_percent_sign_in_the_folder_is_not_a_template_field(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    odd = tmp_path / "100%done" / "fetched"
+    pick = approved_pick(store)
+    runner = FakeYtDlp(clip_file)
+    fetch_pick_clip(store, storage, pick.id, runner=runner, out_dir=odd)
+    assert runner.calls[0][runner.calls[0].index("-o") + 1] == f"{tmp_path}/100%%done/fetched/{pick.id}.%(ext)s"
+    assert (odd / f"{pick.id}.mp4").is_file()
+
+
+def test_a_bad_body_is_refused_before_anything_is_downloaded(world, clip_file):
+    store, storage, out_dir = world
+    pick = approved_pick(store)
+    runner = FakeYtDlp(clip_file)
+    with pytest.raises(ValueError):
+        fetch_pick_clip(store, storage, pick.id, runner=runner, out_dir=out_dir, body="octopus")
+    with pytest.raises(ValueError, match="bodies"):
+        fetch_pick_clip(store, storage, pick.id, runner=runner, out_dir=out_dir, bodies=0)
+    assert runner.calls == []
 
 
 def test_an_analysed_pick_is_fetched_too(world, clip_file):
@@ -350,13 +371,14 @@ def test_purge_also_removes_the_contact_sheets_of_the_clips(world, clip_file, tm
     store, storage, out_dir = world
     _, parent, child, clip = fetched_and_made(store, storage, out_dir, clip_file)
     renders = tmp_path / "renders"
-    for sid in (parent.id, child.id):
+    pick_id = store.list_favorites(clip_id=clip.id)[0].id
+    for sid in (parent.id, child.id, pick_id):  # the two sources, and the downloaded file analysed directly (named by the pick)
         (renders / sid).mkdir(parents=True)
         (renders / sid / "analysis.png").write_bytes(b"png")
     (renders / "keep").mkdir()
     (renders / "keep" / "analysis.png").write_bytes(b"png")
     purge_clip(store, storage, clip.id, fetched_dir=out_dir, renders_dir=renders)
-    assert not (renders / parent.id).exists() and not (renders / child.id).exists()
+    assert not (renders / parent.id).exists() and not (renders / child.id).exists() and not (renders / pick_id).exists()
     assert (renders / "keep" / "analysis.png").is_file()  # only the sheets of this clip's sources
 
 
