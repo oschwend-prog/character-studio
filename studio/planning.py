@@ -11,7 +11,7 @@
   those it skipped under ``skipped_not_live``, so a day with nothing due says why).
 
 Due characters are ordered by slot, then slug, and added one by one at an estimated cost
-(``EST_CREDITS``: recreate 160 including the amortised synthetic driver, drop-in 115). The plan
+(``EST_CREDITS``: recreate 160 including the amortised synthetic driver, drop-in 145 including its AI beat render). The plan
 **stops at the first clip that would take ``committed + Σ est`` past the monthly cap**: nothing
 after it is planned either, even if a cheaper clip would still fit (the daily run's rule is to
 stop on a budget refusal). ``studio plan today`` also reports those deferred clips.
@@ -67,8 +67,9 @@ from studio.sources import rank_sources
 from studio.store import Store, require_aware
 
 # Estimated credits per clip. Recreate includes the ~70 credits of its synthetic driver, spread
-# over the clips made from it.
-EST_CREDITS: dict[Mode, int] = {Mode.recreate: 160, Mode.dropin: 115}
+# over the clips made from it; Drop-in includes the ~30-credit Seedance beat render (its music is
+# never the source's soundtrack).
+EST_CREDITS: dict[Mode, int] = {Mode.recreate: 160, Mode.dropin: 145}
 
 ROLLING_WINDOW = 10
 

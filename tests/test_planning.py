@@ -255,9 +255,9 @@ def test_plan_may_spend_exactly_up_to_the_cap():
 
 
 def test_plan_stops_at_the_first_clip_that_does_not_fit():
-    # biscuit (19:00, recreate 160) does not fit in 130; reginald's cheaper Drop-in (115) would,
+    # biscuit (19:00, recreate 160) does not fit in 150; reginald's cheaper Drop-in (145) would,
     # but the plan stops adding at the first refusal instead of skipping ahead.
-    store = make_store(cap=130)
+    store = make_store(cap=150)
     clean_source(store, Body.biped)
     assert choose_mode(store, character(store, "reginald")) is D
     assert plan_today(store, TUE) == []
@@ -268,7 +268,7 @@ def test_est_credits_follow_the_mode():
     clean_source(store, Body.biped)  # only reginald has a Drop-in source
     by_slug = {d.character_slug: d for d in plan_today(store, TUE)}
     assert (by_slug["biscuit"].mode, by_slug["biscuit"].est_credits) == (R, 160)
-    assert (by_slug["reginald"].mode, by_slug["reginald"].est_credits) == (D, 115)
+    assert (by_slug["reginald"].mode, by_slug["reginald"].est_credits) == (D, 145)
 
 
 # ---- slots ------------------------------------------------------------------------------
@@ -334,7 +334,7 @@ def test_dropin_chosen_when_clean_source_and_under_share():
     history(store, tiktok, [D, R, R, D, R, R, R, D, R, R])  # 3 of 10 = 0.3 < 0.70
     assert choose_mode(store, character(store, "biscuit")) is D
     (due,) = [d for d in plan_today(store, TUE) if d.character_slug == "biscuit"]
-    assert (due.mode, due.est_credits, due.source_candidates) == (D, 115, [src.id])
+    assert (due.mode, due.est_credits, due.source_candidates) == (D, 145, [src.id])
 
 
 def test_dropin_with_no_history_counts_as_ratio_zero():
@@ -567,12 +567,12 @@ def test_plan_today_cli_prints_the_plan_as_json(cli_store):
     out = json.loads(r.output)
     assert out["date"] == "2026-10-06" and out["month"] == "2026-10" and out["weekday"] == "tue"
     assert out["kill_switch"] is False
-    assert (out["cap"], out["committed"], out["remaining"], out["estimated"]) == (6000, 0, 6000, 275)
+    assert (out["cap"], out["committed"], out["remaining"], out["estimated"]) == (6000, 0, 6000, 305)
     biscuit, reginald = out["due"]
     assert biscuit["character_slug"] == "biscuit" and biscuit["mode"] == "recreate"
     assert biscuit["est_credits"] == 160 and biscuit["source_candidates"] == []
     assert biscuit["slot"] == "2026-10-06T19:00:00+01:00"
-    assert reginald["mode"] == "dropin" and reginald["est_credits"] == 115
+    assert reginald["mode"] == "dropin" and reginald["est_credits"] == 145
     assert len(reginald["source_candidates"]) == 1
     assert reginald["slot"] == "2026-10-06T19:30:00+01:00"
     assert out["deferred_over_cap"] == []
