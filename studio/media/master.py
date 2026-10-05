@@ -38,8 +38,17 @@ Every ``at_s`` is a moment of the *unstretched* timeline (the intro starts at 0)
 do not move the other enhancements off their beats; ``out_time`` maps it onto the finished
 master. The hook windows and the bug are already on the finished timeline.
 
-CLI: ``studio master build --spec <json>`` builds, runs the master QA and prints JSON; it exits 1
-when the master has QA problems (the JSON says which) and 2 for anything the caller must fix.
+CLI: ``studio master build --spec <json> [--clip <id>]`` builds, runs the master QA and prints JSON; it
+exits 1 when the master has QA problems (the JSON says which) and 2 for anything the caller must fix.
+
+**The beat is ours, never the source's.** Third-party audio is never posted, and the generation of a
+Drop-in clip (and a library or inbox source file) carries the source's soundtrack. ``master build``
+therefore refuses (exit 2, nothing rendered) when ``audio`` is the same file as ``dance`` (same path or
+same bytes) or a file under an ``inbox`` folder (the owner's source drop), unless the clip is a
+``recreate`` clip made from a ``synthetic`` driver (Seedance renders it with our own beat in it). The
+clip comes from ``--clip <id>`` or ``clip_id`` in the spec (both: they must agree); without one the
+exception cannot be proved, so it does not apply. Any other ``audio`` file is not looked at: a Seedance
+beat render of its own (``seedance_2_5`` t2v with audio) is the way to get music for a Drop-in.
 
 ``studio master upload <clip> <file>`` is the last step: it re-checks the file against the master spec
 (``--loop`` for an eye loop), uploads it to bucket ``clips`` at ``<character>/<clip id>.mp4`` (what
@@ -50,6 +59,7 @@ uploaded (exit 1, the JSON lists the problems); the clip's state is left to ``cl
 from __future__ import annotations
 
 import dataclasses
+import hashlib
 import json
 import re
 import shutil
@@ -67,7 +77,7 @@ from studio.cli_support import emit, fail, open_storage, open_store
 from studio.clips import set_fields
 from studio.media import overlays
 from studio.media.qa import QAError, check_master, probe
-from studio.models import Clip
+from studio.models import Clip, Mode, Source, SourceKind
 from studio.storage import Storage, StorageError
 from studio.store import Store
 
@@ -126,6 +136,7 @@ class MasterSpec:
     outro_zoom: float = 1.30
     enhancements: list[dict[str, Any]] = field(default_factory=list)
     preset: str = "slow"
+    clip_id: str | None = None  # the clip this master is for: lets ``master build`` judge the audio source
 
 
 # ---- enhancements: parsing ---------------------------------------------------------------------
@@ -490,7 +501,8 @@ def build_master(spec: MasterSpec) -> Path:
     slow = [e for e in items if isinstance(e, Slowmo)]
     intro_len = _frames(spec.intro_s) / FPS if closeup else 0.0
     outro_len = _frames(spec.outro_s) / FPS if closeup else 0.0
-    if closeup and spec.hook2 and spec.hook2_until_s <= intro_len:
+    if any(line.strip() for line in spec.hook2) and spec.hook2_until_s <= intro_len:
+        # Without a close-up the intro is 0 s long: an end at 0 would flash the hook for one frame.
         raise ValueError(f"hook2_until_s ({spec.hook2_until_s:g}) must come after the intro ({intro_len:g} s)")
     if slow:  # fail before rendering anything; the exact check follows the normalised dance
         estimate = intro_len + _duration(dance) + outro_len + 1 / FPS
@@ -589,7 +601,8 @@ def spec_from_json(data: Any) -> MasterSpec:
 
     ``dance``, ``audio``, ``out`` and ``closeup`` (a path or ``null``) are required; hooks default
     to none, the offset to 0, and ``closeup_center`` / ``blue_eye_xy`` are required only with a
-    close-up. Other keys are the ``MasterSpec`` fields.
+    close-up. ``hook1`` / ``hook2`` must be lists of strings (a bare string is refused). ``clip_id`` is
+    optional. Other keys are the ``MasterSpec`` fields.
     """
     if not isinstance(data, dict):
         raise ValueError("the spec must be a JSON object")
@@ -602,6 +615,13 @@ def spec_from_json(data: Any) -> MasterSpec:
     if missing:
         raise ValueError(f"the spec is missing: {', '.join(missing)}")
     merged = {"closeup_center": (0, 0), "blue_eye_xy": (0, 0), **_DEFAULTS, **data}
+    for key in ("hook1", "hook2"):
+        lines = merged[key]
+        if not (isinstance(lines, list) and all(isinstance(line, str) for line in lines)):
+            raise ValueError(
+                f'{key} must be a list of text lines, e.g. ["line one", "line two"] '
+                f"(a bare string would be drawn one letter per line), got {lines!r}"
+            )
     for key in ("closeup_center", "blue_eye_xy"):
         xy = merged[key]
         if not (isinstance(xy, list | tuple) and len(xy) == 2 and all(isinstance(v, int | float) for v in xy)):
@@ -611,6 +631,50 @@ def spec_from_json(data: Any) -> MasterSpec:
         merged[key] = Path(merged[key])
     merged["closeup"] = Path(merged["closeup"]) if merged["closeup"] else None
     return MasterSpec(**merged)
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    """The same path, or two files with identical bytes (a copy of the generation is the generation)."""
+    try:
+        if a.resolve() == b.resolve() or (a.exists() and b.exists() and a.samefile(b)):
+            return True
+        if a.stat().st_size != b.stat().st_size:
+            return False
+        digest = lambda p: hashlib.sha256(p.read_bytes()).digest()  # noqa: E731
+        return digest(a) == digest(b)
+    except OSError:
+        return False
+
+
+def _in_inbox(audio: Path) -> bool:
+    return "inbox" in (part.lower() for part in audio.resolve().parts)
+
+
+def audio_problem(dance: Path, audio: Path, clip: Clip | None, source: Source | None) -> str | None:
+    """Why ``audio`` may not be used for this master, or ``None`` (see the module docstring).
+
+    The soundtrack of the dance generation or of a source file is third-party audio. The one clip whose
+    generation carries our own beat is a ``recreate`` clip with a ``synthetic`` driver.
+    """
+    ours = (
+        clip is not None
+        and clip.mode is Mode.recreate
+        and source is not None
+        and source.kind is SourceKind.synthetic
+    )
+    if not ours and _same_file(Path(dance), Path(audio)):
+        return (
+            "the audio is the dance generation's own soundtrack, which for this clip may be third-party "
+            "audio (never posted). Use a beat of our own: a seedance_2_5 t2v render with generate_audio. "
+            "Only a recreate clip with a synthetic driver may use its generation's audio, and then "
+            "master build needs --clip <id> (or clip_id in the spec) to know it is one"
+        )
+    if _in_inbox(Path(audio)):
+        return (
+            f"the audio {audio} is in an inbox folder: that is a source file (third-party audio, "
+            "never posted). Use a beat of our own: a seedance_2_5 t2v render with generate_audio"
+        )
+    return None
 
 
 app = typer.Typer(
@@ -639,12 +703,44 @@ def upload_master(
     return set_fields(store, clip_id, master_path=key)
 
 
+def _check_audio_rights(spec: MasterSpec, clip_id: str | None) -> None:
+    """``ValueError`` when the spec's audio may be third-party.
+
+    Only an audio that is the dance file or sits in an inbox folder needs a closer look, so the store is
+    opened (for the clip and its source) only then: an ordinary build needs no database.
+    """
+    dance, audio = Path(spec.dance), Path(spec.audio)
+    if not (_same_file(dance, audio) or _in_inbox(audio)):
+        return
+    clip = source = None
+    if clip_id is not None:
+        store = open_store()
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise ValueError(f"unknown clip {clip_id}")
+        source = next(iter(store.list_sources(id=clip.source_id)), None) if clip.source_id else None
+    if (problem := audio_problem(dance, audio, clip, source)) is not None:
+        raise ValueError(problem)
+
+
 @app.command("build")
 def build_command(
     spec: Annotated[Path, typer.Option("--spec", help="JSON file of MasterSpec fields (see master.py).")],
     loop: Annotated[bool, typer.Option("--loop", help="Judge the result as an eye loop (6-8 s).")] = False,
+    clip: Annotated[
+        str | None,
+        typer.Option(
+            "--clip",
+            help="Clip id (or clip_id in the spec): needed to use the dance generation's own audio, "
+            "allowed only for a recreate clip with a synthetic driver.",
+        ),
+    ] = None,
 ) -> None:
-    """Render the master described by SPEC, check it against the master spec, print the report."""
+    """Render the master described by SPEC, check it against the master spec, print the report.
+
+    Refuses (exit 2) an audio that is the dance generation's soundtrack or a source file, unless the
+    clip is a recreate clip made from a synthetic driver.
+    """
     try:
         data = json.loads(spec.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -652,7 +748,11 @@ def build_command(
     except (OSError, json.JSONDecodeError) as e:
         fail(f"cannot read the spec {spec}: {e}")
     try:
-        out = build_master(spec_from_json(data))
+        built = spec_from_json(data)
+        if clip is not None and built.clip_id is not None and clip != built.clip_id:
+            raise ValueError(f"--clip {clip} and clip_id {built.clip_id} in the spec are different clips")
+        _check_audio_rights(built, clip or built.clip_id)
+        out = build_master(built)
         report = probe(out)
     except (ValueError, MasterError, QAError) as e:
         fail(str(e))

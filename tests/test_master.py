@@ -487,6 +487,195 @@ def test_an_ffmpeg_failure_is_a_master_error_with_the_tail(tmp_path):
         build_master(spec)
 
 
+# ---- the end beat: eye close-up, glint and sting, in a built master -----------------------------------
+
+
+def test_a_built_master_ends_on_the_eye_closeup_with_the_glint_and_the_sting(tmp_path):
+    """Every master ends on the close-up glint + sting (CLAUDE.md): checked in the rendered file."""
+    dance = flat_video(tmp_path / "dance.mp4", 2, colour="0x203040")  # dark blue, no bright pixel anywhere
+    closeup = flat_png(tmp_path / "eye_closeup.png", colour=(150, 30, 30))  # red: unlike the dance, no bright pixel
+    beat = tone(tmp_path / "beat.wav", 1.0)  # the beat is over long before the dance ends
+    spec = spec_for(tmp_path, dance, beat, closeup=closeup, hook1=[], hook2=[], audio_offset_s=0.0)
+    out = build_master(spec)
+    total = probe(out, loudness=False).duration_s
+    dance_end = total - spec.outro_s
+    glint_box = (spec.blue_eye_xy[0] - 150, spec.blue_eye_xy[1] - 150, spec.blue_eye_xy[0] + 150, spec.blue_eye_xy[1] + 150)
+
+    # the picture: the dance, then the close-up with the sparkle on the blue eye
+    dance_frame = frame_at(out, 0.8 + 1.0, tmp_path)
+    end_frame = frame_at(out, dance_end + 0.28, tmp_path)
+    assert ImageStat.Stat(dance_frame).mean[2] > ImageStat.Stat(dance_frame).mean[0]  # blue dance
+    assert ImageStat.Stat(end_frame).mean[0] > ImageStat.Stat(end_frame).mean[2] + 40  # the red close-up
+    assert bright_pixels(dance_frame, glint_box) == 0
+    assert bright_pixels(end_frame, glint_box, floor=215) > 300, "the glint sits on the blue eye"
+    assert bright_pixels(end_frame, (0, 0, 1080, 600), floor=215) == 0  # and only there
+
+    # the sound: the sting lands just after the dance ends, over a silent beat
+    samples, _, rate = read_wav(s16_of(out, tmp_path))
+    quiet = rms(samples, rate, 1.4, dance_end - 0.1)
+    sting = rms(samples, rate, dance_end + 0.1, dance_end + 0.55)
+    assert sting > 0.02 and sting > 20 * quiet, (sting, quiet)
+
+
+def s16_of(video: Path, tmp: Path) -> Path:
+    wav = tmp / "master_audio.wav"
+    ffmpeg("-i", str(video), "-vn", "-c:a", "pcm_s16le", str(wav))
+    return wav
+
+
+# ---- hooks are lists of lines; the hook2 window must be real with or without a close-up ----------------
+
+
+@pytest.mark.parametrize("key", ["hook1", "hook2"])
+@pytest.mark.parametrize("bad", ["my eyes don't match.", 5, None, [["a"]], ["ok", 3], {"line": "x"}])
+def test_spec_from_json_rejects_a_hook_that_is_not_a_list_of_strings(key, bad):
+    """A str is a sequence of characters: it would render one letter per line."""
+    data = {"dance": "d.mp4", "audio": "a.wav", "out": "o.mp4", "closeup": None, key: bad}
+    with pytest.raises(ValueError, match=key):
+        master.spec_from_json(data)
+
+
+def test_spec_from_json_accepts_lists_of_lines_and_the_defaults():
+    data = {"dance": "d.mp4", "audio": "a.wav", "out": "o.mp4", "closeup": None,
+            "hook1": ["a", "b"], "hook2": ["c"], "hook2_until_s": 2.0}  # fmt: skip
+    spec = master.spec_from_json(data)
+    assert (spec.hook1, spec.hook2) == (["a", "b"], ["c"])
+    bare = master.spec_from_json({"dance": "d.mp4", "audio": "a.wav", "out": "o.mp4", "closeup": None})
+    assert (bare.hook1, bare.hook2) == ([], [])
+
+
+def test_the_hook2_window_is_checked_without_a_closeup_too(tmp_path):
+    """No intro: the window runs from 0, so an end at or before 0 would flash for one frame."""
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2_until_s=0.0)
+    with pytest.raises(ValueError, match="hook2_until_s"):
+        build_master(spec)
+    assert not spec.out.exists()
+
+
+def test_the_hook2_window_still_has_to_follow_the_intro_with_a_closeup(tmp_path):
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), hook2_until_s=0.5)  # intro is 0.8 s
+    with pytest.raises(ValueError, match="hook2_until_s"):
+        build_master(spec)
+
+
+def test_without_hook2_text_no_window_is_needed(tmp_path):
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[], hook2_until_s=0.0)
+    assert build_master(spec).is_file()
+
+
+# ---- the beat must be ours: never the source's soundtrack (third-party audio) -----------------------------
+
+
+@pytest.fixture
+def clip_rig(monkeypatch):
+    from studio.models import Body, Clip, Source
+    from studio.store import MemoryStore
+
+    store = MemoryStore()
+    monkeypatch.setattr(master, "open_store", lambda: store)
+
+    def make(mode: str, kind: str | None):
+        source = None
+        if kind:
+            source = store.add_source(Source(kind=kind, body=Body.biped, bodies=1, duration_s=9.0))
+        return store.add_clip(Clip(character_slug="biscuit", mode=mode, state="qa_passed",
+                                   source_id=source.id if source else None))
+
+    return store, make
+
+
+def run_build(tmp_path, dance, audio, *extra, **over):
+    return CliRunner().invoke(app, ["master", "build", "--spec", str(spec_json(tmp_path, dance, audio, closeup=None, hook1=[], **over)), *extra])
+
+
+def test_a_build_whose_audio_is_the_dance_file_is_refused_without_clip_context(tmp_path):
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    r = run_build(tmp_path, dance, dance)
+    assert r.exit_code == 2 and "third-party" in r.output and "--clip" in r.output
+    assert not (tmp_path / "master.mp4").exists()
+
+
+def test_a_copy_of_the_dance_file_is_the_same_file(tmp_path):
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    copy = tmp_path / "gen_copy.mp4"
+    copy.write_bytes(dance.read_bytes())
+    assert run_build(tmp_path, dance, copy).exit_code == 2
+
+
+@pytest.mark.parametrize(("mode", "kind"), [
+    ("dropin", "higgsfield_library"), ("dropin", "owner_inbox"), ("recreate", "higgsfield_library"),
+    ("recreate", "owner_inbox"), ("recreate", None),
+])  # fmt: skip
+def test_the_dance_audio_is_refused_for_every_clip_that_is_not_recreate_from_a_synthetic_driver(
+    tmp_path, clip_rig, mode, kind
+):
+    store, make = clip_rig
+    clip = make(mode, kind)
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    r = run_build(tmp_path, dance, dance, "--clip", clip.id)
+    assert r.exit_code == 2 and "third-party" in r.output
+    assert not (tmp_path / "master.mp4").exists()
+
+
+def test_a_recreate_clip_with_a_synthetic_driver_may_use_its_own_generation_audio(tmp_path, clip_rig):
+    """The synthetic driver (Seedance) carries OUR beat: gen.mp4's audio is ours there."""
+    store, make = clip_rig
+    clip = make("recreate", "synthetic")
+    dance = tmp_path / "dance.mp4"
+    ffmpeg("-f", "lavfi", "-i", "color=c=0x203040:s=1080x1920:r=30:d=1", "-f", "lavfi", "-i", "sine=frequency=330:duration=1",
+           "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-shortest", str(dance))  # fmt: skip
+    r = run_build(tmp_path, dance, dance, "--clip", clip.id)
+    assert r.exit_code in (0, 1), r.output  # built (1 only means the 1 s clip misses the 7 s master spec)
+    assert (tmp_path / "master.mp4").is_file()
+
+
+def test_the_clip_can_come_from_the_spec_as_clip_id(tmp_path, clip_rig):
+    store, make = clip_rig
+    clip = make("dropin", "higgsfield_library")
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    r = run_build(tmp_path, dance, dance, clip_id=clip.id)
+    assert r.exit_code == 2 and "third-party" in r.output
+
+
+def test_a_clip_given_twice_must_agree_and_must_exist(tmp_path, clip_rig):
+    store, make = clip_rig
+    a, b = make("recreate", "synthetic"), make("recreate", "synthetic")
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    assert run_build(tmp_path, dance, dance, "--clip", a.id, clip_id=b.id).exit_code == 2
+    r = run_build(tmp_path, dance, dance, "--clip", "no-such-clip")
+    assert r.exit_code == 2 and "unknown clip" in r.output
+
+
+def test_audio_under_an_inbox_folder_is_a_source_file_and_is_refused(tmp_path, clip_rig):
+    store, make = clip_rig
+    clip = make("dropin", "owner_inbox")
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    src = tone(inbox / "owner_clip.wav", 3)
+    r = run_build(tmp_path, dance, src, "--clip", clip.id)
+    assert r.exit_code == 2 and "source" in r.output
+
+
+def test_a_separate_beat_render_is_fine_for_a_dropin_clip(tmp_path, clip_rig):
+    """The legal path: a Seedance beat render of our own (a different file from the dance)."""
+    store, make = clip_rig
+    clip = make("dropin", "higgsfield_library")
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    r = run_build(tmp_path, dance, tone(tmp_path / "beat.wav", 3), "--clip", clip.id)
+    assert r.exit_code in (0, 1) and (tmp_path / "master.mp4").is_file()
+
+
+def test_audio_rights_is_a_plain_function_too(tmp_path):
+    dance = flat_video(tmp_path / "dance.mp4", 1)
+    beat = tone(tmp_path / "beat.wav", 1)
+    assert master.audio_problem(dance, beat, None, None) is None
+    assert "third-party" in master.audio_problem(dance, dance, None, None)
+
+
 # ---- CLI ---------------------------------------------------------------------------------------
 
 
