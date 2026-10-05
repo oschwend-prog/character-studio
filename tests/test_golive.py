@@ -247,7 +247,7 @@ def test_database_and_schema_pass_when_everything_is_applied(world):
     checks = world.run()
     assert checks["database"].status == "pass"
     assert checks["schema"].status == "pass"
-    assert "0001" in checks["schema"].title and "0009" in checks["schema"].title
+    assert "0001" in checks["schema"].title and "0010" in checks["schema"].title
 
 
 def test_no_database_url_fails_both_and_points_at_the_keychain(world):
@@ -292,6 +292,8 @@ def test_a_missing_table_fails_the_schema_check_naming_it(world):
         (("column", "has_minors"), "0008"),
         (("function", "attach_clip"), "0008"),
         (("column", "analysis"), "0009"),
+        (("view", "v_tracker"), "0010"),
+        (("column", "source_candidates"), "0010"),
     ],
 )
 def test_each_migration_is_detected_by_its_own_objects(world, missing, migration):
@@ -328,19 +330,20 @@ def test_the_markers_cover_exactly_what_the_migration_files_create():
         for m in re.finditer(r"alter table studio\.(?:snapshots|characters|runs|sources) add column if not exists (\w+)", text):
             created.add(("column", m.group(1)))
         if n >= "0009":
-            # a migration that only appends columns to views: the last column it appends is its marker (the probe reads it
-            # from the view's own columns). "Appended" = not in the same view of any earlier migration.
+            # a migration that appends columns to views of an earlier one: the last column it appends is its marker (the probe
+            # reads it from the view's own columns). "Appended" = not in the same view of any earlier migration; a view that is
+            # new in this migration is its own marker.
             for m in re.finditer(r"create or replace view studio\.(\w+) .*?from studio\.favorites f", text, re.S):
                 columns = lambda t: re.findall(r"\bas (\w+),?\s*$", t, re.M)  # noqa: E731
-                earlier = {
-                    c
+                before = [
+                    o
                     for k, other in files.items()
                     if k < n
                     for o in re.finditer(rf"create or replace view studio\.{m.group(1)} .*?from studio\.favorites f", other, re.S)
-                    for c in columns(o.group(0))
-                }
+                ]
+                earlier = {c for o in before for c in columns(o.group(0))}
                 appended = [c for c in columns(m.group(0)) if c not in earlier]
-                if appended:
+                if before and appended:
                     created.add(("column", appended[-1]))
         if n == "0001":  # the first migration's snapshot columns are not markers; its tables are
             created = {c for c in created if c[0] == "table"}

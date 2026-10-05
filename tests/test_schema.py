@@ -719,3 +719,117 @@ def test_0009_every_column_it_exposes_is_a_field_the_cli_validates():
     source = inspect.getsource(favorites._validate_analyst_fields) + inspect.getsource(favorites.validate_card)
     for column in ANALYST_COLUMNS:
         assert f'"{column}"' in source, f"{column}: exposed by the views but not validated by studio.favorites"
+
+
+# ---- 0010: the long list and the "In the works" tracker ---------------------------------------------------------------
+
+TRACKER_PATH = MIGRATIONS / "0010_tracker.sql"
+TRACKER_SQL = TRACKER_PATH.read_text()
+TRACKER_CODE = re.sub(r"--[^\n]*", "", TRACKER_SQL)
+LONGLIST_COLUMNS = [
+    "recognisability", "original_views", "original_url", "source_status", "audio_risk", "est_credits", "season", "checks",
+    "source_candidates",
+]  # fmt: skip
+TRACKER_COLUMNS = [
+    "pick_id", "character_slug", "character_name", "url", "platform", "creator_handle", "views", "outlier_x", "tier", "theme",
+    "concept", "hook", "thumbnail_url", "preview_url", "gallery", "posted_at", "velocity", "proposed_mode", "owner_mode",
+    "owner_presence", "owner_music", "owner_clip_path", "status", "decision", "approved_at", "note", "source_id", "analysis",
+    "fetch_failed", "clip_id", "clip_state", "clip_mode", "clip_state_since", "clip_failure", "credits_spent", "post_id",
+    "post_status", "post_scheduled_for", "post_posted_at", "post_url", "post_error", "latest_views",
+]  # fmt: skip
+
+
+def _view(sql: str, name: str) -> str:
+    return re.search(rf"create or replace view studio\.{name} .*?from studio\.favorites f", sql, re.S).group(0)
+
+
+def _select_list(view: str) -> list[str]:
+    """Every output column of a view's select list, in order (`f.url` -> url, `x as y` -> y)."""
+    body = view.split("select", 1)[1].rsplit("from studio.favorites f", 1)[0]
+    out = []
+    for line in body.strip().splitlines():
+        line = line.strip().rstrip(",")
+        m = re.search(r"\bas (\w+)$", line) or re.fullmatch(r"\w+\.(\w+)", line)
+        assert m, f"cannot read the column of {line!r}"
+        out.append(m.group(1))
+    return out
+
+
+def test_0010_picks_views_keep_every_column_and_append_the_long_list():
+    cols = lambda text: re.findall(r"\bas (\w+),?\s*$", text, re.M)  # noqa: E731
+    for view in ("v_picks", "v_pick_history"):
+        new, old = _view(TRACKER_SQL, view), _view(ANALYST_SQL, view)
+        assert "with (security_invoker = true)" in new
+        assert new.startswith(old.rsplit("\nfrom studio.favorites f", 1)[0]), f"{view}: 0009's select list must stay as it is"
+        assert cols(new)[: len(cols(old))] == cols(old), f"{view}: create or replace view may only append columns"
+        assert cols(new)[len(cols(old)) :] == LONGLIST_COLUMNS
+        # numbers through studio.num (a non-number is null, never 0), texts as text, the two lists only when they are arrays
+        for key in ("recognisability", "original_views", "est_credits"):
+            assert f"studio.num(f.proposal -> '{key}') as {key}" in new
+        for key in ("original_url", "source_status", "audio_risk", "season"):
+            assert f"f.proposal ->> '{key}' as {key}" in new
+        for key in ("checks", "source_candidates"):
+            assert f"case when jsonb_typeof(f.proposal -> '{key}') = 'array' then f.proposal -> '{key}' end as {key}" in new
+        assert f"grant select on studio.{view} to authenticated;" in TRACKER_SQL
+    # the where clauses and joins of 0009 are unchanged
+    assert "where f.status = 'new'" in TRACKER_CODE and "where f.status <> 'new'" in TRACKER_CODE
+    assert "left join studio.clips c on c.id = f.clip_id" in TRACKER_CODE
+
+
+def test_0010_is_views_and_grants_only():
+    statements = [s.strip() for s in TRACKER_CODE.split(";") if s.strip()]
+    kinds = sorted(re.match(r"(create or replace view studio\.\w+|grant select on studio\.\w+)", s).group(1) for s in statements)
+    assert kinds == [
+        "create or replace view studio.v_pick_history", "create or replace view studio.v_picks", "create or replace view studio.v_tracker",
+        "grant select on studio.v_pick_history", "grant select on studio.v_picks", "grant select on studio.v_tracker",
+    ]  # fmt: skip
+    assert not re.search(r"\b(drop|truncate|delete|insert|update|alter|create table|create function)\b", TRACKER_CODE, re.I)
+    assert not re.search(r"\banon\b", TRACKER_CODE)
+    assert re.findall(r"\b(?:public|auth|storage|extensions)\.[a-z_]+", TRACKER_CODE) == []
+    assert "grant select on studio.v_tracker to authenticated;" in TRACKER_SQL
+
+
+def test_0010_every_long_list_column_is_a_field_the_cli_validates():
+    import inspect
+
+    from studio import favorites
+
+    source = inspect.getsource(favorites._validate_longlist_fields) + "".join(map(repr, favorites.LONGLIST_TEXT_KEYS))
+    for column in LONGLIST_COLUMNS:
+        assert f'"{column}"' in source or f"'{column}'" in source, f"{column}: exposed by the views but not validated"
+
+
+def test_0010_tracker_has_its_columns_in_order_and_runs_as_the_caller():
+    tracker = _view(TRACKER_SQL, "v_tracker")
+    assert tracker.startswith("create or replace view studio.v_tracker with (security_invoker = true) as")
+    assert _select_list(tracker) == TRACKER_COLUMNS
+
+
+def test_0010_tracker_follows_an_approved_pick_until_a_week_after_its_post():
+    tail = TRACKER_CODE.split("create or replace view studio.v_tracker", 1)[1]
+    where = tail.split("\nwhere ", 1)[1].split(";", 1)[0]
+    assert "f.status in ('approved', 'analysed', 'queued')" in where
+    assert "f.status = 'made'" in where and "interval '7 days'" in where
+    # a made pick with no post yet (awaiting approval) must stay: the cut-off is null-safe
+    assert "not coalesce(p.status = 'posted' and coalesce(p.claimed_at, p.scheduled_for) < now() - interval '7 days', false)" in where
+    assert "'new'" not in where and "'skipped'" not in where
+
+
+def test_0010_tracker_joins_the_newest_clip_its_credits_its_post_and_the_latest_views():
+    tail = TRACKER_CODE.split("create or replace view studio.v_tracker", 1)[1]
+    # the clip: by favorites.clip_id or the clip's features.fav_id (a Regenerate or a remake), the newest one
+    assert "where x.id = f.clip_id or x.features ->> 'fav_id' = f.id::text" in tail
+    assert "order by x.created_at desc, x.id desc" in tail
+    # credits: every settled ledger entry of every clip of the pick
+    assert "where l.kind = 'settle' and (y.id = f.clip_id or y.features ->> 'fav_id' = f.id::text)" in tail
+    assert "coalesce(sp.spent, 0) as credits_spent" in tail
+    # the post: the latest slot, a failed / needs_check post first among the posts of one slot
+    assert "order by q.scheduled_for desc" in tail
+    assert "case q.status when 'failed' then 0 when 'needs_check' then 1" in tail
+    assert "case when p.status = 'posted' then coalesce(p.claimed_at, p.scheduled_for) end as post_posted_at" in tail
+    # the views of the post's latest snapshot, never a sum that hides a missing reading
+    assert "select s.views from studio.snapshots s where s.post_id = p.id order by s.captured_at desc limit 1" in tail
+    # the failure reason and the best-effort state time
+    assert "coalesce(nullif(btrim(c.reject_reason), ''), qp.problems, nullif(btrim(c.qa ->> 'error'), '')) as clip_failure" in tail
+    assert "greatest(c.created_at, cl.last_entry, cp.last_claim) as clip_state_since" in tail
+    assert "f.created_at as approved_at" in tail  # no decision time is stored (decide / decide_pick record none)
