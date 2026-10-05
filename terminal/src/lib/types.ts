@@ -1,4 +1,4 @@
-// Row shapes of the studio views (supabase/migrations/0004_terminal_rpc.sql, 0007_characters_view.sql). Numbers that Postgres
+// Row shapes of the studio views (supabase/migrations/0004_terminal_rpc.sql, 0007_characters_view.sql, 0008_dropin_first.sql). Numbers that Postgres
 // returns as numeric/bigint may arrive as strings over PostgREST; `num()` in data.ts normalises them.
 
 export type Platform = 'tiktok' | 'instagram';
@@ -180,6 +180,26 @@ export interface Pick {
   owner_note: string | null;
   owner_mode: OwnerMode | null;
   owner_presence: OwnerPresence | null;
+  /**
+   * The pick card of migration 0008. Optional on purpose: a row from a database that has not had 0008 yet lacks them,
+   * and every reader treats absent like null.
+   */
+  owner_props?: string[] | null;
+  owner_music?: OwnerMusic | null;
+  /** Where the owner's own clip for a Drop-in sits in the `sources` bucket (owner/<pick id>/<file>), once attached. */
+  owner_clip_path?: string | null;
+  /** The analyst's tier; null = the terminal derives it (`defaultTier`). */
+  tier?: Tier | null;
+  /** Which of the character's scan themes it matched. */
+  theme?: string | null;
+  /** When the video was posted (ISO date or time): what the tier rule reads. */
+  posted_at?: string | null;
+  /** A Higgsfield Genjutsu gallery clip (preset or source kind). */
+  gallery?: boolean | null;
+  /** An https image URL a tool returned; never fetched or rehosted by us. */
+  thumbnail_url?: string | null;
+  /** An https video URL (a Genjutsu preset's preview) for the tap-to-play preview. */
+  preview_url?: string | null;
 }
 
 export interface PickHistory {
@@ -204,7 +224,21 @@ export interface PickHistory {
   owner_note: string | null;
   owner_mode: OwnerMode | null;
   owner_presence: OwnerPresence | null;
+  owner_props?: string[] | null;
+  owner_music?: OwnerMusic | null;
+  owner_clip_path?: string | null;
+  tier?: Tier | null;
+  theme?: string | null;
+  posted_at?: string | null;
+  gallery?: boolean | null;
+  thumbnail_url?: string | null;
+  preview_url?: string | null;
 }
+
+/** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */
+export type Tier = 'iconic' | 'viral_now' | 'rising' | 'gallery';
+/** Where a Drop-in's music comes from (`proposal.owner_music`): the owner's per-video choice. */
+export type OwnerMusic = 'in_app' | 'original' | 'ai_beat';
 
 /** How to loop the character in (`proposal.owner_mode`); absent = the analyst decides. */
 export type OwnerMode = 'dropin' | 'recreate';
@@ -220,10 +254,28 @@ export interface CharacterAccount {
   mode: 'approval' | 'auto';
 }
 
+/** One gadget of a traits card: a phrase, or its name with the viral job it does. */
+export type TraitProp = string | { name: string; job: string };
+
+/** The character's trait card (refs.json `traits`, seeded into characters.setup.traits). */
+export interface CharacterTraits {
+  energy: string;
+  comedy: string;
+  best_formats: string[];
+  settings: string[];
+  moves: string[];
+  props: TraitProp[];
+  music: string;
+  never: string[];
+}
+
 /** What `studio seed` writes from refs.json into characters.setup. */
 export interface CharacterSetup {
   closeup?: boolean;
   planned_handles?: { tiktok?: string | null; instagram?: string | null };
+  traits?: CharacterTraits | null;
+  /** Higgsfield job ids of the character sheets, by body: the Genjutsu reference image next to the master. */
+  sheets?: { biped?: string | null; quadruped?: string | null } | null;
 }
 
 /** One row of v_characters: every seeded character, whether or not it has accounts yet. */
@@ -282,6 +334,19 @@ export interface DecideExtras {
   ownerMode?: OwnerMode | null;
   /** Only sent with ownerMode 'dropin'. */
   ownerPresence?: OwnerPresence | null;
+  /** "Gadgets & jewellery": at most 3 items of 1-40 characters. */
+  ownerProps?: string[] | null;
+  /** in_app | original | ai_beat; the database keeps it only when the mode is not Recreate. */
+  ownerMusic?: OwnerMusic | null;
+}
+
+/** What the upload needs of a File (a plain object in tests). */
+export interface ClipFile {
+  name: string;
+  size: number;
+  type: string;
+  /** The browser File itself, for the upload body; absent in tests and the demo. */
+  blob?: Blob;
 }
 
 export interface Backend {
@@ -300,6 +365,12 @@ export interface Backend {
     extras?: DecideExtras,
   ): Promise<void>;
   addOwnerLink(url: string, characterSlug: string, note: string | null): Promise<{ duplicate: boolean }>;
+  /**
+   * "Attach clip" on the Make-it sheet: uploads the owner's own video for a Drop-in to our `sources` bucket at
+   * owner/<pick id>/<timestamp>.<ext> (with progress, 0-100) and records the path with the attach_clip RPC.
+   * Returns the storage path. We never download from TikTok or Instagram: this file comes from the owner.
+   */
+  attachClip(pickId: string, file: ClipFile, onProgress?: (pct: number) => void): Promise<string>;
   signedUrl(path: string): Promise<string | null>;
   /** Live updates; returns an unsubscribe. `onStatus` reports whether the live channel is up. */
   subscribe(onChange: (kind: ChangeKind) => void, onStatus: (up: boolean) => void): () => void;

@@ -2,6 +2,7 @@
 // (next slot), Schedule (a time you pick), Reject (with a reason) or Regenerate (a note for tomorrow).
 import { CalendarClock, ChevronLeft, ChevronRight, ExternalLink, RotateCcw, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
 import { Flap, Livery, Skeleton, Spinner, characterName } from '../components/ui';
 import { clipCode, formatCredits, isoToLondonWall, londonStamp, londonWallToIso, platformName } from '../lib/format';
 import { href } from '../lib/hooks';
@@ -15,7 +16,11 @@ const REJECT_REASONS = ['Eyes swapped', 'Outfit or identity off', 'Hands or paws
 export function Queue({ focus }: { focus: string | null }) {
   const { data, backend, busy } = useStudio();
   const approveAll = useApproveAll();
-  const queue = data?.queue ?? [];
+  const [character, setCharacter, roster] = useCharacterChoice();
+  const everything = data?.queue ?? [];
+  const queue = everything.filter((c) => character === 'all' || c.character_slug === character);
+  const counts: Record<string, number> = { all: everything.length };
+  for (const c of roster) counts[c.slug] = everything.filter((q) => q.character_slug === c.slug).length;
   const ids = queue.map((c) => c.id);
   // Which clip is on screen is decided by nextCurrentId alone: computed during render (so the very first
   // render of a deep link already shows that clip) and written back in a single effect.
@@ -69,9 +74,11 @@ export function Queue({ focus }: { focus: string | null }) {
         )}
       </div>
 
+      <CharacterSwitcher value={character} onChange={setCharacter} roster={roster} counts={counts} />
+
       {!clip ? (
         <div className="panel empty">
-          <b>Nothing waiting</b>
+          <b>{everything.length ? `Nothing waiting for ${characterName(character)}` : 'Nothing waiting'}</b>
           <span className="muted small">
             Finished clips land here after QA. Channels on autopilot skip this queue and post at their next slot.
           </span>
@@ -193,6 +200,17 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
             </a>
           )}
         </div>
+
+        {clip.features?.music === 'in_app' && (
+          <p className="notice" role="note" style={{ margin: 0 }}>
+            Silent master: you add the song in the Instagram app. Approving schedules it as it is (it is never posted silently on autopilot).
+          </p>
+        )}
+        {clip.features?.music === 'original' && (
+          <p className="notice" role="note" style={{ margin: 0 }}>
+            Keeps the original clip audio. If Instagram mutes a chart song, re-post with the song added in-app.
+          </p>
+        )}
 
         <div className="facts">
           <div>

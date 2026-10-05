@@ -4,6 +4,8 @@
 import { Check, ChevronRight, ExternalLink, X } from 'lucide-react';
 import { useState, type ReactNode } from 'react';
 import { MakeItSheet } from '../components/MakeIt';
+import { PickThumb } from '../components/PickThumb';
+import { TraitsCard } from '../components/TraitsCard';
 import { Avatar, AutopilotSwitch, Livery, OutlierBadge, PlatformCode, Skeleton, characterName } from '../components/ui';
 import { formatAge, formatCredits, formatViews, londonDate, londonStamp, platformName } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
@@ -79,6 +81,7 @@ function CharacterSection({ character: c }: { character: Character }) {
         )}
       </div>
 
+      <TraitsCard character={c} />
       <Checklist character={c} />
       <PipelineView character={c} />
     </section>
@@ -148,7 +151,7 @@ function PipelineView({ character }: { character: Character }) {
   const now = useNow(60_000);
   const [making, setMaking] = useState<ViralPick | null>(null);
   if (!data) return null;
-  const pipe = pipelineFor(character.slug, data);
+  const pipe = pipelineFor(character.slug, data, now);
   const titleId = `pipe-${character.slug}`;
   return (
     <div className="pipeline" role="group" aria-labelledby={titleId}>
@@ -157,7 +160,7 @@ function PipelineView({ character }: { character: Character }) {
       </h3>
       {STAGES.map((st) => (
         <StageBlock key={st.id} id={`${character.slug}-${st.id}`} title={st.title} hint={st.hint} count={pipe[st.id].total} startOpen={(pipe.firstOpen ?? 'proposed') === st.id}>
-          {st.id === 'proposed' && <ProposedList pipe={pipe} onMake={setMaking} />}
+          {st.id === 'proposed' && <ProposedList pipe={pipe} slug={character.slug} name={character.name} onMake={setMaking} />}
           {st.id === 'production' && <ProductionList pipe={pipe} now={now} />}
           {st.id === 'waiting' && <WaitingList pipe={pipe} />}
           {st.id === 'posted' && <PostedList pipe={pipe} />}
@@ -196,26 +199,39 @@ export function loopLabel(i: Pick<ProposedItem, 'ownerMode' | 'ownerPresence'>):
   return i.ownerMode === 'dropin' ? `${MODE_LABEL.dropin} · ${PART_LABEL[i.ownerPresence ?? 'featured']}` : MODE_LABEL.recreate;
 }
 
-function ProposedList({ pipe, onMake }: { pipe: Pipeline; onMake(p: ViralPick): void }) {
+function ProposedList({ pipe, slug, name, onMake }: { pipe: Pipeline; slug: string; name: string; onMake(p: ViralPick): void }) {
   const { items, total } = pipe.proposed;
   return (
     <>
+      <a className="small stage-more stage-all" href={href('picks', undefined, { c: slug })}>
+        All {total} of {name}’s proposed videos in Picks →
+      </a>
       <ul className="pipe-list">
         {items.map((i) => (
           <li key={i.id} className="pipe-row">
+            <PickThumb pick={i.thumbSource} size="small" />
             <div className="pipe-main">
               <b className="pipe-hook">{i.hook ? `“${i.hook}”` : i.creator ?? i.url}</b>
+              <div className="pipe-meta">
+                <span className={`tier-badge tier-${i.tier}`}>{i.tierLabel}</span>
+                {i.theme && <span className="tag theme-chip">{i.theme}</span>}
+              </div>
               <div className="pipe-meta">
                 <span className="tag num" title="Total score out of 100">score {i.score == null ? '—' : Math.round(i.score)}</span>
                 <span>{platformName(i.platform)}</span>
                 {i.creator && <span>{i.creator}</span>}
-                <a href={i.url} target="_blank" rel="noopener noreferrer" aria-label={`Open the original on ${platformName(i.platform)} (new tab)`}>
-                  original <ExternalLink size={12} aria-hidden="true" />
-                </a>
+                {i.thumb.original && (
+                  <a href={i.thumb.original} target="_blank" rel="noopener noreferrer" aria-label={`Open the original on ${platformName(i.platform)} (new tab)`}>
+                    original <ExternalLink size={12} aria-hidden="true" />
+                  </a>
+                )}
               </div>
               <div className="pipe-meta">
                 <span className={`tag ${i.status === 'new' ? 'action' : 'live'}`}>{i.held ? 'held' : i.status === 'new' ? 'waiting for you' : i.status}</span>
                 <span className="tag" title="How to loop him in">{loopLabel(i)}</span>
+                {i.ownerProps.map((g) => (
+                  <span key={g} className="tag gadget-tag" title="Gadget or jewellery">{g}</span>
+                ))}
               </div>
               {i.ownerNote && <p className="pipe-note small muted">Your note: “{i.ownerNote}”</p>}
             </div>
@@ -228,7 +244,7 @@ function ProposedList({ pipe, onMake }: { pipe: Pipeline; onMake(p: ViralPick): 
         ))}
       </ul>
       {total > items.length && (
-        <a className="small stage-more" href={href('picks')}>
+        <a className="small stage-more" href={href('picks', undefined, { c: slug })}>
           Showing {items.length} of {total} · all picks
         </a>
       )}

@@ -1,7 +1,9 @@
 // The live backend: supabase-js with the publishable (anon) key, magic-link auth, RLS does the rest.
-// Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0007.
+// Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0008.
+// The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type { Backend, ChangeKind, DecideExtras, Snapshot } from './types';
+import { checkClipBasics, ownerClipPath } from './rules';
+import type { Backend, ChangeKind, ClipFile, DecideExtras, Snapshot } from './types';
 
 const URL_ = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -42,6 +44,36 @@ function normalise<T extends Record<string, unknown>>(row: T, keys: string[]): T
   const out: Record<string, unknown> = { ...row };
   for (const k of keys) if (k in out) out[k] = n(out[k]);
   return out as T;
+}
+
+/** An upload with progress (fetch has none): XMLHttpRequest PUT-style POST to Supabase Storage, 0-100 to `onProgress`. */
+function putWithProgress(url: string, body: Blob, headers: Record<string, string>, onProgress?: (pct: number) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) onProgress?.(Math.min(99, Math.round((e.loaded / e.total) * 100)));
+    };
+    xhr.onerror = () => reject(new StudioError('The upload failed: check the connection and try again'));
+    xhr.onabort = () => reject(new StudioError('The upload was cancelled'));
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(100);
+        resolve();
+        return;
+      }
+      let message = `The upload was refused (${xhr.status})`;
+      try {
+        const body = JSON.parse(xhr.responseText) as { message?: string; error?: string };
+        message = body.message ?? body.error ?? message;
+      } catch {
+        /* keep the status line */
+      }
+      reject(new StudioError(message));
+    };
+    xhr.send(body);
+  });
 }
 
 export class LiveBackend implements Backend {
@@ -113,11 +145,29 @@ export class LiveBackend implements Backend {
       ...(extras.ownerNote ? { owner_note: extras.ownerNote } : {}),
       ...(extras.ownerMode ? { owner_mode: extras.ownerMode } : {}),
       ...(extras.ownerPresence ? { owner_presence: extras.ownerPresence } : {}),
+      ...(extras.ownerProps?.length ? { owner_props: extras.ownerProps } : {}),
+      ...(extras.ownerMusic ? { owner_music: extras.ownerMusic } : {}),
     });
   }
   async addOwnerLink(url: string, characterSlug: string, note: string | null) {
     const r = await this.rpc('add_owner_link', { url, character_slug: characterSlug, note });
     return { duplicate: Boolean(r?.duplicate) };
+  }
+  async attachClip(pickId: string, file: ClipFile, onProgress?: (pct: number) => void) {
+    if (!file.blob) throw new Error('There is no file to upload');
+    const checked = checkClipBasics(file); // the duration was checked where the file was chosen
+    if (!checked.ok) throw new Error(checked.reason);
+    const path = ownerClipPath(pickId, file, Date.now());
+    const { data } = await this.sb.auth.getSession();
+    if (!data.session) throw new Error('Sign in again to upload the clip');
+    await putWithProgress(`${URL_}/storage/v1/object/sources/${path}`, file.blob, {
+      Authorization: `Bearer ${data.session.access_token}`,
+      apikey: KEY!,
+      'Content-Type': file.type || 'video/mp4',
+      'x-upsert': 'false',
+    }, onProgress);
+    await this.rpc('attach_clip', { pick_id: pickId, storage_path: path });
+    return path;
   }
   async signedUrl(path: string) {
     const { data, error } = await this.sb.storage.from('clips').createSignedUrl(path, 3600);

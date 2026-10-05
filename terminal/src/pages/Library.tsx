@@ -2,6 +2,7 @@
 // cost and where it went. Tap a row for the posts and their latest numbers.
 import { ExternalLink } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
 import { Livery, OutlierBadge, Skeleton } from '../components/ui';
 import { clipCode, formatCredits, formatViews, londonStamp, platformName } from '../lib/format';
 import { useStudio } from '../lib/store';
@@ -33,7 +34,7 @@ function Chips<T extends string>({ value, options, onChange, label }: { value: T
 
 export function Library({ focus }: { focus: string | null }) {
   const { data } = useStudio();
-  const [character, setCharacter] = useState<'all' | 'biscuit' | 'reginald'>('all');
+  const [character, setCharacter, roster] = useCharacterChoice();
   const [platform, setPlatform] = useState<'all' | 'tiktok' | 'instagram'>('all');
   const [state, setState] = useState('all');
   const [open, setOpen] = useState<string | null>(focus);
@@ -67,7 +68,7 @@ export function Library({ focus }: { focus: string | null }) {
         </p>
       </div>
       <div className="filters">
-        <Chips label="Character" value={character} onChange={(v) => setCharacter(v)} options={[{ id: 'all', label: 'Both' }, { id: 'biscuit', label: 'Biscuit' }, { id: 'reginald', label: 'Reginald' }]} />
+        <CharacterSwitcher value={character} onChange={setCharacter} roster={roster} />
         <Chips label="Platform" value={platform} onChange={(v) => setPlatform(v)} options={[{ id: 'all', label: 'Any platform' }, { id: 'tiktok', label: 'TikTok' }, { id: 'instagram', label: 'Instagram' }]} />
         <Chips label="State" value={state} onChange={setState} options={STATES.map(({ id, label }) => ({ id, label }))} />
       </div>

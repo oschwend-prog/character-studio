@@ -258,7 +258,7 @@ describe('makeItPayload', () => {
   it('one character, no note, the analyst decides: only the character goes', () => {
     expect(makeItPayload(base, ctx)).toEqual({
       ok: true, characterSlug: 'reginald',
-      extras: { alsoCharacter: null, ownerNote: null, ownerMode: null, ownerPresence: null },
+      extras: { alsoCharacter: null, ownerNote: null, ownerMode: null, ownerPresence: null, ownerProps: null, ownerMusic: null },
       summary: 'Approved for Reginald: it joins the production queue',
     });
   });

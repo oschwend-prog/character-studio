@@ -1,7 +1,7 @@
 import { londonDate, londonDayKey, londonTime, londonWallToIso, londonWeekday } from './format';
 import type {
-  Channel, Character, DecideExtras, LibraryClip, OwnerMode, OwnerPresence, Pick as ViralPick, PickHistory, QueueClip, RunRow,
-  ScanDetails, Snapshot,
+  Channel, Character, CharacterTraits, ClipFile, DecideExtras, LibraryClip, OwnerMode, OwnerMusic, OwnerPresence,
+  Pick as ViralPick, PickHistory, QueueClip, RunRow, ScanDetails, Snapshot, Tier, TraitProp,
 } from './types';
 
 // The owner-facing rules the terminal applies on its own side. Each one mirrors a rule the database
@@ -411,6 +411,17 @@ export interface ProposedItem {
   ownerMode: OwnerMode | null;
   ownerPresence: OwnerPresence | null;
   ownerNote: string | null;
+  /** The owner's gadgets & jewellery for this video. */
+  ownerProps: string[];
+  /** The tier (the analyst's, else derived) and its owner-facing label. */
+  tier: Tier;
+  tierLabel: string;
+  /** Which scan theme it matched (null = none recorded). */
+  theme: string | null;
+  /** The picture to show (an image, or a placeholder tile when there is none). */
+  thumb: ThumbSpec;
+  /** What `thumbFor` was given, so the component can fall back on its own when the image fails to load. */
+  thumbSource: Parameters<typeof thumbFor>[0];
   /** Only a pick still waiting for the owner can be made from the sheet. */
   canMakeIt: boolean;
   /** The whole pick, for the sheet (null for one already decided). */
@@ -470,22 +481,38 @@ const byScoreThenAge = (a: { score: number | null; created: string }, b: { score
  * (Proposed), its clips being made (In production), the ones waiting for the owner or booked (Waiting /
  * scheduled) and the last posted ones (Posted). Pure: stage membership by state, ordering and limits live here.
  */
-export function pipelineFor(slug: string, data: Pick<Snapshot, 'picks' | 'history' | 'queue' | 'library'>): Pipeline {
-  const asItem = (row: ViralPick | PickHistory, pick: ViralPick | null): ProposedItem => ({
-    id: row.id,
-    hook: row.hook,
-    score: row.total_score,
-    platform: row.platform,
-    creator: row.creator_handle,
-    url: row.url,
-    status: row.status as ProposedItem['status'],
-    held: pick?.hold_reason != null,
-    ownerMode: row.owner_mode ?? null,
-    ownerPresence: row.owner_presence ?? null,
-    ownerNote: row.owner_note ?? null,
-    canMakeIt: row.status === 'new',
-    pick,
-  });
+export function pipelineFor(
+  slug: string,
+  data: Pick<Snapshot, 'picks' | 'history' | 'queue' | 'library'>,
+  now: number = Date.now(),
+): Pipeline {
+  const asItem = (row: ViralPick | PickHistory, pick: ViralPick | null): ProposedItem => {
+    const tier = tierOf(row, now).tier;
+    return {
+      id: row.id,
+      hook: row.hook,
+      score: row.total_score,
+      platform: row.platform,
+      creator: row.creator_handle,
+      url: row.url,
+      status: row.status as ProposedItem['status'],
+      held: pick?.hold_reason != null,
+      ownerMode: row.owner_mode ?? null,
+      ownerPresence: row.owner_presence ?? null,
+      ownerNote: row.owner_note ?? null,
+      ownerProps: row.owner_props ?? [],
+      tier,
+      tierLabel: TIER_LABELS[tier],
+      theme: row.theme ?? null,
+      thumb: thumbFor(row),
+      thumbSource: {
+        thumbnail_url: row.thumbnail_url, preview_url: row.preview_url, platform: row.platform, creator_handle: row.creator_handle,
+        hook: row.hook, url: row.url,
+      },
+      canMakeIt: row.status === 'new',
+      pick,
+    };
+  };
   // waiting for the owner first, then the approved ones; inside each group by score (unscored last), then oldest
   const proposedRows: Array<{ row: ViralPick | PickHistory; pick: ViralPick | null }> = [
     ...data.picks.filter((p) => p.character_slug === slug && p.status === 'new').map((p) => ({ row: p, pick: p })),
@@ -559,6 +586,12 @@ export interface MakeItChoice {
   mode: 'analyst' | OwnerMode;
   /** His part in a Drop-in; only sent with mode 'dropin'. */
   presence: OwnerPresence;
+  /** "Gadgets & jewellery": the traits chips picked (their names); with `customProp`, at most PROPS_MAX in all. */
+  props?: string[];
+  /** The one free-text chip, at most PROP_MAX_CHARS characters; blank = none. */
+  customProp?: string;
+  /** Where the music comes from; undefined or the mode's default sends nothing (the daily run's default applies). */
+  music?: OwnerMusic;
 }
 
 export type MakeItPayload =
@@ -572,12 +605,22 @@ export type MakeItPayload =
  */
 export function makeItPayload(
   choice: MakeItChoice,
-  ctx: { pickCharacter: string | null; characters: ReadonlyArray<string>; names?: Readonly<Record<string, string>> },
+  ctx: {
+    pickCharacter: string | null;
+    characters: ReadonlyArray<string>;
+    names?: Readonly<Record<string, string>>;
+    /** The pick being made (only here for symmetry with the sheet: an attached clip is optional, nothing blocks). */
+    pick?: { gallery?: boolean | null; owner_clip_path?: string | null };
+    attachedPath?: string | null;
+  },
 ): MakeItPayload {
   const nameOf = (slug: string) => ctx.names?.[slug] ?? slug.charAt(0).toUpperCase() + slug.slice(1);
   if (!choice.character) return { ok: false, reason: 'Choose a character first' };
   const note = choice.note.trim();
   if (note.length > NOTE_MAX) return { ok: false, reason: `The note is limited to ${NOTE_MAX} characters (now ${note.length})` };
+  const props = gadgetList(choice.props ?? [], choice.customProp ?? '');
+  if (!props.ok) return { ok: false, reason: props.reason };
+  if (choice.mode === 'recreate' && choice.music === 'original') return { ok: false, reason: RECREATE_NO_ORIGINAL };
 
   let characterSlug: string;
   let also: string | null = null;
@@ -597,6 +640,9 @@ export function makeItPayload(
       ownerNote: note || null,
       ownerMode: choice.mode === 'analyst' ? null : choice.mode,
       ownerPresence: choice.mode === 'dropin' ? choice.presence : null,
+      ownerProps: props.items.length ? props.items : null,
+      // only a choice that differs from the default is sent: the default (original for a Drop-in, ai_beat for a Recreate) is what the daily run does anyway
+      ownerMusic: choice.music && choice.music !== defaultMusicForMode(choice.mode) ? choice.music : null,
     },
     summary: also
       ? `Approved for ${nameOf(characterSlug)} and ${nameOf(also)}: one clip each`
@@ -710,4 +756,495 @@ export function nextScanLabel(now: number, anyLive: boolean): string {
   if (!anyLive) return 'Not scheduled yet: scans start when a character goes live (Tue, Thu, Sat and Sun at 08:00 London)';
   const at = nextScanAt(now);
   return `Next scan ${londonDate(at)} ${londonTime(at)}`;
+}
+
+// ---- the pick card: tier, theme, picture, gadgets, music, estimate (migration 0008) --------------------------------
+
+export const TIERS: ReadonlyArray<Tier> = ['iconic', 'viral_now', 'rising', 'gallery'];
+/** The owner's keys and labels, in the order the Picks page groups them. */
+export const TIER_LABELS: Record<Tier, string> = {
+  iconic: 'Broke the internet',
+  viral_now: 'Viral now',
+  rising: 'Up and coming',
+  gallery: 'Ready to drop in',
+};
+export const TIER_HINTS: Record<Tier, string> = {
+  iconic: 'Everyone knows it: a famous meme, dance or scene, months to years old, evergreen',
+  viral_now: 'Peaking this week, with a big outlier',
+  rising: 'Early and climbing fast: catch it before the peak',
+  gallery: 'A clip from Higgsfield’s Genjutsu gallery: already clean and trimmed, a backup when nothing real fits',
+};
+const isTier = (v: unknown): v is Tier => typeof v === 'string' && (TIERS as ReadonlyArray<string>).includes(v);
+const DAY_MS = 86_400_000;
+
+export interface TierInput {
+  tier?: string | null;
+  gallery?: boolean | null;
+  outlier_x: number | null;
+  posted_at?: string | null;
+}
+
+/**
+ * The tier of a pick the analyst did not tier (mirrors studio.favorites.default_tier; both read
+ * parity-cases.json). In this order: a gallery clip is `gallery`; an outlier of 100 or more posted within 14 days is
+ * `viral_now`; posted within 4 days with an outlier of 5 or more is `rising`; posted more than 90 days ago is
+ * `iconic`; anything else (an unknown post date included) is `viral_now`.
+ */
+export function defaultTier(p: Pick<TierInput, 'gallery' | 'outlier_x' | 'posted_at'>, now: number): Tier {
+  if (p.gallery) return 'gallery';
+  const at = p.posted_at ? Date.parse(p.posted_at) : Number.NaN;
+  const age = Number.isNaN(at) ? null : (now - at) / DAY_MS;
+  const x = typeof p.outlier_x === 'number' && Number.isFinite(p.outlier_x) ? p.outlier_x : null;
+  if (age != null && x != null) {
+    if (x >= 100 && age <= 14) return 'viral_now';
+    if (x >= 5 && age <= 4) return 'rising';
+  }
+  if (age != null && age > 90) return 'iconic';
+  return 'viral_now';
+}
+
+/** The analyst's tier when it set one, else the derived one (`derived` says which). */
+export function tierOf(p: TierInput, now: number): { tier: Tier; derived: boolean } {
+  return isTier(p.tier) ? { tier: p.tier, derived: false } : { tier: defaultTier(p, now), derived: true };
+}
+
+export interface PickCardLike extends TierInput {
+  id: string;
+  character_slug: string | null;
+  total_score: number | null;
+  created_at: string;
+  theme?: string | null;
+}
+export interface TierGroup<P> {
+  tier: Tier;
+  label: string;
+  picks: P[];
+}
+export interface ThemeGroup<P> {
+  /** null = no theme recorded. */
+  theme: string | null;
+  label: string;
+  picks: P[];
+}
+export interface PickSection<P> {
+  /** null = the section of picks that belong to no seeded character yet. */
+  slug: string | null;
+  name: string;
+  /** Every pick of the section, in rank order (real clips by score, then the gallery ones). */
+  picks: P[];
+  tiers: TierGroup<P>[];
+  themes: ThemeGroup<P>[];
+}
+export const UNASSIGNED_NAME = 'Unassigned / Outsider (later)';
+export const NO_THEME = 'No theme';
+
+/**
+ * Rank order of one character's picks (owner priority 2026-10-05: real scanned viral clips first, the Genjutsu
+ * gallery is the backup): everything but the gallery tier by total score (unscored last, older first on ties),
+ * then the gallery ones the same way.
+ */
+export function rankPicks<P extends PickCardLike>(picks: ReadonlyArray<P>, now: number): P[] {
+  const gallery = (p: P) => Number(tierOf(p, now).tier === 'gallery');
+  return [...picks].sort(
+    (a, b) =>
+      gallery(a) - gallery(b) ||
+      Number(a.total_score == null) - Number(b.total_score == null) ||
+      (b.total_score ?? 0) - (a.total_score ?? 0) ||
+      Date.parse(a.created_at) - Date.parse(b.created_at) ||
+      a.id.localeCompare(b.id),
+  );
+}
+
+/** How many picks each tier chip stands for (`all` = every pick). */
+export function tierCounts(picks: ReadonlyArray<TierInput>, now: number): Record<Tier | 'all', number> {
+  const out: Record<Tier | 'all', number> = { all: picks.length, iconic: 0, viral_now: 0, rising: 0, gallery: 0 };
+  for (const p of picks) out[tierOf(p, now).tier] += 1;
+  return out;
+}
+
+/**
+ * The Picks page's structure: one section per character of the roster (always there, empty or not), then an
+ * "Unassigned / Outsider (later)" section when some pick belongs to nobody seeded. Each section holds its picks in
+ * `rankPicks` order, grouped by tier (Broke the internet, Viral now, Up and coming, Ready to drop in; empty
+ * groups left out) and by theme (the best real clip's score first, themes of gallery clips only after them, "No
+ * theme" last). `character` limits it to one character's section (no unassigned one); `tier` keeps one tier.
+ */
+export function groupPicksByCharacter<P extends PickCardLike>(
+  picks: ReadonlyArray<P>,
+  roster: ReadonlyArray<{ slug: string; name: string }>,
+  opts: { now: number; character?: string | null; tier?: Tier | 'all' | null },
+): PickSection<P>[] {
+  const { now } = opts;
+  const known = new Set(roster.map((c) => c.slug));
+  const only = opts.character && opts.character !== 'all' && known.has(opts.character) ? opts.character : null;
+  const wantTier = opts.tier && opts.tier !== 'all' ? opts.tier : null;
+  const kept = picks.filter((p) => !wantTier || tierOf(p, now).tier === wantTier);
+
+  const section = (slug: string | null, name: string, mine: P[]): PickSection<P> => {
+    const ranked = rankPicks(mine, now);
+    const tiers = TIERS.map((tier) => ({ tier, label: TIER_LABELS[tier], picks: ranked.filter((p) => tierOf(p, now).tier === tier) }))
+      .filter((g) => g.picks.length > 0);
+    const byTheme = new Map<string | null, P[]>();
+    for (const p of ranked) {
+      const key = p.theme?.trim() || null;
+      byTheme.set(key, [...(byTheme.get(key) ?? []), p]);
+    }
+    const best = (g: P[]) => {
+      const real = g.filter((p) => tierOf(p, now).tier !== 'gallery');
+      return { real: real.length > 0, score: Math.max(...(real.length ? real : g).map((p) => p.total_score ?? -1)) };
+    };
+    const themes = [...byTheme.entries()]
+      .map(([theme, list]) => ({ theme, label: theme ?? NO_THEME, picks: list, ...best(list) }))
+      .sort(
+        (a, b) =>
+          Number(a.theme == null) - Number(b.theme == null) ||
+          Number(!a.real) - Number(!b.real) ||
+          b.score - a.score ||
+          a.label.localeCompare(b.label),
+      )
+      .map(({ theme, label, picks: list }) => ({ theme, label, picks: list }));
+    return { slug, name, picks: ranked, tiers, themes };
+  };
+
+  const out = roster
+    .filter((c) => !only || c.slug === only)
+    .map((c) => section(c.slug, c.name, kept.filter((p) => p.character_slug === c.slug)));
+  if (!only) {
+    const orphans = kept.filter((p) => !p.character_slug || !known.has(p.character_slug));
+    if (orphans.length) out.push(section(null, UNASSIGNED_NAME, orphans));
+  }
+  return out;
+}
+
+// ---- the picture on a card -------------------------------------------------------------------------------------
+
+export interface ThumbSpec {
+  /** `image` when a usable thumbnail URL is known and has not failed to load, else a platform-colour tile. */
+  kind: 'image' | 'placeholder';
+  src: string | null;
+  /** An https video the card can play muted and looping on tap (a Genjutsu preset's preview). */
+  preview: string | null;
+  /** 16:9 pictures (YouTube) are letterboxed inside the 9:16 frame. */
+  aspect: '9:16' | '16:9';
+  alt: string;
+  platform: string;
+  /** TT / IG / YT: the placeholder's monogram. */
+  code: string;
+  handle: string | null;
+  /** The original video, for the "View original" link; null for a gallery clip (it has no page). */
+  original: string | null;
+}
+
+const httpsUrl = (value: unknown): URL | null => {
+  if (typeof value !== 'string' || !value.trim() || /\s/.test(value.trim())) return null;
+  try {
+    const u = new URL(value.trim());
+    return u.protocol === 'https:' && u.hostname ? u : null;
+  } catch {
+    return null;
+  }
+};
+const VIDEO_SUFFIX = /\.(mp4|webm|mov|m4v)$/i;
+const PLATFORM_CODE: Record<string, string> = { tiktok: 'TT', instagram: 'IG', youtube: 'YT', higgsfield: 'HF' };
+
+/**
+ * Which picture a pick shows: its thumbnail (an https image URL a tool returned, or an inline data: image, as the demo
+ * uses) unless it is missing, malformed, or `imageFailed` (platform CDN links expire), then a tidy placeholder tile
+ * with the platform, the creator handle and a "View original" link. A valid https `preview_url` (a video) makes
+ * the picture tappable either way. We never fetch or rehost the media: only the URL a tool already returned.
+ */
+export function thumbFor(
+  p: { thumbnail_url?: string | null; preview_url?: string | null; platform: string; creator_handle: string | null; hook: string | null; url: string },
+  opts: { imageFailed?: boolean } = {},
+): ThumbSpec {
+  const https = httpsUrl(p.thumbnail_url);
+  const inline = typeof p.thumbnail_url === 'string' && /^data:image\//i.test(p.thumbnail_url) ? p.thumbnail_url : null;
+  const src = https ? https.href : inline;
+  const preview = httpsUrl(p.preview_url);
+  const platform = PLATFORM_CODE[p.platform] ? p.platform : 'other';
+  const name = p.hook ? `“${p.hook}”` : p.creator_handle ?? p.url;
+  const where = PLATFORM_CODE[p.platform] ? ` on ${platformLabel(p.platform)}` : '';
+  const by = p.creator_handle ? ` by ${p.creator_handle}` : '';
+  const wide = p.platform === 'youtube' || /(^|\.)ytimg\.com$|(^|\.)youtube\.com$/.test(https?.hostname ?? '');
+  const showImage = src != null && !opts.imageFailed;
+  return {
+    kind: showImage ? 'image' : 'placeholder',
+    src: showImage ? src : null,
+    preview: preview && VIDEO_SUFFIX.test(preview.pathname) ? preview.href : null,
+    aspect: wide ? '16:9' : '9:16',
+    alt: `${showImage ? 'Thumbnail' : 'Placeholder'} of ${name}${where}${by}`,
+    platform,
+    code: PLATFORM_CODE[p.platform] ?? '??',
+    handle: p.creator_handle,
+    original: httpsUrl(p.url)?.href ?? null,
+  };
+}
+const platformLabel = (platform: string) =>
+  ({ tiktok: 'TikTok', instagram: 'Instagram', youtube: 'YouTube', higgsfield: 'the Genjutsu gallery' })[platform] ?? platform;
+
+// ---- the card's top line ---------------------------------------------------------------------------------------
+
+const PART_NAME: Record<OwnerPresence, string> = { cameo: 'cameo', featured: 'featured', star: 'star' };
+
+/**
+ * "Drop-in · his part: featured" or "Recreate": what the video is, plainly. The owner's choice from the Make-it sheet
+ * wins over the analyst's proposal; with neither it says the analyst decides.
+ */
+export function modeLine(p: { proposed_mode?: string | null; owner_mode?: OwnerMode | null; owner_presence?: OwnerPresence | null }): string {
+  const mode = p.owner_mode ?? (p.proposed_mode === 'dropin' || p.proposed_mode === 'recreate' ? p.proposed_mode : null);
+  if (mode === 'dropin') return `Drop-in · his part: ${PART_NAME[p.owner_presence ?? 'featured']}`;
+  if (mode === 'recreate') return 'Recreate';
+  return 'Analyst decides how to make it';
+}
+
+// ---- gadgets & jewellery -----------------------------------------------------------------------------------------
+
+/** "Gadgets & jewellery": at most 3 items of 1-40 characters (decide_pick, migration 0008, refuses more). */
+export const PROPS_MAX = 3;
+export const PROP_MAX_CHARS = 40;
+
+/** A traits card's props as chips: the name, and the viral job it does (null for a plain phrase). */
+export function traitProps(traits: CharacterTraits | null | undefined): { name: string; job: string | null }[] {
+  return (traits?.props ?? []).map((p: TraitProp) => (typeof p === 'string' ? { name: p, job: null } : { name: p.name, job: p.job }));
+}
+
+/**
+ * The gadgets to send: the chips picked plus the free-text one, trimmed, blanks dropped, repeats (any case) once, in order.
+ * Refused above PROPS_MAX items or when one is over PROP_MAX_CHARS, with the sentence the sheet shows.
+ */
+export function gadgetList(chips: ReadonlyArray<string>, custom: string): { ok: true; items: string[] } | { ok: false; reason: string } {
+  const seen = new Set<string>();
+  const items: string[] = [];
+  for (const raw of [...chips, custom]) {
+    const item = raw.trim();
+    if (!item || seen.has(item.toLowerCase())) continue;
+    if (item.length > PROP_MAX_CHARS) return { ok: false, reason: `“${item.slice(0, 20)}…” is longer than ${PROP_MAX_CHARS} characters` };
+    seen.add(item.toLowerCase());
+    items.push(item);
+  }
+  if (items.length > PROPS_MAX) return { ok: false, reason: `Pick at most ${PROPS_MAX} gadgets (now ${items.length})` };
+  return { ok: true, items };
+}
+
+// ---- music ---------------------------------------------------------------------------------------------------------
+
+/** Under the "Keep original audio" option (owner decision 2026-10-05, replacing the earlier warning). */
+export const ORIGINAL_AUDIO_NOTE = 'If Instagram mutes a chart song, re-post with the song added in-app.';
+export const RECREATE_NO_ORIGINAL = 'A Recreate has no original audio: choose the AI beat or add the song in the Instagram app';
+
+/** Drop-ins keep the original clip audio by default; a Recreate keeps the beat of its own synthetic driver. */
+export const DEFAULT_MUSIC: OwnerMusic = 'original';
+export const MUSIC_OPTIONS: { id: OwnerMusic; name: string; help: string; note?: string }[] = [
+  {
+    id: 'original',
+    name: 'Keep original audio (default)',
+    help: 'The clip’s own sound comes through, loudness-matched. No beat to pay for.',
+    note: ORIGINAL_AUDIO_NOTE,
+  },
+  { id: 'in_app', name: 'Add in Instagram app', help: 'The video goes out silent and you add the song while posting: the fallback if a post gets muted. No beat to pay for.' },
+  { id: 'ai_beat', name: 'AI beat (+30)', help: 'Our own beat, made for this clip (about 30 credits more).' },
+];
+
+/** The music a mode starts on: the original audio for a Drop-in (or when the analyst decides), the AI beat for a Recreate. */
+export function defaultMusicForMode(mode: 'analyst' | OwnerMode): OwnerMusic {
+  return mode === 'recreate' ? 'ai_beat' : DEFAULT_MUSIC;
+}
+
+/** The options offered for a mode: a Recreate has no original audio, so it chooses between its AI beat and the in-app song. */
+export function musicOptionsFor(mode: 'analyst' | OwnerMode): { id: OwnerMusic; name: string; help: string; note?: string }[] {
+  if (mode !== 'recreate') return MUSIC_OPTIONS;
+  return [
+    { id: 'ai_beat', name: 'AI beat (default)', help: 'The beat of the synthetic driver this Recreate is made from: already paid for in its 160 credits.' },
+    MUSIC_OPTIONS[1],
+  ];
+}
+
+// ---- the estimate ------------------------------------------------------------------------------------------------
+
+/** The numbers of studio.planning.estimate_credits; parity-cases.json holds the cases both sides must agree on. */
+export const CREDITS = { recreate: 160, dropinPerSecond: 11, stills: 3, aiBeat: 30, defaultSeconds: 8 } as const;
+
+/** Credits one clip is expected to cost: Recreate 160; a Drop-in ceil(seconds x 11) + 3 (+ 30 for an AI beat). */
+export function estimateCredits(mode: OwnerMode, seconds: number = CREDITS.defaultSeconds, music: OwnerMusic = 'in_app'): number {
+  if (mode === 'recreate') return CREDITS.recreate;
+  const perSecond = Math.ceil(Math.round(seconds * CREDITS.dropinPerSecond * 1e6) / 1e6);
+  return perSecond + CREDITS.stills + (music === 'ai_beat' ? CREDITS.aiBeat : 0);
+}
+
+/**
+ * What the Make-it sheet shows for the chosen options: the credits per clip and in all ("Both" makes one clip each).
+ * "Analyst decides" is priced as a Drop-in (the default for every video) and says what a Recreate would cost.
+ */
+export function sheetEstimate(c: {
+  mode: 'analyst' | OwnerMode;
+  music?: OwnerMusic;
+  clips: number;
+  /** A clip the daily run can drive a Drop-in with (an attached one, or a gallery preset); undefined = assume there is one. */
+  usableSource?: boolean;
+}): {
+  perClip: number;
+  total: number;
+  label: string;
+  note: string | null;
+  /** What the daily run will make: dropin when a usable source exists, else recreate. */
+  effective: OwnerMode;
+} {
+  const effective = effectiveMode(c.mode, c.usableSource ?? true);
+  const wanted = c.music ?? defaultMusicForMode(effective);
+  const music = musicOptionsFor(effective).some((o) => o.id === wanted) ? wanted : defaultMusicForMode(effective);
+  const perClip = estimateCredits(effective, CREDITS.defaultSeconds, music);
+  const total = perClip * Math.max(1, c.clips);
+  const label = c.clips > 1 ? `≈ ${total} credits (${c.clips} clips of ≈ ${perClip})` : `≈ ${total} credits`;
+  const note =
+    c.mode !== 'recreate' && effective === 'recreate'
+      ? noClipNote()
+      : c.mode === 'analyst'
+        ? `Priced as a Drop-in of ${CREDITS.defaultSeconds} s; if the analyst makes it as Recreate it is ${CREDITS.recreate} per clip.`
+        : effective === 'dropin'
+          ? `A Drop-in of ${CREDITS.defaultSeconds} s: Genjutsu is paid per second of the trimmed clip.`
+          : 'A Recreate includes its own driver and beat.';
+  return { perClip, total, label, note, effective };
+}
+
+/** Can the daily run drive a Drop-in with this pick: a Genjutsu gallery preset, or the owner's attached clip? */
+export function hasUsableSource(pick: { gallery?: boolean | null; owner_clip_path?: string | null } | undefined, attachedPath?: string | null): boolean {
+  if (!pick) return true; // nothing known: do not claim a Recreate
+  return Boolean(pick.gallery || pick.owner_clip_path || attachedPath);
+}
+
+/**
+ * The mode the daily run will really use. The owner's mode is stored as chosen; a Drop-in (or "analyst decides")
+ * needs a usable source, and without one the pick is made automatically as a Recreate.
+ */
+export function effectiveMode(mode: 'analyst' | OwnerMode, usableSource: boolean): OwnerMode {
+  return mode === 'recreate' ? 'recreate' : usableSource ? 'dropin' : 'recreate';
+}
+
+/** The line under the sheet's mode choice when a real clip has no file attached (owner decision 2026-10-05, section J). */
+export function noClipNote(): string {
+  return `No clip attached → it will be made automatically as a Recreate (≈${CREDITS.recreate} credits). Attach the clip to make it a true Drop-in (≈${estimateCredits('dropin')}).`;
+}
+
+// ---- attaching the owner's own clip ---------------------------------------------------------------------------------
+
+export const CLIP_MAX_BYTES = 200 * 1024 * 1024;
+export const CLIP_MAX_SECONDS = 60;
+export const CLIP_HELP =
+  'Best: a screen recording of the Reel/TikTok, or the creator’s own file. TikTok “Save video” adds a watermark we can’t use.';
+const CLIP_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm'] as const;
+
+/** The part of the check that needs no video element: a video by type or extension, not empty, at most 200 MB. */
+export function checkClipBasics(file: Pick<ClipFile, 'name' | 'size' | 'type'>): { ok: true } | { ok: false; reason: string } {
+  const ext = file.name.toLowerCase().split('.').pop() ?? '';
+  const looksLikeVideo = file.type.toLowerCase().startsWith('video/') || (CLIP_EXTENSIONS as ReadonlyArray<string>).includes(ext);
+  if (!looksLikeVideo) return { ok: false, reason: 'That is not a video file: choose an mp4 or mov' };
+  if (!(file.size > 0)) return { ok: false, reason: 'That file is empty' };
+  if (file.size > CLIP_MAX_BYTES) {
+    return { ok: false, reason: `The clip is ${(file.size / 1024 / 1024).toFixed(0)} MB: the limit is ${CLIP_MAX_BYTES / 1024 / 1024} MB` };
+  }
+  return { ok: true };
+}
+
+/**
+ * The file the owner chose for "Attach clip": a video (an iPhone camera-roll clip is video/quicktime or has no
+ * type at all, so the extension counts too), at most 200 MB and 60 s. `durationS` is what a `<video>` element read
+ * from it (null = it could not be read).
+ */
+export function validateClipFile(file: Pick<ClipFile, 'name' | 'size' | 'type'>, durationS: number | null): { ok: true } | { ok: false; reason: string } {
+  const basics = checkClipBasics(file);
+  if (!basics.ok) return basics;
+  if (durationS == null || !Number.isFinite(durationS) || durationS <= 0) {
+    return { ok: false, reason: 'This browser could not read that video: try an mp4 or mov' };
+  }
+  if (durationS > CLIP_MAX_SECONDS) {
+    return { ok: false, reason: `The clip is ${Math.round(durationS)} s: the limit is ${CLIP_MAX_SECONDS} s. Trim it to the part we need` };
+  }
+  return { ok: true };
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Where the upload goes: bucket `sources`, `owner/<pick id>/<timestamp>.<ext>` (what attach_clip and the storage policy accept). */
+export function ownerClipPath(pickId: string, file: Pick<ClipFile, 'name' | 'type'>, now: number): string {
+  if (!UUID.test(pickId)) throw new Error(`not a pick id: ${pickId}`);
+  const named = file.name.toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  const ext = (CLIP_EXTENSIONS as ReadonlyArray<string>).includes(named ?? '')
+    ? named!
+    : file.type.toLowerCase().includes('quicktime')
+      ? 'mov'
+      : 'mp4';
+  return `owner/${pickId.toLowerCase()}/${Math.trunc(now)}.${ext}`;
+}
+
+// ---- the character switcher --------------------------------------------------------------------------------------------
+
+export const CHARACTER_FILTER_KEY = 'oddeyes.character';
+
+/** `all` or a roster slug; anything else is not a filter. */
+export function parseCharacterFilter(value: unknown, known: ReadonlyArray<string>): string | null {
+  return typeof value === 'string' && (value === 'all' || known.includes(value)) ? value : null;
+}
+
+/**
+ * The choice the switcher opens on: a `?c=<slug>` deep link (from the page URL or the hash) wins, else what this
+ * viewer chose last time, else `all`. Storage may be missing or throw (a private window, blocked site data): that is `all`.
+ */
+export function loadCharacterFilter(
+  storage: Pick<Storage, 'getItem'> | null | undefined,
+  query: string | URLSearchParams,
+  known: ReadonlyArray<string>,
+): string {
+  const linked = parseCharacterFilter(new URLSearchParams(query).get('c'), known);
+  if (linked) return linked;
+  try {
+    return parseCharacterFilter(storage?.getItem(CHARACTER_FILTER_KEY), known) ?? 'all';
+  } catch {
+    return 'all';
+  }
+}
+
+/** Remember the choice for this viewer; false when storage is missing or refuses (nothing else depends on it). */
+export function saveCharacterFilter(storage: Pick<Storage, 'setItem'> | null | undefined, value: string): boolean {
+  try {
+    if (!storage) return false;
+    storage.setItem(CHARACTER_FILTER_KEY, value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The segmented control's options in the owner's order: each character, then All. */
+export function characterFilterOptions(roster: ReadonlyArray<{ slug: string; name: string }>): { id: string; label: string }[] {
+  return [...roster.map((c) => ({ id: c.slug, label: c.name })), { id: 'all', label: 'All' }];
+}
+
+// ---- the traits card -------------------------------------------------------------------------------------------------------
+
+export interface TraitRow {
+  key: keyof CharacterTraits;
+  label: string;
+  /** `text` is one phrase, `chips` a list. */
+  kind: 'text' | 'chips';
+  values: { text: string; hint?: string }[];
+}
+
+/** The Traits card's rows in reading order; a character with no card has none. */
+export function traitRows(traits: CharacterTraits | null | undefined): TraitRow[] {
+  if (!traits) return [];
+  const text = (key: keyof CharacterTraits, label: string): TraitRow => ({ key, label, kind: 'text', values: [{ text: String(traits[key] ?? '') }] });
+  const chips = (key: 'best_formats' | 'settings' | 'moves' | 'never', label: string): TraitRow => ({
+    key, label, kind: 'chips', values: (traits[key] ?? []).map((t) => ({ text: t })),
+  });
+  const rows: TraitRow[] = [
+    text('energy', 'Energy'),
+    text('comedy', 'Comedy'),
+    chips('best_formats', 'Best formats'),
+    chips('settings', 'Settings'),
+    chips('moves', 'Moves'),
+    { key: 'props', label: 'Gadgets & jewellery', kind: 'chips', values: traitProps(traits).map((p) => ({ text: p.name, ...(p.job ? { hint: p.job } : {}) })) },
+    text('music', 'Music'),
+    chips('never', 'Never'),
+  ];
+  return rows.filter((r) => r.values.length > 0 && r.values.every((v) => v.text.trim()));
 }

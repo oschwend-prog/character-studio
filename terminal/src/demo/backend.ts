@@ -3,11 +3,12 @@
 // (docs/launch/viral-picks-2026-10-04.md, parsed by studio.seed); every clip, post, metric and credit
 // figure is SYNTHETIC and the UI says so. Actions follow the same rules as the SQL RPCs.
 import picksJson from './batch1-picks.json';
-import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED } from '../lib/rules';
+import traitsJson from './traits.json';
+import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, checkClipBasics, ownerClipPath } from '../lib/rules';
 import { londonDayKey, londonWallToIso } from '../lib/format';
 import type {
-  Backend, Budget, Channel, ChangeKind, Character, ClipState, DecideExtras, HealthRow, LibraryClip, Pick, PickHistory, Platform,
-  PostStatus, QueueClip, RunRow, Snapshot,
+  Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipFile, ClipState, DecideExtras, HealthRow, LibraryClip, OwnerMusic,
+  Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, Tier,
 } from '../lib/types';
 
 interface Account { id: string; character_slug: string; platform: Platform; handle: string; connected: boolean; mode: 'approval' | 'auto'; dropin_share: number }
@@ -52,10 +53,43 @@ function upcomingSlot(slug: string, now: number): string {
 
 class DemoError extends Error {}
 
+/** A 9:16 stand-in picture for a demo pick (an inline SVG: the demo makes no network request and stores no media). */
+function demoThumb(label: string, hue: number): string {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 90 160"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0" stop-color="hsl(${hue} 55% 38%)"/><stop offset="1" stop-color="hsl(${(hue + 50) % 360} 60% 18%)"/></linearGradient></defs>` +
+    `<rect width="90" height="160" fill="url(#g)"/><circle cx="45" cy="62" r="20" fill="hsl(${hue} 70% 80%)" opacity=".85"/>` +
+    `<rect x="25" y="86" width="40" height="46" rx="14" fill="hsl(${hue} 70% 80%)" opacity=".7"/>` +
+    `<text x="45" y="150" font-family="sans-serif" font-size="8" font-weight="700" fill="#fff" fill-opacity=".8" text-anchor="middle">${label}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+/** A 16:9 stand-in picture (a YouTube Shorts thumbnail is landscape: the card letterboxes it in its 9:16 frame). */
+function demoWide(label: string, hue: number): string {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 90"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1">` +
+    `<stop offset="0" stop-color="hsl(${hue} 50% 40%)"/><stop offset="1" stop-color="hsl(${(hue + 60) % 360} 55% 16%)"/></linearGradient></defs>` +
+    `<rect width="160" height="90" fill="url(#g)"/><circle cx="80" cy="38" r="16" fill="hsl(${hue} 70% 82%)" opacity=".85"/>` +
+    `<rect x="62" y="56" width="36" height="26" rx="10" fill="hsl(${hue} 70% 82%)" opacity=".7"/>` +
+    `<text x="80" y="86" font-family="sans-serif" font-size="7" font-weight="700" fill="#fff" fill-opacity=".8" text-anchor="middle">${label}</text></svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+const MUSIC_ARMS = ['in_app', 'original', 'ai_beat'];
+
 const ownerOf = (f: { proposal: Record<string, unknown> }) => ({
   owner_note: (f.proposal.owner_note as string) ?? null,
   owner_mode: (f.proposal.owner_mode as 'dropin' | 'recreate') ?? null,
   owner_presence: (f.proposal.owner_presence as 'cameo' | 'featured' | 'star') ?? null,
+  owner_props: Array.isArray(f.proposal.owner_props) ? (f.proposal.owner_props as string[]) : null,
+  owner_music: (f.proposal.owner_music as OwnerMusic) ?? null,
+  owner_clip_path: (f.proposal.owner_clip_path as string) ?? null,
+  tier: (f.proposal.tier as Tier) ?? null,
+  theme: (f.proposal.theme as string) ?? null,
+  posted_at: (f.proposal.posted_at as string) ?? null,
+  gallery: f.proposal.source_kind === 'higgsfield_library' || String(f.proposal.preset_id ?? '').trim() !== '',
+  thumbnail_url: (f.proposal.thumbnail_url as string) ?? null,
+  preview_url: (f.proposal.preview_url as string) ?? null,
 });
 
 export class DemoBackend implements Backend {
@@ -83,10 +117,10 @@ export class DemoBackend implements Backend {
       this.accounts.push(a);
       return a;
     };
-    const btt = acc('biscuit', 'tiktok', '@biscuit.moves', 'approval', 0.7);
-    const big = acc('biscuit', 'instagram', 'biscuit.moves', 'auto', 0.4);
-    const rtt = acc('reginald', 'tiktok', '@reginald.thebutler', 'approval', 0.7);
-    const rig = acc('reginald', 'instagram', 'reginald.thebutler', 'approval', 0.4);
+    const btt = acc('biscuit', 'tiktok', '@biscuit.moves', 'approval', 1);
+    const big = acc('biscuit', 'instagram', 'biscuit.moves', 'auto', 1);
+    const rtt = acc('reginald', 'tiktok', '@reginald.thebutler', 'approval', 1);
+    const rig = acc('reginald', 'instagram', 'reginald.thebutler', 'approval', 1);
 
     const clip = (slug: string, hook: string, mode: Clip['mode'], state: ClipState, daysAgo: number, extra: Partial<Clip> = {}): Clip => {
       const c: Clip = {
@@ -202,6 +236,65 @@ export class DemoBackend implements Backend {
     said('D2', { owner_mode: 'dropin', owner_presence: 'featured', owner_note: 'keep the snare hits on the beat' });
     said('B3', { owner_mode: 'dropin', owner_presence: 'cameo', owner_note: 'the tea stays in frame' });
     said('D5', { owner_mode: 'recreate' });
+    // one proposed pick with the owner's gadgets & jewellery, and a music choice
+    (pickByRef.get('D2')!.proposal as Record<string, unknown>).owner_props = ['gold chain', 'aviator shades'];
+    (pickByRef.get('D2')!.proposal as Record<string, unknown>).owner_music = 'in_app';
+    (pickByRef.get('B3')!.proposal as Record<string, unknown>).owner_props = ['gold pocket watch'];
+
+    // The pick card (migration 0008): which scan theme each pick matched, when it was posted (what the derived tier reads),
+    // an explicit tier where the analyst set one, and a picture. The pictures are inline stand-ins: B5 has an expired
+    // platform link and B6 none, so the placeholder tile shows too.
+    const DAYS = 86_400_000;
+    const posted = (d: number) => new Date(now - d * DAYS).toISOString();
+    const card = (ref: string, c: Record<string, unknown>) => {
+      const f = pickByRef.get(ref);
+      if (f) f.proposal = { ...f.proposal, ...c };
+    };
+    card('B1', { theme: 'false premise, then the drop', posted_at: posted(21), thumbnail_url: demoThumb('DEMO', 215) });
+    card('B2', { theme: 'deadpan at work', posted_at: posted(9), thumbnail_url: demoThumb('DEMO', 150) });
+    card('B3', { theme: 'deadpan at work', posted_at: posted(8), thumbnail_url: demoThumb('DEMO', 40) });
+    card('D2', { theme: 'stare, then hits every beat', posted_at: posted(11), thumbnail_url: demoThumb('DEMO', 200) });
+    card('D4', { theme: 'stare, then hits every beat', posted_at: posted(3), thumbnail_url: demoThumb('DEMO', 190) });
+    card('D5', { theme: 'skilled upright dance', posted_at: posted(2), thumbnail_url: demoThumb('DEMO', 280) });
+    card('D6', { theme: 'pet with a human job', posted_at: posted(5), thumbnail_url: demoThumb('DEMO', 25) });
+    card('D1', { tier: 'iconic', theme: 'dog leads the dancers', posted_at: posted(6), thumbnail_url: demoThumb('DEMO', 330) });
+    card('D3', {
+      source_kind: 'higgsfield_library', preset_id: 'hf-genjutsu-pets-04', theme: 'skilled upright dance', posted_at: posted(4),
+      thumbnail_url: demoThumb('GENJUTSU', 170),
+    });
+    card('B4', { theme: 'deadpan at work', posted_at: posted(2), thumbnail_url: demoThumb('DEMO', 100) });
+    card('B5', {
+      theme: 'elder out-dances the young', posted_at: posted(6), thumbnail_url: 'https://p16-sign.tiktokcdn.com/obj/expired-demo-link.jpg',
+    });
+    card('B6', { theme: 'elder out-dances the young', posted_at: posted(5) });
+    for (const ref of ['O1', 'O2', 'O3', 'O4', 'O5']) card(ref, { posted_at: posted(12), thumbnail_url: demoThumb('DEMO', 260) });
+
+    // Four stand-in picks (SYNTHETIC, like every clip here) so each tier has a card for both characters.
+    const standIn = (n: number, slug: string, platform: string, handle: string, hook: string, concept: string, views: number, x: number, total: number, proposal: Record<string, unknown>): Fav => {
+      const f: Fav = {
+        id: uid(`fs${n}`), origin: 'scan', status: 'new', clip_id: null, character_slug: slug, platform, creator_handle: handle, views, outlier_x: x,
+        url: platform === 'youtube' ? `https://www.youtube.com/shorts/demoSynth${n}` : platform === 'higgsfield' ? 'higgsfield-preset:hf-genjutsu-butler-02' : `https://www.${platform}.com/${platform === 'tiktok' ? `@${handle.slice(1)}/video/76000000000000000${n}` : `reel/DemoSynth${n}/`}`,
+        scores: { virality: 8, reach: 7, freshness: 8, fit: 8, feasibility: 8, saturation: 6 }, total_score: total,
+        note: 'SYNTHETIC demo pick', created_at: new Date(now - 20 * 3600_000 + n * 60_000).toISOString(),
+        proposal: { mode: 'dropin', hook, concept, ...proposal },
+      };
+      this.favs.push(f);
+      return f;
+    };
+    standIn(1, 'biscuit', 'tiktok', '@demo.pawprint', 'tracksuit on. worries off.', 'Small dog in a tracksuit mouths the lyric, one paw on the beat; the caption gives him a job.', 3_100_000, 1240, 78, {
+      theme: 'pet with a human job', posted_at: posted(3), thumbnail_url: demoThumb('DEMO', 300),
+      decision: { decision: 'approve', by: 'analyst', reason: 'Matches: wholesome ego, ego or job caption. Posted 3 days ago at 1,240x.' },
+    });
+    standIn(2, 'biscuit', 'instagram', '@demo.doxie', 'vet face. fully fine.', 'Stares into the lens, then hits one perfect beat; rewatch bait.', 420_000, 18, 71, {
+      theme: 'stare, then hits every beat', posted_at: posted(1), thumbnail_url: demoThumb('DEMO', 80),
+    });
+    standIn(3, 'reginald', 'youtube', '@demo.rainstreet', 'an umbrella. a puddle. no notes.', 'A formal figure dances with an umbrella in the rain, perfectly serious; a famous scene, played straight.', 12_000_000, 5.2, 69, {
+      tier: 'iconic', theme: 'one action, new location', posted_at: posted(400), thumbnail_url: demoWide('DEMO', 215),
+      decision: { decision: 'approve', by: 'analyst', reason: 'Matches: deadpan under absurdity, black umbrella. A famous moment everyone knows.' },
+    });
+    standIn(4, 'reginald', 'higgsfield', '@genjutsu', 'tea for two, dance for one', 'A Genjutsu gallery clip: one dancer, static camera, ready to drop in.', 380_000, 9.1, 66, {
+      source_kind: 'higgsfield_library', preset_id: 'hf-genjutsu-butler-02', theme: 'deadpan at work', posted_at: posted(8), thumbnail_url: demoThumb('GENJUTSU', 160),
+    });
 
     // Clips still being made: the "In production" stage of the pipeline.
     const hour = 3600_000;
@@ -260,7 +353,7 @@ export class DemoBackend implements Backend {
 
   private targetsFor(c: Clip) {
     const connected = this.connectedFor(c.character_slug);
-    return c.mode === 'recreate' ? connected : connected.filter((a) => this.dropinRatio(a.id, c.id) < a.dropin_share);
+    return c.mode === 'recreate' ? connected : connected.filter((a) => a.dropin_share >= 1 || this.dropinRatio(a.id, c.id) < a.dropin_share); // a share of 1 is no cap
   }
 
   /** queue_block_reason (migration 0005). */
@@ -422,7 +515,11 @@ export class DemoBackend implements Backend {
 
     const characters: Character[] = Object.keys(NAMES).map((slug) => ({
       slug, name: NAMES[slug], status: 'live', bodies: slug === 'biscuit' ? ['biped', 'quadruped'] : ['biped'],
-      setup: { closeup: true, planned_handles: Object.fromEntries(this.accounts.filter((a) => a.character_slug === slug).map((a) => [a.platform, a.handle])) },
+      setup: {
+        closeup: true,
+        planned_handles: Object.fromEntries(this.accounts.filter((a) => a.character_slug === slug).map((a) => [a.platform, a.handle])),
+        traits: (traitsJson as Record<string, CharacterTraits>)[slug] ?? null,
+      },
       accounts: this.accounts.filter((a) => a.character_slug === slug).map((a) => ({ platform: a.platform, handle: a.handle, has_postiz: a.connected, mode: a.mode })),
     }));
 
@@ -501,6 +598,8 @@ export class DemoBackend implements Backend {
     const note = extras.ownerNote?.trim() || null;
     const mode = extras.ownerMode?.trim() || null;
     const presence = extras.ownerPresence?.trim() || null;
+    const music = extras.ownerMusic?.trim() || null;
+    const props = (extras.ownerProps ?? []).map((x) => x.trim());
     const also = extras.alsoCharacter?.trim() || null;
     if (decision !== 'approve' && decision !== 'skip') throw new DemoError(`decision must be approve or skip, got ${decision}`);
     if (note && note.length > 280) throw new DemoError(`the note is limited to 280 characters, got ${note.length}`);
@@ -508,10 +607,16 @@ export class DemoBackend implements Backend {
     if (presence && !['cameo', 'featured', 'star'].includes(presence)) {
       throw new DemoError(`owner_presence must be cameo, featured or star, got ${presence}`);
     }
+    if (music && !MUSIC_ARMS.includes(music)) throw new DemoError(`owner_music must be in_app, original or ai_beat, got ${music}`);
+    if (props.length > PROPS_MAX) throw new DemoError(`owner_props takes at most ${PROPS_MAX} items, got ${props.length}`);
+    if (props.some((x) => x.length < 1 || x.length > PROP_MAX_CHARS)) throw new DemoError(`each of owner_props must be 1 to ${PROP_MAX_CHARS} characters`);
     if (also && decision !== 'approve') throw new DemoError('also_character only applies when approving');
     const f = this.favs.find((x) => x.id === id);
     if (!f) throw new DemoError(`unknown pick ${id}`);
     if (f.status === 'queued' || f.status === 'made') throw new DemoError(`pick ${id} is already ${f.status}: too late to decide`);
+    if (music === 'original' && (mode ?? (f.proposal.owner_mode as string | undefined)) === 'recreate') {
+      throw new DemoError('owner_music original needs the dropin mode: a Recreate has no original audio (use ai_beat or in_app)');
+    }
     const slug = characterSlug?.trim() || f.character_slug;
     if (slug && !(slug in NAMES)) throw new DemoError(`unknown character ${slug}`);
     if (decision === 'approve' && !slug) throw new DemoError('choose a character before approving this pick');
@@ -520,11 +625,13 @@ export class DemoBackend implements Backend {
       if (also === slug) throw new DemoError(`also_character must be a different character from ${slug}`);
     }
 
-    const owner: Record<string, string> = {};
+    const owner: Record<string, unknown> = {};
     if (decision === 'approve') {
       if (note) owner.owner_note = note;
       if (mode) owner.owner_mode = mode;
       if (presence && (mode ?? (f.proposal.owner_mode as string | undefined)) === 'dropin') owner.owner_presence = presence;
+      if (props.length) owner.owner_props = props;
+      if (music) owner.owner_music = music;
     }
     const record = { decision, by: 'owner', reason: reason?.trim() || null };
     const { hold_reason: _drop, ...rest } = f.proposal;
@@ -575,6 +682,23 @@ export class DemoBackend implements Backend {
     });
     this.emit('favorites');
     return { duplicate: false };
+  }
+
+  /** attach_clip of migration 0008 (the browser upload is simulated: the demo stores no media). */
+  async attachClip(pickId: string, file: ClipFile, onProgress?: (pct: number) => void) {
+    const f = this.favs.find((x) => x.id === pickId);
+    if (!f) throw new DemoError(`unknown pick ${pickId}`);
+    if (f.status === 'queued' || f.status === 'made') throw new DemoError(`pick ${pickId} is already ${f.status}: too late to attach a clip`);
+    const checked = checkClipBasics(file);
+    if (!checked.ok) throw new DemoError(checked.reason);
+    for (const pct of [10, 45, 80, 100]) {
+      onProgress?.(pct);
+      await new Promise((r) => setTimeout(r, 40));
+    }
+    const path = ownerClipPath(pickId, file, this.now());
+    f.proposal = { ...f.proposal, owner_clip_path: path };
+    this.emit('favorites');
+    return path;
   }
 
   async signedUrl() {

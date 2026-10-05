@@ -1,18 +1,24 @@
-// Viral Picks: the Scanner card, new picks best-first with their six sub-scores, Approve (opens the "Make it"
-// sheet: character or Both, a note, how to loop him in) / Skip (with reason); a paste box for the owner's own
-// links; the decided picks with what they became.
-import { ExternalLink, Link2, Plus } from 'lucide-react';
-import { useState, type FormEvent } from 'react';
+// Viral Picks: the Scanner card, then the proposed videos by character (Biscuit, Reginald, then the unassigned ones), each
+// section grouped by category (Broke the internet, Viral now, Up and coming, Ready to drop in) or by theme, best first with
+// the Genjutsu gallery as the backup. Each card says plainly what the video is, then Make it / Skip; a paste box for the
+// owner's own links; the decided picks with what they became.
+import { Clapperboard, Crown, ExternalLink, Flame, Link2, Plus, TrendingUp } from 'lucide-react';
+import { useState, type FormEvent, type ReactNode } from 'react';
+import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
 import { MakeItSheet } from '../components/MakeIt';
+import { PickThumb } from '../components/PickThumb';
 import { ScannerCard } from '../components/Scanner';
-import { Flap, Livery, Section, Skeleton, Spinner, characterName } from '../components/ui';
+import { Avatar, Flap, Livery, Section, Skeleton, Spinner, characterName } from '../components/ui';
 import { formatViews, outlierBadge, platformName } from '../lib/format';
 
 const formatOutlier = (x: number) => outlierBadge(x).label;
-import { href } from '../lib/hooks';
-import { canonicalVideoUrl, sortPicks } from '../lib/rules';
+import { href, useNow } from '../lib/hooks';
+import {
+  TIERS, TIER_HINTS, TIER_LABELS, canonicalVideoUrl, groupPicksByCharacter, modeLine, tierCounts, tierOf,
+  type PickSection,
+} from '../lib/rules';
 import { useStudio } from '../lib/store';
-import type { Pick } from '../lib/types';
+import type { Pick, Tier } from '../lib/types';
 
 const CHARACTERS = ['biscuit', 'reginald'] as const;
 const SCORES: { key: keyof Pick; name: string; weight: string }[] = [
@@ -25,8 +31,13 @@ const SCORES: { key: keyof Pick; name: string; weight: string }[] = [
 ];
 const SKIP_REASONS = ['Not our brand', 'Too hard to make now', 'Seen it everywhere', 'Wrong character'];
 
+const TIER_ICON: Record<Tier, typeof Flame> = { iconic: Crown, viral_now: Flame, rising: TrendingUp, gallery: Clapperboard };
+
 export function Picks() {
   const { data } = useStudio();
+  const now = useNow(60_000);
+  const [character, setCharacter, roster] = useCharacterChoice();
+  const [tier, setTier] = useState<Tier | 'all'>('all');
   if (!data) {
     return (
       <div className="page stack" aria-busy="true">
@@ -35,32 +46,106 @@ export function Picks() {
       </div>
     );
   }
-  const picks = sortPicks(data.picks);
+  const inScope = data.picks.filter((p) => character === 'all' || p.character_slug === character);
+  const counts: Record<string, number> = { all: data.picks.length };
+  for (const c of roster) counts[c.slug] = data.picks.filter((p) => p.character_slug === c.slug).length;
+  const tiers = tierCounts(inScope, now);
+  const sections = groupPicksByCharacter(data.picks, roster, { now, character, tier });
+  const shown = sections.reduce((n, s) => n + s.picks.length, 0);
   return (
     <div className="page stack">
       <div>
         <h1 className="h1">Viral Picks</h1>
         <p className="small muted" style={{ margin: '6px 0 0' }}>
-          Best first. The standing rule already approved anything 80+ with feasibility 7+; these wait for a call.
+          Best first, real viral clips before the Genjutsu gallery. The standing rule already approved anything 80+ with feasibility 7+; these wait for a call.
         </p>
       </div>
       <ScannerCard />
       <PasteBox />
-      <Section id="new-picks" title={`New · ${picks.length}`} aside="sorted by total score">
-        {picks.length === 0 ? (
+      <div className="pick-filters stack" style={{ gap: 10 }}>
+        <CharacterSwitcher value={character} onChange={setCharacter} roster={roster} counts={counts} />
+        <div className="chips tier-chips" role="group" aria-label="Category">
+          {(['all', ...TIERS] as const).map((t) => (
+            <button key={t} type="button" className={`chip tier-${t}`} aria-pressed={tier === t} onClick={() => setTier(t)} title={t === 'all' ? undefined : TIER_HINTS[t]}>
+              {t === 'all' ? 'All' : TIER_LABELS[t]} <span className="num count">{tiers[t]}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="stack" id="new-picks" style={{ gap: 22 }} aria-label={`${shown} proposed videos`}>
+        {sections.map((sec) => (
+          <CharacterPicks key={sec.slug ?? 'unassigned'} section={sec} />
+        ))}
+        {data.picks.length === 0 && (
           <div className="panel empty">
             <b>No picks waiting</b>
-            <span className="muted small">The daily scan files new ones on Tue, Thu, Sat and Sun. Paste a link above to add your own.</span>
+            <span className="muted small">The daily scan files new ones every day. Paste a link above to add your own.</span>
           </div>
-        ) : (
-          <div className="picks-grid stack" style={{ gap: 12 }}>
-            {picks.map((p) => (
-              <PickCard key={p.id} pick={p} />
+        )}
+      </div>
+      <History />
+    </div>
+  );
+}
+
+/** One character's section: its picture, name and count, then its picks grouped by category or by theme. */
+function CharacterPicks({ section }: { section: PickSection<Pick> }) {
+  const [by, setBy] = useState<'category' | 'theme'>('category');
+  const slug = section.slug;
+  const titleId = `sec-${slug ?? 'unassigned'}`;
+  return (
+    <section className={`pick-sec ${slug ?? 'none'}`} aria-labelledby={titleId} data-char={slug ?? 'none'}>
+      <header className="pick-sec-head">
+        {slug ? <Avatar slug={slug} name={section.name} size={40} /> : <Livery slug={null} />}
+        <h2 className="h2" id={titleId}>{section.name}</h2>
+        <span className="stage-count num on" aria-label={`${section.picks.length} proposed`}>{section.picks.length}</span>
+        {section.picks.length > 1 && (
+          <div className="seg group-by" role="group" aria-label={`Group ${section.name}'s picks by`}>
+            {(['category', 'theme'] as const).map((g) => (
+              <button key={g} type="button" aria-pressed={by === g} onClick={() => setBy(g)}>
+                {g === 'category' ? 'Category' : 'Theme'}
+              </button>
             ))}
           </div>
         )}
-      </Section>
-      <History />
+      </header>
+      {section.picks.length === 0 ? (
+        <p className="small muted pick-sec-empty">Nothing proposed for {section.name} right now: the next scan files more.</p>
+      ) : by === 'category' ? (
+        section.tiers.map((g) => {
+          const Icon = TIER_ICON[g.tier];
+          return (
+            <GroupBlock key={g.tier} id={`${titleId}-${g.tier}`} icon={<Icon size={16} aria-hidden="true" />} label={g.label} hint={TIER_HINTS[g.tier]} count={g.picks.length}>
+              {g.picks.map((p) => (
+                <PickCard key={p.id} pick={p} />
+              ))}
+            </GroupBlock>
+          );
+        })
+      ) : (
+        section.themes.map((g) => (
+          <GroupBlock key={g.label} id={`${titleId}-${g.label}`} label={g.label} count={g.picks.length}>
+            {g.picks.map((p) => (
+              <PickCard key={p.id} pick={p} />
+            ))}
+          </GroupBlock>
+        ))
+      )}
+    </section>
+  );
+}
+
+function GroupBlock({ id, icon, label, hint, count, children }: { id: string; icon?: ReactNode; label: string; hint?: string; count: number; children: ReactNode }) {
+  return (
+    <div className="pick-group" role="group" aria-labelledby={id}>
+      <h3 className="pick-group-head" id={id} title={hint}>
+        {icon}
+        <span>{label}</span>
+        <span className="num count">{count}</span>
+      </h3>
+      <div className="picks-grid stack" style={{ gap: 12 }}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -165,6 +250,7 @@ function CharacterSeg({ value, onChange, label }: { value: string | null; onChan
 
 function PickCard({ pick }: { pick: Pick }) {
   const { backend, run, busy } = useStudio();
+  const now = useNow(60_000);
   const slug = pick.character_slug;
   const [making, setMaking] = useState(false);
   const [skipping, setSkipping] = useState(false);
@@ -173,6 +259,13 @@ function PickCard({ pick }: { pick: Pick }) {
   const working = busy.has(key);
   const needs = Array.isArray(pick.needs) ? pick.needs.join(', ') : pick.needs;
   const titleId = `pick-${pick.id}-t`;
+  const { tier, derived } = tierOf(pick, now);
+  const TierIcon = TIER_ICON[tier];
+  const why = pick.hold_reason
+    ? `Held by the rule${needs ? ` (needs ${needs.replace('_', ' ')})` : ''}: ${pick.hold_reason}`
+    : pick.decision
+      ? `${pick.decision.by === 'rule' ? 'Rule' : 'Analyst'}: ${pick.decision.reason ?? pick.decision.decision}`
+      : null;
 
   const skip = (e: FormEvent) => {
     e.preventDefault();
@@ -180,27 +273,28 @@ function PickCard({ pick }: { pick: Pick }) {
   };
 
   return (
-    <article className="panel pick" aria-labelledby={titleId}>
-      <div className="pick-top">
-        <div className="pick-total">
-          <Flap text={pick.total_score == null ? '--' : String(Math.round(pick.total_score))} label={`Total score ${pick.total_score ?? 'not scored'} of 100`} />
-          <span className="label">score</span>
-        </div>
-        <div className="pick-head">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-            <Livery slug={slug} />
-            <span className="small muted">
-              {slug ? characterName(slug) : pick.intended_character ? `For ${pick.intended_character} (not built yet)` : 'No character yet'}
-              {pick.proposed_mode ? ` · ${pick.proposed_mode}` : ''}
+    <article className="panel pick" data-char={slug ?? 'none'} data-tier={tier} aria-labelledby={titleId}>
+      <div className="pick-layout">
+        <PickThumb pick={pick} />
+        <div className="pick-main">
+          <div className="pick-badges">
+            <span className={`tier-badge tier-${tier}`} title={`${TIER_HINTS[tier]}${derived ? ' (worked out from the numbers)' : ''}`}>
+              <TierIcon size={13} aria-hidden="true" /> {TIER_LABELS[tier]}
             </span>
+            {pick.theme && <span className="tag theme-chip" title="The scan theme it matched">{pick.theme}</span>}
+            {slug && <Livery slug={slug} />}
           </div>
           <h3 className="pick-hook" id={titleId} style={{ margin: 0 }}>
             {pick.hook ? `“${pick.hook}”` : pick.creator_handle ?? pick.url}
           </h3>
+          <p className="pick-mode" style={{ margin: 0 }}>
+            {modeLine(pick)}
+            {!slug && pick.intended_character ? ` · for ${pick.intended_character} (not built yet)` : ''}
+          </p>
           <div className="pick-meta">
             <span>{platformName(pick.platform)}</span>
             {pick.creator_handle && <span>{pick.creator_handle}</span>}
-            <span className="num">{formatViews(pick.views)} views</span>
+            {pick.views != null && <span className="num">{formatViews(pick.views)} views</span>}
             {pick.outlier_x != null && (
               <span className="tag num" title="Views against the creator's own median">
                 {formatOutlier(pick.outlier_x)} their median
@@ -208,41 +302,34 @@ function PickCard({ pick }: { pick: Pick }) {
             )}
           </div>
         </div>
+        <div className="pick-total">
+          <Flap text={pick.total_score == null ? '--' : String(Math.round(pick.total_score))} label={`Total score ${pick.total_score ?? 'not scored'} of 100`} />
+          <span className="label">score</span>
+        </div>
       </div>
 
       {pick.concept && <p className="pick-concept" style={{ margin: 0 }}>{pick.concept}</p>}
+      {why && <p className="pick-hold" style={{ margin: 0 }}>{why}</p>}
 
-      <div className="scores" role="list" aria-label="Sub-scores out of 10">
-        {SCORES.map((s) => {
-          const v = pick[s.key] as number | null;
-          return (
-            <div className="score" role="listitem" key={s.key} title={`${s.name}: ${v ?? '—'} of 10 (weight ${s.weight})`}>
-              <span className="top">
-                <span className="name">{s.name}</span>
-                <span className="val">{v == null ? '—' : Number(v).toFixed(v % 1 ? 1 : 0)}</span>
-              </span>
-              <span
-                className="bar"
-                role="meter"
-                aria-label={`${s.name}`}
-                aria-valuemin={0}
-                aria-valuemax={10}
-                aria-valuenow={v ?? 0}
-              >
-                <span style={{ width: `${Math.max(0, Math.min(10, v ?? 0)) * 10}%` }} />
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      {(pick.hold_reason || pick.decision) && (
-        <p className="pick-hold" style={{ margin: 0 }}>
-          {pick.hold_reason
-            ? `Held by the rule${needs ? ` (needs ${needs.replace('_', ' ')})` : ''}: ${pick.hold_reason}`
-            : `${pick.decision?.by === 'rule' ? 'Rule' : 'Analyst'}: ${pick.decision?.reason ?? pick.decision?.decision}`}
-        </p>
-      )}
+      <details className="pick-scores">
+        <summary className="small muted">Sub-scores</summary>
+        <div className="scores" role="list" aria-label="Sub-scores out of 10">
+          {SCORES.map((sc) => {
+            const v = pick[sc.key] as number | null;
+            return (
+              <div className="score" role="listitem" key={sc.key} title={`${sc.name}: ${v ?? '—'} of 10 (weight ${sc.weight})`}>
+                <span className="top">
+                  <span className="name">{sc.name}</span>
+                  <span className="val">{v == null ? '—' : Number(v).toFixed(v % 1 ? 1 : 0)}</span>
+                </span>
+                <span className="bar" role="meter" aria-label={`${sc.name}`} aria-valuemin={0} aria-valuemax={10} aria-valuenow={v ?? 0}>
+                  <span style={{ width: `${Math.max(0, Math.min(10, v ?? 0)) * 10}%` }} />
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </details>
 
       {skipping ? (
         <form className="inline-form" onSubmit={skip} aria-label="Skip this pick">
@@ -268,16 +355,18 @@ function PickCard({ pick }: { pick: Pick }) {
       ) : (
         <div className="pick-actions">
           <span className="grow" />
-          <a className="btn ghost" href={pick.url} target="_blank" rel="noopener noreferrer" aria-label={`Open the original on ${platformName(pick.platform)} (new tab)`}>
-            Original <ExternalLink aria-hidden="true" />
-          </a>
+          {/^https:/.test(pick.url) && (
+            <a className="btn ghost" href={pick.url} target="_blank" rel="noopener noreferrer" aria-label={`Open the original on ${platformName(pick.platform)} (new tab)`}>
+              Original <ExternalLink aria-hidden="true" />
+            </a>
+          )}
           <div className="decide">
-          <button type="button" className="btn line" onClick={() => setSkipping(true)} disabled={working}>
-            Skip
-          </button>
-          <button type="button" className="btn primary" onClick={() => setMaking(true)} disabled={working} aria-busy={working} aria-haspopup="dialog">
-            {working && <Spinner />} Approve
-          </button>
+            <button type="button" className="btn line" onClick={() => setSkipping(true)} disabled={working}>
+              Skip
+            </button>
+            <button type="button" className="btn primary" onClick={() => setMaking(true)} disabled={working} aria-busy={working} aria-haspopup="dialog">
+              {working && <Spinner />} Make it
+            </button>
           </div>
         </div>
       )}
