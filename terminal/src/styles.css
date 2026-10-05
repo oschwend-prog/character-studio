@@ -815,3 +815,10 @@ a.ll-title:hover { text-decoration: underline; }
   .step.current .step-name { color: var(--ink); }
 }
 .work-flag b { font-weight: 700; }
+
+/* ---- the post text and the first comment, with Copy ------------------------------------ */
+.post-text { display: flex; flex-direction: column; gap: 12px; }
+.copy-block { display: flex; flex-direction: column; gap: 6px; }
+.copy-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.copy-btn { min-height: 36px; padding: 0 10px; }
+.copy-text { min-height: 0; font-size: 13.5px; line-height: 1.45; white-space: pre-wrap; resize: none; color: var(--ink); background: var(--board); }

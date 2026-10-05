@@ -76,6 +76,8 @@ export interface QueueClip {
   pick_url: string | null;
   /** Why it cannot be approved yet (migration 0005), or null. */
   blocked_reason: string | null;
+  /** The line the owner pins under the post (features.first_comment, migration 0010); absent before 0010. */
+  first_comment?: string | null;
 }
 
 export interface LibraryPost {
@@ -369,6 +371,10 @@ export interface TrackerRow {
   post_error: string | null;
   /** The views of the post's latest metric snapshot. */
   latest_views: number | null;
+  /** The clip's post text and the comment the owner pins: shown with Copy at Your OK and Scheduled. */
+  caption: string | null;
+  hashtags: string[] | null;
+  first_comment: string | null;
 }
 
 /** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */

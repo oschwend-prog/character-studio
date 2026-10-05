@@ -4,6 +4,7 @@
 // something failed. The steps and flags come from trackerStep (lib/tracker.ts).
 import { AlertTriangle, Check, ExternalLink } from 'lucide-react';
 import { PickThumb } from '../components/PickThumb';
+import { PostText } from '../components/PostText';
 import { Avatar, Livery, Skeleton } from '../components/ui';
 import { formatCredits } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
@@ -129,6 +130,10 @@ function WorkCard({ row, now }: { row: TrackerRow; now: number }) {
           </div>
         )}
       </div>
+
+      {(s.step === 6 || s.step === 7) && row.clip_id && (row.caption || row.first_comment) && (
+        <PostText caption={row.caption} hashtags={row.hashtags} firstComment={row.first_comment} />
+      )}
     </article>
   );
 }

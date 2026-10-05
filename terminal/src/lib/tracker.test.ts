@@ -20,7 +20,7 @@ const row = (over: Partial<TrackerRow> = {}): TrackerRow => {
     decision: { decision: 'approve', by: 'rule', reason: 'rule: total 84 >= 80' }, approved_at: ago(2), note: null, source_id: null,
     analysis: null, fetch_failed: null, clip_id: null, clip_state: null, clip_mode: null, clip_state_since: null, clip_failure: null,
     credits_spent: 0, post_id: null, post_status: null, post_scheduled_for: null, post_posted_at: null, post_url: null, post_error: null,
-    latest_views: null,
+    latest_views: null, caption: null, hashtags: null, first_comment: null,
     ...over,
   };
 };
@@ -202,5 +202,21 @@ describe('the demo data', () => {
       expect([key, picks.some((p) => p[key] != null)]).toEqual([key, true]);
       expect([key, picks.some((p) => p[key] == null)]).toEqual([key, true]);
     }
+  });
+});
+
+describe('the post text on the cards', () => {
+  it('is in the demo for a clip waiting for your OK and a booked one, with the first comment', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    const { postText } = await import('./captions');
+    const snap = await new DemoBackend(() => NOW).load();
+    const at = (step: number) => snap.tracker.filter((r) => trackerStep(r, NOW).step === step);
+    for (const step of [6, 7]) {
+      const withText = at(step).filter((r) => r.caption && r.first_comment);
+      expect([step, withText.length > 0]).toEqual([step, true]);
+      for (const r of withText) expect(postText(r.caption, r.hashtags).error).toBeNull();
+    }
+    expect(snap.queue.some((q) => q.first_comment) && snap.queue.some((q) => !q.first_comment)).toBe(true);
+    for (const q of snap.queue) expect(postText(q.caption, q.hashtags).error).toBeNull(); // every demo caption passes the studio's rule
   });
 });

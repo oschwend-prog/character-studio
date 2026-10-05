@@ -201,7 +201,9 @@ export class DemoBackend implements Backend {
 
     // Today: Biscuit's eye loop is booked for 19:00 on both channels.
     const eyeLoop = clip('biscuit', "eyes don't match. moves do.", 'recreate', 'scheduled', 0, {
-      cost: 84, caption: 'blue one sees the beat. amber one sees you. 🌭', features: { format_id: 'B-EYELOOP', hook_text: "eyes don't match. moves do.", seamless_loop: true },
+      cost: 84, caption: 'Eye check · dachshund edition\nblue one sees the beat. amber one sees you. 🌭\nwhich eye did you notice first? 💙\n🎵 original beat',
+      hashtags: ['#dachshund', '#dogdance', '#sausagedog', '#oddeyes'],
+      features: { format_id: 'B-EYELOOP', hook_text: "eyes don't match. moves do.", seamless_loop: true, first_comment: 'which eye did you notice first? 💙🧡' },
     });
     for (const a of [btt, big]) {
       this.posts.push({
@@ -225,16 +227,21 @@ export class DemoBackend implements Backend {
       pickByRef.set(p.ref, f);
     });
     const queued: [string, string, string, number, string][] = [
-      ['B1', 'reginald', 'first day as head butler', 162, 'first day on the job. nobody saw the tray move. #butler #deadpan'],
-      ['B2', 'reginald', 'POV: you rang for tea', 158, 'the bell can wait. the song cannot. #teatime #butler'],
+      ['B1', 'reginald', 'first day as head butler', 162,
+        'First day on the job · butler edition\nNobody saw the tray move. 🎩\nSend this to whoever starts somewhere new on Monday.\n🎵 trend: @eatfryhaven #butler #deadpan #firstday #oddeyes'],
+      ['B2', 'reginald', 'POV: you rang for tea', 158,
+        'Tea time · butler edition\nThe bell can wait. The kettle cannot. 🫖\nWhich would you ring for first?\n🎵 trend: @drink321coffee #butler #deadpan #teatime #oddeyes'],
       ['D6', 'biscuit', 'official taste inspector', 171, 'croissant: approved. crumbs: also approved. #dachshund #sausagedog'],
     ];
     queued.forEach(([ref, slug, hook, cost, caption], i) => {
       const f = pickByRef.get(ref)!;
       const c = clip(slug, hook, 'recreate', 'awaiting_approval', 0, {
-        cost, caption, hashtags: caption.match(/#\w+/g) ?? [],
+        cost, caption: caption.replace(/\s*#\w+/g, '').trim(), hashtags: caption.match(/#\w+/g) ?? [],
         created_at: new Date(now - (3 - i) * 3600_000).toISOString(),
-        features: { format_id: slug === 'biscuit' ? 'B-EGO' : 'R-DEADPAN', hook_text: hook, fav_id: f.id },
+        features: {
+          format_id: slug === 'biscuit' ? 'B-EGO' : 'R-DEADPAN', hook_text: hook, fav_id: f.id,
+          ...(i < 2 ? { first_comment: slug === 'biscuit' ? 'which eye did you notice first? 💙🧡' : 'Requests for next week may be left below. Within reason.' } : {}),
+        },
         source: { kind: 'synthetic', url: null, credit: f.creator_handle, trend: String(f.proposal.concept ?? '').slice(0, 60) || null },
         qa: { tech: 'ok', problems: [], visual: slug === 'reginald' ? 'quiff rigid, no smile, eyes right' : 'eyes right, crumbs on onesie, paws clean' },
       });
@@ -583,6 +590,7 @@ export class DemoBackend implements Backend {
           targets: this.targetsFor(c).map((a) => ({ account_id: a.id, platform: a.platform, handle: a.handle, mode: a.mode })),
           next_slot: upcomingSlot(c.character_slug, now), pick_id: fav?.id ?? null, pick_url: fav?.url ?? null,
           blocked_reason: this.blockReason(c),
+          first_comment: typeof c.features.first_comment === 'string' ? c.features.first_comment : null,
         };
       });
 
@@ -717,6 +725,9 @@ export class DemoBackend implements Backend {
       post_id: p?.id ?? null, post_status: p?.status ?? null, post_scheduled_for: p?.scheduled_for ?? null,
       post_posted_at: p?.status === 'posted' ? p.scheduled_for : null, post_url: p?.url ?? null, post_error: p?.error ?? null,
       latest_views: p?.views ?? null,
+      caption: c?.caption ?? null,
+      hashtags: c ? c.hashtags : null,
+      first_comment: c && typeof c.features.first_comment === 'string' ? c.features.first_comment : null,
     };
   }
 

@@ -3,6 +3,7 @@
 import { CalendarClock, ChevronLeft, ChevronRight, ExternalLink, RotateCcw, X } from 'lucide-react';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
+import { PostText } from '../components/PostText';
 import { Flap, Livery, Skeleton, Spinner, characterName } from '../components/ui';
 import { clipCode, formatCredits, isoToLondonWall, londonStamp, londonWallToIso, platformName } from '../lib/format';
 import { href } from '../lib/hooks';
@@ -251,6 +252,7 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
           <textarea id={`cap-${clip.id}`} className="textarea" value={caption} onChange={(e) => setCaption(e.target.value)} />
           <span className="hint">{caption.trim() ? 'The AI-generated label is added when it posts.' : 'Empty: the original caption is kept.'}</span>
         </div>
+        <PostText caption={caption.trim() ? caption : clip.caption} hashtags={clip.hashtags} firstComment={clip.first_comment ?? null} />
 
         {mode === 'schedule' && (
           <form className="inline-form" onSubmit={schedule} aria-label="Schedule this clip">
