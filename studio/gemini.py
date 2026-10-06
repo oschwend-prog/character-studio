@@ -13,7 +13,7 @@ character's voice, search keywords and traits card from ``characters/<slug>``). 
 them. A file up to ``INLINE_MAX_BYTES`` rides inline; a bigger one goes through the Files API (resumable upload, polled until
 ``ACTIVE``, deleted again after the answer).
 
-**One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 60, a hashtag list that is
+**One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 42, a hashtag list that is
 not 3-5 tags), the same request is made once more with the problems appended to the prompt; a second miss raises
 ``GeminiUnexpected`` naming them. Anything the video says is data: the prompt says so and nothing it returns is executed.
 
@@ -57,7 +57,7 @@ CAMERAS = ("static", "handheld", "moving")
 PARTS = ("cameo", "featured", "star")
 ENGAGEMENT_KINDS = ("send", "question", "tease")
 TITLE_MAX = 40
-HOOK_MAX = 60
+HOOK_MAX = 42  # owner 2026-10-06: about 40 characters, two short lines in the studio pill
 JOKE_MAX = 150
 LINE_MAX = 150
 FIRST_COMMENT_MAX = 300
@@ -453,7 +453,11 @@ burned_in_text: true when text is burned into the picture. camera: static, handh
 - classic: true only for a famous moment almost everyone knows; moment_name: its name or the trend's name ("" when none).
 - suggested_part: cameo, featured or star (how big {c.name}'s part should be).
 - gadgets: 0-3 names copied exactly from the gadget list below that would make this clip better.
-- hooks: 3 on-screen hook lines in {c.name}'s voice, at most {HOOK_MAX} characters each, the first line of the video.
+- hooks: 3 different on-screen hooks in {c.name}'s voice, at most {HOOK_MAX} characters each: the line in the caption pill \
+for the first seconds, read with the sound off, so it must land in one glance. Each one is TRUE to what happens in this clip (the \
+video pays it off) and opens a gap the viewer needs the clip to close: a deadpan understatement of an absurd moment, a mundane \
+frame on a wild one, a confident claim the clip proves wrong. Use a different angle for each; the strongest first. Never explain \
+the joke, never a greeting, never "POV:" or "wait for it", never mention AI.
 - caption: title = a searchable label of at most {TITLE_MAX} characters, "<famous moment or format> · {c.edition or c.noun} edition", carrying \
 a literal search phrase (the moment's name or a search keyword below); joke = one line in {c.name}'s voice (at most {JOKE_MAX} \
 characters); send = a send trigger ("send this to ..."); question = a question to the viewer; tease = a series tease ("next \
