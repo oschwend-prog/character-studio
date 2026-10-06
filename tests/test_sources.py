@@ -89,9 +89,9 @@ def test_synthetic_never_dropin_eligible():
 
 
 @pytest.mark.parametrize(
-    "checks",  # (has_watermark, has_overlay, has_minors)
-    [(True, False, False), (False, True, False), (False, False, True),
-     (None, False, False), (False, None, False), (False, False, None)],
+    "checks",  # (has_watermark, has_overlay, has_minors): has_minors is recorded only, it is not a blocking check
+    [(True, False, False), (False, True, False), (None, False, False), (False, None, False), (True, False, True),
+     (None, None, None)],
 )
 def test_any_failed_or_missing_blocking_check_blocks_dropin(checks):
     store = make_store()
@@ -104,7 +104,7 @@ def test_any_failed_or_missing_blocking_check_blocks_dropin(checks):
 
 @pytest.mark.parametrize("background", [0, 1, 3, None])
 def test_people_in_the_background_no_longer_block_a_dropin(background):
-    """Owner decision 2026-10-05: other people are recorded and shown, but only watermark, overlay and children block."""
+    """Owner decision 2026-10-05: other people are recorded and shown, but only a watermark and an overlay block."""
     store = make_store()
     s = new_source(store)
     s = store.update_source(
@@ -114,22 +114,30 @@ def test_people_in_the_background_no_longer_block_a_dropin(background):
     assert dropin_eligible(s) is True
 
 
-def test_a_child_in_the_clip_blocks_a_dropin_however_clean_the_rest_is():
+def test_a_child_in_the_clip_is_recorded_but_does_not_block_a_dropin():
+    """Owner decision 2026-10-06: children are fine in a clip, only the star we replace must be an adult (a drop's
+    ``star.child`` checks that); ``has_minors`` is information, like ``other_people``."""
     store = make_store()
     s = record_checks(store, new_source(store).id, False, False, 0, True)
+    assert s.has_minors is True and dropin_eligible(s) is True
+    assert [x.id for x in rank_sources(store, character(store, "reginald"), Mode.dropin, set())] == [s.id]
+
+
+def test_a_watermark_still_blocks_a_dropin_that_has_children_in_it():
+    store = make_store()
+    s = record_checks(store, new_source(store).id, True, False, 0, True)
     assert s.has_minors is True and dropin_eligible(s) is False
 
 
-def test_a_source_whose_minors_check_was_never_run_is_not_eligible():
-    """A source checked before migration 0008 has has_minors NULL: it is not eligible until it is looked at again."""
+def test_a_source_whose_minors_check_was_never_run_is_still_eligible_once_watermark_and_overlay_are_checked():
+    """A source checked before migration 0008 has has_minors NULL: the child question no longer gates it."""
     store = make_store()
     s = store.update_source(
         new_source(store).id, has_watermark=False, has_overlay=False, other_people=0
     )
     assert s.has_minors is None
-    assert dropin_eligible(s) is False
-    assert rank_sources(store, character(store, "reginald"), Mode.dropin, set()) == []
-    assert [x.id for x in rank_sources(store, character(store, "reginald"), Mode.recreate, set())] == [s.id]
+    assert dropin_eligible(s) is True
+    assert [x.id for x in rank_sources(store, character(store, "reginald"), Mode.dropin, set())] == [s.id]
 
 
 def test_flag_dirty_makes_ineligible():
@@ -492,7 +500,7 @@ def test_cli_check_records_a_child_and_background_people_with_the_verdict(cli_st
     out = json.loads(run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "4", "--no-minors").stdout)
     assert (out["other_people"], out["has_minors"], out["dropin_eligible"]) == (4, False, True)  # a crowd behind him is fine
     out = json.loads(run("check", sid, "--no-watermark", "--no-overlay", "--other-people", "0", "--minors").stdout)
-    assert (out["has_minors"], out["dropin_eligible"]) == (True, False)
+    assert (out["has_minors"], out["dropin_eligible"]) == (True, True)  # a child in the clip is recorded, not a gate (2026-10-06)
     assert "--minors" in run("check", "--help").output and "--no-minors" in run("check", "--help").output
 
 

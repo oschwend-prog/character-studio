@@ -113,7 +113,7 @@ export function clipCheckChips(a: ClipAnalysis): CheckChip[] {
   chips.push({ text: CAMERA_WORDS[a.camera] ?? String(a.camera), tone: a.camera === 'static' ? 'ok' : 'warn' });
   chips.push({ text: a.watermark ? 'Watermark or handle' : 'No watermark', tone: a.watermark ? 'bad' : 'ok' });
   chips.push({ text: a.overlay ? 'Text on screen' : 'No text overlay', tone: a.overlay ? 'bad' : 'ok' });
-  chips.push({ text: a.minors ? 'Child visible' : 'No children', tone: a.minors ? 'bad' : 'ok' });
+  chips.push({ text: a.minors ? 'Children in clip' : 'No children', tone: 'plain' }); // information only: the star must be an adult, children elsewhere are fine
   const w = a.best_window;
   if (w && Number.isFinite(w.start_s) && Number.isFinite(w.end_s)) {
     chips.push({ text: `Best ${trim1(w.start_s)}-${trim1(w.end_s)} s (${trim1(w.end_s - w.start_s)} s)`, tone: 'plain' });

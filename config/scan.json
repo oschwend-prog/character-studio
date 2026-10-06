@@ -54,7 +54,7 @@
     "A mostly static camera",
     "No watermark and no other creator's handle",
     "No text burned into the picture",
-    "No child visible anywhere",
+    "The star is an adult (children elsewhere in the clip are fine)",
     "People in the background are fine",
     "A clean 6-9 second window to use (16 at most)",
     "Music: the clip's original audio by default"
@@ -92,6 +92,6 @@
   },
   "_themes": "Each rotation entry has a `theme`: a short label (at most 60 characters) naming what the entry looks for. A filed pick carries `proposal.theme` = the theme of the entry it matched, or the closest theme of its character when it came from the Genjutsu gallery or the owner. The terminal groups a character's picks by category or by theme.",
   "free_sources_daily": ["Higgsfield Genjutsu Trending + New galleries (get_presets source=genjutsu): backup picks only, when the scan could not run or found fewer than 2 usable clips for a character that day", "TikTok trending commercial sounds (tiktok_music_trending, country GB and US, 7DAY)", "YouTube stats of iconic moments only (views and dates; free)"],
-  "global_reject_rules": ["a real person's likeness or an impersonation as the joke (the real star is always replaced by our character; a famous clip, meme or dance is fine)", "brand ads / sponsored posts", "trend more than 7 days past its peak, unless it is an iconic evergreen moment (tier iconic)", "already picked or produced", "sexualised content, or a child as the star or main subject (a Drop-in source shows no child at all)", "national/ethnic/religious stereotypes"],
+  "global_reject_rules": ["a real person's likeness or an impersonation as the joke (the real star is always replaced by our character; a famous clip, meme or dance is fine)", "brand ads / sponsored posts", "trend more than 7 days past its peak, unless it is an iconic evergreen moment (tier iconic)", "already picked or produced", "sexualised content, or a child as the star or main subject", "national/ethnic/religious stereotypes"],
   "pick_card_fields": ["url", "platform", "creator_handle", "views", "outlier_x", "posted_at", "velocity (views per day, worked out at filing)", "engagement {likes, comments, shares, saves} when vidIQ returns it", "saturation_count", "matched_character", "tier", "theme", "thumbnail_url", "preview_url (gallery clips)", "fit_grade A/B/C", "trait_matches (1-4 phrases of the traits card)", "why (the analyst's reasoning, one paragraph)", "analysis (the clip check, after the clip is fetched or attached)", "proposed_mode", "proposed_hook", "proposed_prop", "why_it_works"]
 }

@@ -355,10 +355,16 @@ def test_recreate_without_a_dropin_eligible_source():
     clean_source(store, kind=SourceKind.synthetic)
     clean_source(store, has_watermark=True)
     clean_source(store, has_overlay=True)
-    clean_source(store, has_minors=True)  # a child in the clip
-    clean_source(store, has_minors=None)  # watermark/overlay checked, the child question never asked
     clean_source(store, body=Body.biped)  # clean, but the wrong body for a dachshund
     assert choose_mode(store, biscuit) is R
+
+
+def test_children_in_the_clip_do_not_stop_a_dropin():
+    store = make_store()
+    src = clean_source(store, has_minors=True)  # owner decision 2026-10-06: only the star must be an adult; has_minors is recorded
+    assert choose_mode(store, character(store, "biscuit")) is D
+    (due,) = [d for d in plan_today(store, TUE) if d.character_slug == "biscuit"]
+    assert (due.mode, due.source_candidates) == (D, [src.id])
 
 
 def test_people_in_the_background_do_not_stop_a_dropin():
@@ -600,7 +606,6 @@ def test_with_share_one_and_no_eligible_source_it_is_recreate(dropin_first):
     store = dropin_first
     biscuit = character(store, "biscuit")
     assert choose_mode(store, biscuit) is R  # no source at all
-    clean_source(store, has_minors=True)
     clean_source(store, has_watermark=True)
     clean_source(store, kind=SourceKind.synthetic)
     assert choose_mode(store, biscuit) is R

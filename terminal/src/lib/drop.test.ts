@@ -59,7 +59,7 @@ describe('the card of a dropped video', () => {
 
   it('says in one line where it is; the database’s reason wins', () => {
     expect(dropLine(READY, NOW)).toBe('Replaces the man in the grey suit · Featured · 1.5–10.5 s (9 s)');
-    expect(dropLine({ state: 'blocked', reason: 'a child is in the clip: we never use it' }, NOW)).toBe('a child is in the clip: we never use it');
+    expect(dropLine({ state: 'blocked', reason: 'the star is a child: our character only replaces an adult' }, NOW)).toBe('the star is a child: our character only replaces an adult');
     expect(dropLine({ state: 'uploading', at: ago(STALE_UPLOAD_MINUTES + 5) }, NOW)).toMatch(/did not finish/);
     expect(dropTitle({ concept: 'A man dances\nmore', drop_card: READY })).toBe('A man dances');
     expect(dropTitle({ concept: null, drop_card: { state: 'checking', kind: 'link' } })).toBe('Your link');
@@ -125,7 +125,7 @@ describe('the tracker maps a drop onto the first steps until its clip exists', (
   it('uploading, checking, waiting and blocked are step 1; ready is 2; making is 3', () => {
     expect(trackerStep(row({ state: 'checking', at: ago(1) }), NOW)).toMatchObject({ step: 1, state: 'ok' });
     expect(trackerStep(row({ state: 'waiting', reason: 'the Mac tries again' }), NOW)).toMatchObject({ step: 1, state: 'waiting' });
-    expect(trackerStep(row({ state: 'blocked', reason: 'a child' }), NOW)).toMatchObject({ step: 1, state: 'failed', reason: 'a child' });
+    expect(trackerStep(row({ state: 'blocked', reason: 'the star is a child' }), NOW)).toMatchObject({ step: 1, state: 'failed', reason: 'the star is a child' });
     expect(trackerStep(row(READY), NOW)).toMatchObject({ step: 2, state: 'ok', note: `Ready: about ${dropCredits(READY)} credits` });
     expect(trackerStep(row({ ...READY, state: 'making' }), NOW)).toMatchObject({ step: 3, state: 'ok' });
     expect(trackerStep(row({ ...READY, state: 'making', reason: 'waiting for the Higgsfield key' }), NOW)).toMatchObject({ step: 3, state: 'waiting' });

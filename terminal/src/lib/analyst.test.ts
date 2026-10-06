@@ -107,19 +107,19 @@ describe('the clip check row', () => {
       { text: 'Static camera', tone: 'ok' },
       { text: 'No watermark', tone: 'ok' },
       { text: 'No text overlay', tone: 'ok' },
-      { text: 'No children', tone: 'ok' },
+      { text: 'No children', tone: 'plain' },
       { text: 'Best 2.5-10 s (7.5 s)', tone: 'plain' },
       { text: '113 bpm', tone: 'plain' },
     ]);
   });
-  it('flags a watermark, burned-in text, a child and a camera that is not static', () => {
+  it('flags a watermark, burned-in text and a camera that is not static; children in the clip are information only', () => {
     const chips = clipCheckChips({ ...clean, people_count: 0, camera: 'handheld', watermark: true, overlay: true, minors: true, best_window: null, bpm: null, main_subject: undefined });
     expect(chips).toEqual([
       { text: 'No people', tone: 'plain' },
       { text: 'Handheld camera', tone: 'warn' },
       { text: 'Watermark or handle', tone: 'bad' },
       { text: 'Text on screen', tone: 'bad' },
-      { text: 'Child visible', tone: 'bad' },
+      { text: 'Children in clip', tone: 'plain' },
     ]);
   });
 });

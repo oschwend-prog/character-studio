@@ -107,7 +107,7 @@ export const VIDEO_REQUIREMENTS: ReadonlyArray<string> = [
   "A mostly static camera",
   "No watermark and no other creator's handle",
   "No text burned into the picture",
-  "No child visible anywhere",
+  "The star is an adult (children elsewhere in the clip are fine)",
   "People in the background are fine",
   "A clean 6-9 second window to use (16 at most)",
   "Music: the clip's original audio by default"
@@ -220,6 +220,6 @@ export const GLOBAL_REJECT_RULES: ReadonlyArray<string> = [
   "brand ads / sponsored posts",
   "trend more than 7 days past its peak, unless it is an iconic evergreen moment (tier iconic)",
   "already picked or produced",
-  "sexualised content, or a child as the star or main subject (a Drop-in source shows no child at all)",
+  "sexualised content, or a child as the star or main subject",
   "national/ethnic/religious stereotypes"
 ];

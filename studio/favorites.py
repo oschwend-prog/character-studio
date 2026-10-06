@@ -48,7 +48,8 @@ posting, worked out at filing time when the post date and the views are known: `
 rate), ``saturation_count`` (similar outliers of the last 7 days: ``saturation_score`` turns it into the 0-10 saturation
 sub-score), ``trait_matches`` (1-4 short phrases of the character's traits card the video matches), ``why`` (the analyst's
 reasoning, one paragraph) and ``analysis`` (the local check of a fetched or attached clip: people, subject, camera,
-watermark, overlay, children, best window, bpm). ``fav mark --analysis-file`` stores the last one.
+watermark, overlay, children (recorded only: children in a clip are fine, the star we replace must be an adult), best window,
+bpm). ``fav mark --analysis-file`` stores the last one.
 
 **The tier rule** (``default_tier``, mirrored by the terminal's ``defaultTier``; the numbers live once, in
 ``config/scan.json`` ``tier_rules``, and ``TIER_RULES`` here is pinned equal to them by a test). A pick with an explicit
@@ -545,9 +546,9 @@ def validate_analysis(analysis: Any) -> None:
     """Refuse a malformed ``proposal['analysis']``, the check of a fetched or attached clip.
 
     Required: ``people_count`` (whole number), ``camera`` (static, handheld or moving) and the three yes/no flags
-    ``watermark``, ``overlay`` and ``minors`` (a child anywhere in the clip). Optional: ``main_subject``, ``best_window``
-    (``{start_s, end_s}``, 0 <= start < end, seconds), ``bpm`` (30-300 or null) and ``notes``. An unknown key is refused,
-    so a typo is never stored as if it were data.
+    ``watermark``, ``overlay`` and ``minors`` (a child anywhere in the clip: recorded only, it blocks nothing). Optional:
+    ``main_subject``, ``best_window`` (``{start_s, end_s}``, 0 <= start < end, seconds), ``bpm`` (30-300 or null) and
+    ``notes``. An unknown key is refused, so a typo is never stored as if it were data.
     """
     what = "proposal.analysis"
     if not isinstance(analysis, Mapping) or not analysis:
@@ -1236,8 +1237,8 @@ def mark_command(
         Path | None,
         typer.Option(
             "--analysis-file",
-            help="JSON object: the check of the clip (people_count, main_subject, camera, watermark, overlay, minors, "
-            "best_window, bpm, notes), stored as proposal.analysis.",
+            help="JSON object: the check of the clip (people_count, main_subject, camera, watermark, overlay, minors "
+            "(a child anywhere: recorded only), best_window, bpm, notes), stored as proposal.analysis.",
         ),
     ] = None,
 ) -> None:

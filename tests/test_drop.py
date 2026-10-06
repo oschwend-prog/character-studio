@@ -2,8 +2,9 @@
 
 Real ffmpeg on small synthetic clips; Gemini, Higgsfield and yt-dlp are fakes (no request leaves the machine). What matters:
 no credits without ``proposal.make_requested``; the cap and the kill switch refuse; the submit is never repeated blindly; the
-like-for-like, child, watermark and burned-in-text checks block; one automatic re-roll then stop; the master ends on the dance
-with the clip's own sound and the hook on screen; every step resumes where the clip is.
+like-for-like, child-as-the-star, watermark and burned-in-text checks block (children elsewhere in the clip do not); one
+automatic re-roll then stop; the master ends on the dance with the clip's own sound and the hook on screen; every step
+resumes where the clip is.
 """
 
 from __future__ import annotations
@@ -36,7 +37,7 @@ TIKTOK = "https://www.tiktok.com/@dancer.one/video/7688386199270001953"
 def deconstruct(**over) -> dict:
     base = {
         "people_count": 1,
-        "star": {"kind": "person", "body": "biped", "description": "the man in the grey suit", "x_center": 0.5, "full_body": True},
+        "star": {"kind": "person", "body": "biped", "description": "the man in the grey suit", "x_center": 0.5, "full_body": True, "child": False},
         "minors": False, "watermark": False, "burned_in_text": False, "camera": "static",
         "setting": "an office corridor", "what_happens": "a man in a suit does the shoulder shimmy down the corridor",
         "classic": False, "moment_name": "shoulder shimmy", "suggested_part": "featured", "gadgets": ["black umbrella"],
@@ -50,7 +51,7 @@ def deconstruct(**over) -> dict:
     return base
 
 
-QA_PASS = {"character_visible": True, "leftover_person": False, "watermark": False, "child": False, "eyes_ok": True, "problems": [], "verdict": "pass"}
+QA_PASS = {"character_visible": True, "leftover_person": False, "watermark": False, "eyes_ok": True, "problems": [], "verdict": "pass"}
 QA_FAIL = {**QA_PASS, "leftover_person": True, "verdict": "fail", "problems": ["the original man is still dancing at 3 s"]}
 
 
@@ -222,11 +223,12 @@ def test_a_landscape_clip_is_cropped_around_the_star(world, synth_video):
 @pytest.mark.parametrize(
     ("look", "reason"),
     [
-        ({"minors": True}, "a child is in the clip"),
+        ({"star": {"kind": "person", "body": "biped", "description": "the boy in the middle", "x_center": 0.5, "full_body": True, "child": True}},
+         "the star is a child: our character only replaces an adult"),
         ({"watermark": True}, "paste the link instead"),
         ({"burned_in_text": True}, "text is burned into the picture"),
-        ({"star": {"kind": "dog", "body": "quadruped", "description": "the dog", "x_center": 0.5, "full_body": True}}, "Reginald replaces a person"),
-        ({"star": {"kind": "none", "body": "biped", "description": "nobody", "x_center": 0.5, "full_body": False}}, "nobody to replace"),
+        ({"star": {"kind": "dog", "body": "quadruped", "description": "the dog", "x_center": 0.5, "full_body": True, "child": False}}, "Reginald replaces a person"),
+        ({"star": {"kind": "none", "body": "biped", "description": "nobody", "x_center": 0.5, "full_body": False, "child": False}}, "nobody to replace"),
     ],
 )
 def test_a_clip_we_cannot_use_is_blocked_with_one_line(world, portrait, look, reason):
@@ -238,9 +240,19 @@ def test_a_clip_we_cannot_use_is_blocked_with_one_line(world, portrait, look, re
     assert "credits" not in d and "window" not in d
 
 
+def test_children_elsewhere_in_the_clip_do_not_block_it_and_are_recorded(world, portrait):
+    """Owner 2026-10-06: "children are fine in a clip; only the star we replace must be an adult"."""
+    store, storage = world
+    pid = ready_drop(store, storage, portrait, minors=True)
+    pick = store.get_favorite(pid)
+    assert pick.proposal["drop"]["state"] == "ready" and pick.proposal["drop"]["reason"] is None
+    assert pick.proposal["analysis"]["minors"] is True  # recorded on the clip check card
+    assert next(iter(store.list_sources(id=pick.source_id))).has_minors is True
+
+
 def test_biscuit_takes_a_dog_star_and_refuses_a_person(world, portrait):
     store, storage = world
-    dog = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True}
+    dog = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True, "child": False}
     pid = ready_drop(store, storage, portrait, slug="biscuit", star=dog)
     assert store.get_favorite(pid).proposal["drop"]["star"]["body"] == "quadruped"
     assert next(iter(store.list_sources(id=store.get_favorite(pid).source_id))).body is Body.quadruped

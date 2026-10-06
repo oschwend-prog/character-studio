@@ -167,7 +167,7 @@ class Source:
     has_watermark: bool | None = None  # None = not checked yet
     has_overlay: bool | None = None
     other_people: int | None = None  # recorded and shown; people in the background no longer block a Drop-in
-    has_minors: bool | None = None  # a child is visible (migration 0008); None = not checked, which blocks a Drop-in
+    has_minors: bool | None = None  # a child is visible anywhere (migration 0008); recorded only, no longer a gate (owner 2026-10-06)
     trend: str | None = None
     credit_handle: str | None = None
     created_at: datetime | None = None

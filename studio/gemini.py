@@ -356,10 +356,11 @@ DECONSTRUCT_SCHEMA: dict[str, Any] = {
                 "description": {**_STR, "description": "who to replace, by position or clothes, at most 80 characters"},
                 "x_center": {"type": "number", "minimum": 0, "maximum": 1, "description": "horizontal centre of the star, 0 left, 1 right"},
                 "full_body": _BOOL,
+                "child": {**_BOOL, "description": "the person we would replace is a child, under 18"},
             },
-            "required": ["kind", "body", "description", "x_center", "full_body"],
+            "required": ["kind", "body", "description", "x_center", "full_body", "child"],
         },
-        "minors": {**_BOOL, "description": "a child is visible anywhere in the clip"},
+        "minors": {**_BOOL, "description": "a child is visible anywhere in the clip; recorded, not a reason to refuse it"},
         "watermark": {**_BOOL, "description": "a platform watermark or another creator's handle is visible"},
         "burned_in_text": {**_BOOL, "description": "text is burned into the picture (captions, titles, stickers)"},
         "camera": {"type": "string", "enum": list(CAMERAS)},
@@ -398,8 +399,10 @@ Watch the whole clip and answer with one JSON object:
 - star: the main performer to replace. kind person, dog, animal (another small animal) or none; body biped (on two legs) or \
 quadruped (on four); description = how to point at them in one short phrase, by position or clothes ("the man in the red jacket in \
 the middle"), at most 80 characters; x_center = the horizontal centre of the star in the frame (0 left edge, 1 right edge); \
-full_body = the whole body is in frame.
-- minors: true when a child is visible anywhere. watermark: true when a platform watermark or another creator's handle shows. \
+full_body = the whole body is in frame; child = true only when the person to replace is a child (under 18), false for an adult, \
+a dog or an animal.
+- minors: true when a child is visible anywhere in the clip (we only record it: children in a crowd or a family are fine). \
+watermark: true when a platform watermark or another creator's handle shows. \
 burned_in_text: true when text is burned into the picture. camera: static, handheld or moving.
 - setting and what_happens: one sentence each (at most 120 and 300 characters).
 - classic: true only for a famous moment almost everyone knows; moment_name: its name or the trend's name ("" when none).
@@ -453,6 +456,8 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character) -> list[str]:
             p.append("star.x_center must be a number from 0 to 1")
         if not isinstance(star.get("full_body"), bool):
             p.append("star.full_body must be true or false")
+        if not isinstance(star.get("child"), bool):
+            p.append("star.child must be true or false")
     for flag in ("minors", "watermark", "burned_in_text", "classic"):
         if not isinstance(answer[flag], bool):
             p.append(f"{flag} must be true or false")
@@ -535,12 +540,11 @@ FRAME_QA_SCHEMA: dict[str, Any] = {
         "character_visible": {**_BOOL, "description": "our character is clearly the performer"},
         "leftover_person": {**_BOOL, "description": "the original star (a real person or animal) is still the performer anywhere"},
         "watermark": {**_BOOL, "description": "a platform watermark or a creator's handle is visible"},
-        "child": {**_BOOL, "description": "a child is visible"},
         "eyes_ok": {**_BOOL, "description": "his RIGHT eye (viewer's left) is ice-blue and his LEFT eye (viewer's right) amber"},
         "problems": {"type": "array", "items": _STR, "maxItems": 8},
         "verdict": {"type": "string", "enum": ["pass", "fail"]},
     },
-    "required": ["character_visible", "leftover_person", "watermark", "child", "eyes_ok", "problems", "verdict"],
+    "required": ["character_visible", "leftover_person", "watermark", "eyes_ok", "problems", "verdict"],
 }
 
 
@@ -551,7 +555,7 @@ in which {c.name}, our {c.noun}, replaced the star of a clip (Higgsfield Object 
 Answer with one JSON object:
 - character_visible: {c.name} is clearly the performer.
 - leftover_person: the original star (a real person or animal) is still the performer in any frame, or a half-swapped body shows.
-- watermark: a platform watermark or a creator's handle is visible. child: a child is visible.
+- watermark: a platform watermark or a creator's handle is visible. (A child in the picture is fine: never a problem.)
 - eyes_ok: wherever his eyes are visible, his RIGHT eye (on the viewer's LEFT) is ice-blue and his LEFT eye (on the viewer's \
 RIGHT) is amber; true when the eyes are too small to judge.
 - problems: one short line per problem you see (melting hands or paws, extra limbs, a broken face, text that leaked, a smile on \
@@ -565,7 +569,7 @@ def frame_qa_problems(answer: Mapping[str, Any]) -> list[str]:
     missing = [k for k in FRAME_QA_SCHEMA["required"] if k not in answer]
     if missing:
         return [f"missing field(s) {', '.join(missing)}"]
-    for flag in ("character_visible", "leftover_person", "watermark", "child", "eyes_ok"):
+    for flag in ("character_visible", "leftover_person", "watermark", "eyes_ok"):
         if not isinstance(answer[flag], bool):
             p.append(f"{flag} must be true or false")
     problems = answer["problems"]
@@ -589,7 +593,6 @@ def judge_frames(answer: Mapping[str, Any]) -> FrameVerdict:
     flags = {
         "the original star is still there": answer["leftover_person"],
         "a watermark or creator handle is visible": answer["watermark"],
-        "a child is visible": answer["child"],
         "the eyes are the wrong way round": not answer["eyes_ok"],
         "the character is not the performer": not answer["character_visible"],
     }

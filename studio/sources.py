@@ -5,12 +5,15 @@ catalogued here with the checks that decide whether it may be used as a **Drop-i
 character swapped into the actual clip):
 
 * ``has_watermark`` / ``has_overlay`` / ``has_minors`` / ``other_people`` start as ``None`` ("not checked yet");
-  an unchecked source is never Drop-in eligible, and neither is a ``synthetic`` one.
+  an unchecked source is never Drop-in eligible (the watermark and overlay checks gate it), and neither is a ``synthetic`` one.
 * **Owner decision 2026-10-05** ("Drop-in is the default for every video"): a source may be used for a Drop-in
   when it is not synthetic, shows no platform watermark or other creator's handle (``has_watermark``), no
-  burned-in text overlay (``has_overlay``) and **no child** (``has_minors``, migration 0008). ``other_people``
-  (people in the background, who are replaced or left as the scene) is still recorded and shown but no longer
-  blocks a Drop-in; the real star is always replaced by our character, in the visual QA of the output.
+  burned-in text overlay (``has_overlay``). **Owner decision 2026-10-06** ("children are fine in a clip; only the star we
+  replace must be an adult"): ``has_minors`` (a child visible anywhere, migration 0008) is recorded like ``other_people``
+  and no longer blocks; the star must be an adult, which the deconstruct of a drop checks (``star.child``, ``studio.drop``)
+  and the like-for-like rule enforces (an adult character cannot take a child's place). ``other_people`` (people in the
+  background, who are replaced or left as the scene) is likewise recorded and shown but does not block a Drop-in; the real
+  star is always replaced by our character, in the visual QA of the output.
 * ``flag_dirty`` is the late alarm (output QA spotted a leaked watermark): it sets
   ``has_watermark=True``, so the source drops out of Drop-in ranking at once.
 * **Recreate** only borrows the moves and replaces everything else, so any source whose body
@@ -136,16 +139,16 @@ def is_platform_page(url: str) -> bool:
 
 
 def dropin_eligible(s: Source) -> bool:
-    """May this source be used for a Drop-in? Not synthetic, and the three blocking checks were run and are clean.
+    """May this source be used for a Drop-in? Not synthetic, and the two blocking checks were run and are clean.
 
-    Blocking: ``has_watermark``, ``has_overlay`` and ``has_minors`` must each be ``False`` (``None`` = not
-    checked yet = not eligible). ``other_people`` does not gate any more (owner decision 2026-10-05).
+    Blocking: ``has_watermark`` and ``has_overlay`` must each be ``False`` (``None`` = not checked yet = not
+    eligible). ``other_people`` does not gate any more (owner decision 2026-10-05), nor does ``has_minors`` (owner
+    decision 2026-10-06: children in a clip are fine, only the star must be an adult); both are recorded only.
     """
     return (
         s.kind is not SourceKind.synthetic
         and s.has_watermark is False
         and s.has_overlay is False
-        and s.has_minors is False
     )
 
 
@@ -194,10 +197,11 @@ def record_checks(
     other_people: int,
     has_minors: bool,
 ) -> Source:
-    """Store the result of the visual checks (6 frames: watermark, overlay, other people, a child).
+    """Store the result of the visual checks (6 frames: watermark, overlay, other people, a child anywhere).
 
-    ``has_minors`` has no default on purpose: a check that forgets the child question must fail loudly,
-    never record a source as clean. People in the background (``other_people``) are only counted.
+    ``has_minors`` (a child visible anywhere in the clip) is recorded only, it blocks nothing (owner 2026-10-06); it has no
+    default on purpose, so a check that forgets the child question still fails loudly. People in the background
+    (``other_people``) are only counted.
     """
     if other_people < 0:
         raise ValueError(f"other_people must be 0 or more, got {other_people!r}")
@@ -553,7 +557,7 @@ def check_command(
         typer.Option(min=0, help="People besides the main subject (background people are fine: only counted)."),
     ],
     minors: Annotated[
-        bool, typer.Option("--minors/--no-minors", help="A child is visible anywhere in the clip (blocks the Drop-in).")
+        bool, typer.Option("--minors/--no-minors", help="A child is visible anywhere in the clip (recorded only, blocks nothing).")
     ],
 ) -> None:
     """Record the visual checks of a source (watermark, overlay, other people, a child)."""

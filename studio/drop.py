@@ -13,15 +13,15 @@ the request and fires the ``studio-drop`` GitHub workflow, which runs ``studio d
 2-hourly ``studio drop sweep`` picks up anything left pending. ``drop.state`` moves::
 
     uploading -> checking -> ready -----------(Make it: request_job make)----------> making -> made
-                    |   \\-> blocked (a child, a watermark, burned-in text, the wrong star, too short)    \\-> failed
+                    |   \\-> blocked (a child as the star, a watermark, burned-in text, the wrong star, too short)  \\-> failed
                     \\-> waiting (a link the cloud could not fetch: the daily run on the Mac tries again)
 
 ``reason`` carries the one line the card shows (blocked, waiting, failed, or what a making job waits for).
 
 **Process** (``process_drop``, free): the clip (``source ingest-owner`` for a file, ``source fetch`` with no Recreate fallback
 for a link), a probe, the free local analysis (``source analyze``: cuts, beat, the best window), the Gemini **deconstruct**
-(``studio.gemini``: people, the star and where, a child, a watermark or handle, burned-in text, setting, what happens, his part,
-gadgets from the traits card, 3 hooks in the bible voice, a playbook caption, a first comment, hashtags) or, without the key, the
+(``studio.gemini``: people, the star and where and whether the star is a child, children anywhere (recorded only), a watermark or
+handle, burned-in text, setting, what happens, his part, gadgets from the traits card, 3 hooks in the bible voice, a playbook caption, a first comment, hashtags) or, without the key, the
 one the daily run wrote by hand (``--deconstruct-file``), the checks, the window (``drop_window``: a classic 12-15 s, any other
 clip 8-10 s, inside one shot, on the beat), the crop of a landscape clip around the star, the price (``planning.estimate_credits``
 for the window) and a preview strip in ``sources/owner/<pick id>/preview.jpg`` (the owner's browser may read ``owner/``). Then
@@ -36,7 +36,7 @@ frame), the credits reserved (``budget.reserve``: the monthly cap and the kill s
 ``reference_urls``), a SHORT prompt ("replace the <star> with the <noun> from the reference images" + his part + gadgets),
 1080p. It is polled up to 25 minutes (longer: the next sweep polls again, never resubmits). Completed: the output is
 downloaded, the credits settled (the API reports no cost: the estimate for the trimmed seconds is booked), ``qa tech``, the
-original audio muxed back if it was lost, the Gemini frame QA (a leftover person, a watermark, a child, the eyes), one automatic
+original audio muxed back if it was lost, the Gemini frame QA (a leftover person, a watermark, the eyes), one automatic
 re-roll on a fail then stop, the master (``closeup: null``, music ``original``, the hook on screen), the upload, the caption +
 first comment + hashtags of the deconstruct (playbook: a searchable title, the joke, a rotating engagement line, the credit),
 ``awaiting_approval``. The card then follows the 8 tracker steps of "In the works".
@@ -554,8 +554,8 @@ def _analysis_card(answer: Mapping[str, Any], free: Mapping[str, Any], window: M
 
 
 def _blocked_reason(answer: Mapping[str, Any], ref: Mapping[str, Any], name: str, link: bool) -> str | None:
-    if answer["minors"]:
-        return "a child is in the clip: we never use it"
+    if answer["star"].get("child"):  # children elsewhere in the clip are fine (owner 2026-10-06): only the star we replace must be an adult
+        return "the star is a child: our character only replaces an adult"
     if answer["watermark"]:
         return (
             "a watermark or creator handle is burned in: we cannot use this clip"

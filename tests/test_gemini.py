@@ -43,7 +43,7 @@ REGINALD = Character(
 
 GOOD = {
     "people_count": 3,
-    "star": {"kind": "person", "body": "biped", "description": "the man in the red jacket in the middle", "x_center": 0.48, "full_body": True},
+    "star": {"kind": "person", "body": "biped", "description": "the man in the red jacket in the middle", "x_center": 0.48, "full_body": True, "child": False},
     "minors": False, "watermark": False, "burned_in_text": False, "camera": "static",
     "setting": "a school hallway", "what_happens": "a man does the shoulder shimmy while two friends cheer",
     "classic": False, "moment_name": "shoulder shimmy", "suggested_part": "featured",
@@ -142,6 +142,8 @@ def test_a_second_miss_fails_loudly(clip):
         ({"star": {**GOOD["star"], "kind": "robot"}}, "star.kind"),
         ({"star": {**GOOD["star"], "x_center": 1.4}}, "x_center"),
         ({"minors": "no"}, "minors must be true or false"),
+        ({"star": {**GOOD["star"], "child": "yes"}}, "star.child must be true or false"),
+        ({"star": {k: v for k, v in GOOD["star"].items() if k != "child"}}, "star.child must be true or false"),
         ({"camera": "drone"}, "camera must be one of"),
         ({"hashtags": ["#fyp", "#butler", "#deadpan"]}, "may not include #fyp"),
         ({"hashtags": ["#butler"]}, "3-5 distinct tags"),
@@ -154,6 +156,29 @@ def test_every_rule_of_the_deconstruct_is_checked(change, problem):
     assert deconstruct_problems(GOOD, REGINALD) == []
     missing = {k: v for k, v in GOOD.items() if k != "star"}
     assert deconstruct_problems(missing, REGINALD) == ["missing field(s) star"]
+
+
+def test_children_in_the_clip_are_recorded_and_never_a_problem(clip):
+    """Owner 2026-10-06: a child anywhere in the clip is fine (``minors`` is information); only ``star.child`` matters."""
+    crowd = {**GOOD, "minors": True}
+    assert deconstruct_problems(crowd, REGINALD) == []
+    out = deconstruct(client(Fake((200, answer(crowd)))), clip, REGINALD)
+    assert out["minors"] is True and out["star"]["child"] is False
+
+
+def test_a_child_as_the_star_is_a_valid_answer_that_the_drop_gate_refuses():
+    kid = {**GOOD, "star": {**GOOD["star"], "child": True}}
+    assert deconstruct_problems(kid, REGINALD) == []
+    assert gemini.tidy_deconstruct(kid, REGINALD)["star"]["child"] is True  # kept for the gate in studio.drop
+
+
+def test_the_deconstruct_schema_and_prompt_ask_whether_the_star_is_a_child():
+    star = gemini.DECONSTRUCT_SCHEMA["properties"]["star"]
+    assert "child" in star["required"] and star["properties"]["child"]["type"] == "boolean"
+    assert "recorded, not a reason to refuse" in gemini.DECONSTRUCT_SCHEMA["properties"]["minors"]["description"]
+    prompt = gemini.deconstruct_prompt(REGINALD)
+    assert "child = true only when the person to replace is a child (under 18)" in prompt
+    assert "children in a crowd or a family are fine" in prompt
 
 
 @pytest.mark.parametrize(
@@ -251,7 +276,7 @@ def test_an_upload_url_off_the_api_host_is_refused(clip, monkeypatch):
 
 # ---- the frame QA -----------------------------------------------------------------------------------------------------------
 
-QA_PASS = {"character_visible": True, "leftover_person": False, "watermark": False, "child": False, "eyes_ok": True, "problems": [], "verdict": "pass"}
+QA_PASS = {"character_visible": True, "leftover_person": False, "watermark": False, "eyes_ok": True, "problems": [], "verdict": "pass"}
 
 
 def test_the_frame_qa_sends_the_sheet_and_passes_a_clean_answer(tmp_path):
@@ -269,7 +294,6 @@ def test_the_frame_qa_sends_the_sheet_and_passes_a_clean_answer(tmp_path):
     [
         ({"leftover_person": True}, "the original star is still there"),
         ({"watermark": True}, "watermark"),
-        ({"child": True}, "a child is visible"),
         ({"eyes_ok": False}, "the eyes are the wrong way round"),
         ({"character_visible": False}, "not the performer"),
         ({"verdict": "fail", "problems": ["melting hands at 4 s"]}, "melting hands"),
@@ -278,6 +302,17 @@ def test_the_frame_qa_sends_the_sheet_and_passes_a_clean_answer(tmp_path):
 def test_any_flag_fails_the_frame_qa_even_when_gemini_says_pass(change, problem):
     verdict = judge_frames({**QA_PASS, **change})
     assert not verdict.passed and any(problem in p for p in verdict.problems)
+
+
+def test_a_child_visible_in_our_output_does_not_fail_the_frame_qa(tmp_path):
+    """Owner 2026-10-06: children are fine in a clip; the frame QA no longer asks about them (an old-style ``child`` flag is ignored)."""
+    assert "child" not in gemini.FRAME_QA_SCHEMA["properties"] and "child" not in gemini.FRAME_QA_SCHEMA["required"]
+    assert judge_frames({**QA_PASS, "child": True}).passed
+    sheet = tmp_path / "frames.jpg"
+    sheet.write_bytes(b"\xff\xd8jpeg")
+    verdict = frame_qa(client(Fake((200, answer({**QA_PASS, "child": True})))), sheet, REGINALD)
+    assert verdict.passed and verdict.problems == []
+    assert "A child in the picture is fine" in gemini.frame_qa_prompt(REGINALD, 6)
 
 
 def test_the_prompts_carry_the_odd_eyes_rule_and_the_like_for_like_rule():

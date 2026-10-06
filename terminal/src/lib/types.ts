@@ -263,7 +263,7 @@ export interface ClipAnalysis {
   camera: 'static' | 'handheld' | 'moving';
   watermark: boolean;
   overlay: boolean;
-  /** A child is visible somewhere in the clip. */
+  /** A child is visible somewhere in the clip. Recorded only: children are fine, the star we replace must be an adult. */
   minors: boolean;
   best_window?: { start_s: number; end_s: number } | null;
   bpm?: number | null;
