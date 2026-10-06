@@ -35,7 +35,8 @@ benchmark, "best practice" or community number replaces them, before or after se
 - The caption formula in the bible (`## Voice (captions)`) is the owner's rule; skills refine wording inside
   it, never replace it. 3-5 hashtags; never #fyp, #foryou, #foryoupage, #viral or #explore.
 - Credit the original creator and song; never keep another creator's watermark or handle.
-- No scraping or downloading from TikTok or Instagram; no paid scraping keys (Apify and the like).
+- The automation never scrapes TikTok or Instagram on its own and uses no paid scraping keys (Apify and the like); the
+  owner's own saved TikTok/Instagram clips, dropped in the terminal, are the main source.
 - No third-party audio we sourced ourselves; a drop-in keeps the clip's own sound. Trending audio is added
   by the owner in the Instagram app, never by us.
 - Original characters only: no celebrity likeness, no real nationality or ethnic stereotype, real brands
