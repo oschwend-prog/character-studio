@@ -116,6 +116,26 @@ Smaller differences, no decision needed (both are kept):
   3. The price is shown, and the owner taps **Make it**. No credits are spent without that tap.
   4. Genjutsu runs, then QA, then the video goes to the Queue.
 
+## 4b. Character design rules (the JeanPhil lesson, owner 2026-10-06)
+
+JeanPhil: an AI Frenchman (blond bob, handlebar moustache, houndstooth suit, slow air-punches down a Paris pavement, "Oui Madame") reached ~100M views in a week, and within days had a coin and lawyers. The moat is **designing someone people want to see a second time**: a casting and writing problem, not a rendering one. Every character must pass these five rules:
+
+1. **Reads from a thumbnail:** recognisable at 50 feet, muted, mid-scroll, from silhouette, hair and costume.
+   - Reginald: the black pompadour quiff, round glasses, moustache, tails and white gloves.
+   - Biscuit: a cream dachshund in the baby-blue velour tracksuit. The odd eyes don't read at thumbnail size, so the tracksuit carries him.
+2. **One signature move, repeated:** every clip becomes "a Reginald", so the character becomes a format.
+   - Proposals, owner to pick: Reginald **tugs his white gloves, deadpan** (or a tiny formal bow); Biscuit **flips his ears / lowers his aviators**.
+   - Object swap keeps the clip's own moves, so the signature move would be a short 1-2 s tag, at extra cost: decide before adding.
+3. **A free, quotable catchphrase:** viewers repeat it, which turns them into distributors.
+   - Proposals: Reginald **"As you were."** (or "The household is unaware."); Biscuit **"obviously."**
+   - Use it in every caption's joke line or first comment.
+4. **Reads as filmed:** ordinary daylight, real places, handheld drift, so nobody starts inspecting the render. Drop-in into real footage gives us this for free. Prefer real-world clips over studio or AI-looking sources.
+5. **Consistency = one reference image:** same face, same outfit, any place. That's our masters, sheets and `reference_urls`. Never redesign mid-run.
+
+Also:
+- **Protect the IP early:** a character that takes off outgrows its creator within days. The audit's owner item still applies: a UK IPO trademark search, then filing "ODD EYES" and the character names, and reserving the handles everywhere.
+- **Test a new character cheaply:** image-to-video from one still before building a pipeline. This matters for strand B's characters and any new ones.
+
 ## 5. Technical recipes (Higgsfield)
 
 - **Genjutsu modes:**
