@@ -4,8 +4,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ADJUST_KEYS, DROP_STATE_LABEL, dropsFirst, STALE_UPLOAD_MINUTES, adjustChanges, dropActions, dropCredits, dropLine, dropLink, dropTitle, effectiveDrop,
-  isDropCard, isLandscape, sectionLabel, validateAdjust,
+  ADJUST_KEYS, DROP_STATE_LABEL, RECOMMEND, STALE_UPLOAD_MINUTES, adjustChanges, avoidHit, avoidLabel, canChooseCharacter, characterMenu,
+  dropActions, dropCredits, dropLine, dropLink, dropRows, dropTitle, effectiveDrop, isDropCard, isLandscape, readyTotal, recommendationLine,
+  sectionLabel, validateAdjust,
 } from './drop';
 import { estimateCredits } from './rules';
 import { trackerStep } from './tracker';
@@ -221,12 +222,150 @@ describe('own footage or a downloaded clip (owner 2026-10-06)', () => {
   });
 });
 
-describe('the order in a group', () => {
-  it('puts the drops on their own card first, newest on top, then the rest as the tracker orders them', () => {
-    const a = row({ ...READY, at: ago(30) }, { pick_id: 'a' });
-    const b = row({ state: 'checking', at: ago(2) }, { pick_id: 'b' });
-    const scan = row(null, { pick_id: 's' });
-    const made = row({ ...READY, state: 'made' }, { pick_id: 'm', clip_id: 'c', clip_state: 'awaiting_approval' });
-    expect(dropsFirst([scan, a, made, b]).map((r) => r.pick_id)).toEqual(['b', 'a', 's', 'm']);
+describe('the drops table (owner 2026-10-06: one table of every drop)', () => {
+  const ROSTER = [{ slug: 'franz', name: 'Franz' }, { slug: 'reginald', name: 'Reginald' }, { slug: 'lenny', name: 'Lenny Gold' }];
+
+  it('is one list: Ready first, then what needs the owner, then what moves by itself, then what is made; the newest first', () => {
+    const r = (id: string, state: DropState, minutes: number, over: Partial<TrackerRow> = {}) =>
+      row({ ...READY, state, at: ago(minutes) }, { pick_id: id, character_slug: id.startsWith('f') ? 'franz' : 'reginald', ...over });
+    const rows = [
+      r('made', 'made', 1, { clip_id: 'c', clip_state: 'awaiting_approval' }), r('check', 'checking', 2), r('ready-old', 'ready', 50),
+      r('fail', 'failed', 9), r('f-ready-new', 'ready', 3), r('making', 'making', 4), r('block', 'blocked', 8), r('wait', 'waiting', 7),
+      r('upload', 'uploading', 1), row(null, { pick_id: 'scan' }),
+    ];
+    expect(dropRows(rows).map((x) => x.pick_id)).toEqual([
+      'f-ready-new', 'ready-old', 'fail', 'block', 'wait', 'upload', 'check', 'making', 'made',
+    ]);
+  });
+
+  it('adds up the price of every Ready drop, each with its own Adjust', () => {
+    const a = row(READY);
+    const b = row({ ...READY, adjust: { length_s: 12 } });
+    const c = row({ ...READY, state: 'checking' });
+    expect(readyTotal([a, b, c, row(null)])).toEqual({ count: 2, credits: dropCredits(READY) + estimateCredits('dropin', 12, 'original') });
+    expect(readyTotal([])).toEqual({ count: 0, credits: 0 });
+  });
+
+  it('offers the live roster with a star on the recommended one, and names it with its reason', () => {
+    const owners = row({ ...READY, recommended: { slug: 'reginald', reason: 'office corridor: Reginald’s deadpan' } }, { character_slug: 'lenny' });
+    const menu = characterMenu(owners, ROSTER);
+    expect(menu.value).toBe('lenny');
+    expect(menu.options.map((o) => o.label)).toEqual(['Franz', 'Reginald ★', 'Lenny Gold']);
+    expect(menu).toMatchObject({ pending: false, locked: false, by: 'owner', recommendation: { slug: 'reginald', name: 'Reginald' } });
+    expect(recommendationLine(menu, 'lenny')).toBe('★ Reginald: office corridor: Reginald’s deadpan'); // he may ignore it
+    expect(recommendationLine(characterMenu({ ...owners, character_slug: 'reginald' }, ROSTER), 'reginald')).toBe('★ office corridor: Reginald’s deadpan');
+    const studio = row({ ...READY, character_by: 'studio', recommended: { slug: 'franz', reason: 'a dachshund: Franz' } }, { character_slug: 'franz' });
+    expect(recommendationLine(characterMenu(studio, ROSTER), 'franz')).toBe('★ Studio’s pick: a dachshund: Franz');
+    expect(recommendationLine(characterMenu(row(READY), ROSTER), 'reginald')).toBeNull(); // a check from before the recommendation
+  });
+
+  it('shows "Recommend" until the check of a Recommend drop has chosen', () => {
+    const checking = row({ state: 'checking', character_by: 'studio' }, { character_slug: 'lenny' });
+    const menu = characterMenu(checking, ROSTER);
+    expect(menu).toMatchObject({ value: RECOMMEND, pending: true, by: 'studio', recommendation: null });
+    expect(recommendationLine(menu, 'lenny')).toBe('★ The studio picks after the check');
+  });
+
+  it('keeps a paused character on his own drop, never offered, and settles the menu at Make it', () => {
+    const old = row({ ...READY, recommended: { slug: 'franz', reason: 'a dachshund' } }, { character_slug: 'biscuit' });
+    const menu = characterMenu(old, ROSTER);
+    expect(menu.value).toBe('biscuit');
+    expect(menu.options.at(-1)).toEqual({ slug: 'biscuit', label: 'Biscuit (paused)', recommended: false, disabled: true });
+    for (const state of ['uploading', 'checking', 'waiting', 'ready', 'blocked', 'failed'] as DropState[]) {
+      expect([state, canChooseCharacter(row({ ...READY, state }))]).toEqual([state, true]);
+    }
+    expect(canChooseCharacter(row({ ...READY, state: 'making' }))).toBe(false);
+    expect(canChooseCharacter(row({ ...READY, state: 'made' }, { status: 'made' }))).toBe(false);
+    expect(canChooseCharacter(row({ ...READY, state: 'failed' }, { status: 'queued' }))).toBe(false); // a make that is still on its way
+    expect(characterMenu(row({ ...READY, state: 'making' }), ROSTER).locked).toBe(true);
+  });
+});
+
+describe('only the section we use is judged (owner 2026-10-06)', () => {
+  const CAPTION: DropCard = { ...READY, window: { start_s: 6, length_s: 9 }, avoid: [{ start_s: 0, end_s: 5.5, what: 'text' }] };
+
+  it('refuses an Adjust whose section shows the text or the watermark, and says when they are', () => {
+    expect(validateAdjust({ start_s: 2, length_s: 8 }, CAPTION)).toEqual({
+      ok: false, reason: 'The section shows text on screen (0–5.5 s): Genjutsu would keep it',
+    });
+    expect(validateAdjust({ start_s: 5.5, length_s: 8 }, CAPTION)).toEqual({ ok: true }); // touching is clear
+    expect(validateAdjust({ hook: 'Tea at four.' }, CAPTION)).toEqual({ ok: true }); // the check's own section is clear
+    const mark: DropCard = { ...CAPTION, avoid: [{ start_s: 12, end_s: 20, what: 'watermark' }] };
+    expect(validateAdjust({ start_s: 6, length_s: 8 }, mark)).toMatchObject({ ok: false, reason: expect.stringContaining('a watermark on screen (12–20 s)') });
+    expect(avoidHit(1, 4, CAPTION.avoid)).toEqual(CAPTION.avoid![0]);
+    expect(avoidHit(5.5, 4, CAPTION.avoid)).toBeNull();
+    expect(avoidLabel(mark)).toBe('a watermark on screen 12–20 s');
+    expect(avoidLabel(READY)).toBeNull();
+  });
+});
+
+describe('the demo: Recommend and the character menu', () => {
+  it('files a Recommend drop under a provisional character and the check moves it to the one it recommends', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    let now = NOW;
+    const demo = new DemoBackend(() => now);
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i += 1) {
+      const { pickId } = await demo.addDrop(null, null);
+      await demo.attachClip(pickId, { name: `v${i}.mp4`, size: 1000, type: 'video/mp4' });
+      await demo.requestJob(pickId, 'process');
+      ids.push(pickId);
+    }
+    let rows = (await demo.load()).tracker.filter((r) => ids.includes(r.pick_id));
+    expect(rows.every((r) => r.character_slug === 'lenny' && r.drop_card?.character_by === 'studio')).toBe(true);
+    now += 2_500;
+    rows = (await demo.load()).tracker.filter((r) => ids.includes(r.pick_id));
+    for (const r of rows) {
+      const d = r.drop_card!;
+      expect(d.state).toBe('ready');
+      expect(d.recommended?.slug).toBe(r.character_slug); // the studio's choice is its recommendation
+      expect(d.star?.kind === 'dog' ? r.character_slug === 'franz' : ['reginald', 'lenny'].includes(r.character_slug!)).toBe(true);
+    }
+    expect(new Set(rows.map((r) => r.drop_card!.star!.kind)).size).toBe(2); // a dog and a person among them: both cases shown
+  });
+
+  it('puts any character into a drop: refusals as set_drop_character, the old look cleared, the check again in his voice', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    let now = NOW;
+    const demo = new DemoBackend(() => now);
+    const snap = await demo.load();
+    const ready = snap.tracker.find((r) => r.drop_card?.state === 'ready' && r.character_slug === 'reginald' && !isLandscape(r.drop_card))
+      ?? snap.tracker.find((r) => r.drop_card?.state === 'ready' && r.character_slug === 'reginald')!;
+    await expect(demo.setDropCharacter(ready.pick_id, 'biscuit')).rejects.toThrow(/paused/);
+    await expect(demo.setDropCharacter(ready.pick_id, 'nobody')).rejects.toThrow(/unknown character/);
+    const making = snap.tracker.find((r) => r.drop_card?.state === 'making')!;
+    await expect(demo.setDropCharacter(making.pick_id, 'lenny')).rejects.toThrow(/settled|before Make it/);
+    expect(await demo.setDropCharacter(ready.pick_id, 'lenny')).toEqual({ dispatched: true });
+    let r = (await demo.load()).tracker.find((x) => x.pick_id === ready.pick_id)!;
+    expect(r.character_slug).toBe('lenny');
+    expect(r.drop_card).toMatchObject({ state: 'checking', character_by: 'owner' });
+    for (const gone of ['hooks', 'credits', 'window', 'adjust']) expect(r.drop_card).not.toHaveProperty(gone);
+    expect(r.drop_card?.star).toEqual(ready.drop_card?.star); // what is in the clip stays
+    now += 2_500;
+    r = (await demo.load()).tracker.find((x) => x.pick_id === ready.pick_id)!;
+    expect(r.drop_card?.state).toBe('ready');
+    expect(r.drop_card?.hooks).toContain('Call my assistant.'); // Lenny's voice now
+    // a person's clip put on the dog character is checked, and blocked like for like, with the star pointing back
+    await demo.setDropCharacter(ready.pick_id, 'franz');
+    now += 2_500;
+    r = (await demo.load()).tracker.find((x) => x.pick_id === ready.pick_id)!;
+    expect(r.drop_card).toMatchObject({ state: 'blocked', recommended: { slug: 'reginald' } });
+    expect(r.drop_card?.reason).toMatch(/the wrong star: Franz replaces a dog/);
+    // the same character again only records his choice
+    const studio = (await demo.load()).tracker.find((x) => x.drop_card?.character_by === 'studio' && x.drop_card.state === 'ready')!;
+    expect(await demo.setDropCharacter(studio.pick_id, studio.character_slug!)).toEqual({ dispatched: false });
+    expect((await demo.load()).tracker.find((x) => x.pick_id === studio.pick_id)!.drop_card).toMatchObject({ character_by: 'owner', state: 'ready' });
+  });
+
+  it('shows the table with recommendations, a Recommend drop being checked, a star pointing elsewhere, and a caption to keep clear of', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    const snap = await new DemoBackend(() => NOW).load();
+    const drops = dropRows(snap.tracker);
+    expect(drops[0].drop_card?.state).toBe('ready');
+    expect(drops.some((r) => r.drop_card?.character_by === 'studio' && r.drop_card.state === 'checking' && !r.drop_card.recommended)).toBe(true);
+    expect(drops.some((r) => r.drop_card?.recommended && r.drop_card.recommended.slug !== r.character_slug)).toBe(true);
+    expect(drops.some((r) => (r.drop_card?.avoid ?? []).length > 0 && r.drop_card?.state === 'ready')).toBe(true);
+    for (const r of drops.filter((x) => x.drop_card?.recommended)) expect(r.drop_card!.recommended!.reason.length).toBeLessThanOrEqual(80);
+    expect(readyTotal(drops).count).toBeGreaterThan(3);
   });
 });

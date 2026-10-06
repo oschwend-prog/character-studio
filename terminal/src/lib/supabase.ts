@@ -1,6 +1,6 @@
 // The live backend: supabase-js with the publishable (anon) key, magic-link auth, RLS does the rest.
-// Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0008 and
-// 0012 (add_drop, request_job: "Drop a video").
+// Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0008,
+// 0012 (add_drop, request_job: "Drop a video") and 0013 (add_drop without a character, set_drop_character: the drops table).
 // v_tracker (migration 0010) feeds "In the works"; a database without it yet shows that tab empty instead of failing the load.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
@@ -204,10 +204,15 @@ export class LiveBackend implements Backend {
     await this.rpc('attach_clip', { pick_id: pickId, storage_path: path });
     return path;
   }
-  async addDrop(characterSlug: string, link: string | null) {
+  async addDrop(characterSlug: string | null, link: string | null) {
+    // null = "Recommend" (migration 0013): the database files it under a provisional character, the check chooses
     const r = await this.rpc('add_drop', { character_slug: characterSlug, link });
     if (!r || typeof r.id !== 'string') throw new StudioError('The drop was not filed: try again');
     return { pickId: r.id, duplicate: Boolean(r.duplicate) };
+  }
+  async setDropCharacter(pickId: string, characterSlug: string) {
+    const r = await this.rpc('set_drop_character', { pick_id: pickId, character_slug: characterSlug });
+    return { dispatched: Boolean(r?.dispatched) };
   }
   async requestJob(pickId: string, kind: 'process' | 'make', adjust: DropAdjust | null = null) {
     const r = await this.rpc('request_job', {

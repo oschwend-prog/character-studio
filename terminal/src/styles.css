@@ -896,3 +896,33 @@ a.ll-title:hover { text-decoration: underline; }
 /* a character's name as the link to his page (Characters, In the works, Scan): the heading's own colour, a quiet underline */
 .name-link { color: inherit; text-decoration-color: var(--rule-strong); }
 .name-link:hover { text-decoration-color: currentColor; }
+
+/* ---- In the works (owner 2026-10-06): "Your drops", the Long list's table with a character menu per row (stacked rows on a
+   phone), and "Finished clips", the Queue's player in the pick card. Layout only: the classes and looks are the existing ones. -- */
+.drop-head .seg { flex-wrap: wrap; }
+.drops-table thead th { padding: 10px 8px; }
+.drops-table .ll-row { cursor: default; }
+.drops-table th, .drops-table td { vertical-align: top; }
+.drops-table .ll-pic { padding-top: 8px; }
+.drops-table .dt-char { width: 200px; min-width: 180px; white-space: normal; }
+.drops-table .dt-char .hint { display: block; max-width: 240px; }
+.drops-table .dt-price { min-width: 140px; }
+.drops-table .dt-state { min-width: 160px; max-width: 260px; white-space: normal; }
+.drops-table .dt-actions { min-width: 210px; white-space: normal; }
+.drops-table .drop-actions .btn.primary { flex: 0 1 auto; }
+@media (max-width: 719px) {
+  .drops-table, .drops-table tbody { display: block; min-width: 0; }
+  .drops-table thead { display: none; }
+  .drops-table tr.ll-row { display: grid; grid-template-columns: 50px minmax(0, 1fr); column-gap: 10px; padding: 10px 8px 12px; border-bottom: 1px solid var(--rule); }
+  .drops-table tr.ll-row > * { display: block; position: static; width: auto; min-width: 0; max-width: none; padding: 4px 0; border: 0; white-space: normal; background: transparent; }
+  .drops-table tr.ll-row > .ll-clip { box-shadow: none; }
+  .drops-table tr.ll-row > .ll-pic { grid-row: 1 / span 5; padding: 2px 0 0; }
+  .drops-table tr.ll-row > :not(.ll-pic) { grid-column: 2; }
+  .drops-table .dt-char .hint { max-width: none; }
+  .drops-table tr.ll-detail, .drops-table tr.ll-detail > td { display: block; }
+}
+.finished-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.finished-grid .pick { padding: 10px; gap: 8px; }
+@media (min-width: 720px) {
+  .finished-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+}

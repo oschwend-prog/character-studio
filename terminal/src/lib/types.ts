@@ -430,6 +430,25 @@ export interface DropCard {
   /** Owner 2026-10-06: his own recording or footage used with permission (true) or a downloaded clip (false, the default). For
    * reporting later: the generation never reads it. */
   own_footage?: boolean;
+  /** Who chose the character (migration 0013): `owner` (never overridden) or `studio` (the Drop box's Recommend: the check moves
+   * the drop to the character it recommends). Absent on a drop from before 0013: the owner's. */
+  character_by?: 'owner' | 'studio';
+  /** The check's recommendation (studio.drop): who of the live roster should replace the star, like for like, and one line why. */
+  recommended?: DropRecommendation | null;
+  /** When text or a watermark is on screen (the check's spans, padded): the section keeps clear of them, and so must the Adjust. */
+  avoid?: DropAvoid[];
+}
+
+export interface DropRecommendation {
+  slug: string;
+  /** At most 80 characters: "gym setting: Reginald's sweatband gag". */
+  reason: string;
+}
+
+export interface DropAvoid {
+  start_s: number;
+  end_s: number;
+  what: 'text' | 'watermark';
 }
 
 /** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */
@@ -570,8 +589,13 @@ export interface Backend {
    * Returns the storage path. We never download from TikTok or Instagram: this file comes from the owner.
    */
   attachClip(pickId: string, file: ClipFile, onProgress?: (pct: number) => void): Promise<string>;
-  /** "Drop a video" (add_drop, migration 0012): a file drop (link null, then attachClip + requestJob process) or a pasted link. */
-  addDrop(characterSlug: string, link: string | null): Promise<{ pickId: string; duplicate: boolean }>;
+  /**
+   * "Drop a video" (add_drop, migrations 0012 and 0013): a file drop (link null, then attachClip + requestJob process) or a pasted
+   * link. `characterSlug` null = "Recommend": the studio chooses after the check.
+   */
+  addDrop(characterSlug: string | null, link: string | null): Promise<{ pickId: string; duplicate: boolean }>;
+  /** The drops table's character menu (set_drop_character, migration 0013): his choice, then the free check again in that voice. */
+  setDropCharacter(pickId: string, characterSlug: string): Promise<{ dispatched: boolean }>;
   /** The owner's button (request_job): Checking (process) or Make it (make, with the Adjust). `dispatched` = the cloud job started now. */
   requestJob(pickId: string, kind: 'process' | 'make', adjust?: DropAdjust | null): Promise<{ dispatched: boolean }>;
   /** The drop card's toggle (set_drop_footage, migration 0012): own footage (true) or a downloaded clip (false). */

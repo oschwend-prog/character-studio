@@ -92,6 +92,29 @@ function demoWide(label: string, hue: number): string {
 const MUSIC_ARMS = ['in_app', 'original', 'ai_beat'];
 const DEMO_JOB_MS = 2_000; // how long the demo's "cloud job" takes
 
+// Who each character replaces (refs.json `swap.stars`: like for like) and what the demo's "check" writes in his voice.
+const STARS: Record<string, ReadonlyArray<'person' | 'dog' | 'animal'>> = { franz: ['dog'], reginald: ['person'], lenny: ['person'], biscuit: ['dog', 'animal'] };
+const DEMO_HOOKS: Record<string, string[]> = {
+  franz: ['One does not walk. One arrives.', 'I was stretching to music.', 'Fetch it yourself.'],
+  reginald: ['The household is unaware.', 'Breakfast is at eight.', 'Kindly do not tell the Duchess.'],
+  lenny: ['NOON. Not 12:01.', 'Call my assistant.', 'You’re welcome.'],
+  biscuit: ['main character energy', 'the beat asked for me', 'one take. obviously.'],
+};
+const DEMO_REASONS: Record<string, string> = {
+  franz: 'a dog as the star: Franz’s gala-trot, then tiny disco',
+  reginald: 'a deadpan solo: Reginald’s straight face and silver tray',
+  lenny: 'a loud solo: Lenny’s mid-deal phone energy',
+};
+/** set_drop_character's states (migration 0013): before Make it. */
+const CHOOSABLE = ['uploading', 'checking', 'waiting', 'ready', 'blocked', 'failed'];
+/** What set_drop_character clears: the old character's results. */
+const PER_CHARACTER = ['hooks', 'hook', 'part', 'gadgets', 'window', 'seconds', 'credits', 'deconstruct', 'adjust'];
+const WORDS: Record<string, string> = { person: 'a person', dog: 'a dog', animal: 'a small animal' };
+const active = (slug: string) => slug in NAMES && STATUS[slug] !== 'paused';
+/** add_drop without a character (migration 0013): the first character not paused, by slug, who replaces a person. */
+const provisional = () => Object.keys(NAMES).filter(active).sort().find((s) => STARS[s].includes('person')) ?? Object.keys(NAMES).filter(active).sort()[0];
+const hashOf = (id: string) => [...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 1_000_003, 7);
+
 /** v_tracker.drop_card (migration 0012): proposal.drop without the job's internals. */
 function dropCardOf(f: { proposal: Record<string, unknown> }): DropCard | null {
   const d = f.proposal.drop;
@@ -534,15 +557,21 @@ export class DemoBackend implements Backend {
     readyDrop(4, 'biscuit', 40, 'A dachshund trots across a sunlit kitchen and spins on the beat.', {
       slug: 'biscuit', star: dog('the dachshund on the kitchen floor'), seconds: 9, start: 1.5, duration: 14.2,
       hooks: ['kitchen is my stage', 'chef’s kiss, but with paws', 'the spin was not planned'], gadgets: ['gold chain'],
-    }, 'ready', { own_footage: true }); // the owner's own recording
+    }, 'ready', { own_footage: true, recommended: { slug: 'franz', reason: 'a dachshund in a kitchen: Franz, now that Biscuit is retired' } }); // the owner's own recording
     readyDrop(5, 'reginald', 25, 'A man in a grey suit does the shoulder shimmy down an office corridor.', {
       slug: 'reginald', star: person('the man in the grey suit in the middle', 0.42), seconds: 12.5, start: 3, duration: 31, landscape: true,
       hooks: ['The household is unaware.', 'Breakfast is at eight.', 'Kindly do not tell the Duchess.'], gadgets: ['silver tray + teapot'],
-    });
+    }, 'ready', { recommended: { slug: 'reginald', reason: 'an office-corridor shimmy: Reginald’s deadpan service' } });
     readyDrop(6, 'reginald', 90, 'Two friends film a dance in a car park; a watermark sits in the corner.', {
       slug: 'reginald', star: person('the man on the left'), seconds: 8, start: 0, duration: 11, hooks: ['a', 'b', 'c'], gadgets: [],
-    }, 'blocked', { reason: 'a watermark or creator handle is burned in: paste the link instead', credits: undefined, window: undefined });
-    dropFav(7, 'reginald', 70, { state: 'blocked', reason: 'the wrong star: Reginald replaces a person, this clip’s star is a dog' });
+    }, 'blocked', {
+      reason: 'text or a watermark is on screen in every usable section: paste the link instead', credits: undefined, window: undefined,
+      avoid: [{ start_s: 0, end_s: 11, what: 'watermark' }], recommended: { slug: 'reginald', reason: 'two friends in a car park: Reginald keeps a straight face' },
+    });
+    dropFav(7, 'reginald', 70, {
+      state: 'blocked', reason: 'the wrong star: Reginald replaces a person, this clip’s star is a dog', star: dog('the beagle on the sofa'),
+      recommended: { slug: 'franz', reason: 'a dog on a sofa: Franz’s outraged tiny aristocrat' },
+    });
     const waitingKey = readyDrop(8, 'biscuit', 300, 'A pug walks a tightrope of sofa cushions, deadly serious.', {
       slug: 'biscuit', star: dog('the pug on the cushions'), seconds: 8.5, start: 2, duration: 12, hooks: ['balance is a lifestyle', 'x', 'y'], gadgets: [],
     }, 'making', { reason: 'waiting for the Higgsfield key: the next daily run makes it by hand' });
@@ -581,11 +610,26 @@ export class DemoBackend implements Backend {
     readyDrop(12, 'franz', 15, 'A dachshund refuses the walk, then betrays himself into a tiny shuffle on a cream rug.', {
       slug: 'franz', star: dog('the dachshund on the cream rug'), seconds: 9, start: 1, duration: 12,
       hooks: ['One does not walk. One arrives.', 'I was stretching to music.', 'Fetch it yourself.'], gadgets: ['tortoiseshell sunglasses'],
-    });
+    }, 'ready', { character_by: 'studio', recommended: { slug: 'franz', reason: 'a dachshund refusing the walk: Franz, unimpressed' } }); // "Recommend": the studio chose
     dropFav(13, 'franz', 6, { state: 'checking' });
     readyDrop(14, 'lenny', 35, 'A man in a suit yells into his phone in a glass office, then hits the trend.', {
       slug: 'lenny', star: person('the man in the navy suit by the window', 0.46), seconds: 8.5, start: 0.5, duration: 11,
       hooks: ['NOON. Not 12:01.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['black smartphone'],
+    }, 'ready', { recommended: { slug: 'lenny', reason: 'a phone tantrum in a glass office: Lenny’s mid-deal call' } });
+    // owner 2026-10-06, the drops table: a drop filed with "Recommend" still being checked (the studio picks after the check), the
+    // owner's own choice where the star points to another character, and a clip with a caption in its first seconds (the
+    // section keeps clear of it: only the section we use is judged)
+    dropFav(15, 'lenny', 1, { state: 'checking', character_by: 'studio' });
+    readyDrop(16, 'lenny', 50, 'A man in a tailcoat glides down a grand staircase with a tray, then hits the trend.', {
+      slug: 'lenny', star: person('the man in the tailcoat on the stairs', 0.5), seconds: 12, start: 2, duration: 18,
+      hooks: ['Stairs are for closers.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['gold watch'],
+    }, 'ready', { recommended: { slug: 'reginald', reason: 'a grand staircase and a tray: Reginald’s home ground' } });
+    readyDrop(17, 'reginald', 12, 'A man in a raincoat dances through puddles on a rainy street; a caption sits on the first seconds.', {
+      slug: 'reginald', star: person('the man in the raincoat'), seconds: 9, start: 5, duration: 16,
+      hooks: ['The umbrella stays closed.', 'Puddles are beneath me.', 'Tea at four regardless.'], gadgets: ['black umbrella'],
+    }, 'ready', {
+      character_by: 'studio', recommended: { slug: 'reginald', reason: 'a rainy street at dawn: Reginald’s black umbrella' },
+      avoid: [{ start_s: 0, end_s: 4.5, what: 'text' }],
     });
 
     // The run log: a finished scan on the latest scan day, an earlier one, and a day that did not scan.
@@ -668,17 +712,36 @@ export class DemoBackend implements Backend {
       if (!d || typeof d !== 'object') continue;
       const req = (d.requested ?? {}) as { process?: string; make?: string };
       if (d.state === 'checking' && req.process && now - Date.parse(req.process) >= DEMO_JOB_MS) {
-        const slug = f.character_slug ?? 'biscuit';
-        const star: DropCard['star'] = slug === 'biscuit' ? { kind: 'dog', body: 'quadruped', description: 'the dog in the middle', x_center: 0.5, full_body: true }
-          : { kind: 'person', body: 'biped', description: 'the person in the middle', x_center: 0.5, full_body: true };
+        // the clip's star: kept from an earlier look (a change of character), else made up (a Recommend drop: a dog or a person)
+        let slug = f.character_slug ?? provisional();
+        const star: DropCard['star'] = (d.star as DropCard['star']) ?? (
+          (d.character_by === 'studio' ? hashOf(f.id) % 2 === 0 : STARS[slug]?.includes('dog'))
+            ? { kind: 'dog', body: 'quadruped', description: 'the dog in the middle', x_center: 0.5, full_body: true }
+            : { kind: 'person', body: 'biped', description: 'the person in the middle', x_center: 0.5, full_body: true });
+        const takers = Object.keys(NAMES).filter((s) => active(s) && STARS[s].includes(star!.kind as 'person' | 'dog'));
+        const pick = takers.includes(slug) ? slug : star!.kind === 'dog' ? 'franz' : takers.includes('reginald') ? 'reginald' : takers[0] ?? slug;
+        const recommended = { slug: pick, reason: DEMO_REASONS[pick] ?? 'the best fit' };
+        if (d.character_by === 'studio' && pick !== slug) f.character_slug = slug = pick; // the studio's own move, then a look in his voice
+        if (!STARS[slug]?.includes(star!.kind as 'person' | 'dog')) {
+          const wants = (STARS[slug] ?? []).map((k) => WORDS[k]).join(' or ');
+          f.proposal = {
+            ...f.proposal, concept: (f.proposal.concept as string) ?? 'SYNTHETIC: your video, checked (the demo makes up what it found)',
+            drop: {
+              ...d, state: 'blocked', at: new Date(now).toISOString(), star, recommended,
+              reason: `the wrong star: ${NAMES[slug]} replaces ${wants}, this clip’s star is ${WORDS[star!.kind]}`,
+            },
+          };
+          continue;
+        }
         const seconds = 9;
-        const hooks = slug === 'biscuit' ? ['main character energy', 'the beat asked for me', 'one take. obviously.'] : ['The household is unaware.', 'Breakfast is at eight.', 'Kindly do not tell the Duchess.'];
+        const hooks = DEMO_HOOKS[slug] ?? DEMO_HOOKS.reginald;
         f.proposal = {
-          ...f.proposal, mode: 'dropin', owner_mode: 'dropin', hook: hooks[0], concept: 'SYNTHETIC: your video, checked (the demo makes up what it found)',
+          ...f.proposal, mode: 'dropin', owner_mode: 'dropin', hook: hooks[0],
+          concept: (f.proposal.concept as string) ?? 'SYNTHETIC: your video, checked (the demo makes up what it found)',
           drop: {
-            ...d, state: 'ready', reason: null, at: new Date(now).toISOString(), source_id: uid('sd'), duration_s: 14, width: 1080, height: 1920,
+            ...d, state: 'ready', reason: null, at: new Date(now).toISOString(), source_id: (d.source_id as string) ?? uid('sd'), duration_s: 14, width: 1080, height: 1920,
             window: { start_s: 1, length_s: seconds }, crop_x: null, star, classic: false, part: 'featured', gadgets: [], hooks, hook: hooks[0],
-            music: 'original', seconds, credits: estimateCredits('dropin', seconds, 'original'), preview_path: `owner/${f.id}/preview.jpg`,
+            music: 'original', seconds, credits: estimateCredits('dropin', seconds, 'original'), preview_path: `owner/${f.id}/preview.jpg`, recommended,
           },
         };
       }
@@ -1071,30 +1134,36 @@ export class DemoBackend implements Backend {
     return path;
   }
 
-  /** add_drop of migration 0012: a file drop (then attachClip and requestJob process) or a pasted link. */
-  async addDrop(characterSlug: string, link: string | null) {
-    if (!(characterSlug in NAMES)) throw new DemoError(`unknown character ${characterSlug}`);
+  /** add_drop of migrations 0012 and 0013: a file drop (then attachClip and requestJob process) or a pasted link; no character =
+   * "Recommend" (a provisional one, character_by studio). */
+  async addDrop(characterSlug: string | null, link: string | null) {
+    let slug = characterSlug ?? provisional();
+    const by = characterSlug == null ? 'studio' : 'owner';
+    if (!(slug in NAMES)) throw new DemoError(`unknown character ${slug}`);
     const at = new Date(this.now()).toISOString();
     const decision = { decision: 'approve', by: 'owner', reason: "owner's own video", at };
     if (link == null) {
       const id = uid('fn');
       this.favs.push({
         id, url: `owner-drop:${id}`, platform: 'drop', creator_handle: null, views: null, outlier_x: null, origin: 'owner',
-        character_slug: characterSlug, proposal: { decision, drop: { state: 'uploading', kind: 'file', at, reason: null, own_footage: false } }, scores: {},
+        character_slug: slug,
+        proposal: { decision, drop: { state: 'uploading', kind: 'file', at, reason: null, own_footage: false, character_by: by } }, scores: {},
         total_score: null, note: null, status: 'approved', created_at: at, clip_id: null,
       });
       this.emit('favorites');
       return { pickId: id, duplicate: false };
     }
     const { platform, url } = canonicalVideoUrl(link);
-    const drop = { state: 'checking', kind: 'link', at, reason: null, own_footage: false };
-    const existing = this.favs.find((f) => f.url === url && f.character_slug === characterSlug);
+    const drop = { state: 'checking', kind: 'link', at, reason: null, own_footage: false, character_by: by };
+    const existing = this.favs.find((f) => f.url === url && (by === 'studio' || f.character_slug === slug));
     if (existing) {
       if (existing.status !== 'queued' && existing.status !== 'made') {
+        if (by === 'studio' && existing.character_slug && active(existing.character_slug)) slug = existing.character_slug;
         const { hold_reason: _h, ...rest } = existing.proposal;
         void _h;
         existing.proposal = { ...rest, decision, drop };
         existing.status = 'approved';
+        existing.character_slug = slug;
         this.emit('favorites');
       }
       return { pickId: existing.id, duplicate: true };
@@ -1102,11 +1171,44 @@ export class DemoBackend implements Backend {
     const id = uid('fl');
     const handle = platform === 'tiktok' ? `@${url.split('/@')[1].split('/')[0]}` : null;
     this.favs.push({
-      id, url, platform, creator_handle: handle, views: null, outlier_x: null, origin: 'owner', character_slug: characterSlug,
+      id, url, platform, creator_handle: handle, views: null, outlier_x: null, origin: 'owner', character_slug: slug,
       proposal: { decision, drop }, scores: {}, total_score: null, note: null, status: 'approved', created_at: at, clip_id: null,
     });
     this.emit('favorites');
     return { pickId: id, duplicate: false };
+  }
+
+  /** set_drop_character of migration 0013 (the same refusals): his choice, the old character's results cleared, the check again. */
+  async setDropCharacter(pickId: string, characterSlug: string) {
+    if (!(characterSlug in NAMES)) throw new DemoError(`unknown character ${characterSlug}`);
+    if (!active(characterSlug)) throw new DemoError(`${characterSlug} is paused: he takes no new videos`);
+    const f = this.favs.find((x) => x.id === pickId);
+    if (!f) throw new DemoError(`unknown pick ${pickId}`);
+    const d = f.proposal.drop as Record<string, unknown> | undefined;
+    if (!d || typeof d !== 'object') throw new DemoError(`pick ${pickId} is not a dropped video`);
+    if (f.status === 'queued' || f.status === 'made') throw new DemoError(`pick ${pickId} is already ${f.status}: its character is settled`);
+    if (!CHOOSABLE.includes(String(d.state))) {
+      throw new DemoError(`the character changes before Make it (uploading, checking, waiting, ready, blocked or failed); this one is ${d.state}`);
+    }
+    if (f.character_slug === characterSlug) {
+      f.proposal = { ...f.proposal, drop: { ...d, character_by: 'owner' } };
+      this.emit('favorites');
+      return { dispatched: false };
+    }
+    const kept = Object.fromEntries(Object.entries(d).filter(([k]) => !PER_CHARACTER.includes(k)));
+    const waitsForFile = d.state === 'uploading' && !f.proposal.owner_clip_path;
+    const at = new Date(this.now()).toISOString();
+    const requested = { ...((d.requested as Record<string, string>) ?? {}), process: at };
+    const { hook: _h, make_requested: _m, ...rest } = f.proposal;
+    void _h; void _m;
+    f.proposal = {
+      ...rest,
+      drop: { ...kept, character_by: 'owner', ...(waitsForFile ? {} : { state: 'checking', reason: null, at, requested }) },
+    };
+    f.character_slug = characterSlug;
+    this.emit('favorites');
+    if (!waitsForFile) setTimeout(() => this.emit('favorites'), DEMO_JOB_MS + 100); // the board reloads when the demo's check is done
+    return { dispatched: !waitsForFile };
   }
 
   /** request_job of migration 0012 (the same refusals); the "cloud job" runs in tick() after 2 s. */

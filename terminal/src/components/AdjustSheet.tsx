@@ -1,9 +1,10 @@
-// "Adjust" on a ready drop: who is replaced, his part, his gadgets, the hook, the section (start and length) and, for a
-// landscape clip, where the 9:16 crop sits. The price follows the section live. Its button is Make it with these settings:
-// only what the owner changed is sent (request_job checks it, and the CLI checks it again before anything is spent).
+// "Adjust" on a ready drop: who is replaced, his part, his gadgets, the hook, the section (start and length: never over the
+// moments the check saw text or a watermark on screen) and, for a landscape clip, where the 9:16 crop sits. The price follows
+// the section live. Its button is Make it with these settings: only what the owner changed is sent (request_job checks it, and
+// the CLI checks it again before anything is spent).
 import { useId, useMemo, useState, type FormEvent } from 'react';
 import {
-  DROP_MAX_SECONDS, DROP_MIN_SECONDS, PART_LABEL, adjustChanges, dropCredits, effectiveDrop, isLandscape, sectionLabel, validateAdjust,
+  DROP_MAX_SECONDS, DROP_MIN_SECONDS, PART_LABEL, adjustChanges, avoidLabel, dropCredits, effectiveDrop, isLandscape, sectionLabel, validateAdjust,
 } from '../lib/drop';
 import { PROPS_MAX, PROP_MAX_CHARS, traitProps } from '../lib/rules';
 import { useStudio } from '../lib/store';
@@ -127,6 +128,7 @@ export function AdjustSheet({
           <span className="hint num">
             {checked.ok ? sectionLabel(Number(from), Number(length)) : checked.reason}
             {d.duration_s ? ` · the video is ${Number(d.duration_s.toFixed(1))} s` : ''} · a classic 12-15 s, other clips 8-10 s
+            {avoidLabel(d) ? ` · keep clear of ${avoidLabel(d)}` : ''}
           </span>
         </div>
 

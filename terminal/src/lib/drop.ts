@@ -1,9 +1,12 @@
-// "Drop a video" (plan 2026-10-06): the owner drops videos on "In the works", each becomes a card that moves by itself
-// (Uploading → Checking → Ready: about N credits) until the owner taps Make it; then the card follows the 8 tracker steps.
-// Pure functions over v_tracker rows (drop_card, migration 0012) and the owner's Adjust; no browser. The rules mirror
-// studio.drop (validate_adjust, estimate) and request_job in migration 0012: the database and the CLI check them again.
+// "Drop a video" (plan 2026-10-06): the owner drops videos on "In the works", each becomes a row of the drops table that moves
+// by itself (Uploading → Checking → Ready: about N credits) until the owner taps Make it; then it follows the 8 tracker steps.
+// Owner 2026-10-06: any of his characters can go into any drop (the row's menu, set_drop_character of migration 0013), the
+// studio recommends one (★, drop_card.recommended), and only the section we use is judged for text and watermarks
+// (drop_card.avoid). Pure functions over v_tracker rows (drop_card, migration 0012) and the owner's Adjust; no browser. The
+// rules mirror studio.drop (validate_adjust, estimate) and request_job in migration 0012: the database and the CLI check them.
+import { nameOf, type RosterEntry } from './roster';
 import { CLIP_MAX_SECONDS, canonicalVideoUrl, estimateCredits } from './rules';
-import type { DropAdjust, DropCard, DropState, OwnerPresence, TrackerRow } from './types';
+import type { DropAdjust, DropAvoid, DropCard, DropState, OwnerPresence, TrackerRow } from './types';
 
 export const DROP_MIN_SECONDS = 6; // a master is 6-16 s
 export const DROP_MAX_SECONDS = 16;
@@ -35,16 +38,6 @@ export function isDropCard(r: Pick<TrackerRow, 'drop_card' | 'clip_id' | 'clip_s
   return r.clip_state == null;
 }
 
-/**
- * A group's rows with the dropped videos still on their own card first, the newest drop on top (the owner's turn: Make it),
- * then every other row in the tracker's own order.
- */
-export function dropsFirst<R extends Pick<TrackerRow, 'drop_card' | 'clip_id' | 'clip_state' | 'approved_at'>>(rows: ReadonlyArray<R>): R[] {
-  const at = (r: R) => Date.parse(r.drop_card?.at ?? r.approved_at) || 0;
-  const cards = rows.filter((r) => isDropCard(r)).sort((a, b) => at(b) - at(a));
-  return [...cards, ...rows.filter((r) => !isDropCard(r))];
-}
-
 /** The card's title: what happens in the clip (the check's own sentence), else "Your video" / "Your link". */
 export function dropTitle(r: Pick<TrackerRow, 'concept' | 'drop_card'>): string {
   const line = (r.concept ?? '').split(/\r?\n/).map((l) => l.trim()).find(Boolean);
@@ -52,10 +45,23 @@ export function dropTitle(r: Pick<TrackerRow, 'concept' | 'drop_card'>): string 
   return r.drop_card?.kind === 'link' ? 'Your link' : 'Your video';
 }
 
+const n = (x: number) => String(Number(x.toFixed(1)));
+
 /** "1.5–9.5 s (8 s)": a section of the clip. */
 export function sectionLabel(start: number, length: number): string {
-  const n = (x: number) => String(Number(x.toFixed(1)));
   return `${n(start)}–${n(start + length)} s (${n(length)} s)`;
+}
+
+/** The first moment with text or a watermark on screen that the section `start`..`start + length` shows, or null. */
+export function avoidHit(start: number, length: number, avoid: ReadonlyArray<DropAvoid> | undefined): DropAvoid | null {
+  return (avoid ?? []).find((x) => start < x.end_s - 1e-9 && start + length > x.start_s + 1e-9) ?? null;
+}
+
+/** "text on screen 0–5.5 s": when the check saw text or a watermark (the section keeps clear of it); null when it saw none. */
+export function avoidLabel(d: Pick<DropCard, 'avoid'>): string | null {
+  const spans = d.avoid ?? [];
+  if (!spans.length) return null;
+  return spans.map((x) => `${x.what === 'watermark' ? 'a watermark' : 'text'} on screen ${n(x.start_s)}–${n(x.end_s)} s`).join(', ');
 }
 
 /** Is the dropped clip landscape (wider than 9:16), so a crop around the star applies? */
@@ -83,8 +89,9 @@ export function dropCredits(d: DropCard, adjust: DropAdjust = {}): number {
 
 /**
  * The owner's Adjust, checked like studio.drop.validate_adjust and request_job (migration 0012): who is replaced and the hook
- * 1-80 characters on one line, his part, at most 3 gadgets of 1-40 characters, a section of 6-16 s inside the clip, a crop
- * from 0 to 1 only for a landscape clip.
+ * 1-80 characters on one line, his part, at most 3 gadgets of 1-40 characters, a section of 6-16 s inside the clip and clear of
+ * the text and watermark moments (drop_card.avoid: refused here and by the CLI before anything is spent), a crop from 0 to 1
+ * only for a landscape clip.
  */
 export function validateAdjust(adjust: DropAdjust, d: DropCard): { ok: true } | { ok: false; reason: string } {
   const bad = (reason: string) => ({ ok: false as const, reason });
@@ -112,6 +119,10 @@ export function validateAdjust(adjust: DropAdjust, d: DropCard): { ok: true } | 
     }
     if (d.duration_s && e.start_s + e.length_s > d.duration_s + SLACK_S) {
       return bad(`The section runs past the end of the ${Number(d.duration_s.toFixed(1))} s video`);
+    }
+    const hit = avoidHit(e.start_s, e.length_s, d.avoid); // only the section is judged: it may not show text or a watermark
+    if (hit) {
+      return bad(`The section shows ${hit.what === 'watermark' ? 'a watermark' : 'text'} on screen (${n(hit.start_s)}–${n(hit.end_s)} s): Genjutsu would keep it`);
     }
   }
   if (adjust.crop_x != null) {
@@ -213,3 +224,99 @@ export type UploadPhase =
   | { phase: 'uploading'; pct: number }
   | { phase: 'done' }
   | { phase: 'error'; message: string };
+
+// ---- the drops table (owner 2026-10-06: one table of every dropped clip, a character menu per row) -----------------------------
+
+/** The Drop box's default: no character, the studio recommends one after the check (add_drop with no character, migration 0013). */
+export const RECOMMEND = 'recommend';
+
+const TABLE_ORDER: Record<DropState, number> = { ready: 0, failed: 1, blocked: 2, waiting: 3, uploading: 4, checking: 4, making: 5, made: 6 };
+
+/**
+ * The drops table: every dropped video in one list, whatever its character. Ready first (the owner's Make it), then what needs
+ * him (failed, blocked, waiting), then what moves by itself (uploading, checking), then what is being made or made; the newest
+ * drop first within each.
+ */
+export function dropRows<R extends Pick<TrackerRow, 'pick_id' | 'drop_card' | 'approved_at'>>(rows: ReadonlyArray<R>): R[] {
+  const at = (r: R) => Date.parse(r.drop_card?.at ?? r.approved_at) || 0;
+  return rows
+    .filter((r) => r.drop_card)
+    .sort((a, b) => TABLE_ORDER[a.drop_card!.state] - TABLE_ORDER[b.drop_card!.state] || at(b) - at(a) || a.pick_id.localeCompare(b.pick_id));
+}
+
+/** The header line: how many drops are Ready and what making every one of them would cost (each with its own Adjust). */
+export function readyTotal(rows: ReadonlyArray<Pick<TrackerRow, 'drop_card'>>): { count: number; credits: number } {
+  const ready = rows.filter((r) => r.drop_card?.state === 'ready');
+  return { count: ready.length, credits: ready.reduce((sum, r) => sum + dropCredits(r.drop_card!, r.drop_card!.adjust ?? {}), 0) };
+}
+
+const CHOOSABLE: ReadonlyArray<DropState> = ['uploading', 'checking', 'waiting', 'ready', 'blocked', 'failed'];
+
+/** May the owner still choose the character (set_drop_character's own rule): before Make it, the pick neither queued nor made. */
+export function canChooseCharacter(r: Pick<TrackerRow, 'drop_card' | 'status'>): boolean {
+  const s = r.drop_card?.state;
+  return Boolean(s && CHOOSABLE.includes(s) && r.status !== 'queued' && r.status !== 'made');
+}
+
+export interface CharacterOption {
+  slug: string;
+  /** "Franz ★" for the recommended one. */
+  label: string;
+  recommended: boolean;
+  /** The row's own character when he is no longer offered (paused): shown, never chosen. */
+  disabled: boolean;
+}
+
+export interface CharacterMenu {
+  /** The menu's value: the row's character, or RECOMMEND while the studio has not chosen yet. */
+  value: string;
+  options: CharacterOption[];
+  /** A Recommend drop before its check: the studio's choice is still to come (a first "Recommend" option shows it). */
+  pending: boolean;
+  /** The character is settled (Make it was tapped): the menu is read-only. */
+  locked: boolean;
+  /** The check's recommendation, named; null before the check (or from a check before 0013). */
+  recommendation: { slug: string; name: string; reason: string } | null;
+  /** Who chose the character shown: the owner (never overridden) or the studio (Recommend). */
+  by: 'owner' | 'studio';
+}
+
+/** The row's character menu: the live roster (★ on the recommended one), the row's character, who chose it. */
+export function characterMenu(
+  r: Pick<TrackerRow, 'character_slug' | 'drop_card' | 'status'>,
+  roster: ReadonlyArray<RosterEntry>,
+): CharacterMenu {
+  const d = r.drop_card;
+  const by = d?.character_by === 'studio' ? 'studio' : 'owner';
+  const rec = d?.recommended && d.recommended.slug ? d.recommended : null;
+  const named = (slug: string) => roster.find((c) => c.slug === slug)?.name ?? nameOf(slug);
+  const locked = !canChooseCharacter(r);
+  const pending = by === 'studio' && !rec && !locked;
+  const options: CharacterOption[] = roster.map((c) => ({
+    slug: c.slug, label: rec?.slug === c.slug ? `${c.name} ★` : c.name, recommended: rec?.slug === c.slug, disabled: false,
+  }));
+  if (r.character_slug && !roster.some((c) => c.slug === r.character_slug)) {
+    options.push({ slug: r.character_slug, label: `${named(r.character_slug)} (paused)`, recommended: false, disabled: true });
+  }
+  return {
+    value: pending ? RECOMMEND : r.character_slug ?? RECOMMEND,
+    options,
+    pending,
+    locked,
+    recommendation: rec ? { slug: rec.slug, name: named(rec.slug), reason: rec.reason } : null,
+    by,
+  };
+}
+
+/**
+ * The line under the menu: "★ The studio picks after the check" before a Recommend drop's check; "★ Studio's pick: <why>" when
+ * the studio chose; "★ <why>" when the owner's choice is the recommended one; "★ Franz: <why>" when the star points elsewhere
+ * (he may ignore it); null when there is no recommendation.
+ */
+export function recommendationLine(menu: CharacterMenu, current: string | null): string | null {
+  if (menu.pending) return '★ The studio picks after the check';
+  const rec = menu.recommendation;
+  if (!rec) return null;
+  if (rec.slug !== current) return `★ ${rec.name}: ${rec.reason}`;
+  return menu.by === 'studio' ? `★ Studio’s pick: ${rec.reason}` : `★ ${rec.reason}`;
+}
