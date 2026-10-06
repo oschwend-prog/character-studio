@@ -9,11 +9,14 @@ What is checked, in the order the owner's checklist (``docs/launch/go-live.md``)
 
 * Keychain items ``cs-database-url``, ``cs-supabase-url``, ``cs-supabase-service-key``,
   ``cs-postiz-api-key``: present or absent. The probe never reads a value.
-* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0011.
+* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0012.
 * The Supabase Data API exposes schema ``studio`` (the terminal and the owner RPCs need it).
 * Characters: at least one is ``live``; each launch character has masters, a close-up and an account
   with a Postiz integration id (``characters/*/refs.json`` plus the database).
 * GitHub: the four secrets exist and the publish / metrics / health workflows are enabled.
+* Drop a video (plan 2026-10-06): the GitHub secrets of the cloud jobs (``HF_API_KEY_ID``, ``HF_API_KEY_SECRET``,
+  ``GEMINI_API_KEY``), the ``studio-drop`` workflow enabled, and the Supabase Vault secret ``github_dispatch_token`` that lets
+  the owner's button start it (only its presence is read, never its value).
 * The ``postiz`` CLI is on PATH and ``postiz auth:status`` succeeds.
 * ``.claude/settings.json`` carries the deny rules of ``.claude/settings.json.proposed``.
 * No ``.env`` or other secret file is tracked in git.
@@ -58,7 +61,16 @@ KEYCHAIN_SOURCE = {
     "cs-supabase-service-key": "Supabase > Settings > API > service_role key",
     "cs-postiz-api-key": "Postiz > Settings > Public API",
 }
-WORKFLOWS = ("publish", "metrics", "health")
+WORKFLOWS = ("publish", "metrics", "health", "studio-drop")
+# The cloud jobs of "Drop a video": GitHub secrets only (they never sit on the Mac), each with where the owner makes it.
+DROP_SECRETS: tuple[tuple[str, str], ...] = (
+    ("HF_API_KEY_ID", "console.higgsfield.ai > API keys (the key id)"),
+    ("HF_API_KEY_SECRET", "console.higgsfield.ai > API keys (the secret, shown once)"),
+    ("GEMINI_API_KEY", "aistudio.google.com > Get API key"),
+)
+VAULT_SECRET = "github_dispatch_token"
+# Only whether the Vault holds a secret of that name: the value is never selected.
+VAULT_SQL = "select count(*) from vault.secrets where name = 'github_dispatch_token'"
 
 # What each migration leaves behind in schema studio: (kind, name). tests/test_golive.py pins these to
 # the text of supabase/migrations/*.sql, so a new migration or object cannot be forgotten here.
@@ -119,6 +131,9 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
     # 0011 (when the owner decided): decide_pick and v_tracker re-created; the column v_tracker appends, `decided_at`, is what
     # tells 0011 from 0010 (the function and the view already exist after 0010).
     "0011": (("function", "decide_pick"), ("view", "v_tracker"), ("column", "decided_at")),
+    # 0012 (Drop a video): add_drop, request_job (the owner's button: pg_net + the Vault token) and v_tracker with the drop's
+    # card appended (drop_card, then make_requested_at: the last appended column tells it from 0011).
+    "0012": (("function", "add_drop"), ("function", "request_job"), ("view", "v_tracker"), ("column", "make_requested_at")),
 }
 
 PROBE_SQL = """
@@ -135,7 +150,7 @@ where n.nspname = 'studio' and a.attnum > 0 and not a.attisdropped
        or (c.relname = 'runs' and a.attname = 'details') or (c.relname = 'sources' and a.attname = 'has_minors')
        or (c.relname = 'v_picks' and a.attname in ('analysis', 'source_candidates'))
        or (c.relname = 'v_queue' and a.attname = 'first_comment')
-       or (c.relname = 'v_tracker' and a.attname = 'decided_at'))
+       or (c.relname = 'v_tracker' and a.attname in ('decided_at', 'make_requested_at')))
 union all
 select 'index', indexname::text from pg_indexes where schemaname = 'studio'
 union all
@@ -522,6 +537,13 @@ def check_github(env: Env) -> list[Check]:
             else:
                 fix = f'printf %s "$(security find-generic-password -s {item} -w)" | gh secret set {name}'
                 out.append(Check(f"github:{name}", title, "fail", "missing", fix))
+        for name, where in DROP_SECRETS:
+            title = f"github: secret {name}"
+            if name in present:
+                out.append(Check(f"github:{name}", title, "pass", "set"))
+            else:
+                fix = f"gh secret set {name}  (paste the value when asked; it comes from {where})"
+                out.append(Check(f"github:{name}", title, "fail", "missing (Drop a video waits at Checking / Make it)", fix))
     try:
         workflows = _gh_json(env, ["gh", "workflow", "list", "--all", "--json", "name,state,path"])
     except _CommandFailed as e:
@@ -540,6 +562,24 @@ def check_github(env: Env) -> list[Check]:
         else:
             out.append(Check(cid, title, "fail", f"state: {found.get('state')}", f"gh workflow enable {wf}.yml"))
     return out
+
+
+def check_vault(env: Env) -> Check:
+    """The Vault secret the owner's button uses to start the cloud job (migration 0012): present or not, never read."""
+    title, cid = f"drop: vault secret {VAULT_SECRET}", "drop:vault"
+    rows, why = _query(env, VAULT_SQL)
+    if rows is None:
+        return Check(
+            cid, title, "fail", f"could not look: {why}",
+            "fix `database: reachable` first" if not env.settings.database_url or "vault" not in why.lower()
+            else "Supabase > Project Settings > Vault: enable it (Supabase projects have it by default)",
+        )  # fmt: skip
+    if rows and rows[0] and int(rows[0][0] or 0) > 0:
+        return Check(cid, title, "pass", "present (the value is not read)")
+    return Check(
+        cid, title, "fail", "missing: drops are picked up by the 2-hourly sweep only",
+        f"a fine-grained GitHub token for this repo only (Actions: read and write) into Supabase > Vault as {VAULT_SECRET}",
+    )  # fmt: skip
 
 
 # ---- (f) postiz CLI --------------------------------------------------------------------------------
@@ -703,6 +743,7 @@ def run_checks(env: Env) -> list[Check]:
         check_data_api(env),
         *check_characters(env),
         *check_github(env),
+        check_vault(env),
         check_postiz(env),
         check_permissions(env),
         check_repo_secrets(env),

@@ -76,12 +76,13 @@ class World:
         ]
     )
     db_error: Exception | None = None
+    vault: list[tuple] | Exception = field(default_factory=lambda: [(1,)])
     http_reply: tuple[int, str] | Exception = (200, "[]")
-    gh_secrets: list[str] = field(default_factory=lambda: [name for name, _ in golive.SECRETS])
+    gh_secrets: list[str] = field(default_factory=lambda: [name for name, _ in (*golive.SECRETS, *golive.DROP_SECRETS)])
     gh_workflows: list[dict] = field(
         default_factory=lambda: [
             {"name": n, "path": f".github/workflows/{n}.yml", "state": "active"}
-            for n in ("ci", "publish", "metrics", "health")
+            for n in ("ci", "publish", "metrics", "health", "studio-drop")
         ]
     )
     gh_result: subprocess.CompletedProcess[str] | Exception | None = None  # overrides both gh calls
@@ -145,6 +146,10 @@ class World:
             return list(self.probe)
         if sql == golive.CHARACTERS_SQL:
             return list(self.people)
+        if sql == golive.VAULT_SQL:
+            if isinstance(self.vault, Exception):
+                raise self.vault
+            return list(self.vault)
         raise AssertionError(f"unexpected query {sql!r}")
 
 
@@ -247,7 +252,7 @@ def test_database_and_schema_pass_when_everything_is_applied(world):
     checks = world.run()
     assert checks["database"].status == "pass"
     assert checks["schema"].status == "pass"
-    assert "0001" in checks["schema"].title and "0011" in checks["schema"].title
+    assert "0001" in checks["schema"].title and "0012" in checks["schema"].title
 
 
 def test_no_database_url_fails_both_and_points_at_the_keychain(world):
@@ -296,6 +301,9 @@ def test_a_missing_table_fails_the_schema_check_naming_it(world):
         (("column", "source_candidates"), "0010"),
         (("column", "first_comment"), "0010"),
         (("column", "decided_at"), "0011"),
+        (("function", "request_job"), "0012"),
+        (("function", "add_drop"), "0012"),
+        (("column", "make_requested_at"), "0012"),
     ],
 )
 def test_each_migration_is_detected_by_its_own_objects(world, missing, migration):
@@ -908,7 +916,7 @@ def test_cli_works_from_the_real_repo_with_nothing_configured(monkeypatch):
 
 # ---- the owner's checklist stays true to the check -------------------------------------------------
 
-_GROUPS = ("keychain:", "database:", "data api:", "characters:", "github:", "postiz:", "permissions:", "repo:")
+_GROUPS = ("keychain:", "database:", "data api:", "characters:", "github:", "drop:", "postiz:", "permissions:", "repo:")
 
 
 def test_go_live_doc_is_short_and_every_check_it_names_is_a_real_check(world):
@@ -926,3 +934,33 @@ def test_claude_md_points_at_the_go_live_doc_and_stays_short():
     text = (ROOT / "CLAUDE.md").read_text()
     assert len(text.splitlines()) <= 40
     assert "docs/launch/go-live.md" in text and "studio golive check" in text
+
+
+
+# ---- Drop a video: the cloud jobs' secrets, the workflow and the Vault token (plan 2026-10-06) ---------------------------------
+
+
+def test_the_drop_secrets_the_workflow_and_the_vault_token_pass_when_present(world):
+    checks = world.run()
+    for name, _ in golive.DROP_SECRETS:
+        assert checks[f"github:{name}"].status == "pass"
+    assert checks["github:workflow:studio-drop"].status == "pass"
+    assert checks["drop:vault"].status == "pass" and checks["drop:vault"].title == "drop: vault secret github_dispatch_token"
+
+
+def test_a_missing_drop_secret_fails_with_a_prompting_set_command(world):
+    world.gh_secrets.remove("GEMINI_API_KEY")
+    checks = world.run()
+    assert failing(checks) == {"github:GEMINI_API_KEY"}
+    fix = checks["github:GEMINI_API_KEY"].fix
+    assert fix.startswith("gh secret set GEMINI_API_KEY ") and "aistudio.google.com" in fix  # gh asks for it: never typed inline
+
+
+def test_a_missing_vault_token_fails_and_the_value_is_never_selected(world):
+    world.vault = [(0,)]
+    checks = world.run()
+    assert failing(checks) == {"drop:vault"}
+    assert "github_dispatch_token" in checks["drop:vault"].fix and "Actions: read and write" in checks["drop:vault"].fix
+    assert "decrypted" not in golive.VAULT_SQL and "secret," not in golive.VAULT_SQL and golive.VAULT_SQL.startswith("select count(*)")
+    world.vault = RuntimeError('relation "vault.secrets" does not exist')
+    assert world.run()["drop:vault"].status == "fail"

@@ -164,6 +164,8 @@ def test_migrations_are_additive_and_stay_inside_schema_studio():
     statements_only = re.sub(r"--[^\n]*", "", ALL_SQL)  # the words in a comment are not statements
     assert statements_only.count(SANCTIONED_DROP) == 1 and statements_only.count(SANCTIONED_DROP_0008) == 1
     remaining = statements_only.replace(SANCTIONED_DROP, "").replace(SANCTIONED_DROP_0008, "")
+    # words inside a string literal are data, not statements: 0012's key 'drop' (proposal.drop, 'owner-drop:', 'drop-make')
+    remaining = re.sub(r"'(?:[^']|'')*'", "''", remaining)
     assert not re.search(r"\b(drop|truncate)\b", remaining, re.I)
     assert not re.search(r"\balter\s+column\b|\brename\b", ALL_SQL, re.I)
     # the only references outside schema studio: auth.jwt() for RLS, the Storage buckets, and (0004)
@@ -946,3 +948,113 @@ def test_0011_only_a_valid_iso_decision_time_is_cast_and_anything_else_falls_bac
     assert "make_date(substr(dt.decided, 1, 4)::int, substr(dt.decided, 6, 2)::int, 1) + interval '1 month' - interval '1 day'" in inner
     assert inner.index("<=") < inner.index("then dt.decided::timestamptz")
     assert block.count("::timestamptz") == 1  # the only cast, the last thing evaluated
+
+
+# ---- 0012: Drop a video -----------------------------------------------------------------------------------------------------
+
+DROPVIDEO_PATH = MIGRATIONS / "0012_drop_a_video.sql"
+DROPVIDEO_SQL = DROPVIDEO_PATH.read_text()
+DROPVIDEO_CODE = re.sub(r"--[^\n]*", "", DROPVIDEO_SQL)
+
+
+def _function(sql: str, name: str) -> str:
+    return re.search(rf"create or replace function studio\.{name}\(.*?\n\$\$;", sql, re.S).group(0)
+
+
+def test_0012_creates_add_drop_request_job_and_v_tracker_and_nothing_else():
+    code = re.sub(r"create or replace function studio\.\w+\(.*?\n\$\$;", "", DROPVIDEO_CODE, flags=re.S)
+    code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
+    statements = [s.strip() for s in code.split(";") if s.strip()]
+    kinds = sorted(
+        re.match(r"(create or replace view studio\.\w+|grant select on studio\.\w+|revoke all on function studio\.\w+|grant execute on function studio\.\w+)", s).group(1)
+        for s in statements
+    )
+    assert kinds == [
+        "create or replace view studio.v_tracker", "grant execute on function studio.add_drop", "grant execute on function studio.request_job",
+        "grant select on studio.v_tracker", "revoke all on function studio.add_drop", "revoke all on function studio.request_job",
+    ]  # fmt: skip
+    assert DROPVIDEO_CODE.count("create or replace function") == 2
+    assert re.findall(r"create or replace function studio\.(\w+)", DROPVIDEO_CODE) == ["add_drop", "request_job"]
+    assert not re.search(r"\b(truncate|delete|alter|create table|drop function|drop view|drop table)\b", DROPVIDEO_CODE, re.I)
+    # the two do-blocks: pg_net only where the database has it, and the anon revoke only where the role exists
+    assert "pg_available_extensions where name = 'pg_net'" in DROPVIDEO_CODE
+    assert "create extension if not exists pg_net with schema extensions;" in DROPVIDEO_CODE
+    assert "rolname = 'anon'" in DROPVIDEO_CODE and "revoke all on function studio.request_job(uuid, text, jsonb) from anon" in DROPVIDEO_CODE
+    assert "grant execute on function studio.request_job(uuid, text, jsonb) to anon" not in DROPVIDEO_CODE
+    # outside schema studio: only the owner rule, the Vault view and pg_net's http_post (and pg_catalog lookups)
+    outside = set(re.findall(r"\b(?:public|auth|storage|extensions|vault|net)\.[a-z_]+", DROPVIDEO_CODE))
+    assert outside == {"auth.jwt", "vault.decrypted_secrets", "net.http_post"}
+
+
+def test_0012_request_job_is_a_security_definer_with_a_fixed_path_and_the_owner_check_first():
+    body = _function(DROPVIDEO_SQL, "request_job")
+    assert "request_job(pick_id uuid, kind text, adjust jsonb default null)" in body and "returns jsonb" in body
+    assert "security definer" in body and "set search_path = ''" in body and "security invoker" not in body
+    owner = "if coalesce((select auth.jwt() ->> 'email'), '') <> 'o.schwend@gmail.com' then"
+    assert body.index(owner) < body.index("select * into f") < body.index("update studio.favorites")  # checked before anything
+    assert "insufficient_privilege" in body
+    assert "request_job.kind not in ('process', 'make')" in body
+    assert "for update" in body and "is not a dropped video" in body and "is already made" in body
+    # every studio object is schema-qualified (the empty search_path would not find it otherwise)
+    for name in re.findall(r"\b(from|update|into)\s+(\w+)\.", body):
+        assert name[1] in ("studio", "vault", "pg_catalog"), name
+
+
+def test_0012_make_it_is_the_one_writer_of_make_requested_and_checks_the_adjust():
+    body = _function(DROPVIDEO_SQL, "request_job")
+    assert "'make_requested', jsonb_build_object('at', now(), 'by', 'owner')" in body
+    assert "state_ not in ('ready', 'failed') or not (d ? 'credits') or not (d ? 'source_id')" in body
+    assert "k not in ('star', 'part', 'gadgets', 'hook', 'start_s', 'length_s', 'crop_x')" in body
+    assert "between 1 and 80" in body and "('cameo', 'featured', 'star')" in body and "jsonb_array_length(v) > 3" in body
+    assert "length_ < 6 or length_ > 16" in body and "start_ + length_ > dur + 0.15" in body
+    assert "between 0 and 1" in body
+    # the same keys and limits as the CLI's own check (studio.drop.validate_adjust), so neither side can drift
+    from studio import drop
+
+    assert drop.ADJUST_KEYS == ("star", "part", "gadgets", "hook", "start_s", "length_s", "crop_x")
+    assert (drop.MASTER_MIN_S, drop.MASTER_MAX_S) == (6.0, 16.0) and drop.PARTS == ("cameo", "featured", "star")
+    # a check runs from these states, and an upload must be attached first
+    assert "state_ not in ('uploading', 'checking', 'waiting', 'failed')" in body
+    assert "the upload has not finished" in body
+
+
+def test_0012_the_dispatch_never_exposes_the_token():
+    body = _function(DROPVIDEO_SQL, "request_job")
+    dispatch = body.split("-- the GitHub dispatch", 1)[1]
+    assert "select s.decrypted_secret into token from vault.decrypted_secrets s where s.name = 'github_dispatch_token'" in dispatch
+    assert "url := 'https://api.github.com/repos/oschwend-prog/character-studio/dispatches'" in dispatch
+    assert "'event_type', 'drop-' || request_job.kind" in dispatch and "'client_payload', jsonb_build_object('pick_id', f.id::text)" in dispatch
+    assert "'Authorization', 'Bearer ' || token" in dispatch
+    assert "exception when others then\n    dispatched := false;" in dispatch  # a failure is swallowed: no message carries it
+    tail = body.split("token := null;", 1)[1]
+    assert "token" not in tail and "return to_jsonb(f) || jsonb_build_object('dispatched', dispatched);" in tail
+    assert body.count("token") == dispatch.count("token") + body.split("-- the GitHub dispatch", 1)[0].count("token")
+    assert "raise" not in dispatch and "notice" not in dispatch.lower()
+
+
+def test_0012_add_drop_mirrors_the_cli_and_runs_as_the_caller():
+    body = _function(DROPVIDEO_SQL, "add_drop")
+    assert "add_drop(character_slug text, link text default null)" in body
+    assert "security invoker" in body and "set search_path = ''" in body and "security definer" not in body
+    assert "'owner-drop:' || new_id::text, 'drop', 'owner'" in body
+    assert "jsonb_build_object('state', 'uploading', 'kind', 'file'" in body and "jsonb_build_object('state', 'checking', 'kind', 'link'" in body
+    assert "'approved'" in body and "'by', 'owner'" in body and "'at', now()" in body
+    assert "f.status in ('queued', 'made')" in body and "'duplicate', true" in body
+    from studio import drop, favorites
+
+    assert favorites.DROP_URL_PREFIX == "owner-drop:" and favorites.DROP_PLATFORM == "drop"
+    assert set(drop.DROP_STATES) >= {"uploading", "checking", "waiting", "ready", "blocked", "making", "made", "failed"}
+
+
+def test_0012_v_tracker_is_0011s_with_the_drop_card_appended():
+    old, new = _view(DECISION_SQL, "v_tracker"), _view(DROPVIDEO_SQL, "v_tracker")
+    assert new.startswith("create or replace view studio.v_tracker with (security_invoker = true) as")
+    assert _select_list(new) == TRACKER_COLUMNS + ["decided_at", "drop_card", "make_requested_at"]
+    whole_old = re.search(r"create or replace view studio\.v_tracker .*?interval '7 days', false\)\);", DECISION_SQL, re.S).group(0)
+    whole_new = re.search(r"create or replace view studio\.v_tracker .*?interval '7 days', false\)\);", DROPVIDEO_SQL, re.S).group(0)
+    appended = (
+        ",\n  case when jsonb_typeof(f.proposal -> 'drop') = 'object' then (f.proposal -> 'drop') - 'deconstruct' - 'make' - 'job' end as drop_card,"
+        "\n  f.proposal #>> '{make_requested,at}' as make_requested_at\n"
+    )
+    assert appended in whole_new and whole_new.replace(appended, "\n") == whole_old  # nothing else of 0011's view changed
+    assert "grant select on studio.v_tracker to authenticated;" in DROPVIDEO_SQL
