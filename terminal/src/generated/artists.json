@@ -105,7 +105,7 @@
      "platform": "instagram",
      "handle": "biscuit.moves",
      "planned": "biscuit.moves",
-     "connected": true
+     "connected": false
     },
     {
      "platform": "tiktok",
@@ -331,14 +331,14 @@
    "accounts": [
     {
      "platform": "instagram",
-     "handle": null,
-     "planned": "franz.dachshund",
-     "connected": false
+     "handle": "franz.unimpressed",
+     "planned": "franz.unimpressed",
+     "connected": true
     },
     {
      "platform": "tiktok",
      "handle": null,
-     "planned": "@franz.dachshund",
+     "planned": "@franz.unimpressed",
      "connected": false
     }
    ]
