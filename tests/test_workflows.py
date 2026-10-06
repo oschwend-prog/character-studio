@@ -157,7 +157,7 @@ def test_go_live_documents_the_pinned_version_and_the_monthly_minutes():
 
 # ---- studio-drop: the cloud jobs of "Drop a video" (plan 2026-10-06) ------------------------------------------------------
 
-DROP_SECRETS = ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "HF_API_KEY_ID", "HF_API_KEY_SECRET", "GEMINI_API_KEY")
+DROP_SECRETS = ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "HF_KEY", "HF_API_KEY_ID", "HF_API_KEY_SECRET", "GEMINI_API_KEY")
 
 
 def test_drop_runs_on_the_two_dispatch_types_a_two_hourly_sweep_and_by_hand():

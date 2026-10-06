@@ -3,7 +3,9 @@
 The cloud make job (``studio drop make``) sends one owner-approved clip and the character's reference images to
 ``POST https://api.higgsfield.ai/higgsfield/genjutsu/object-swap/v1.0`` (docs.higgsfield.ai/docs/models/genjutsu/object-swap):
 
-* header ``Authorization: Key <HF_API_KEY_ID>:<HF_API_KEY_SECRET>`` (from the environment only: GitHub secrets in CI), and an
+* header ``Authorization: Key <id>:<secret>`` (from the environment only: GitHub secrets in CI): ``HF_KEY`` holds the whole
+  ``id:secret`` value as the console copies it (the official SDK's variable, owner 2026-10-06: nothing to split by hand), else
+  ``HF_API_KEY_ID`` + ``HF_API_KEY_SECRET``; and an
   ``Idempotency-Key`` the caller chooses and stores BEFORE the request;
 * JSON ``video_url`` (a public URL: our signed Storage URL), ``image_urls`` (1-8 public URLs), ``prompt`` (optional, at most
   10,000 characters) and ``resolution`` (``480p``, ``720p`` or ``1080p``). The video must be at least 4 s and 409,600 pixels a
@@ -134,16 +136,17 @@ class HiggsfieldClient:
     def __init__(
         self,
         key_id: str,
-        key_secret: str,
+        key_secret: str | None,
         *,
         transport: httpx.BaseTransport | None = None,
         base_url: str = API_ROOT,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if not (key_id or "").strip() or not (key_secret or "").strip():
-            raise ValueError("the Higgsfield API needs HF_API_KEY_ID and HF_API_KEY_SECRET")
-        self._id, self._secret = key_id.strip(), key_secret.strip()
+        if not (key_id or "").strip() or (key_secret is not None and not key_secret.strip()):
+            raise ValueError("the Higgsfield API needs HF_KEY (or HF_API_KEY_ID and HF_API_KEY_SECRET)")
+        self._id, self._secret = key_id.strip(), (key_secret or "").strip()
+        self._cred = f"{self._id}:{self._secret}" if self._secret else self._id  # a whole HF_KEY is sent as is
         self._root = _https(base_url.rstrip("/"), "base_url")
         self._host = (urlsplit(self._root).hostname or "").lower()
         self._client = httpx.Client(transport=transport, timeout=_TIMEOUT, follow_redirects=False)
@@ -151,8 +154,12 @@ class HiggsfieldClient:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None, **kw: Any) -> HiggsfieldClient | None:
-        """The client for ``HF_API_KEY_ID`` / ``HF_API_KEY_SECRET``, or None when either is unset (the owner has not made a key yet)."""
+        """The client for ``HF_KEY`` (the whole ``id:secret`` value, first, as the official SDK reads it) or else
+        ``HF_API_KEY_ID`` + ``HF_API_KEY_SECRET``; None when neither is set (the owner has not made a key yet)."""
         env = os.environ if env is None else env
+        whole = (env.get("HF_KEY") or "").strip()
+        if whole:
+            return cls(whole, None, **kw)
         key_id, secret = (env.get("HF_API_KEY_ID") or "").strip(), (env.get("HF_API_KEY_SECRET") or "").strip()
         return cls(key_id, secret, **kw) if key_id and secret else None
 
@@ -165,11 +172,12 @@ class HiggsfieldClient:
     # ---- plumbing -----------------------------------------------------------------------------------------------
 
     def _auth(self) -> dict[str, str]:
-        return {"Authorization": f"Key {self._id}:{self._secret}", "Accept": "application/json"}
+        return {"Authorization": f"Key {self._cred}", "Accept": "application/json"}
 
     def _scrub(self, text: str) -> str:
-        for value in (f"{self._id}:{self._secret}", self._secret, self._id):
-            text = text.replace(value, "***")
+        for value in (self._cred, *self._cred.split(":", 1), self._secret, self._id):
+            if value:
+                text = text.replace(value, "***")
         return text
 
     def _body(self, response: httpx.Response) -> str:
@@ -358,7 +366,7 @@ def check_credentials(env: Mapping[str, str] | None = None, **kw: Any) -> str:
     """``HiggsfieldClient.check_credentials`` for the key pair in the environment; ``"missing: ..."`` when it is not set."""
     client = HiggsfieldClient.from_env(env, **kw)
     if client is None:
-        return "missing: HF_API_KEY_ID and HF_API_KEY_SECRET are not both set"
+        return "missing: neither HF_KEY nor both HF_API_KEY_ID and HF_API_KEY_SECRET are set"
     try:
         return client.check_credentials()
     finally:

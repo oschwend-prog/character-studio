@@ -64,10 +64,11 @@ KEYCHAIN_SOURCE = {
 WORKFLOWS = ("publish", "metrics", "health", "studio-drop")
 # The cloud jobs of "Drop a video": GitHub secrets only (they never sit on the Mac), each with where the owner makes it.
 DROP_SECRETS: tuple[tuple[str, str], ...] = (
-    ("HF_API_KEY_ID", "console.higgsfield.ai > API keys (the key id)"),
-    ("HF_API_KEY_SECRET", "console.higgsfield.ai > API keys (the secret, shown once)"),
+    ("HF_KEY", "console.higgsfield.ai > API keys: the whole id:secret value the console copies, shown once"),
     ("GEMINI_API_KEY", "aistudio.google.com > Get API key"),
 )
+# The older pair that stands in for HF_KEY (the cloud job and the client accept either).
+HF_PAIR = ("HF_API_KEY_ID", "HF_API_KEY_SECRET")
 VAULT_SECRET = "github_dispatch_token"
 # Only whether the Vault holds a secret of that name: the value is never selected.
 VAULT_SQL = "select count(*) from vault.secrets where name = 'github_dispatch_token'"
@@ -543,7 +544,7 @@ def check_github(env: Env) -> list[Check]:
                 out.append(Check(f"github:{name}", title, "fail", "missing", fix))
         for name, where in DROP_SECRETS:
             title = f"github: secret {name}"
-            if name in present:
+            if name in present or (name == "HF_KEY" and all(p in present for p in HF_PAIR)):
                 out.append(Check(f"github:{name}", title, "pass", "set"))
             else:
                 fix = f"gh secret set {name}  (paste the value when asked; it comes from {where})"

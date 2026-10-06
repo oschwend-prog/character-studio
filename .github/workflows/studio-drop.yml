@@ -12,7 +12,7 @@
 #   {"higgsfield": "ok|invalid ..|error ..", "gemini": ...} without the keys; the run fails unless both are ok.
 #
 # Secrets (repo secrets): DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY (as the other workflows) and, for Drop a video,
-# HF_API_KEY_ID, HF_API_KEY_SECRET and GEMINI_API_KEY (until they exist the jobs record "waiting for the key" and the daily run
+# HF_KEY (the whole id:secret value; or HF_API_KEY_ID + HF_API_KEY_SECRET) and GEMINI_API_KEY (until they exist the jobs record "waiting for the key" and the daily run
 # on the Mac does those steps by hand). Until DATABASE_URL exists the job prints a notice and every later step is skipped.
 #
 # One job per pick: the concurrency group is the pick id (every sweep shares the group `studio-drop-sweep`); `studio drop` also
@@ -107,6 +107,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          HF_KEY: ${{ secrets.HF_KEY }}
           HF_API_KEY_ID: ${{ secrets.HF_API_KEY_ID }}
           HF_API_KEY_SECRET: ${{ secrets.HF_API_KEY_SECRET }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}

@@ -19,6 +19,7 @@ from studio.higgsfield_api import (
     PollTimeout,
     SubmitUncertain,
     UnexpectedResponse,
+    check_credentials,
     parse_status,
 )
 
@@ -295,3 +296,18 @@ def test_the_key_check_from_the_environment_says_missing_without_a_key():
     fake = Fake((404, {"detail": "not found"}))
     env = {"HF_API_KEY_ID": KEY_ID, "HF_API_KEY_SECRET": SECRET}
     assert check_credentials(env, transport=httpx.MockTransport(fake)) == "ok" and len(fake.requests) == 1
+
+
+def test_hf_key_holds_the_whole_value_as_the_console_copies_it_and_wins_over_the_pair():
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["Authorization"])
+        return httpx.Response(404, json={"detail": "not found"})
+
+    env = {"HF_KEY": f" {KEY_ID}:{SECRET} ", "HF_API_KEY_ID": "old-id", "HF_API_KEY_SECRET": "old-secret"}
+    assert check_credentials(env, transport=httpx.MockTransport(handler), sleep=lambda s: None) == "ok"
+    assert seen == [f"Key {KEY_ID}:{SECRET}"]  # the whole value, trimmed, exactly as the official SDK sends HF_KEY
+    single = HiggsfieldClient.from_env({"HF_KEY": "one-token-key"})
+    assert single is not None and single._auth()["Authorization"] == "Key one-token-key"
+    assert "one-token-key" not in single._scrub("Key one-token-key failed")
