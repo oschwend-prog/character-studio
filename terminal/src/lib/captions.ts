@@ -71,3 +71,35 @@ export async function copyText(text: string, clipboard: Pick<Clipboard, 'writeTe
     return 'select'; // not allowed here (an insecure page, an iframe, a denied permission)
   }
 }
+
+// ---- the credit line (owner 2026-10-06: crediting the original creator is optional, a switch per post) ----------------
+
+/** A credit line of the caption formula: "🎵 song – artist · dance: @creator", "trend: @x", "dance: @x" or "original: x". */
+const CREDIT_START = /^(?:🎵\s|trend:\s|dance:\s|original:\s)/i;
+
+export interface RemovedCredit {
+  line: string;
+  index: number;
+}
+
+/** The caption's credit line, or null when it has none. */
+export function creditLine(caption: string): string | null {
+  return caption.split('\n').find((l) => CREDIT_START.test(l.trim())) ?? null;
+}
+
+/** The caption without its credit line, and the line with its position (to put it back); `removed` is null when there was none. */
+export function withoutCredit(caption: string): { text: string; removed: RemovedCredit | null } {
+  const lines = caption.split('\n');
+  const index = lines.findIndex((l) => CREDIT_START.test(l.trim()));
+  if (index < 0) return { text: caption, removed: null };
+  const [line] = lines.splice(index, 1);
+  return { text: lines.join('\n'), removed: { line, index } };
+}
+
+/** The caption with the credit line back where it was (clamped to the end); unchanged when it already has one. */
+export function withCredit(caption: string, removed: RemovedCredit): string {
+  if (creditLine(caption)) return caption;
+  const lines = caption.split('\n');
+  lines.splice(Math.min(removed.index, lines.length), 0, removed.line);
+  return lines.join('\n');
+}

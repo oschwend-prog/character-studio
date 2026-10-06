@@ -4,6 +4,7 @@ import { CalendarClock, ChevronLeft, ChevronRight, ExternalLink, RotateCcw, X } 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
 import { PostText } from '../components/PostText';
+import { creditLine, withCredit, withoutCredit, type RemovedCredit } from '../lib/captions';
 import { Flap, Livery, Skeleton, Spinner, characterName } from '../components/ui';
 import { clipCode, formatCredits, isoToLondonWall, londonStamp, londonWallToIso, platformName } from '../lib/format';
 import { href } from '../lib/hooks';
@@ -154,6 +155,18 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
   const { backend, run, busy } = useStudio();
   const [hook, setHook] = useState(clip.hook ?? '');
   const [caption, setCaption] = useState(clip.caption ?? '');
+  const [removedCredit, setRemovedCredit] = useState<RemovedCredit | null>(null);
+  const credit = creditLine(caption);
+  const toggleCredit = () => {
+    if (credit) {
+      const { text, removed } = withoutCredit(caption);
+      setCaption(text);
+      setRemovedCredit(removed);
+    } else if (removedCredit) {
+      setCaption(withCredit(caption, removedCredit));
+      setRemovedCredit(null);
+    }
+  };
   const [mode, setMode] = useState<Mode>(null);
   const [when, setWhen] = useState(() => isoToLondonWall(clip.next_slot ?? Date.now() + 3600_000));
   const [reason, setReason] = useState('');
@@ -252,6 +265,14 @@ function ClipView({ clip, demo }: { clip: QueueClip; demo: boolean }) {
           <textarea id={`cap-${clip.id}`} className="textarea" value={caption} onChange={(e) => setCaption(e.target.value)} />
           <span className="hint">{caption.trim() ? 'The AI-generated label is added when it posts.' : 'Empty: the original caption is kept.'}</span>
         </div>
+        {(credit || removedCredit) && (
+          <div className="chips" role="group" aria-label="Credit the original creator">
+            <button type="button" className="chip" aria-pressed={Boolean(credit)} onClick={toggleCredit}>
+              {credit ? 'Creator credited' : 'Credit the creator'}
+            </button>
+            <span className="hint">{credit ?? 'Off for this post: tap to put the credit line back.'}</span>
+          </div>
+        )}
         <PostText caption={caption.trim() ? caption : clip.caption} hashtags={clip.hashtags} firstComment={clip.first_comment ?? null} />
 
         {mode === 'schedule' && (

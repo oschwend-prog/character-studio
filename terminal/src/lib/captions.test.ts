@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AI_DISCLOSURE, captionLength, cleanTags, composeContent, copyText, postText } from './captions';
+import { AI_DISCLOSURE, captionLength, cleanTags, composeContent, copyText, creditLine, postText, withCredit, withoutCredit } from './captions';
 import parity from './parity-cases.json';
 
 interface CaptionCase {
@@ -51,5 +51,24 @@ describe('the Copy button', () => {
     expect(await copyText('hello', null)).toBe('select');
     expect(await copyText('hello', { writeText: () => Promise.reject(new DOMException('denied', 'NotAllowedError')) })).toBe('select');
     expect(await copyText('hello', { writeText: () => { throw new Error('sync failure'); } })).toBe('select');
+  });
+});
+
+describe('the credit switch', () => {
+  const caption = 'Wednesday dance · butler edition\nThe household requested something seasonal. 🎩\nSend this to your butler.\n🎵 Goo Goo Muck – The Cramps · dance: @someone';
+
+  it('finds the credit line of the formula and the short forms', () => {
+    expect(creditLine(caption)).toBe('🎵 Goo Goo Muck – The Cramps · dance: @someone');
+    expect(creditLine('A joke.\ntrend: @creator')).toBe('trend: @creator');
+    expect(creditLine('A joke.\nSend this to a friend.')).toBeNull();
+  });
+
+  it('switching it off removes only that line, switching it on puts it back in place', () => {
+    const { text, removed } = withoutCredit(caption);
+    expect(text).toBe('Wednesday dance · butler edition\nThe household requested something seasonal. 🎩\nSend this to your butler.');
+    expect(removed).toEqual({ line: '🎵 Goo Goo Muck – The Cramps · dance: @someone', index: 3 });
+    expect(withCredit(text, removed!)).toBe(caption);
+    expect(withCredit(caption, removed!)).toBe(caption); // never twice
+    expect(withoutCredit('No credit here.')).toEqual({ text: 'No credit here.', removed: null });
   });
 });
