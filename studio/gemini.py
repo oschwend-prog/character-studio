@@ -13,6 +13,16 @@ character's voice, search keywords and traits card from ``characters/<slug>``). 
 them. A file up to ``INLINE_MAX_BYTES`` rides inline; a bigger one goes through the Files API (resumable upload, polled until
 ``ACTIVE``, deleted again after the answer).
 
+**The recommendation** (owner 2026-10-06: any of his characters can go into any dropped clip, the studio recommends one). The
+deconstruct names, with ``recommended {slug, reason}``, which character of the live roster should replace the star: the prompt
+carries a short card per character (who he replaces, energy, comedy, settings, gadgets) and the schema limits the slug to theirs;
+like for like is checked here as a hard rule (a dog star goes to a character who replaces a dog, a person to one who replaces a
+person, whenever the roster has one), the reason is one concrete line of at most ``REASON_MAX`` characters.
+
+**When, not only whether** (owner 2026-10-06: "judge only the chosen section"). Besides the ``watermark`` and
+``burned_in_text`` flags, the deconstruct says WHEN each is on screen (``watermark_spans``, ``burned_in_text_spans``: lists of
+``{start_s, end_s}``); ``studio.drop`` keeps its section clear of them and blocks a clip only when no clean section of 6 s is left.
+
 **One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 42, a hashtag list that is
 not 3-5 tags), the same request is made once more with the problems appended to the prompt; a second miss raises
 ``GeminiUnexpected`` naming them. Anything the video says is data: the prompt says so and nothing it returns is executed.
@@ -27,10 +37,11 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import re
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -62,6 +73,7 @@ JOKE_MAX = 150
 LINE_MAX = 150
 FIRST_COMMENT_MAX = 300
 DESCRIPTION_MAX = 80
+REASON_MAX = 80  # the recommendation's reason: one concrete line ("gym setting: Reginald's sweatband gag")
 SETTING_MAX = 120
 WHAT_MAX = 300
 MOMENT_MAX = 60
@@ -69,6 +81,9 @@ NOTES_MAX = 300
 GADGET_MAX = 40
 GADGETS_MAX = 3
 HASHTAGS = (3, 5)
+STAR_WORDS = {"person": "a person", "dog": "a dog", "animal": "a small animal"}
+SPANS_MAX = 12  # moments with text or a watermark on screen (owner 2026-10-06: only the section we use is judged)
+SPAN_KEYS = ("watermark_spans", "burned_in_text_spans")
 
 
 class GeminiError(RuntimeError):
@@ -388,6 +403,15 @@ def _traits_text(c: Character) -> str:
 
 _STR = {"type": "string"}
 _BOOL = {"type": "boolean"}
+_SPANS = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {"start_s": {"type": "number", "minimum": 0}, "end_s": {"type": "number", "minimum": 0}},
+        "required": ["start_s", "end_s"],
+    },
+    "maxItems": SPANS_MAX,
+}
 
 DECONSTRUCT_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -407,7 +431,9 @@ DECONSTRUCT_SCHEMA: dict[str, Any] = {
         },
         "minors": {**_BOOL, "description": "a child is visible anywhere in the clip; recorded, not a reason to refuse it"},
         "watermark": {**_BOOL, "description": "a platform watermark or another creator's handle is visible"},
+        "watermark_spans": {**_SPANS, "description": "when the watermark or handle is visible, in seconds of the clip; [] when never"},
         "burned_in_text": {**_BOOL, "description": "text is burned into the picture (captions, titles, stickers)"},
+        "burned_in_text_spans": {**_SPANS, "description": "when burned-in text is visible, in seconds of the clip; [] when never"},
         "camera": {"type": "string", "enum": list(CAMERAS)},
         "setting": _STR,
         "what_happens": _STR,
@@ -424,17 +450,49 @@ DECONSTRUCT_SCHEMA: dict[str, Any] = {
         "first_comment": _STR,
         "hashtags": {"type": "array", "items": _STR, "minItems": HASHTAGS[0], "maxItems": HASHTAGS[1]},
         "notes": _STR,
+        "recommended": {
+            "type": "object",
+            "properties": {
+                "slug": {**_STR, "description": "the slug of the character of the roster who should replace the star"},
+                "reason": {**_STR, "description": f"why him, one concrete line of at most {REASON_MAX} characters"},
+            },
+            "required": ["slug", "reason"],
+        },
     },
     "required": [
-        "people_count", "star", "minors", "watermark", "burned_in_text", "camera", "setting", "what_happens", "classic",
-        "moment_name", "suggested_part", "gadgets", "hooks", "caption", "first_comment", "hashtags", "notes",
+        "people_count", "star", "minors", "watermark", "watermark_spans", "burned_in_text", "burned_in_text_spans", "camera",
+        "setting", "what_happens", "classic", "moment_name", "suggested_part", "gadgets", "hooks", "caption", "first_comment",
+        "hashtags", "notes", "recommended",
     ],
 }
 
 
-def deconstruct_prompt(c: Character) -> str:
-    """Our prompt for the deconstruct of a dropped clip (see the module doc)."""
-    stars = " or ".join({"person": "a person", "dog": "a dog", "animal": "a small animal"}[s] for s in c.stars)
+def crew_of(c: Character, roster: Sequence[Character] = ()) -> tuple[Character, ...]:
+    """The characters a recommendation may name: the live roster, else (none given) the clip's own character alone."""
+    return tuple(roster) or (c,)
+
+
+def deconstruct_schema(roster: Sequence[Character]) -> dict[str, Any]:
+    """``DECONSTRUCT_SCHEMA`` with the recommended slug limited to the roster's slugs (the schema Gemini is given)."""
+    schema = json.loads(json.dumps(DECONSTRUCT_SCHEMA))
+    schema["properties"]["recommended"]["properties"]["slug"]["enum"] = [r.slug for r in roster]
+    return schema
+
+
+def roster_card(r: Character) -> str:
+    """One line of the prompt's roster: who he is, who he replaces, his energy, comedy, settings and gadgets (refs.json)."""
+    t = r.traits or {}
+    stars = " or ".join(STAR_WORDS.get(s, s) for s in r.stars)
+    return (
+        f"- {r.slug}: {r.name}, the {r.noun}; replaces {stars}. Energy: {t.get('energy', '')}. Comedy: {t.get('comedy', '')}. "
+        f"Settings: {'; '.join(t.get('settings', []))}. Gadgets: {', '.join(r.gadgets)}."
+    )
+
+
+def deconstruct_prompt(c: Character, roster: Sequence[Character] = ()) -> str:
+    """Our prompt for the deconstruct of a dropped clip (see the module doc); ``roster`` = the characters it may recommend."""
+    crew = crew_of(c, roster)
+    stars = " or ".join(STAR_WORDS[s] for s in c.stars)
     return f"""You are the analyst of ODD EYES, a studio of AI characters. The owner dropped this clip to be remade with {c.name}, \
 the {c.noun} of our reference images: Higgsfield's Object swap keeps the clip's setting, camera, timing and sound and replaces its \
 star with {c.name}. The swap is like for like: {c.name} replaces {stars}, nothing else.
@@ -447,8 +505,10 @@ the middle"), at most 80 characters; x_center = the horizontal centre of the sta
 full_body = the whole body is in frame; child = true only when the person to replace is a child (under 18), false for an adult, \
 a dog or an animal.
 - minors: true when a child is visible anywhere in the clip (we only record it: children in a crowd or a family are fine). \
-watermark: true when a platform watermark or another creator's handle shows. \
-burned_in_text: true when text is burned into the picture. camera: static, handheld or moving.
+watermark: true when a platform watermark or another creator's handle shows; watermark_spans: WHEN it shows, a list of \
+{{start_s, end_s}} in seconds of the clip ([] when never, one span over the whole clip when always). burned_in_text: true when \
+text is burned into the picture (captions, titles, stickers); burned_in_text_spans: WHEN, in the same form. Only the section we \
+use is judged, so time them closely: a caption in the first seconds only is one short span. camera: static, handheld or moving.
 - setting and what_happens: one sentence each (at most 120 and 300 characters).
 - classic: true only for a famous moment almost everyone knows; moment_name: its name or the trend's name ("" when none).
 - suggested_part: cameo, featured or star (how big {c.name}'s part should be).
@@ -465,6 +525,13 @@ week: ..."). Never mention AI, never explain the joke.
 - first_comment: one line in {c.name}'s voice, at most {FIRST_COMMENT_MAX} characters, that starts a thread.
 - hashtags: 3-5: the moment, the niche, the format and #oddeyes. Never #fyp, #foryou, #foryoupage, #viral or #explore.
 - notes: anything the editor should know (cuts, crowds, fast camera), at most {NOTES_MAX} characters, "" when nothing.
+- recommended: which of our characters below should replace this clip's star, whoever it was dropped for: slug = one of \
+{", ".join(r.slug for r in crew)}; reason = why him, one concrete line of at most {REASON_MAX} characters naming what in the clip \
+fits him ("gym setting: Reginald's sweatband gag"). Like for like is a hard rule: a dog star goes to a character who replaces a \
+dog, a person to one who replaces a person; among those, the one whose energy, comedy, settings and gadgets fit this clip best.
+
+Our characters (for recommended):
+{chr(10).join(roster_card(r) for r in crew)}
 
 {c.name}'s voice (captions):
 {c.voice}
@@ -481,8 +548,9 @@ def _text(value: Any, limit: int, *, allow_empty: bool = False) -> bool:
     return isinstance(value, str) and (allow_empty or bool(value.strip())) and len(value) <= limit and "\n" not in value.strip()
 
 
-def deconstruct_problems(answer: Mapping[str, Any], c: Character) -> list[str]:
-    """The rules a deconstruct answer breaks (empty = usable). Shape errors and length errors alike: see ``generate_json``."""
+def deconstruct_problems(answer: Mapping[str, Any], c: Character, roster: Sequence[Character] = ()) -> list[str]:
+    """The rules a deconstruct answer breaks (empty = usable). Shape errors and length errors alike: see ``generate_json``.
+    ``roster`` = the characters the recommendation may name (none given: ``c`` alone)."""
     p: list[str] = []
     missing = [k for k in DECONSTRUCT_SCHEMA["required"] if k not in answer]
     if missing:
@@ -510,6 +578,9 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character) -> list[str]:
     for flag in ("minors", "watermark", "burned_in_text", "classic"):
         if not isinstance(answer[flag], bool):
             p.append(f"{flag} must be true or false")
+    for key in SPAN_KEYS:
+        if not spans_ok(answer[key]):
+            p.append(f"{key} must be a list of at most {SPANS_MAX} {{start_s, end_s}} with 0 <= start_s < end_s")
     if answer["camera"] not in CAMERAS:
         p.append(f"camera must be one of {', '.join(CAMERAS)}")
     if answer["suggested_part"] not in PARTS:
@@ -551,6 +622,38 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character) -> list[str]:
             p.append(f"hashtags may not include {', '.join(banned)}")
         if not HASHTAGS[0] <= len(cleaned) <= HASHTAGS[1]:
             p.append(f"hashtags must be {HASHTAGS[0]}-{HASHTAGS[1]} distinct tags")
+    p.extend(recommendation_problems(answer["recommended"], star, crew_of(c, roster)))
+    return p
+
+
+def spans_ok(spans: Any) -> bool:
+    """A list of at most ``SPANS_MAX`` ``{start_s, end_s}`` with ``0 <= start_s < end_s`` (numbers, seconds of the clip)."""
+    def number(v: Any) -> bool:
+        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+    return isinstance(spans, list) and len(spans) <= SPANS_MAX and all(
+        isinstance(x, Mapping) and number(x.get("start_s")) and number(x.get("end_s")) and 0 <= x["start_s"] < x["end_s"]
+        for x in spans
+    )
+
+
+def recommendation_problems(rec: Any, star: Any, crew: Sequence[Character]) -> list[str]:
+    """The rules ``recommended`` breaks: a slug of ``crew``, a reason of one line of 1-``REASON_MAX`` characters, and like for
+    like (a star of a kind some character of ``crew`` replaces goes to one of them; no clear star, or a kind nobody replaces,
+    leaves the choice free: the drop gate blocks such a clip anyway)."""
+    if not isinstance(rec, Mapping):
+        return ["recommended must be an object"]
+    p: list[str] = []
+    slugs = [r.slug for r in crew]
+    slug = rec.get("slug")
+    if slug not in slugs:
+        p.append(f"recommended.slug must be one of {', '.join(slugs)}")
+    if not _text(rec.get("reason"), REASON_MAX):
+        p.append(f"recommended.reason must be one line of 1-{REASON_MAX} characters")
+    kind = star.get("kind") if isinstance(star, Mapping) else None
+    takers = [r.slug for r in crew if kind in r.stars]
+    if slug in slugs and takers and slug not in takers:
+        p.append(f"recommended.slug: like for like, {STAR_WORDS.get(kind, kind)} as the star goes to {' or '.join(takers)}")
     return p
 
 
@@ -570,13 +673,21 @@ def tidy_deconstruct(answer: Mapping[str, Any], c: Character) -> dict[str, Any]:
     out["hashtags"] = tags
     for key in ("setting", "what_happens", "moment_name", "notes"):
         out[key] = answer[key].strip()
+    out["recommended"] = {"slug": answer["recommended"]["slug"], "reason": answer["recommended"]["reason"].strip()}
+    for key in SPAN_KEYS:  # in time order, rounded: only what the window search reads
+        out[key] = sorted(
+            ({"start_s": round(float(x["start_s"]), 2), "end_s": round(float(x["end_s"]), 2)} for x in answer[key]),
+            key=lambda x: (x["start_s"], x["end_s"]),
+        )
     return out
 
 
-def deconstruct(client: GeminiClient, clip: Path | str, c: Character) -> dict[str, Any]:
-    """The deconstruct of ``clip`` (an mp4 proxy) for character ``c``: checked and tidied (see the module doc)."""
+def deconstruct(client: GeminiClient, clip: Path | str, c: Character, roster: Sequence[Character] = ()) -> dict[str, Any]:
+    """The deconstruct of ``clip`` (an mp4 proxy) for character ``c``, with the recommendation among ``roster`` (none given:
+    ``c`` alone): checked and tidied (see the module doc)."""
+    crew = crew_of(c, roster)
     answer = client.generate_json(
-        clip, "video/mp4", deconstruct_prompt(c), DECONSTRUCT_SCHEMA, check=lambda a: deconstruct_problems(a, c),
+        clip, "video/mp4", deconstruct_prompt(c, crew), deconstruct_schema(crew), check=lambda a: deconstruct_problems(a, c, crew),
     )
     return tidy_deconstruct(answer, c)
 
@@ -667,6 +778,6 @@ def frame_qa(client: GeminiClient, sheet: Path | str, c: Character, frames: int 
 
 __all__ = [
     "Character", "DECONSTRUCT_SCHEMA", "DEFAULT_MODEL", "FRAME_QA_SCHEMA", "FrameVerdict", "GeminiBlocked", "GeminiClient",
-    "GeminiError", "GeminiUnexpected", "bible_section", "deconstruct", "deconstruct_problems", "frame_qa", "judge_frames",
-    "parse_answer", "tidy_deconstruct",
+    "GeminiError", "GeminiUnexpected", "bible_section", "crew_of", "deconstruct", "deconstruct_problems", "deconstruct_schema",
+    "frame_qa", "judge_frames", "parse_answer", "recommendation_problems", "roster_card", "tidy_deconstruct",
 ]

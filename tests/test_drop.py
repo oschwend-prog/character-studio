@@ -46,8 +46,12 @@ def deconstruct(**over) -> dict:
                     "send": "Send this to your butler.", "question": "Which eye did you notice first?", "tease": "Next week: the stairs."},
         "first_comment": "Requests for next week may be left below. Within reason.",
         "hashtags": ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes"], "notes": "",
+        "watermark_spans": [], "burned_in_text_spans": [],
     }
     base.update(over)
+    if "recommended" not in over:  # like for like among the test roster (biscuit: a dog or an animal; reginald: a person)
+        dog = base["star"]["kind"] in ("dog", "animal")
+        base["recommended"] = {"slug": "biscuit" if dog else "reginald", "reason": "dog star: Biscuit's moves" if dog else "office shimmy: Reginald's deadpan"}
     return base
 
 
@@ -225,8 +229,9 @@ def test_a_landscape_clip_is_cropped_around_the_star(world, synth_video):
     [
         ({"star": {"kind": "person", "body": "biped", "description": "the boy in the middle", "x_center": 0.5, "full_body": True, "child": True}},
          "the star is a child: our character only replaces an adult"),
-        ({"watermark": True}, "paste the link instead"),
-        ({"burned_in_text": True}, "text is burned into the picture"),
+        ({"watermark": True}, "every usable section: paste the link instead"),  # a flag with no span: the whole clip
+        ({"burned_in_text": True}, "text or a watermark is on screen in every usable section"),
+        ({"burned_in_text_spans": [{"start_s": 0, "end_s": 7}]}, "every usable section: Genjutsu would keep it"),
         ({"star": {"kind": "dog", "body": "quadruped", "description": "the dog", "x_center": 0.5, "full_body": True, "child": False}}, "Reginald replaces a person"),
         ({"star": {"kind": "none", "body": "biped", "description": "nobody", "x_center": 0.5, "full_body": False, "child": False}}, "nobody to replace"),
     ],
@@ -754,3 +759,211 @@ def test_the_own_footage_flag_is_kept_through_the_check_and_never_reaches_the_sw
     scan_pick = store.add_favorite(drop.Favorite(url=TIKTOK, platform="tiktok", character_slug="reginald", status="approved"))
     with pytest.raises(DropError, match="not a dropped video"):
         drop.set_own_footage(store, scan_pick.id, True)
+
+
+# ---- whose clip it is: the owner's choice or the studio's recommendation (owner 2026-10-06) -----------------------------------
+
+DOG_STAR = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True, "child": False}
+BISCUIT_LOOK = {
+    "star": DOG_STAR, "hooks": ["main character energy", "the beat asked for me", "one take. obviously."], "gadgets": ["gold chain"],
+    "caption": {"title": "Rug dance · dog edition", "joke": "I was stretching.", "send": "Send this to your dog.",
+                "question": "Which eye first?", "tease": "Next week: the stairs."},
+}
+
+
+def studio_drop(store, storage, clip):
+    """A file dropped with "Recommend": no character given, then uploaded and sent to the check."""
+    pick, _ = add_drop(store, None, None, NOW)
+    path = f"owner/{pick.id}/1759700000000.mp4"
+    storage.upload("sources", path, clip)
+    f = store.get_favorite(pick.id)
+    store.update_favorite(pick.id, proposal={**f.proposal, "owner_clip_path": path, "drop": {**f.proposal["drop"], "state": "checking"}})
+    return pick.id
+
+
+def test_a_drop_without_a_character_waits_under_a_provisional_one(world):
+    store, _ = world
+    pick, dup = add_drop(store, None, None, NOW)
+    assert not dup and pick.character_slug == "reginald"  # the first of the live roster (by slug) who replaces a person
+    assert pick.proposal["drop"]["character_by"] == "studio"
+    owners, _ = add_drop(store, "biscuit", None, NOW)
+    assert owners.proposal["drop"]["character_by"] == "owner"
+    # a link without a character takes the existing pick of that URL, whichever character it has, and keeps him
+    first, _ = add_drop(store, "biscuit", TIKTOK, NOW)
+    again, dup = add_drop(store, None, TIKTOK, NOW)
+    assert dup and again.id == first.id and again.character_slug == "biscuit" and again.proposal["drop"]["character_by"] == "studio"
+    # a paused character is never the provisional one, nor kept for a link
+    store.upsert_character(Character(slug="reginald", name="Reginald", status="paused", bodies=[Body.biped]))
+    assert add_drop(store, None, None, NOW)[0].character_slug == "biscuit"
+    store.upsert_character(Character(slug="biscuit", name="Biscuit", status="paused", bodies=[Body.biped, Body.quadruped]))
+    with pytest.raises(ValueError, match="every one is paused"):
+        add_drop(store, None, None, NOW)
+
+
+def test_the_studio_moves_its_drop_to_the_character_it_recommends_and_looks_again_in_his_voice(world, portrait):
+    store, storage = world
+    pid = studio_drop(store, storage, portrait)
+    assert store.get_favorite(pid).character_slug == "reginald"
+    rec = {"slug": "biscuit", "reason": "dog star on a rug: Biscuit's moves"}
+    first = deconstruct(**BISCUIT_LOOK, recommended=rec)  # asked as the provisional Reginald
+    second = deconstruct(**BISCUIT_LOOK, recommended={"slug": "biscuit", "reason": "a dog: Biscuit"})
+    g = FakeGemini(first, second)
+    out = process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    assert out.ok and out.state == "ready" and out.detail["character"] == "biscuit"
+    pick = store.get_favorite(pid)
+    d = pick.proposal["drop"]
+    assert pick.character_slug == "biscuit" and d["character_by"] == "studio"
+    assert d["recommended"] == rec  # the recommendation that moved it is the one the card shows
+    assert d["gadgets"] == ["gold chain"] and d["hook"] == "main character energy"  # his own look, his gadgets
+    assert len(g.calls) == 2 and "remade with Reginald" in g.calls[0]["prompt"] and "remade with Biscuit" in g.calls[1]["prompt"]
+    for call in g.calls:  # the roster, each time: free, nothing reserved
+        assert call["schema"]["properties"]["recommended"]["properties"]["slug"]["enum"] == ["biscuit", "reginald"]
+    assert store.list_clips() == [] and store.ledger_month(NOW.strftime("%Y-%m")) == []
+
+
+def test_a_studio_drop_already_under_its_recommendation_is_looked_at_once(world, portrait):
+    store, storage = world
+    pid = studio_drop(store, storage, portrait)
+    g = FakeGemini(deconstruct())
+    out = process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    assert out.state == "ready" and len(g.calls) == 1 and store.get_favorite(pid).character_slug == "reginald"
+
+
+def test_the_owners_choice_is_never_overridden(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)  # the owner chose Reginald
+    g = FakeGemini(deconstruct(star=DOG_STAR))
+    out = process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    pick = store.get_favorite(pid)
+    assert out.state == "blocked" and "Reginald replaces a person" in out.reason and len(g.calls) == 1
+    assert pick.character_slug == "reginald" and pick.proposal["drop"]["character_by"] == "owner"
+    assert pick.proposal["drop"]["recommended"]["slug"] == "biscuit"  # the star on the menu points him to the right one
+
+
+def test_a_drop_from_before_the_menu_counts_as_the_owners_choice(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {k: v for k, v in f.proposal["drop"].items() if k != "character_by"}})
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(star=DOG_STAR)), now=NOW, job="t")
+    assert out.state == "blocked" and store.get_favorite(pid).character_slug == "reginald"
+
+
+def test_the_deconstruct_by_hand_of_a_studio_drop_files_it_under_its_recommendation(world, portrait):
+    store, storage = world
+    pid = studio_drop(store, storage, portrait)
+    out = process_drop(store, storage, pid, gemini_client=None, deconstruct_answer=deconstruct(**BISCUIT_LOOK), now=NOW, job="t")
+    pick = store.get_favorite(pid)
+    assert out.state == "ready" and pick.character_slug == "biscuit" and pick.proposal["drop"]["gadgets"] == ["gold chain"]
+    other = studio_drop(store, storage, portrait)
+    with pytest.raises(DropError, match="like for like"):  # a recommendation against the like-for-like rule is refused
+        process_drop(store, storage, other, gemini_client=None,
+                     deconstruct_answer=deconstruct(star=DOG_STAR, recommended={"slug": "reginald", "reason": "x"}), now=NOW, job="t")
+    assert store.get_favorite(other).character_slug == "reginald"  # nothing moved before the refusal
+
+
+def test_the_owner_changing_the_character_during_the_check_starts_it_again_for_him(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+
+    class OwnerTaps(FakeGemini):
+        def generate_json(self, *a, **kw):
+            if not self.calls:  # while Gemini looks, the owner picks Biscuit (what set_drop_character writes)
+                f = store.get_favorite(pid)
+                store.update_favorite(pid, character_slug="biscuit", proposal={**f.proposal, "drop": {**f.proposal["drop"], "character_by": "owner"}})
+            return super().generate_json(*a, **kw)
+
+    g = OwnerTaps(deconstruct(star=DOG_STAR), deconstruct(**BISCUIT_LOOK))
+    out = process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    pick = store.get_favorite(pid)
+    assert out.state == "ready" and pick.character_slug == "biscuit" and pick.proposal["drop"]["hook"] == "main character energy"
+    assert len(g.calls) == 2 and "remade with Biscuit" in g.calls[1]["prompt"]
+
+
+def test_cli_drop_add_without_a_character_lets_the_studio_recommend(monkeypatch, tmp_path):
+    store = make_store()
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    r = CliRunner().invoke(app, ["drop", "add"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["character"] == "reginald" and out["drop"]["character_by"] == "studio" and out["drop"]["state"] == "uploading"
+    r = CliRunner().invoke(app, ["drop", "add", "--character", "biscuit", "--link", TIKTOK])
+    assert r.exit_code == 0 and json.loads(r.output)["drop"]["character_by"] == "owner"
+    r = CliRunner().invoke(app, ["drop", "add", "--character", "nobody"])
+    assert r.exit_code == 2 and "unknown character" in r.output
+
+
+# ---- only the section we use is judged (owner 2026-10-06) -----------------------------------------------------------------------
+
+
+def test_text_or_a_watermark_is_padded_merged_and_fails_closed():
+    look = {"watermark": False, "watermark_spans": [], "burned_in_text": True,
+            "burned_in_text_spans": [{"start_s": 0, "end_s": 4.8}, {"start_s": 5, "end_s": 6}, {"start_s": 18, "end_s": 30}]}
+    assert drop.avoid_spans(look, 20.0) == [
+        {"start_s": 0.0, "end_s": 6.5, "what": "text"}, {"start_s": 17.5, "end_s": 20.0, "what": "text"},
+    ]
+    assert drop.avoid_spans({**look, "burned_in_text_spans": []}, 12.0) == [{"start_s": 0.0, "end_s": 12.0, "what": "text"}]
+    stray = {"watermark": False, "watermark_spans": [{"start_s": 2, "end_s": 3}], "burned_in_text": False, "burned_in_text_spans": []}
+    assert drop.avoid_spans(stray, 10.0) == [{"start_s": 1.5, "end_s": 3.5, "what": "watermark"}]  # a span counts even unflagged
+    clean = {"watermark": False, "watermark_spans": [], "burned_in_text": False, "burned_in_text_spans": []}
+    assert drop.avoid_spans(clean, 10.0) == []
+
+
+def test_the_window_keeps_clear_of_text_and_shortens_or_gives_up_only_when_it_must():
+    energy = [5.0] * 20 + [1.0] * 40  # 30 s, the liveliest part (0-10 s) carries a caption
+    caption = [{"start_s": 0.0, "end_s": 10.5, "what": "text"}]
+    w = drop_window(analysis(energy), classic=False, duration=30.0, avoid=caption)
+    assert w["start_s"] >= 10.5 and 8.0 <= w["length_s"] <= 10.0
+    assert drop_window(analysis(energy), classic=False, duration=30.0)["start_s"] < 10.5  # without it the caption part wins
+    # only 7 s clear (12-19 s): a shorter section, never under 6 s
+    tight = [{"start_s": 0.0, "end_s": 12.0, "what": "text"}, {"start_s": 19.0, "end_s": 30.0, "what": "watermark"}]
+    w = drop_window(analysis([2.0] * 60), classic=True, duration=30.0, avoid=tight)
+    assert 12.0 <= w["start_s"] and w["start_s"] + w["length_s"] <= 19.0 and 6.0 <= w["length_s"] <= 7.0
+    with pytest.raises(drop.NoCleanSection):
+        drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=[{"start_s": 0.0, "end_s": 25.0, "what": "text"}])
+    beats = [i * 0.5 + 0.4 for i in range(60)]  # the nearest beat (10.4 s) would pull the section back onto the caption
+    w = drop_window(analysis(energy, beats=beats), classic=False, duration=30.0, avoid=caption)
+    assert w["start_s"] >= 10.5
+
+
+def test_a_caption_only_at_the_start_leaves_a_clean_section_after_it(world, synth_video):
+    store, storage = world
+    pid = drop_file(store, storage, synth_video(w=540, h=960, dur=16))
+    look = deconstruct(burned_in_text=True, burned_in_text_spans=[{"start_s": 0, "end_s": 5}])
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(look), now=NOW, job="t")
+    d = store.get_favorite(pid).proposal["drop"]
+    assert out.state == d["state"] == "ready"
+    assert d["avoid"] == [{"start_s": 0.0, "end_s": 5.5, "what": "text"}]
+    assert d["window"]["start_s"] >= 5.5 and 8.0 <= d["window"]["length_s"] <= 10.0
+    # the owner's Adjust may not pull the section back onto the caption, here and when Make it runs
+    with pytest.raises(ValueError, match=r"shows text on screen \(0-5.5 s\)"):
+        validate_adjust({"start_s": 2.0, "length_s": 8.0}, d)
+    assert validate_adjust({"start_s": 6.0, "length_s": 8.0}, d) == {"start_s": 6.0, "length_s": 8.0}
+    tap_make(store, pid, adjust={"start_s": 0.0, "length_s": 9.0})
+    out = make_drop(store, storage, pid, hf=None, gemini_client=None, now=NOW, job="t")
+    assert out.state == "failed" and "shows text on screen" in out.reason and store.list_clips() == []
+
+
+def test_text_through_the_whole_clip_still_blocks_it(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    look = deconstruct(burned_in_text=True, burned_in_text_spans=[{"start_s": 0, "end_s": 3}, {"start_s": 2.5, "end_s": 7}])
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(look), now=NOW, job="t")
+    d = store.get_favorite(pid).proposal["drop"]
+    assert out.state == "blocked" and out.reason == "text or a watermark is on screen in every usable section: Genjutsu would keep it, drop a clean copy"
+    (span,) = d["avoid"]
+    assert span["start_s"] == 0.0 and span["end_s"] >= 6.9 and span["what"] == "text" and "credits" not in d
+
+
+def test_the_cut_section_carries_its_own_clean_flags(world, synth_video, gen_out, fast_master):
+    store, storage = world
+    pid = drop_file(store, storage, synth_video(w=540, h=960, dur=16))
+    look = deconstruct(burned_in_text=True, burned_in_text_spans=[{"start_s": 0, "end_s": 5}])
+    process_drop(store, storage, pid, gemini_client=FakeGemini(look), now=NOW, job="t")
+    parent = next(iter(store.list_sources(id=store.get_favorite(pid).source_id)))
+    assert parent.has_overlay is True  # the clip has text somewhere
+    tap_make(store, pid)
+    assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
+    clip = store.get_clip(store.get_favorite(pid).clip_id)
+    child = next(iter(store.list_sources(id=clip.source_id)))
+    assert child.has_overlay is False and child.has_watermark is False  # the section Genjutsu was given has none

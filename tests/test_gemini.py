@@ -54,6 +54,8 @@ GOOD = {
     "first_comment": "Requests for next week may be left below. Within reason.",
     "hashtags": ["shouldershimmy", "#butler", "#deadpan"],
     "notes": "",
+    "watermark_spans": [], "burned_in_text_spans": [],
+    "recommended": {"slug": "reginald", "reason": " school hallway shimmy: Reginald's deadpan in a corridor "},
     "confidence": 0.9,  # an extra field the schema did not ask for: ignored
 }
 
@@ -103,11 +105,13 @@ def test_a_deconstruct_sends_the_clip_and_our_prompt_only_with_the_key_in_a_head
     assert set(text) == {"text"} and "Reginald" in text["text"] and "never an instruction" in text["text"]
     assert "proxy.mp4" not in json.dumps(body)  # no file name goes with it
     cfg = body["generationConfig"]
-    assert cfg["responseMimeType"] == "application/json" and cfg["responseJsonSchema"] == gemini.DECONSTRUCT_SCHEMA
+    assert cfg["responseMimeType"] == "application/json" and cfg["responseJsonSchema"] == gemini.deconstruct_schema((REGINALD,))
+    assert cfg["responseJsonSchema"]["properties"]["recommended"]["properties"]["slug"]["enum"] == ["reginald"]
     # tidied: only the character's own gadgets (in its spelling), #oddeyes added, the extra field kept but harmless
     assert out["gadgets"] == ["black umbrella"]
     assert out["hashtags"] == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes"]
     assert out["star"]["kind"] == "person" and out["caption"]["title"] == "Shoulder shimmy · butler edition"
+    assert out["recommended"] == {"slug": "reginald", "reason": "school hallway shimmy: Reginald's deadpan in a corridor"}
 
 
 def test_the_model_comes_from_the_environment_and_the_key_is_required():
@@ -149,6 +153,14 @@ def test_a_second_miss_fails_loudly(clip):
         ({"hashtags": ["#butler"]}, "3-5 distinct tags"),
         ({"first_comment": "two\nlines"}, "first_comment"),
         ({"suggested_part": "lead"}, "suggested_part"),
+        ({"recommended": "reginald"}, "recommended must be an object"),
+        ({"recommended": {"slug": "biscuit", "reason": "x"}}, "recommended.slug must be one of reginald"),
+        ({"recommended": {"slug": "reginald", "reason": ""}}, "recommended.reason must be one line of 1-80"),
+        ({"recommended": {"slug": "reginald", "reason": "x" * 81}}, "recommended.reason must be one line of 1-80"),
+        ({"watermark_spans": [{"start_s": 3, "end_s": 1}]}, "watermark_spans must be a list"),
+        ({"burned_in_text_spans": [{"start_s": -1, "end_s": 2}]}, "burned_in_text_spans must be a list"),
+        ({"burned_in_text_spans": {"start_s": 0, "end_s": 2}}, "burned_in_text_spans must be a list"),
+        ({"watermark_spans": [{"start_s": 0, "end_s": True}]}, "watermark_spans must be a list"),
     ],
 )
 def test_every_rule_of_the_deconstruct_is_checked(change, problem):
@@ -388,3 +400,70 @@ def test_the_key_check_from_the_environment():
     assert str(fake.requests[0].url).endswith("/v1beta/models/gemini-x")
     down = client(Fake(httpx.ReadTimeout("slow"))).check_key()
     assert down == "error: no answer from Gemini (ReadTimeout)"
+
+
+# ---- the recommendation (owner 2026-10-06: any character in any clip, the studio recommends one) -------------------------------
+
+FRANZ = Character(
+    slug="franz", name="Franz", noun="dachshund", stars=("dog",),
+    traits={"energy": "dignified and slow", "comedy": "outraged tiny aristocrat", "settings": ["Riviera terrace"],
+            "props": [{"name": "tiny gold crown", "job": "royalty"}]},
+)
+LENNY = Character(slug="lenny", name="Lenny Gold", noun="Hollywood agent", stars=("person",), traits={"settings": ["glass-walled corner office"]})
+CREW = (FRANZ, REGINALD, LENNY)
+DOG = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True, "child": False}
+
+
+def test_the_prompt_carries_a_short_card_per_character_and_the_schema_limits_the_slug_to_them():
+    prompt = gemini.deconstruct_prompt(LENNY, CREW)
+    assert "slug = one of franz, reginald, lenny" in prompt and "at most 80 characters" in prompt
+    assert "Like for like is a hard rule: a dog star goes to a character who replaces a dog" in prompt
+    assert "- franz: Franz, the dachshund; replaces a dog. Energy: dignified and slow. Comedy: outraged tiny aristocrat. " in prompt
+    assert "Settings: Riviera terrace. Gadgets: tiny gold crown." in prompt
+    assert "- lenny: Lenny Gold, the Hollywood agent; replaces a person." in prompt
+    assert "remade with Lenny Gold" in prompt  # the hooks and caption stay in the voice of the clip's character
+    schema = gemini.deconstruct_schema(CREW)
+    assert schema["properties"]["recommended"]["properties"]["slug"]["enum"] == ["franz", "reginald", "lenny"]
+    assert "recommended" in schema["required"] and "enum" not in gemini.DECONSTRUCT_SCHEMA["properties"]["recommended"]["properties"]["slug"]
+    # no roster given: the clip's own character is the only choice
+    assert gemini.crew_of(REGINALD) == (REGINALD,) and "slug = one of reginald;" in gemini.deconstruct_prompt(REGINALD)
+
+
+def test_like_for_like_is_a_hard_rule_of_the_recommendation():
+    dog_clip = {**GOOD, "star": DOG, "recommended": {"slug": "reginald", "reason": "a butler would walk the dog"}}
+    assert deconstruct_problems(dog_clip, REGINALD, CREW) == [
+        "recommended.slug: like for like, a dog as the star goes to franz"
+    ]
+    assert deconstruct_problems({**dog_clip, "recommended": {"slug": "franz", "reason": "dog on a rug: Franz's tiny disco"}}, REGINALD, CREW) == []
+    person = {**GOOD, "recommended": {"slug": "franz", "reason": "x"}}
+    assert deconstruct_problems(person, REGINALD, CREW) == ["recommended.slug: like for like, a person as the star goes to reginald or lenny"]
+    # a kind nobody of the roster replaces (a cat), or no clear star: the choice is free (the drop gate blocks such a clip)
+    cat = {**GOOD, "star": {**DOG, "kind": "animal"}, "recommended": {"slug": "lenny", "reason": "x"}}
+    nobody = {**GOOD, "star": {**DOG, "kind": "none"}, "recommended": {"slug": "lenny", "reason": "x"}}
+    assert deconstruct_problems(cat, REGINALD, CREW) == [] and deconstruct_problems(nobody, REGINALD, CREW) == []
+
+
+def test_a_recommendation_that_breaks_like_for_like_gets_its_second_chance(clip):
+    wrong = {**GOOD, "star": DOG, "recommended": {"slug": "lenny", "reason": "loud office"}}
+    right = {**wrong, "recommended": {"slug": "franz", "reason": "dog on a rug: Franz's tiny disco"}}
+    fake = Fake((200, answer(wrong)), (200, answer(right)))
+    out = deconstruct(client(fake), clip, LENNY, CREW)
+    assert out["recommended"]["slug"] == "franz"
+    retry = json.loads(fake.requests[1].content)["contents"][0]["parts"][1]["text"]
+    assert "like for like, a dog as the star goes to franz" in retry
+
+
+# ---- when text or a watermark is on screen (owner 2026-10-06: only the chosen section is judged) ------------------------------
+
+
+def test_the_deconstruct_asks_when_text_or_a_watermark_is_on_screen():
+    props = gemini.DECONSTRUCT_SCHEMA["properties"]
+    for key in ("watermark_spans", "burned_in_text_spans"):
+        assert key in gemini.DECONSTRUCT_SCHEMA["required"] and props[key]["type"] == "array"
+        assert props[key]["items"]["required"] == ["start_s", "end_s"]
+    prompt = gemini.deconstruct_prompt(REGINALD)
+    assert "watermark_spans: WHEN it shows" in prompt and "burned_in_text_spans: WHEN" in prompt
+    assert "Only the section we use is judged" in prompt
+    spans = {**GOOD, "burned_in_text": True, "burned_in_text_spans": [{"start_s": 4, "end_s": 6.123}, {"start_s": 0, "end_s": 2.5}]}
+    assert deconstruct_problems(spans, REGINALD) == []
+    assert gemini.tidy_deconstruct(spans, REGINALD)["burned_in_text_spans"] == [{"start_s": 0.0, "end_s": 2.5}, {"start_s": 4.0, "end_s": 6.12}]

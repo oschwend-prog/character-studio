@@ -18,6 +18,20 @@ the request and fires the ``studio-drop`` GitHub workflow, which runs ``studio d
 
 ``reason`` carries the one line the card shows (blocked, waiting, failed, or what a making job waits for).
 
+**Whose clip it is** (owner 2026-10-06: "the core of the terminal is dropping our characters into my saved videos"). A drop is
+filed for a character the owner chose (``drop['character_by'] = 'owner'``) or for none: then the studio recommends one
+(``'studio'``) and the drop waits under a provisional character (``provisional``: the first of the live roster, by slug, who
+replaces a person; migration 0013's add_drop picks the same). The deconstruct names the character of the live roster (``roster``:
+not paused, with a swap rule) who should replace the star, like for like, with a one-line reason (``drop['recommended']``,
+shown with a star on the terminal's menu). While the choice is the studio's and the recommendation differs, the check moves
+the pick to him and looks once more in his voice, in the same job (free: Gemini only); the owner's choice is never overridden.
+The owner's menu (``studio.set_drop_character``, migration 0013) records his choice, clears the old character's results and
+asks for the check again; a check that finds its character changed under it starts again for the new one.
+
+**Only the section we use is judged** (owner 2026-10-06). The deconstruct says when text or a watermark is on screen
+(``burned_in_text_spans``, ``watermark_spans``); the section (``drop_window``) keeps ``SPAN_PAD_S`` clear of them
+(``drop['avoid']``, which the owner's Adjust may not overlap either), and only a clip with no clean section of 6 s is blocked.
+
 **Process** (``process_drop``, free): the clip (``source ingest-owner`` for a file, ``source fetch`` with no Recreate fallback
 for a link), a probe, the free local analysis (``source analyze``: cuts, beat, the best window), the Gemini **deconstruct**
 (``studio.gemini``: people, the star and where and whether the star is a child, children anywhere (recorded only), a watermark or
@@ -121,7 +135,10 @@ MASTER_PRESET = "slow"
 SOURCES_BUCKET = sources.SOURCES_BUCKET
 PREVIEW_NAME = "preview.jpg"
 ENGAGEMENT_ORDER = gemini.ENGAGEMENT_KINDS  # send -> question -> tease -> send ...
-STAR_WORDS = {"person": "a person", "dog": "a dog", "animal": "a small animal"}
+STAR_WORDS = gemini.STAR_WORDS
+CHARACTER_BY = ("owner", "studio")  # who chose the drop's character: the owner's choice is never overridden
+SPAN_PAD_S = 0.5  # Gemini's times are approximate: a section keeps this far from text or a watermark on screen
+CHANGE_RESTARTS = 2  # the owner changed the character mid-check this often in a row: the next run checks it again
 
 EXIT_FAILED = 1
 EXIT_REFUSED = 3
@@ -129,6 +146,14 @@ EXIT_REFUSED = 3
 
 class DropError(ValueError):
     """A drop the caller asked about cannot take this step (not a drop, the wrong state, no Make it): exit 2."""
+
+
+class NoCleanSection(ValueError):
+    """Text or a watermark is on screen in every section of 6 s or more the clip could give."""
+
+
+class _CharacterChanged(Exception):
+    """The owner chose another character while a check was running: the check starts again, for him."""
 
 
 # ---- reading a drop ------------------------------------------------------------------------------------------------------
@@ -226,17 +251,42 @@ def character(slug: str, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DI
     ref = refs.get(slug)
     if ref is None:
         raise DropError(f"no characters/{slug}/refs.json")
+    return ref, _who(ref, characters_dir)
+
+
+def _who(ref: Mapping[str, Any], characters_dir: Path | str) -> gemini.Character:
+    slug = ref["slug"]
     swap = ref.get("swap")
     if not swap:
         raise DropError(f"characters/{slug}/refs.json has no swap rule (noun, stars)")
     bible_path = Path(characters_dir) / slug / "bible.md"
     bible = bible_path.read_text(encoding="utf-8") if bible_path.is_file() else ""
     voice = gemini.bible_section(bible, "Voice (captions)")
-    return ref, gemini.Character(
+    return gemini.Character(
         slug=slug, name=ref["name"], noun=swap["noun"], stars=tuple(swap["stars"]),
         voice=voice, keywords=gemini.bible_section(bible, "Search keywords"),
         traits=ref.get("traits") or {}, edition=gemini.bible_edition(voice),
     )
+
+
+def roster(store: Store, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR) -> list[gemini.Character]:
+    """The live roster a check recommends from, by slug: every character of the database that is not paused (the owner's
+    v_characters) and has a swap rule in its refs.json (a character Genjutsu cannot be given is no choice)."""
+    refs = {r["slug"]: r for r in seed.load_refs(characters_dir)}
+    return [
+        _who(refs[c.slug], characters_dir)
+        for c in sorted(store.characters(), key=lambda c: c.slug)
+        if c.status != "paused" and refs.get(c.slug, {}).get("swap")
+    ]
+
+
+def provisional(store: Store, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR) -> str:
+    """Who a drop filed without a character waits under until its check recommends one (migration 0013's add_drop picks the
+    same): the first of the live roster, by slug, who replaces a person (the likelier star), else the first of it."""
+    crew = roster(store, characters_dir)
+    if not crew:
+        raise ValueError("no character takes new videos: every one is paused")
+    return next((c.slug for c in crew if "person" in c.stars), crew[0].slug)
 
 
 def like_for_like(star: Mapping[str, Any], ref: Mapping[str, Any], name: str) -> str | None:
@@ -261,14 +311,45 @@ def _shots(cuts: list[float], duration: float) -> list[tuple[float, float]]:
     return [(a, b) for a, b in zip(edges, edges[1:]) if b > a]
 
 
-def drop_window(analysis: Mapping[str, Any], *, classic: bool, duration: float) -> dict[str, float]:
+def avoid_spans(look: Mapping[str, Any], duration: float) -> list[dict[str, Any]]:
+    """The moments no section may touch (``drop['avoid']``): the deconstruct's text and watermark spans, each widened by
+    ``SPAN_PAD_S``, kept inside the clip and merged per kind, as ``{start_s, end_s, what}`` (``what`` = text or watermark) in
+    time order. Fail closed: a flag with no span is the whole clip, and a span is used even when its flag says no."""
+    out: list[dict[str, Any]] = []
+    for what, flag, key in (("watermark", "watermark", "watermark_spans"), ("text", "burned_in_text", "burned_in_text_spans")):
+        spans = [(float(x["start_s"]), float(x["end_s"])) for x in look.get(key) or []]
+        if look.get(flag) and not spans:
+            spans = [(0.0, duration)]
+        merged: list[tuple[float, float]] = []
+        for a, b in sorted((max(0.0, a - SPAN_PAD_S), min(duration, b + SPAN_PAD_S)) for a, b in spans):
+            if b <= a:
+                continue
+            if merged and a <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+        out.extend({"start_s": round(a, 2), "end_s": round(b, 2), "what": what} for a, b in merged)
+    return sorted(out, key=lambda x: (x["start_s"], x["end_s"], x["what"]))
+
+
+def overlaps(start: float, length: float, span: Mapping[str, Any]) -> bool:
+    """Does the section ``start``..``start + length`` show any of ``span`` (an ``avoid`` entry)?"""
+    return start < float(span["end_s"]) - 1e-9 and start + length > float(span["start_s"]) + 1e-9
+
+
+def drop_window(
+    analysis: Mapping[str, Any], *, classic: bool, duration: float, avoid: list[Mapping[str, Any]] | tuple = ()
+) -> dict[str, float]:
     """The section Genjutsu gets: ``{start_s, length_s}`` (pure).
 
     The target is 12-15 s for a classic and 8-10 s for any other clip (owner 2026-10-05), never over 16 s or under 6 s. It
     stays inside one shot when one is long enough (the analysis' cuts), else in the longest shot (at least 6 s), else it
     crosses as few cuts as it must. Among the windows that qualify, the one with the most motion wins (the analysis' energy per
     0.5 s), ties to the longer then the earlier; the ends move to the nearest beats when that keeps the length in range. A
-    clip shorter than 6 s is refused (``ValueError``)."""
+    clip shorter than 6 s is refused (``ValueError``).
+
+    ``avoid`` (``avoid_spans``: text or a watermark on screen): no window may overlap one. When none of the target length is
+    clear, a shorter one (never under 6 s) is taken; when none of 6 s is clear, ``NoCleanSection``."""
     if duration < MASTER_MIN_S - SLACK_S:
         raise ValueError(f"the video is {duration:.1f} s: a video needs at least {MASTER_MIN_S:g} s")
     lo, hi = WINDOW_CLASSIC if classic else WINDOW_OTHER
@@ -287,29 +368,41 @@ def drop_window(analysis: Mapping[str, Any], *, classic: bool, duration: float) 
     def inside(a: float, b: float) -> int:
         return sum(1 for c in cuts if a + 0.3 < c < b - 0.3)
 
+    def clean(a: float, b: float) -> bool:
+        return not any(overlaps(a, b - a, s) for s in avoid)
+
+    def search(shortest: float, longest: float) -> tuple[int, float, float, float] | None:
+        best: tuple[int, float, float, float] | None = None  # (cuts, -energy, -length, start)
+        length = shortest
+        while length <= longest + 1e-9:
+            start = 0.0
+            while start + length <= total + 1e-9:
+                if clean(start, start + length):
+                    key = (inside(start, start + length), -round(mean_energy(start, start + length), 6), -length, start)
+                    if best is None or key < best:
+                        best = key
+                start += WINDOW_STEP_S
+            length += WINDOW_STEP_S
+        return best
+
     hi = min(hi, MASTER_MAX_S, total)
     lo = min(lo, hi)
     longest_shot = max((b - a for a, b in _shots(cuts, total)), default=total)
     if longest_shot < lo:  # no shot is long enough: shorten to the longest shot (never under 6 s)
         lo = max(MASTER_MIN_S, math.floor(longest_shot / WINDOW_STEP_S) * WINDOW_STEP_S)
         hi = max(lo, min(hi, lo))
-    best: tuple[int, float, float, float] | None = None  # (cuts, -energy, -length, start)
-    length = lo
-    while length <= hi + 1e-9:
-        start = 0.0
-        while start + length <= total + 1e-9:
-            key = (inside(start, start + length), -round(mean_energy(start, start + length), 6), -length, start)
-            if best is None or key < best:
-                best = key
-            start += WINDOW_STEP_S
-        length += WINDOW_STEP_S
-    assert best is not None
+    best = search(lo, hi)
+    if best is None and lo > MASTER_MIN_S:  # text or a watermark in every window of the target length: a shorter clean one
+        best = search(MASTER_MIN_S, lo - WINDOW_STEP_S)
+    if best is None:
+        raise NoCleanSection("text or a watermark is on screen in every usable section")
     start, length = best[3], -best[2]
     if beats:
         s2 = min(beats, key=lambda b: abs(b - start))
         e2 = min(beats, key=lambda b: abs(b - (start + length)))
-        if abs(s2 - start) <= 0.35 and abs(e2 - start - length) <= 0.35 and lo - 1e-9 <= e2 - s2 <= hi + 1e-9 and e2 <= total + 1e-9:
-            if inside(s2, e2) <= best[0]:
+        shortest = min(lo, length)
+        if abs(s2 - start) <= 0.35 and abs(e2 - start - length) <= 0.35 and shortest - 1e-9 <= e2 - s2 <= hi + 1e-9 and e2 <= total + 1e-9:
+            if inside(s2, e2) <= best[0] and clean(s2, e2) and s2 >= 0:
                 start, length = s2, e2 - s2
     return {"start_s": round(start, 3), "length_s": round(length, 3)}
 
@@ -329,8 +422,8 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any]) -> dict[str, Any]:
     """The owner's Adjust of a ready drop (``drop['adjust']``, written by request_job), checked again here (fail closed).
 
     Every key optional: ``star`` (1-80 characters: who is replaced), ``part`` (cameo, featured or star), ``gadgets`` (at most 3
-    of 1-40 characters), ``hook`` (1-80 characters), ``start_s`` (0 or more) and ``length_s`` (6-16 s, inside the video),
-    ``crop_x`` (0-1 or null). ``ValueError`` names the first problem."""
+    of 1-40 characters), ``hook`` (1-80 characters), ``start_s`` (0 or more) and ``length_s`` (6-16 s, inside the video, clear
+    of the text and watermark moments of ``drop['avoid']``), ``crop_x`` (0-1 or null). ``ValueError`` names the first problem."""
     if adjust is None:
         return {}
     if not isinstance(adjust, Mapping):
@@ -376,6 +469,13 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any]) -> dict[str, Any]:
             raise ValueError(f"adjust.length_s must be {MASTER_MIN_S:g}-{MASTER_MAX_S:g} s")
         if duration and start + length > duration + SLACK_S:
             raise ValueError(f"the section {start:g}-{start + length:g} s runs past the end of the {duration:g} s video")
+        for span in drop.get("avoid") or []:  # only the section is judged: it may not show text or a watermark
+            if overlaps(start, length, span):
+                what = "a watermark" if span.get("what") == "watermark" else "text"
+                raise ValueError(
+                    f"the section {start:g}-{start + length:g} s shows {what} on screen ({span['start_s']:g}-{span['end_s']:g} s): "
+                    "Genjutsu would keep it"
+                )
         out["start_s"], out["length_s"] = start, length
     if "crop_x" in adjust:
         if adjust["crop_x"] is None:
@@ -454,32 +554,50 @@ def next_engagement(store: Store, slug: str, clip_id: str | None = None) -> str:
 
 
 def add_drop(
-    store: Store, character_slug: str, link: str | None, now: datetime | None = None, *, own_footage: bool = False
+    store: Store, character_slug: str | None, link: str | None, now: datetime | None = None, *, own_footage: bool = False,
+    characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
 ) -> tuple[Favorite, bool]:
     """File a drop: ``(pick, duplicate)``. A file (``link`` None) is a new pick keyed ``owner-drop:<id>`` at ``uploading``; a link
     is its canonical URL at ``checking``, and a link already a pick of this character becomes that pick's drop (a pick already
     queued or made is returned as it is, ``duplicate`` True). ``own_footage`` (owner 2026-10-06, for reporting later): the owner's
-    own recording or footage used with permission; the default is a downloaded clip (False). It does not change the generation."""
+    own recording or footage used with permission; the default is a downloaded clip (False). It does not change the generation.
+
+    ``character_slug`` None (owner 2026-10-06, the Drop box's "Recommend"): the studio chooses after the check
+    (``character_by`` studio); the drop waits under ``provisional``, and a link is matched against every pick of that URL (the
+    oldest), keeping that pick's character while he is not paused. With a character it is the owner's (``character_by`` owner)."""
     now = now or now_london()
-    if character_slug not in {c.slug for c in store.characters()}:
+    if character_slug is None:
+        character_slug, by = provisional(store, characters_dir), "studio"
+    elif character_slug not in {c.slug for c in store.characters()}:
         raise ValueError(f"unknown character {character_slug!r}")
+    else:
+        by = "owner"
     record = {"decision": "approve", "by": "owner", "reason": "owner's own video", "at": now.isoformat()}
     if link is None:
         pick_id = str(uuid.uuid4())
-        drop = {"state": "uploading", "kind": "file", "at": now.isoformat(), "reason": None, "own_footage": bool(own_footage)}
+        drop = {
+            "state": "uploading", "kind": "file", "at": now.isoformat(), "reason": None, "own_footage": bool(own_footage),
+            "character_by": by,
+        }
         return store.add_favorite(Favorite(
             id=pick_id, url=f"{DROP_URL_PREFIX}{pick_id}", platform=DROP_PLATFORM, origin="owner", character_slug=character_slug,
             proposal={"decision": record, "drop": drop}, status="approved",
         )), False  # fmt: skip
     platform, canonical = parse_video_url(link)
-    drop = {"state": "checking", "kind": "link", "at": now.isoformat(), "reason": None, "own_footage": bool(own_footage)}
+    drop = {
+        "state": "checking", "kind": "link", "at": now.isoformat(), "reason": None, "own_footage": bool(own_footage),
+        "character_by": by,
+    }
     handle = canonical.split("/@", 1)[1].split("/", 1)[0] if platform == "tiktok" else None
-    for f in store.list_favorites(url=canonical, character_slug=character_slug):
+    found = store.list_favorites(url=canonical) if by == "studio" else store.list_favorites(url=canonical, character_slug=character_slug)
+    for f in sorted(found, key=lambda f: (f.created_at.timestamp() if f.created_at else 0.0, f.id)):
         if f.status in ("queued", "made"):
             return f, True
+        if by == "studio" and f.character_slug in {c.slug for c in store.characters() if c.status != "paused"}:
+            character_slug = f.character_slug  # the pick's own character is the provisional one while he is not paused
         proposal = {k: v for k, v in f.proposal.items() if k != "hold_reason"}
         proposal.update(decision=record, drop=drop)
-        return store.update_favorite(f.id, status="approved", proposal=proposal), True
+        return store.update_favorite(f.id, status="approved", character_slug=character_slug, proposal=proposal), True
     return store.add_favorite(Favorite(
         url=canonical, platform=platform, origin="owner", character_slug=character_slug,
         creator_handle=f"@{handle}" if handle else None, proposal={"decision": record, "drop": drop}, status="approved",
@@ -585,17 +703,41 @@ def _analysis_card(answer: Mapping[str, Any], free: Mapping[str, Any], window: M
     return card
 
 
-def _blocked_reason(answer: Mapping[str, Any], ref: Mapping[str, Any], name: str, link: bool) -> str | None:
+def _blocked_reason(answer: Mapping[str, Any], ref: Mapping[str, Any], name: str) -> str | None:
+    """Why the clip cannot be made with this character whatever section is taken (text and a watermark are the section's
+    business: ``drop_window`` keeps clear of them, ``_unclean_reason`` says when nothing is left)."""
     if answer["star"].get("child"):  # children elsewhere in the clip are fine (owner 2026-10-06): only the star we replace must be an adult
         return "the star is a child: our character only replaces an adult"
-    if answer["watermark"]:
-        return (
-            "a watermark or creator handle is burned in: we cannot use this clip"
-            if link else "a watermark or creator handle is burned in: paste the link instead"
-        )
-    if answer["burned_in_text"]:
-        return "text is burned into the picture: Genjutsu would keep it, drop a clean copy"
     return like_for_like(answer["star"], ref, name)
+
+
+def _unclean_reason(avoid: list[Mapping[str, Any]], link: bool) -> str:
+    base = "text or a watermark is on screen in every usable section"
+    if any(x["what"] == "watermark" for x in avoid):
+        return f"{base}: {'we cannot use this clip' if link else 'paste the link instead'}"
+    return f"{base}: Genjutsu would keep it, drop a clean copy"
+
+
+def _recommended_slug(answer: Mapping[str, Any], crew: list[gemini.Character]) -> str | None:
+    rec = answer.get("recommended")
+    slug = rec.get("slug") if isinstance(rec, Mapping) else None
+    return slug if slug in {c.slug for c in crew} else None
+
+
+def _still(store: Store, pick_id: str, slug: str) -> Favorite:
+    """The pick as it is now, while its character is still ``slug`` (else the owner moved it: ``_CharacterChanged``)."""
+    fresh = store.get_favorite(pick_id)
+    if fresh is None or fresh.character_slug != slug:
+        raise _CharacterChanged()
+    return fresh
+
+
+def _switch(store: Store, pick_id: str, slug: str, to: str) -> Favorite:
+    """The studio's own move to the character it recommends: only while the choice is still the studio's and nobody moved it."""
+    fresh = _still(store, pick_id, slug)
+    if drop_of(fresh).get("character_by") != "studio":
+        raise _CharacterChanged()
+    return mark_favorite(store, pick_id, fresh.status, character_slug=to)
 
 
 def process_drop(
@@ -611,7 +753,8 @@ def process_drop(
     characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
 ) -> Outcome:
     """Check a dropped video (free) and make it ``ready`` (see the module doc). ``KeyError`` for an unknown pick, ``DropError``
-    for a pick that is not a drop or not at a step a check runs from; ``StorageError`` when our own Storage fails."""
+    for a pick that is not a drop or not at a step a check runs from; ``StorageError`` when our own Storage fails. When the
+    owner chooses another character during the check, it starts again for him (up to ``CHANGE_RESTARTS`` times)."""
     now = now or now_london()
     job = job or job_id()
     pick = _load(store, pick_id)
@@ -621,7 +764,17 @@ def process_drop(
     if not claim(store, pick_id, "process", job, now):
         return Outcome(pick_id, state, "another run is checking this video", detail={"busy": True})
     try:
-        return _process(store, storage, store.get_favorite(pick_id), gemini_client, deconstruct_answer, runner, now, characters_dir)
+        for _ in range(CHANGE_RESTARTS + 1):
+            try:
+                return _process(
+                    store, storage, store.get_favorite(pick_id), gemini_client, deconstruct_answer, runner, now, characters_dir,
+                )
+            except _CharacterChanged:
+                if deconstruct_answer is not None:
+                    raise DropError("the owner chose another character during the check: write the deconstruct for him") from None
+        reason = "the character changed during every look: the next run checks it again"
+        fresh = _update(store, store.get_favorite(pick_id), now, reason=reason)
+        return Outcome(pick_id, drop_of(fresh)["state"], reason, ok=False)
     except (DropError, StorageError):
         raise
     except Exception as e:
@@ -636,7 +789,10 @@ def _process(
     store: Store, storage: Storage, pick: Favorite, client: gemini.GeminiClient | None,
     answer: Mapping[str, Any] | None, runner: Any, now: datetime, characters_dir: Path | str,
 ) -> Outcome:
-    ref, who = character(pick.character_slug, characters_dir)
+    slug = pick.character_slug
+    ref, who = character(slug, characters_dir)
+    crew = roster(store, characters_dir)
+    by_studio = drop_of(pick).get("character_by") == "studio"
     got = _get_source(store, storage, pick, now, runner)
     if isinstance(got, Outcome):
         return got
@@ -666,10 +822,17 @@ def _process(
             "has_audio": report.has_audio,
         }
         if answer is not None:
-            problems = gemini.deconstruct_problems(answer, who)
+            # by hand: written for the character it recommends when the choice is the studio's (the skill says so)
+            target = (_recommended_slug(answer, crew) if by_studio else None) or slug
+            ref_t, who_t = (ref, who) if target == slug else character(target, characters_dir)
+            problems = gemini.deconstruct_problems(answer, who_t, crew)
             if problems:
                 raise DropError("the deconstruct file breaks the rules: " + "; ".join(problems))
-            look = gemini.tidy_deconstruct(answer, who)
+            look = gemini.tidy_deconstruct(answer, who_t)
+            recommended = look["recommended"]
+            if target != slug:
+                _switch(store, pick.id, slug, target)
+                slug, ref, who = target, ref_t, who_t
         elif client is None:
             reason = "waiting for the Gemini key: the next daily run looks at it by hand"
             _update(store, pick, now, state="checking", reason=reason, **basics)
@@ -677,31 +840,45 @@ def _process(
         else:
             proxy = clipwork.proxy_clip(local, work / "proxy.mp4")
             try:
-                look = gemini.deconstruct(client, proxy, who)
+                look = gemini.deconstruct(client, proxy, who, crew)
+                recommended = look["recommended"]  # the one the card shows (the second look is asked in his voice only)
+                if by_studio and recommended["slug"] != slug:
+                    _switch(store, pick.id, slug, recommended["slug"])
+                    slug = recommended["slug"]
+                    ref, who = character(slug, characters_dir)
+                    look = gemini.deconstruct(client, proxy, who, crew)  # once more, his hooks and caption (free)
             except gemini.GeminiBlocked as e:
                 reason = f"Gemini would not look at this clip ({e}): we cannot use it"
-                _update(store, pick, now, state="blocked", reason=reason, **basics)
+                _update(store, _still(store, pick.id, slug), now, state="blocked", reason=reason, **basics)
                 return Outcome(pick.id, "blocked", reason)
             except gemini.GeminiError as e:
                 reason = f"the look at the clip failed ({str(e)[:140]}): tap Try again"
-                _update(store, pick, now, state="failed", reason=reason, **basics)
+                _update(store, _still(store, pick.id, slug), now, state="failed", reason=reason, **basics)
                 return Outcome(pick.id, "failed", reason, ok=False)
-        sources.record_checks(
-            store, src.id, has_watermark=look["watermark"], has_overlay=look["burned_in_text"],
+        pick = _still(store, pick.id, slug)
+        sources.record_checks(  # anywhere in the clip: the section's own flags are set when it is cut (_child)
+            store, src.id, has_watermark=look["watermark"] or bool(look["watermark_spans"]),
+            has_overlay=look["burned_in_text"] or bool(look["burned_in_text_spans"]),
             other_people=max(0, look["people_count"] - 1), has_minors=look["minors"],
         )
         if look["star"]["body"] in (b.value for b in Body):
             store.update_source(src.id, body=look["star"]["body"])
-        blocked = _blocked_reason(look, ref, who.name, pick.platform != DROP_PLATFORM)
+        avoid = avoid_spans(look, report.duration_s)
+        blocked = _blocked_reason(look, ref, who.name)
+        if blocked is None:
+            try:
+                window = drop_window(free, classic=look["classic"], duration=report.duration_s, avoid=avoid)
+            except NoCleanSection:
+                blocked = _unclean_reason(avoid, pick.platform != DROP_PLATFORM)
         if blocked is not None:
-            _update(store, pick, now, state="blocked", reason=blocked, **basics, star=look["star"])
-            return Outcome(pick.id, "blocked", blocked)
-        window = drop_window(free, classic=look["classic"], duration=report.duration_s)
+            _update(store, pick, now, state="blocked", reason=blocked, **basics, star=look["star"], recommended=recommended, avoid=avoid)
+            return Outcome(pick.id, "blocked", blocked, detail={"character": slug, "recommended": recommended})
         crop_x = crop_for(report.width, report.height, look["star"]["x_center"])
         credits = estimate_credits(Mode.dropin, window["length_s"], MUSIC)
         preview = _preview(storage, local, work, pick.id, window, crop_x)
     card = _analysis_card(look, free, window)
     hook = look["hooks"][0]
+    pick = _still(store, pick.id, slug)  # read again: the owner's toggles during the look are kept
     proposal = {
         **pick.proposal, "mode": "dropin", "owner_mode": "dropin", "hook": hook, "concept": look["what_happens"],
         "analysis": card,
@@ -710,11 +887,15 @@ def _process(
             "window": window, "crop_x": crop_x, "star": look["star"], "classic": look["classic"],
             "part": look["suggested_part"], "gadgets": look["gadgets"], "hooks": look["hooks"], "hook": hook,
             "deconstruct": look, "music": MUSIC, "seconds": window["length_s"], "credits": credits, "preview_path": preview,
+            "recommended": recommended, "avoid": avoid,
         },
     }
     proposal["drop"] = {k: v for k, v in proposal["drop"].items() if v is not None or k in ("reason", "crop_x")}
     mark_favorite(store, pick.id, pick.status, proposal=proposal, source_id=src.id)
-    return Outcome(pick.id, "ready", None, detail={"credits": credits, "window": window, "crop_x": crop_x, "preview_path": preview})
+    return Outcome(
+        pick.id, "ready", None,
+        detail={"credits": credits, "window": window, "crop_x": crop_x, "preview_path": preview, "character": slug, "recommended": recommended},
+    )
 
 
 def _preview(storage: Storage, local: Path, work: Path, pick_id: str, window: Mapping[str, float], crop_x: float | None) -> str | None:
@@ -888,11 +1069,18 @@ def _child(store: Store, storage: Storage, pick: Favorite, clip: Clip, now: date
     """The trimmed (and cropped, and big enough) section Genjutsu is given, made once per clip."""
     if clip.source_id:
         return _source(store, clip.source_id)
-    eff = effective(drop_of(pick))
+    drop = drop_of(pick)
+    eff = effective(drop)
     child = sources.trim_source(
-        store, storage, drop_of(pick)["source_id"], eff["start_s"], eff["length_s"], crop_x=eff["crop_x"],
+        store, storage, drop["source_id"], eff["start_s"], eff["length_s"], crop_x=eff["crop_x"],
         min_pixels=clipwork.OBJECT_SWAP_MIN_PIXELS,
     )
+    if "avoid" in drop:  # the section is judged, not the clip: the cut carries its own text and watermark flags
+        seen = {x["what"] for x in drop["avoid"] if overlaps(eff["start_s"], eff["length_s"], x)}
+        child = sources.record_checks(
+            store, child.id, has_watermark="watermark" in seen, has_overlay="text" in seen,
+            other_people=child.other_people or 0, has_minors=bool(child.has_minors),
+        )
     clips.set_source(store, clip.id, child.id)
     return child
 
@@ -1241,7 +1429,13 @@ def _finish(outcome: Outcome) -> None:
 
 @app.command("add")
 def add_command(
-    character_slug: Annotated[str, typer.Option("--character", help="A character slug (the folder name in characters/, e.g. franz).")],
+    character_slug: Annotated[
+        str | None,
+        typer.Option(
+            "--character",
+            help="A character slug (the folder name in characters/, e.g. franz); left out, the studio recommends one after the check.",
+        ),
+    ] = None,
     link: Annotated[str | None, typer.Option("--link", help="A full TikTok / Instagram Reel / YouTube link (else a file drop).")] = None,
     own_footage: Annotated[
         bool, typer.Option("--own-footage", help="The owner's own recording or footage used with permission (default: a downloaded clip).")
@@ -1250,7 +1444,8 @@ def add_command(
         Path | None, typer.Option("--file", help="A saved video on this Mac: uploaded and attached as the terminal does (else a link or an empty file drop).")
     ] = None,
 ) -> None:
-    """File a drop like the terminal does (a link, a saved video with --file, or a file drop waiting for its upload)."""
+    """File a drop like the terminal does (a link, a saved video with --file, or a file drop waiting for its upload); without
+    --character the studio recommends the character (Gemini, free) and moves the drop to him."""
     if file is not None and link is not None:
         fail("give --link or --file, not both")
     store = open_store()
@@ -1259,7 +1454,10 @@ def add_command(
         path = attach_file(store, open_storage(), pick.id, file) if file is not None else None
     except (ValueError, DropError) as e:
         fail(str(e))
-    emit({"pick_id": pick.id, "duplicate": duplicate, "owner_clip_path": path, "drop": pick.proposal.get("drop")})
+    emit({
+        "pick_id": pick.id, "duplicate": duplicate, "character": pick.character_slug, "owner_clip_path": path,
+        "drop": pick.proposal.get("drop"),
+    })
 
 
 @app.command("process")
