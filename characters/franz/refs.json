@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references for Franz (the one dachshund, owner decision C5 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/franz/bible.md. ODD EYES (owner 2026-10-06, the studio signature): his RIGHT eye ice-blue, his LEFT eye amber, in the master, the sheets and the close-up. Masters end on the dance: closeup is the head-and-shoulders identity reference only (no eye close-up end beat), so closeup_center / blue_eye_xy stay null. masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"; odd-eyes versions 2026-10-06): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). element_id is the Higgsfield Element (<<<id>>> inside params.prompt, never in medias); voice_id is the Alistair preset (approved by the owner 2026-10-06). accounts stays empty until the owner creates or renames the account (social.md suggests renaming Instagram biscuit.moves).",
+  "_doc": "Identity-lock references for Franz (the one dachshund, owner decision C5 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/franz/bible.md. ODD EYES (owner 2026-10-06, the studio signature): his RIGHT eye ice-blue, his LEFT eye amber, in the master, the sheets and the close-up. Masters end on the dance: closeup is the head-and-shoulders identity reference only (no eye close-up end beat), so closeup_center / blue_eye_xy stay null. masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"; odd-eyes versions 2026-10-06): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). element_id is the Higgsfield Element (<<<id>>> inside params.prompt, never in medias); voice_id is the Alistair preset (approved by the owner 2026-10-06). accounts: Instagram biscuit.moves was renamed franz.unimpressed on 2026-10-06 (franz.dachshund was taken); it keeps biscuit.moves' Postiz connection.",
   "slug": "franz",
   "name": "Franz",
   "status": "designing",
@@ -97,5 +97,20 @@
       "climbing a stair successfully"
     ]
   },
-  "accounts": []
+  "accounts": [
+    {
+      "platform": "tiktok",
+      "handle": null,
+      "planned_handle": "@franz.unimpressed",
+      "postiz_integration_id": null,
+      "dropin_share": 1.0
+    },
+    {
+      "platform": "instagram",
+      "handle": "franz.unimpressed",
+      "planned_handle": "franz.unimpressed",
+      "postiz_integration_id": "cmuv24qx600brql0yuylht0gj",
+      "dropin_share": 1.0
+    }
+  ]
 }

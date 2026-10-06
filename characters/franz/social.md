@@ -2,7 +2,7 @@
 
 The owner creates or renames the accounts (Claude never creates accounts). The account rules of `docs/launch/social-pages.md` apply: a **Creator** account, not Business; the same handle on TikTok and Instagram; the AI label on (TikTok "AI-generated content", Instagram "AI info"); 2-factor on; connect to Postiz.
 
-## Take over Instagram `biscuit.moves` (suggested)
+## Instagram: `biscuit.moves` became `franz.unimpressed` (done 2026-10-06; `franz.dachshund` was taken)
 Biscuit is retired (C5) and `biscuit.moves` is a live, Postiz-connected Instagram account. Renaming keeps its followers and its Postiz connection.
 1. In the Instagram app: Edit profile → Username → `franz.dachshund`; then the name, bio and picture below. (Instagram lets you change back within 14 days.)
 2. Decide first whether Biscuit's Single Ladies video, still in the Queue, posts before the rename or is dropped.
@@ -14,7 +14,7 @@ Biscuit is retired (C5) and `biscuit.moves` is a live, Postiz-connected Instagra
 3. `lord.franz`
 
 ## Display name (with a search keyword)
-**Franz · Posh Dachshund 👑** (the name field is searchable: "dachshund" is his top keyword).
+**Franz · Posh Sausage 👑** (owner 2026-10-06: "funnier"; live on Instagram). The name field is searchable, so "dachshund" now rides in the captions' search titles ("· dachshund edition") instead.
 
 ## Bio
 - **Instagram (106 of 150 characters):**

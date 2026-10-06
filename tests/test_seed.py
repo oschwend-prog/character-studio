@@ -387,8 +387,10 @@ def test_the_shipped_refs_carry_the_character_sheets_the_owner_made():
 def test_the_shipped_refs_keep_the_real_live_accounts():
     """The live handles and Postiz ids are the owner's real values: a change to the shares or traits must not touch them."""
     by = {r["slug"]: {a["platform"]: a for a in r["accounts"]} for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
-    assert by["biscuit"]["instagram"]["handle"] == "biscuit.moves"
-    assert by["biscuit"]["instagram"]["postiz_integration_id"] == "cmuv24qx600brql0yuylht0gj"
+    # 2026-10-06: Instagram biscuit.moves was renamed franz.unimpressed and its Postiz connection moved to Franz
+    assert by["franz"]["instagram"]["handle"] == "franz.unimpressed"
+    assert by["franz"]["instagram"]["postiz_integration_id"] == "cmuv24qx600brql0yuylht0gj"
+    assert by["biscuit"]["instagram"]["handle"] == "biscuit.moves" and by["biscuit"]["instagram"]["postiz_integration_id"] is None
     assert by["reginald"]["instagram"]["handle"] == "reginald.thebutler"
     assert by["reginald"]["instagram"]["postiz_integration_id"] == "cmuv2mx9s00kxql0y8k92piif"
     assert by["biscuit"]["tiktok"]["handle"] is None and by["reginald"]["tiktok"]["handle"] is None
@@ -426,7 +428,8 @@ def test_seeding_the_shipped_refs_creates_the_roster_and_exactly_the_accounts_th
     report = seed.seed_characters(store, seed.DEFAULT_CHARACTERS_DIR)
     assert [c.slug for c in store.characters()] == ["biscuit", "franz", "lenny", "reginald"]
     assert {(a.character_slug, a.platform.value) for a in store.accounts()} == with_handle
-    assert len(store.accounts()) + len(report.skipped) == 4  # every account is either seeded or reported as not there yet
+    total = sum(len(r["accounts"]) for r in refs_)
+    assert len(store.accounts()) + len(report.skipped) == total  # every account is either seeded or reported as not there yet
 
 
 # ---- CLI: seed + seed status -----------------------------------------------------------------

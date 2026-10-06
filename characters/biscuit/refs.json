@@ -45,6 +45,6 @@
   },
   "accounts": [
     {"platform": "tiktok", "handle": null, "planned_handle": "@biscuit.moves", "postiz_integration_id": null, "dropin_share": 1.00},
-    {"platform": "instagram", "handle": "biscuit.moves", "planned_handle": "biscuit.moves", "postiz_integration_id": "cmuv24qx600brql0yuylht0gj", "dropin_share": 1.00}
+    {"platform": "instagram", "handle": "biscuit.moves", "planned_handle": "biscuit.moves", "postiz_integration_id": null, "dropin_share": 1.00}
   ]
 }
