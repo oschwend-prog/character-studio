@@ -58,7 +58,9 @@ export function Works() {
           <section key={g.slug ?? 'none'} className={`pick-sec ${g.slug ?? 'none'}`} data-char={g.slug ?? 'none'} aria-labelledby={`works-${g.slug ?? 'none'}`}>
             <header className="pick-sec-head">
               {g.slug ? <Avatar slug={g.slug} name={g.name} size={40} /> : <Livery slug={null} />}
-              <h2 className="h2" id={`works-${g.slug ?? 'none'}`}>{g.name}</h2>
+              <h2 className="h2" id={`works-${g.slug ?? 'none'}`}>
+                {g.slug ? <a className="name-link" href={href('artist', g.slug)}>{g.name}</a> : g.name}
+              </h2>
               <span className="stage-count num on" aria-label={`${g.rows.length} in the works`}>{g.rows.length}</span>
             </header>
             <div className="picks-grid stack" style={{ gap: 12 }}>

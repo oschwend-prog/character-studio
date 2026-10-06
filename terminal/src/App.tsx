@@ -5,11 +5,12 @@ import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Mark } from './components/ui';
 import { londonDate, londonTime } from './lib/format';
 import { TABS as TAB_SPECS } from './lib/tabs';
-import { href, useNow, useRoute, type Route } from './lib/hooks';
+import { href, useNow, useRoute, type Route, type TabRoute } from './lib/hooks';
 import { StudioProvider, useStudio } from './lib/store';
 import type { Backend } from './lib/types';
 import { LiveBackend, hasLiveConfig, isSchemaNotExposed, supabase } from './lib/supabase';
 import { Login, SetupNeeded } from './Login';
+import { Artist } from './pages/Artist';
 import { Budget } from './pages/Budget';
 import { Channels } from './pages/Channels';
 import { Library } from './pages/Library';
@@ -99,7 +100,7 @@ function LiveGate({ children }: { children: React.ReactNode }) {
 }
 
 // The order, the labels and the "later" mark live in lib/tabs.ts (owner 2026-10-06: In the works first, the viral scan last).
-const ICONS: Record<Route, ComponentType<{ 'aria-hidden'?: boolean }>> = {
+const ICONS: Record<TabRoute, ComponentType<{ 'aria-hidden'?: boolean }>> = {
   works: Clapperboard, today: Clock3, queue: ListChecks, channels: Users, library: LibraryIcon, budget: Gauge, picks: Flame,
 };
 const TABS = TAB_SPECS.map((t) => ({ ...t, Icon: ICONS[t.route] }));
@@ -145,10 +146,11 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
         {route === 'channels' && <Channels />}
         {route === 'library' && <Library focus={param} />}
         {route === 'budget' && <Budget account={account} />}
+        {route === 'artist' && <Artist slug={param} />}
       </main>
       <nav className="tabbar" aria-label="Sections">
         {TABS.map(({ route: r, label, Icon, later }) => (
-          <a key={r} className="tab" href={href(r)} aria-current={route === r ? 'page' : undefined}>
+          <a key={r} className="tab" href={href(r)} aria-current={route === r || (route === 'artist' && r === 'channels') ? 'page' : undefined}>
             <Icon aria-hidden />
             {label}
             {later && (

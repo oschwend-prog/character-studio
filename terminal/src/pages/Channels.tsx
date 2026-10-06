@@ -59,14 +59,21 @@ function CharacterSection({ character: c }: { character: Character }) {
   return (
     <section className="char section" aria-labelledby={titleId}>
       <div className="char-head">
-        <Avatar slug={c.slug} name={c.name} size={56} />
+        <a href={href('artist', c.slug)} aria-label={`${c.name}’s page`} tabIndex={-1}>
+          <Avatar slug={c.slug} name={c.name} size={56} />
+        </a>
         <div className="who">
           <h2 className="h1" id={titleId} style={{ fontSize: 22 }}>
-            {c.name}
+            <a className="name-link" href={href('artist', c.slug)}>
+              {c.name}
+            </a>
           </h2>
           <span className="char-meta">
             <Livery slug={c.slug} />
             <span className={`tag ${STATUS_TAG[c.status] ?? ''}`}>{c.status}</span>
+            <a className="link" href={href('artist', c.slug)}>
+              His page <ChevronRight size={14} aria-hidden="true" />
+            </a>
           </span>
         </div>
       </div>

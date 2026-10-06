@@ -608,7 +608,8 @@ describe('the tab bar (owner 2026-10-06: the drops first, the viral scan later)'
     expect(TABS[0]).toEqual({ route: 'works', label: 'In the works' });
     expect(TABS[TABS.length - 1]).toEqual({ route: 'picks', label: 'Scan', later: true });
     expect(TABS.filter((t) => t.later).map((t) => t.route)).toEqual(['picks']);
-    expect(new Set(TABS.map((t) => t.route))).toEqual(new Set(ROUTES)); // nothing removed: the Long list and every page stay
+    // nothing removed: the Long list and every page stay; the artist page (#/artist/<slug>) is the one route without a tab
+    expect(new Set(TABS.map((t) => t.route))).toEqual(new Set(ROUTES.filter((r) => r !== 'artist')));
     expect(TABS.map((t) => t.label)).toEqual(['In the works', 'Today', 'Queue', 'Characters', 'Library', 'Budget', 'Scan']);
   });
 });

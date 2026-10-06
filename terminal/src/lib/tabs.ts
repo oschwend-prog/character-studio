@@ -2,10 +2,10 @@
 // characters; the viral search engine takes over slowly later." In the works (the drops) is first and where the app opens
 // (hooks.ts HOME); the viral Picks page is "Scan", last, marked "later". Every page is as it was: only the order, that label and
 // the default route changed.
-import type { Route } from './hooks';
+import type { TabRoute } from './hooks';
 
 export interface TabSpec {
-  route: Route;
+  route: TabRoute;
   label: string;
   /** Shown with a small muted "later" mark instead of a count. */
   later?: boolean;

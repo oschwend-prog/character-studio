@@ -887,3 +887,12 @@ a.ll-title:hover { text-decoration: underline; }
 }
 .drop-footage { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .drop-footage .seg button { min-height: 32px; font-size: 12.5px; }
+
+/* ---- the artist page (#/artist/<slug>): his sheets framed like the drop's preview strip; the catchphrase ---------------- */
+.artist-sheet { display: block; border-radius: var(--r); overflow: hidden; background: var(--board); box-shadow: inset 0 0 0 1px var(--rule); }
+.artist-sheet img { display: block; width: 100%; height: auto; }
+.artist-sheet.spec { max-height: 520px; }
+.artist-quote { margin: 0; font-size: 22px; font-weight: 640; font-stretch: 80%; line-height: 1.2; overflow-wrap: anywhere; }
+/* a character's name as the link to his page (Characters, In the works, Scan): the heading's own colour, a quiet underline */
+.name-link { color: inherit; text-decoration-color: var(--rule-strong); }
+.name-link:hover { text-decoration-color: currentColor; }

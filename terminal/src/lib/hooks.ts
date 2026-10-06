@@ -11,12 +11,14 @@ export function useNow(ms = 15_000): number {
   return now;
 }
 
-export type Route = 'today' | 'picks' | 'works' | 'queue' | 'channels' | 'library' | 'budget';
-export const ROUTES: Route[] = ['works', 'today', 'queue', 'channels', 'library', 'budget', 'picks'];
+export type Route = 'today' | 'picks' | 'works' | 'queue' | 'channels' | 'library' | 'budget' | 'artist';
+/** The routes with a tab; `artist` (`#/artist/<slug>`, a character's page) is reached from the Characters page and his name. */
+export type TabRoute = Exclude<Route, 'artist'>;
+export const ROUTES: Route[] = ['works', 'today', 'queue', 'channels', 'library', 'budget', 'picks', 'artist'];
 /** Where the app opens (owner 2026-10-06: the channels start from the owner's own drops; the scan takes over later). */
 export const HOME: Route = 'works';
 
-/** `#/queue/<clip id>` and `#/picks?c=biscuit`: the route, its one path parameter and the query of the hash. */
+/** `#/queue/<clip id>`, `#/artist/franz` and `#/picks?c=franz`: the route, its one path parameter and the query of the hash. */
 export function parseHash(hash: string): { route: Route; param: string | null; query: string } {
   const [pathPart, ...rest] = hash.replace(/^#\/?/, '').split('?');
   const [path, param] = pathPart.split('/');

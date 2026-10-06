@@ -168,7 +168,9 @@ function CharacterPicks({ section }: { section: PickSection<Pick> }) {
     <section className={`pick-sec ${slug ?? 'none'}`} aria-labelledby={titleId} data-char={slug ?? 'none'}>
       <header className="pick-sec-head">
         {slug ? <Avatar slug={slug} name={section.name} size={40} /> : <Livery slug={null} />}
-        <h2 className="h2" id={titleId}>{section.name}</h2>
+        <h2 className="h2" id={titleId}>
+          {slug ? <a className="name-link" href={href('artist', slug)}>{section.name}</a> : section.name}
+        </h2>
         <span className="stage-count num on" aria-label={`${section.picks.length} proposed`}>{section.picks.length}</span>
         {section.picks.length > 1 && (
           <div className="seg group-by" role="group" aria-label={`Group ${section.name}'s picks by`}>
