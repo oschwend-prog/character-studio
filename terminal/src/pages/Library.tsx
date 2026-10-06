@@ -76,7 +76,13 @@ export function Library({ focus }: { focus: string | null }) {
         {rows.length === 0 && (
           <div className="empty">
             <b>No clips match</b>
-            <span className="small muted">Loosen a filter, or wait for the next daily run.</span>
+            {data.library.length > 0 ? (
+              <button type="button" className="btn primary" onClick={() => { setCharacter('all'); setPlatform('all'); setState('all'); }}>
+                Show all {data.library.length} clips
+              </button>
+            ) : (
+              <span className="small muted">Loosen a filter, or wait for the next daily run.</span>
+            )}
           </div>
         )}
         {rows.map((c) => (
