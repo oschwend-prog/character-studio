@@ -22,10 +22,10 @@ like for like (Reginald replaces a human star, Biscuit a dog or small-animal sta
   A `studio-drop` GitHub Actions workflow also runs every 2 h as a safety net for anything left pending.
 - **Process job** (free): download a pasted link with yt-dlp (cloud; a blocked link stays `waiting` and the daily run on
   the Mac retries it), probe, `source analyze` (cuts, beat, best window widened to 12-15 s inside one shot), a Gemini
-  video **deconstruct** (JSON: people, the star and where, minors, watermark/handle, burned-in text, setting, what
+  video **deconstruct** (JSON: people, the star and where and whether the star is a child, minors (recorded only), watermark/handle, burned-in text, setting, what
   happens, suggested part, gadgets from the traits card, 3 hook lines in the bible voice, a playbook caption, the
   star's horizontal centre for a crop), the like-for-like check, the price (`plan estimate` for the window), then
-  `drop.state = ready` (or `blocked` with the one-line reason: watermark → "paste the link instead", child, wrong star).
+  `drop.state = ready` (or `blocked` with the one-line reason: watermark → "paste the link instead", a child as the star, wrong star; children elsewhere in the clip are fine, owner 2026-10-06).
 - **Make job** (paid, only after Make it): reserve credits (`budget reserve`, cap + kill switch respected), trim/crop the
   window, signed URL, **Higgsfield API** `POST https://api.higgsfield.ai/higgsfield/genjutsu/object-swap/v1.0`
   (`video_url`, `image_urls` = the character's master + sheet (+ close-up) public URLs from refs.json, a SHORT prompt

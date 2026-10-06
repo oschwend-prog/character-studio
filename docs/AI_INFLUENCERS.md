@@ -40,6 +40,8 @@
 - The masters of Franz, Lenny and Reginald are upscaled to 2K (identity unchanged); the Borat-type's was already 2K.
 - Borat-type: the look stays as it is (owner accepts the likeness risk; he skips LaunchPoint). Name still open: it must be
   our own, not one letter from the film character's name and not a real nationality's surname (C7).
+- Children are fine in a clip (crowds, families, spectators); only the star our character replaces must be an adult, which is
+  also the like-for-like rule. Still rejected: sexualised content, and a child as the star or main subject.
 
 Still open: C6 (posh British twice: Franz and Reginald), C8 (one universe, ODD EYES, or standalone), C10 (rhythm), C11 (voice in the studio), C12 (shared credits).
 

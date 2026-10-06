@@ -40,7 +40,7 @@ benchmark, "best practice" or community number replaces them, before or after se
   by the owner in the Instagram app, never by us.
 - Original characters only: no celebrity likeness, no real nationality or ethnic stereotype, real brands
   only as unnamed style references (never named in prompts, captions or on screen).
-- No child visible in any clip.
+- The star we replace is always an adult; children elsewhere in a clip are fine.
 - Never fabricate a metric. Numbers come from `bin/studio review data`, Postiz and the vidIQ owner insights.
 
 ## Operational defaults

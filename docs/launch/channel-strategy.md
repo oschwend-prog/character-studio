@@ -17,7 +17,7 @@ Session 2026-10-04 (evening). Built on `docs/research/2026-10-04-niche-playbook.
 
 ## 2. Content mix per channel
 
-**Viral mode (owner 2026-10-05: "Drop-in is the default for every video"):** every video is a Drop-in when a usable clip exists (a Higgsfield Genjutsu gallery clip, or a file the owner attaches in the terminal), else an automatic Recreate. Shares are 1.00 per account (no cap; the Instagram guard still cuts an account to 0.20 on a reach drop). Guardrails (spec §4.4b amendment): no watermark or other creator's handle, no burned-in overlay, no children, the real star always replaced; background people and famous clips are fine. The daily run files 2-4 gallery clips per character as backup picks, and the terminal lists real viral clips first, ranked by score, the gallery last.
+**Viral mode (owner 2026-10-05: "Drop-in is the default for every video"):** every video is a Drop-in when a usable clip exists (a Higgsfield Genjutsu gallery clip, or a file the owner attaches in the terminal), else an automatic Recreate. Shares are 1.00 per account (no cap; the Instagram guard still cuts an account to 0.20 on a reach drop). Guardrails (spec §4.4b amendment): no watermark or other creator's handle, no burned-in overlay, the star we replace an adult (children elsewhere in the clip are fine, owner 2026-10-06), the real star always replaced; background people and famous clips are fine. The daily run files 2-4 gallery clips per character as backup picks, and the terminal lists real viral clips first, ranked by score, the gallery last.
 
 **Format portfolio (weekly, per channel):** 60% proven · 30% challenger · 10% wild-card (playbook §5.3). In weeks 1–2 everything is a challenger — the point is to learn.
 
