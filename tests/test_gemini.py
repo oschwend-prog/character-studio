@@ -17,6 +17,7 @@ import pytest
 from studio import gemini
 from studio.gemini import (
     BUSY_WAITS_S,
+    FALLBACK_MODELS,
     DEFAULT_MODEL,
     Character,
     GeminiBlocked,
@@ -193,16 +194,30 @@ def test_a_busy_model_is_asked_again_after_a_wait(clip):
     c = GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append)
     assert deconstruct(c, clip, REGINALD)["caption"]["title"] == GOOD["caption"]["title"]
     assert waits == list(BUSY_WAITS_S[:2])
-    fake = Fake(*[(503, "high demand")] * (len(BUSY_WAITS_S) + 1))
+    models = 1 + len(FALLBACK_MODELS)
+    fake = Fake(*[(503, "high demand")] * ((len(BUSY_WAITS_S) + 1) * models))
     waits.clear()
     with pytest.raises(GeminiError) as info:
         deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
-    assert info.value.status == 503 and waits == list(BUSY_WAITS_S)
-    assert len(fake.requests) == len(BUSY_WAITS_S) + 1
+    assert info.value.status == 503 and waits == list(BUSY_WAITS_S) * models  # every model gets its own waits
+    assert len(fake.requests) == (len(BUSY_WAITS_S) + 1) * models
     fake = Fake((400, "bad request"))
     with pytest.raises(GeminiError):
         deconstruct(client(fake), clip, REGINALD)
     assert len(fake.requests) == 1
+
+
+def test_a_model_that_stays_busy_hands_over_to_the_fallbacks_in_turn(clip):
+    busy = [(503, "high demand")] * (len(BUSY_WAITS_S) + 1)
+    fake = Fake(*busy, (404, "no such model"), (200, answer(GOOD)))
+    out = deconstruct(client(fake), clip, REGINALD)
+    assert out["caption"]["title"] == GOOD["caption"]["title"]
+    models = [r.url.path.split("/models/")[1].split(":")[0] for r in fake.requests]
+    assert models == [DEFAULT_MODEL] * len(busy) + list(FALLBACK_MODELS)
+    fake = Fake(*busy, *busy, *busy)  # everyone busy: the first busy answer is what fails
+    with pytest.raises(GeminiError) as info:
+        deconstruct(client(fake), clip, REGINALD)
+    assert info.value.status == 503 and len(fake.requests) == len(busy) * (1 + len(FALLBACK_MODELS))
 
 
 def test_a_big_file_goes_through_the_files_api_and_is_deleted_afterwards(clip, monkeypatch):

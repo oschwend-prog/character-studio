@@ -44,6 +44,8 @@ _TIMEOUT = httpx.Timeout(180.0, connect=15.0)
 _BODY_CHARS = 300
 BUSY_STATUSES = frozenset({429, 500, 502, 503, 504})  # "busy, try later": asked again after a wait, never a 4xx refusal
 BUSY_WAITS_S = (5.0, 15.0, 45.0)  # the first live drop (2026-10-06) stopped on one 503 "high demand"
+FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.5-flash")  # asked in turn when the model stays busy (stable Flash ids, 2026-10-06)
+FALLBACK_SKIP_STATUSES = frozenset({400, 404})  # a fallback that does not take this request: the next one is asked
 
 STAR_KINDS = ("person", "dog", "animal", "none")
 BODIES = ("biped", "quadruped")
@@ -231,11 +233,23 @@ class GeminiClient:
             "contents": [{"role": "user", "parts": [part, {"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": dict(schema), "temperature": 0.4},
         }
-        response = self._call(
-            "POST", f"{API_ROOT}/v1beta/models/{self.model}:generateContent",
-            headers={**self._headers(), "Content-Type": "application/json"}, json=body,
-        )
-        return parse_answer(_json_object(response, "generateContent"))
+        busy: GeminiError | None = None
+        for model in (self.model, *(m for m in FALLBACK_MODELS if m != self.model)):
+            try:
+                response = self._call(
+                    "POST", f"{API_ROOT}/v1beta/models/{model}:generateContent",
+                    headers={**self._headers(), "Content-Type": "application/json"}, json=body,
+                )
+            except GeminiError as e:
+                if busy is None and e.status in BUSY_STATUSES:
+                    busy = e  # the chosen model stayed busy through every wait: the fallbacks are asked in turn
+                    continue
+                if busy is not None and (e.status in BUSY_STATUSES or e.status in FALLBACK_SKIP_STATUSES):
+                    continue
+                raise
+            return parse_answer(_json_object(response, "generateContent"))
+        assert busy is not None
+        raise busy
 
 
 def _json_object(response: httpx.Response, what: str) -> dict[str, Any]:
