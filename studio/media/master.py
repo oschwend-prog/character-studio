@@ -101,7 +101,8 @@ WIDTH, HEIGHT = 1080, 1920
 FPS = 30
 ZOOM_HIT_SECONDS = 0.25
 TITLE_CARD_SECONDS = 0.6
-TEXT_POP_Y = 1180
+TEXT_POP_Y = 1080  # just above the studio pill (overlays.PILL_Y 1300): a pop never covers the hook
+TITLE_CARD_Y = 1080  # the title band, also above the pill (both can show in the first 0.6 s)
 TEXT_POP_SIZE = 110
 SPARKLE_PX = 280  # the 320 px sparkle PNG is shown at this size on the outro
 BEAT_FADE_SECONDS = 0.4
@@ -544,7 +545,7 @@ def build_master(spec: MasterSpec) -> Path:
         # Overlays: every window is on the finished timeline.
         shown: list[Overlay] = []
         for i, card in enumerate(e for e in items if isinstance(e, TitleCard)):
-            shown.append(_boxed(overlays.title_png(card.text, work / f"title{i}.png"), 0.0, TITLE_CARD_SECONDS))
+            shown.append(_boxed(overlays.title_png(card.text, work / f"title{i}.png", y=TITLE_CARD_Y), 0.0, TITLE_CARD_SECONDS))
         if closeup and any(line.strip() for line in spec.hook1):
             shown.append(_boxed(overlays.pill_png(spec.hook1, work / "hook1.png"), 0.0, intro_len))
         if any(line.strip() for line in spec.hook2):

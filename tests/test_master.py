@@ -151,6 +151,14 @@ def test_a_long_hook_wraps_to_two_lines_and_a_low_pill_moves_up_out_of_the_butto
         overlays.pill_png(["  "], tmp_path / "x.png")
 
 
+def test_the_text_pop_and_the_title_band_never_reach_the_studio_pill(tmp_path):
+    from studio.media import master
+    pill_top = Image.open(overlays.pill_png(["one", "two"], tmp_path / "p.png")).getchannel("A").getbbox()[1]
+    pop = Image.open(overlays.hook_png(["WOW"], tmp_path / "pop.png", y=master.TEXT_POP_Y, size=master.TEXT_POP_SIZE))
+    title = Image.open(overlays.title_png("TEA TIME", tmp_path / "t.png", y=master.TITLE_CARD_Y))
+    assert pop.getchannel("A").getbbox()[3] < pill_top and title.getchannel("A").getbbox()[3] < pill_top
+
+
 def test_hook_png_rejects_empty_text(tmp_path):
     with pytest.raises(ValueError):
         overlays.hook_png([], tmp_path / "x.png")
@@ -393,8 +401,8 @@ def test_mix_cuts_the_beat_from_the_offset_and_fades_it_out(tmp_path):
 
 # ---- the master timeline -----------------------------------------------------------------------
 
-POP_BOX = (0, 1150, 1080, 1500)  # where a text_pop lands (the hook text sits at y=350)
-TITLE_BOX = (0, 1200, 1080, 1600)  # the title band
+POP_BOX = (0, 1080, 1080, 1240)  # where a text_pop lands: above the studio pill (y >= 1300), which holds the hook
+TITLE_BOX = (0, 1000, 1080, 1160)  # the title band, also above the pill
 
 
 def test_master_meets_spec(tmp_path, synth_video):
