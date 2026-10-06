@@ -21,8 +21,17 @@
   - The system's own automated sourcing keeps to `yt-dlp` and owner uploads: no third-party download sites inside the automation, which would mean downloading from untrusted sources.
   - Clips saved with the Instagram or TikTok app carry a watermark. The free check catches it.
 - **C9: publishing.** "Our social media manager" will handle hosting, captions and timing later. The focus now is on getting the videos made.
+- **C5: one dachshund, Franz.** Biscuit is retired. His finished Single Ladies video stays in the Queue for Olivier to post or drop. The studio swaps Franz in wherever a dog is the star.
+- **C7: the Borat-type is from an invented country** (e.g. "the Republic of Gorvania": invented customs, accent and name). All the clueless charm, no real nationality mocked, and it's ownable IP. It **replaces the Outsider** (the 1852 Victorian), which is retired.
 
-Still open: C5 (two dachshunds), C6, C7 (Borat-type), C8 (one universe), C10 (rhythm), C11 (voice), C12 (shared credits).
+**The roster from 2026-10-06:**
+- **Franz:** the dog.
+- **Reginald:** the butler.
+- **Lenny Gold:** the agent.
+- **The Borat-type:** to design and name.
+- **The Singer:** stays a later concept.
+
+Still open: C6 (posh British twice: Franz and Reginald), C8 (one universe, ODD EYES, or standalone), C10 (rhythm), C11 (voice in the studio), C12 (shared credits).
 
 
 | # | Topic | Brief (B) says | Repo (A) does today | Decision needed |
@@ -50,13 +59,13 @@ Smaller differences, no decision needed (both are kept):
 
 | Character | Strand | Archetype | Status | Details |
 |---|---|---|---|---|
-| **Biscuit** | A (ODD EYES) | Cute cream mini dachshund who out-dances you; baby-blue tracksuit, odd eyes | Live in the studio; first video (Single Ladies) in the Queue | [characters/biscuit/bible.md](../characters/biscuit/bible.md), `refs.json` |
+| ~~Biscuit~~ | A (ODD EYES) | Cute cream mini dachshund; **retired 2026-10-06** (one dachshund: Franz) | Single Ladies video in the Queue (owner to post or drop) | [characters/biscuit/bible.md](../characters/biscuit/bible.md), `refs.json` |
 | **Reginald "the Quiff"** | A (ODD EYES) | Stone-faced 74-year-old English butler, flawless deadpan dancer | Live in the studio; first video (Wednesday) in the Queue | [characters/reginald/bible.md](../characters/reginald/bible.md), `refs.json` |
-| **The Outsider** | A | 1852 Victorian gentleman lost in 2026 London (talking lane) | Concept; waits on the voice pipeline | [roadmap.md](roadmap.md) |
+| ~~The Outsider~~ | A | 1852 Victorian gentleman; **retired 2026-10-06**, replaced by the Borat-type | n/a | [roadmap.md](roadmap.md) |
 | **The Singer** | A | Lip-syncs the greatest classics in the car, shower, while running (licensed in-app songs) | Concept | [roadmap.md](roadmap.md) |
 | **Lenny Gold** | B | Manic Hollywood super-agent | Complete; first full clip done | §3.1 |
 | **Franz** | B | Aristocratic mini dachshund, permanently unimpressed | Look complete, voice in test | §3.2 |
-| **Borat-type** | B | Clueless foreign correspondent | Not started (see C7) | §3.3 |
+| **Borat-type** | B | Clueless correspondent from an **invented country** (C7 decided) | To design and name | §3.3 |
 
 ---
 
