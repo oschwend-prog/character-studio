@@ -25,6 +25,7 @@ on TikTok + Instagram Reels, with a terminal to approve, track spend and see res
 - KPI bars are binding and must not be renegotiated after seeing data (see plan header).
 
 ## Where things live
+- **AI-influencer master (single source of truth for the whole roster, both strands):** `docs/AI_INFLUENCERS.md` (ODD EYES: Biscuit, Reginald, Outsider, Singer + the claude.ai/Higgsfield strand: Lenny Gold, Franz, Borat-type). Read it first; its section 1 lists OPEN CONFLICTS between the strands (footage, recast method, downloading, the two dachshunds, the Borat-type, one universe, publishing, rhythm, credits): they are the owner's to decide, and until he does the rules below stay as they are. The original claude.ai brief is kept verbatim in `docs/influencers/`.
 - Spec: `docs/superpowers/specs/2026-10-04-character-studio-design.md`; plan: `docs/superpowers/plans/2026-10-04-character-studio-slice1.md` (Global Constraints + Review Focus at the top).
 - Character bibles: `characters/<name>/bible.md`. Strategy: `docs/launch/`, `docs/research/`, `docs/spike/`.
 - Scan settings: `config/scan.json`. Avatars: `assets/avatars/`.
