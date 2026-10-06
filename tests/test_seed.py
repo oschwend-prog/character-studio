@@ -363,8 +363,10 @@ def test_the_shipped_refs_files_load_and_match_the_brief():
     assert (b["closeup_center"], b["blue_eye_xy"], b["bodies"]) == ([584, 738], [251, 559], ["biped", "quadruped"])
     # owner 2026-10-06: the exaggerated gpt_image_2_5 canon, upscaled to 2K (4fb61254 = upscale of 42772b6a)
     assert r["masters"]["biped"] == "4fb61254-cc90-4393-b71d-e2f9886400ad" and r["masters"]["quadruped"] is None
-    assert r["closeup"] == "6bf83e23-8246-4b40-a747-ae4f2439bbfe" and r["bodies"] == ["biped"]
-    assert (r["closeup_center"], r["blue_eye_xy"]) == ([541, 800], [346, 968])
+    # 2026-10-06: the new head-and-shoulders close-up from the canon master (replaces 6bf83e23, the old short quiff);
+    # an identity reference only, so the eye-zoom pixel pins are gone (masters end on the dance, closeup: null)
+    assert r["closeup"] == "1afe9ed7-3bfd-463c-9595-2af133c748ba" and r["bodies"] == ["biped"]
+    assert (r["closeup_center"], r["blue_eye_xy"]) == (None, None)
     assert b["status"] == "paused"  # retired 2026-10-06 (C5: Franz is the one dachshund)
     for c in (b, r):
         assert c["status"] in ("designing", "paused")  # Reginald flips to live at go-live (Task 16)
