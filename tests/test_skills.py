@@ -411,3 +411,21 @@ def test_the_launch_phase_makes_only_the_owners_drops_and_turns_the_auto_approve
     assert body.index("## Launch phase") < body.index("## 1. Orient")  # read before anything runs
     scan = body.split("## 2. Scan", 1)[1].split("## 3. Plan", 1)[0]
     assert "5. **Launch phase: skip this step**" in scan
+
+
+def test_the_drops_by_hand_section_uses_the_cli_for_every_step_and_never_makes_without_make_it():
+    body = text("daily-run")
+    drops = body.split("## Drops (by hand", 1)[1].split("## 2. Scan", 1)[0]
+    for part in (
+        "`bin/studio drop pending --include-waiting`", "`bin/studio drop process <pick>`",
+        "`bin/studio drop process <pick> --deconstruct-file renders/tmp/d.json`", "`DECONSTRUCT_SCHEMA` in `studio/gemini.py`",
+        "`bin/studio drop make <pick> --prepare`", "`bin/studio drop make <pick> --generated-file renders/<clip id>/gen.mp4 --credits N`",
+        "`bin/studio drop make <pick> --generated-file renders/<clip id>/gen.mp4 --qa-file renders/<clip id>/qa.json`",
+        "`hf_mult_replace_object`", "`use_unlim: false`", "only drops the owner sent with Make it", "never `fav mark` or `fav decide` it",
+        "find the job (`show_generations`) before submitting again",
+    ):  # fmt: skip
+        assert part in drops, part
+    from studio import gemini
+
+    for key in gemini.DECONSTRUCT_SCHEMA["required"]:  # the shape the run writes by hand names every field the CLI checks
+        assert key in drops, key
