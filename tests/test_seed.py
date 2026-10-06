@@ -361,7 +361,8 @@ def test_the_shipped_refs_files_load_and_match_the_brief():
     b, r = loaded["biscuit"], loaded["reginald"]
     assert b["masters"] == BISCUIT["masters"] and b["closeup"] == BISCUIT["closeup"]
     assert (b["closeup_center"], b["blue_eye_xy"], b["bodies"]) == ([584, 738], [251, 559], ["biped", "quadruped"])
-    assert r["masters"]["biped"] == REGINALD["masters"]["biped"] and r["masters"]["quadruped"] is None
+    # owner 2026-10-06: the exaggerated gpt_image_2_5 canon, upscaled to 2K (4fb61254 = upscale of 42772b6a)
+    assert r["masters"]["biped"] == "4fb61254-cc90-4393-b71d-e2f9886400ad" and r["masters"]["quadruped"] is None
     assert r["closeup"] == "6bf83e23-8246-4b40-a747-ae4f2439bbfe" and r["bodies"] == ["biped"]
     assert (r["closeup_center"], r["blue_eye_xy"]) == ([541, 800], [346, 968])
     for c in (b, r):
@@ -377,7 +378,7 @@ def test_the_shipped_refs_files_load_and_match_the_brief():
 def test_the_shipped_refs_carry_the_character_sheets_the_owner_made():
     by = {r["slug"]: r["sheets"] for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
     assert by["biscuit"] == SHEETS
-    assert by["reginald"] == {"biped": "a0216125-21c8-4f56-a79e-14a3388bdd85"}
+    assert by["reginald"] == {"biped": "44af3625-5f3e-47c4-bf62-f723cf8fbe24"}  # the canon turnaround, 2026-10-06
 
 
 def test_the_shipped_refs_keep_the_real_live_accounts():

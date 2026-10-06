@@ -1,6 +1,6 @@
 # Franz — character bible
 
-**Status:** designing. Owner decision C5 (2026-10-06): Franz is the ONE dachshund; Biscuit is retired. Voice in test. Owner 2026-10-06: **the exaggerated look is canon** ("always go for exaggerated 2"): the extra-long sausage body and the tiny gold crown. Owner 2026-10-06 ("yes, do all"): **GPT Image 2.5 is the model for every character image**; canon master `8781919e`, final sheets `86359d05` (turnaround) and `7c13a0d0` (expressions).
+**Status:** designing. Owner decision C5 (2026-10-06): Franz is the ONE dachshund; Biscuit is retired. Voice: Alistair (approved by the owner 2026-10-06). Owner 2026-10-06: **the exaggerated look is canon** ("always go for exaggerated 2"): the extra-long sausage body and the tiny gold crown. Owner 2026-10-06 ("yes, do all"): **GPT Image 2.5 is the model for every character image**; canon master `8781919e`, final sheets `86359d05` (turnaround) and `7c13a0d0` (expressions).
 **Concept:** the outraged tiny aristocrat. A cream miniature dachshund who believes he is royalty and is permanently unimpressed.
 
 ## Identity and personality (never changes)
@@ -45,12 +45,12 @@ What makes him "a Franz" at 50 feet, muted, mid-scroll:
 
 The dark eyes don't read at thumbnail size: the polo and the chin carry him. With the **sunglasses** (near-signature) he is unmistakable.
 
-## Signature move (proposed, owner to confirm)
+## Signature move (locked by the owner 2026-10-06)
 **The Chin Lift:** he stops, raises his chin, turns his head a quarter away from the lens and half-closes his eyes. One beat (about 1 s) of total disdain, then he carries on. It closes every provoked scramble. It is a gesture inside the clip, not a required ending: **masters end on the dance, with no eye close-up, glint or sting** (`CLAUDE.md`, owner 2026-10-05).
 - Alternatives: the slow sunglasses lower; the Refusal Sit (he sits down and will not continue).
 - Object swap keeps the clip's own moves, so the Chin Lift would be a 1-2 s tag (image-to-video from a still), at extra cost: decide before adding (same rule as section 4b of `docs/AI_INFLUENCERS.md`).
 
-## Catchphrase (proposed, owner to confirm)
+## Catchphrase (locked by the owner 2026-10-06)
 **"That is what people are for."** (from his own test line). Use it in the joke line or the first comment.
 - Alternative: "One does not." (short form of "One does not simply walk. One arrives.").
 
@@ -64,7 +64,7 @@ The dark eyes don't read at thumbnail size: the polo and the chin carry him. Wit
 - **Dog-anatomy guard (paste into EVERY motion prompt, Object swap and motion transfer):** "adapt the movement naturally to a real dog's body: a long low body and short legs, four paws on the ground, no human limbs, no human hands, no standing like a person, no distortion; keep him dog-sized next to people and furniture." Without it a dog came out human-sized in Biscuit's Single Ladies.
 
 ## How he talks
-- **Voice:** Higgsfield preset **Alistair**, `voice_id d9d5c263-f84e-4752-97b5-3750fcc6fd2f`, `voice_type preset`. **In test, owner to approve** (test file `hf_20261006_043131_892db83e-6d5e-4b2e-abca-ad998634b223.wav`). The model and `speech_rate` of the test were not recorded: try `seed_audio` with an integer `speech_rate` (Lenny uses 2) and note the winner here.
+- **Voice:** Higgsfield preset **Alistair**, `voice_id d9d5c263-f84e-4752-97b5-3750fcc6fd2f`, `voice_type preset`. **Approved by the owner 2026-10-06** (test file `hf_20261006_043131_892db83e-6d5e-4b2e-abca-ad998634b223.wav`). The model and `speech_rate` of the test were not recorded: try `seed_audio` with an integer `speech_rate` (Lenny uses 2) and note the winner here.
 - **Delivery onto video:** `voice_change` with the clip's job id and the Alistair voice id (about 1 minute).
 - **Tone:** plummy, posh, deadpan. Slow; every sentence is a small verdict. He never raises his voice, except one strangled "I beg your pardon" when provoked.
 - **Sample lines:**

@@ -28,7 +28,7 @@
 - **Shoes:** dark brown `#4A3426` suede penny loafers, slim, with a thin leather sole (as in the canon master and sheets; the first masters wore black cap-toe oxfords); dark socks.
 - **Jewellery:** a gold signet ring on his right hand; a yellow-gold watch with a champagne-cream dial on a gold link bracelet, left wrist (style reference: a Patek-Philippe-style gold dress watch).
 - **Paste-ready line:** "wearing a fitted navy chalk-stripe wool-silk double-breasted suit, six buttons, wide peak lapels, broad built-up shoulders, suppressed waist, slim tapered trousers with a half break; a crisp white cotton poplin spread-collar shirt with French cuffs and gold oval cufflinks; a dark burgundy grenadine silk tie with a slim gold tie bar; a white linen pocket square in a flat fold; dark brown suede penny loafers; a gold signet ring; a yellow-gold watch with a cream dial on a gold bracelet; no logos, no brand names".
-- **Known drift:** the old master sheet `93d2d266` and the dance still `05c16541` show a **plain charcoal-black** double-breasted suit (no stripe). Navy chalk-stripe is canon (owner 2026-10-06); the canon master `c6864413` and both final sheets show it clearly.
+- **Known drift:** the old master sheet `93d2d266` and the dance still `05c16541` show a **plain charcoal-black** double-breasted suit (no stripe). Navy chalk-stripe is canon (owner 2026-10-06); the canon master `c6864413` and both final sheets show it clearly. **Owner 2026-10-06: the first full clip (`f6bf6513`, charcoal suit) is remade in the chalk-stripe** (price first).
 
 **Capsule (alternate outfits, one per scene type; all ideas, no assets yet):**
 1. **Lenny: office meltdown.** Jacket off; shirtsleeves rolled twice; the tie pulled loose; burgundy `#5A1A2A` silk braces with gold clips; a phone in each hand. For "when they put me on hold" and work-rage formats.
@@ -43,12 +43,12 @@ What makes him "a Lenny" at 50 feet, muted, mid-scroll:
 - the **phone-to-ear silhouette** (elbow up);
 - the **snarl**: a flash of white teeth in a deep-tan face under a black pompadour.
 
-## Signature move (proposed, owner to confirm)
+## Signature move (locked by the owner 2026-10-06)
 **The Tie Snap:** at the collapse, he tugs his tie knot sharply with one hand, shoots both cuffs and lifts his chin. It is his locked template's own gesture ("he fixes his tie and delivers a catchphrase"), so it is a "Lenny" in every clip.
 - Alternative: hanging up and pocketing the phone without looking.
 - Object swap keeps the clip's own moves, so in a Drop-in the Tie Snap is a 1-2 s tag at extra cost: decide before adding (section 4b of `docs/AI_INFLUENCERS.md`).
 
-## Catchphrase (proposed, owner to confirm)
+## Catchphrase (locked by the owner 2026-10-06)
 **"You're welcome."** (after doing a favour; already locked in the brief). Second line: "Call my assistant." (dismissive).
 
 ## Motion

@@ -3,10 +3,10 @@
 **Status:** designing (name proposed 2026-10-04, owner to confirm). Owner 2026-10-06: **the exaggerated look is canon** ("always go for exaggerated 2"): a taller, perfectly rigid quiff and a slightly larger head, photoreal. Owner 2026-10-06 ("yes, do all"): **GPT Image 2.5 is the model for every character image**; new canon master `42772b6a`, final sheets `44af3625` (turnaround) and `1f02d943` (expressions): see "References (to merge into refs.json)".
 **Concept:** E (Deadpan Icon). Head butler. The quiff never moves.
 
-> **Owner decision needed: his age.** This bible says **mid-40s**; `docs/AI_INFLUENCERS.md` §2 says **74 years old**. Both are kept until the owner picks one. The masters and sheets show a man of about 40-50.
+> **Age (owner 2026-10-06): mid-40s**, as every image shows. `docs/AI_INFLUENCERS.md` no longer says 74.
 
 ## Identity (never changes)
-- Original fictional English butler, mid-40s (see the age decision above), short, stocky and round, rosy cheeks.
+- Original fictional English butler, mid-40s (owner 2026-10-06), short, stocky and round, rosy cheeks.
 - **Towering, immaculately sculpted, glossy black pompadour quiff — perfectly rigid. Running gag: it never moves, however hard he dances.**
 - Tiny round black spectacles; very thin pencil moustache with tiny curled tips.
 - **ODD EYES:** right eye (viewer's left) ice-blue, left eye (viewer's right) amber.
@@ -61,12 +61,12 @@ What makes him "a Reginald" at 50 feet, muted, mid-scroll (section 4b of `docs/A
 - the **white gloves**, which flash on every move;
 - up close: the round spectacles and the curled moustache. The odd eyes don't read at thumbnail size; the quiff carries him.
 
-## Signature move (proposed, owner to confirm)
+## Signature move (locked by the owner 2026-10-06)
 **The Glove Tug:** he stops dead, tugs the cuff of one white glove, then the other, gives a tiny formal bow, and stares down the lens, deadpan. About 1.5 s. It is his existing signature gesture, now a format: every clip becomes "a Reginald".
 - Alternative: the tiny formal bow alone.
 - Object swap keeps the clip's own moves, so in a Drop-in the Glove Tug is a 1-2 s tag at extra cost: decide before adding (section 4b).
 
-## Catchphrase (proposed, owner to confirm)
+## Catchphrase (locked by the owner 2026-10-06)
 **"As you were."** Use it in the joke line or the first comment.
 - Alternative: "The household is unaware."
 

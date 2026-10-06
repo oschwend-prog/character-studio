@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references for Franz (the one dachshund, owner decision C5 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/franz/bible.md. Masters end on the dance: closeup is an identity reference image only (no eye close-up end beat), so closeup_center / blue_eye_xy stay null (no ODD EYES until the owner decides C8). masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). element_id is the Higgsfield Element (<<<id>>> inside params.prompt, never in medias); voice_id is the Alistair preset (in test). accounts stays empty until the owner creates or renames the account (social.md suggests renaming Instagram biscuit.moves).",
+  "_doc": "Identity-lock references for Franz (the one dachshund, owner decision C5 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/franz/bible.md. Masters end on the dance: closeup is an identity reference image only (no eye close-up end beat), so closeup_center / blue_eye_xy stay null (no ODD EYES until the owner decides C8). masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). element_id is the Higgsfield Element (<<<id>>> inside params.prompt, never in medias); voice_id is the Alistair preset (approved by the owner 2026-10-06). accounts stays empty until the owner creates or renames the account (social.md suggests renaming Instagram biscuit.moves).",
   "slug": "franz",
   "name": "Franz",
   "status": "designing",
@@ -8,7 +8,7 @@
   ],
   "masters": {
     "biped": null,
-    "quadruped": "8781919e-93f2-4b4f-87f8-07180f22f888"
+    "quadruped": "14f5f717-f935-4202-b160-b32de67975e1"
   },
   "closeup": "5f2a9b92-1816-4f18-9d96-c88c93ca3524",
   "closeup_center": null,
@@ -18,7 +18,7 @@
     "quadruped": "86359d05-4376-4a41-ba5a-103dd3014958"
   },
   "reference_urls": {
-    "master_quadruped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_061003_8781919e-93f2-4b4f-87f8-07180f22f888.png",
+    "master_quadruped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_070927_14f5f717-f935-4202-b160-b32de67975e1.png",
     "sheet_quadruped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_062428_86359d05-4376-4a41-ba5a-103dd3014958.png",
     "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_185741_5f2a9b92-1816-4f18-9d96-c88c93ca3524.png"
   },

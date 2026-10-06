@@ -5,17 +5,17 @@
   "status": "designing",
   "bodies": ["biped"],
   "masters": {
-    "biped": "6c445225-cf07-462f-b5da-8494381e7e58",
+    "biped": "4fb61254-cc90-4393-b71d-e2f9886400ad",
     "quadruped": null
   },
   "closeup": "6bf83e23-8246-4b40-a747-ae4f2439bbfe",
   "closeup_center": [541, 800],
   "blue_eye_xy": [346, 968],
   "avatar": "assets/avatars/reginald.png",
-  "sheets": {"biped": "a0216125-21c8-4f56-a79e-14a3388bdd85"},
+  "sheets": {"biped": "44af3625-5f3e-47c4-bf62-f723cf8fbe24"},
   "reference_urls": {
-    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_103634_6c445225-cf07-462f-b5da-8494381e7e58.png",
-    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_105726_a0216125-21c8-4f56-a79e-14a3388bdd85.png",
+    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_070937_4fb61254-cc90-4393-b71d-e2f9886400ad.png",
+    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_062428_44af3625-5f3e-47c4-bf62-f723cf8fbe24.png",
     "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_104042_6bf83e23-8246-4b40-a747-ae4f2439bbfe.png"
   },
   "swap": {"noun": "butler", "stars": ["person"]},

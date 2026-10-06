@@ -21,7 +21,7 @@
   - The system's own automated sourcing keeps to `yt-dlp` and owner uploads: no third-party download sites inside the automation, which would mean downloading from untrusted sources.
   - Clips saved with the Instagram or TikTok app carry a watermark. The free check catches it.
 - **C9: publishing.** "Our social media manager" will handle hosting, captions and timing later. The focus now is on getting the videos made.
-- **C5: one dachshund, Franz.** Biscuit is retired. His finished Single Ladies video stays in the Queue for Olivier to post or drop. The studio swaps Franz in wherever a dog is the star.
+- **C5: one dachshund, Franz.** Biscuit is retired. His finished Single Ladies video stays unposted (owner 2026-10-06); `biscuit.moves` becomes Franz's account. The studio swaps Franz in wherever a dog is the star.
 - **C7: the Borat-type is from an invented country** (e.g. "the Republic of Gorvania": invented customs, accent and name). All the clueless charm, no real nationality mocked, and it's ownable IP. It **replaces the Outsider** (the 1852 Victorian), which is retired.
 
 **The roster from 2026-10-06:**
@@ -30,6 +30,16 @@
 - **Lenny Gold:** the agent.
 - **The Borat-type:** to design and name.
 - **The Singer:** stays a later concept.
+
+**Character decisions (owner, 2026-10-06):**
+- Signature moves locked: Franz the Chin Lift, Reginald the Glove Tug, Lenny the Tie Snap.
+- Catchphrases locked: Franz "That is what people are for.", Reginald "As you were.", Lenny "You're welcome."
+- Reginald is mid-40s (not 74). Franz's voice is Alistair (approved).
+- Instagram `biscuit.moves` is renamed to Franz (`franz.dachshund`, owner step); Biscuit's Single Ladies video stays unposted.
+- Lenny's first full clip (charcoal suit) is remade in the chalk-stripe (price first).
+- The masters of Franz, Lenny and Reginald are upscaled to 2K (identity unchanged); the Borat-type's was already 2K.
+- Borat-type: the look stays as it is (owner accepts the likeness risk; he skips LaunchPoint). Name still open: it must be
+  our own, not one letter from the film character's name and not a real nationality's surname (C7).
 
 Still open: C6 (posh British twice: Franz and Reginald), C8 (one universe, ODD EYES, or standalone), C10 (rhythm), C11 (voice in the studio), C12 (shared credits).
 
@@ -46,7 +56,7 @@ Still open: C6 (posh British twice: Franz and Reginald), C8 (one universe, ODD E
 | C8 | **One universe or standalone brands** | Open question. | Everything sits under one brand, **ODD EYES**: heterochromia (right eye ice-blue, left amber) and the two-dot bug on every video. | Do Lenny and Franz join ODD EYES (and get the odd eyes), or stay separate brands with their own accounts? |
 | C9 | **Publishing** | "Higgsfield can publish to TikTok directly." | **Postiz** posts (IG connected; TikTok later). The daily-run guardrails forbid Higgsfield's `tiktok_*` publish tools. | Keep Postiz for all, or let Higgsfield publish TikTok for B's characters? |
 | C10 | **Posting rhythm** | 3–4 posts a week per character. | Biscuit 19:00, Reginald 19:30 London; weeks 1–2 Tue/Wed/Thu, from week 3 Mon–Fri (5 a week); never more than 2 a day per account. | 3–4 a week, or 5 from week 3? |
-| C11 | **Voice** | Every clip ships with a voiceover (Lenny: Emmett; Franz: Alistair, in test). | Biscuit and Reginald are silent and music-driven (Reginald never speaks); voices are planned for the Outsider (Slice 3 "talking lane"). | No conflict for existing characters. Should voiced characters join the studio pipeline (it has no voice step yet)? |
+| C11 | **Voice** | Every clip ships with a voiceover (Lenny: Emmett; Franz: Alistair, approved 2026-10-06). | Biscuit and Reginald are silent and music-driven (Reginald never speaks); voices are planned for the Outsider (Slice 3 "talking lane"). | No conflict for existing characters. Should voiced characters join the studio pipeline (it has no voice step yet)? |
 | C12 | **Credits** | Uses the same Higgsfield account. | Studio budget: monthly cap 6,000 credits, plus per-video approval by the owner. Both strands draw from **one shared balance** (≈ 750 left on 10-06). | One budget for both strands? B's spend isn't recorded in the studio ledger. |
 
 Smaller differences, no decision needed (both are kept):
@@ -60,7 +70,7 @@ Smaller differences, no decision needed (both are kept):
 | Character | Strand | Archetype | Status | Details |
 |---|---|---|---|---|
 | ~~Biscuit~~ | A (ODD EYES) | Cute cream mini dachshund; **retired 2026-10-06** (one dachshund: Franz) | Single Ladies video in the Queue (owner to post or drop) | [characters/biscuit/bible.md](../characters/biscuit/bible.md), `refs.json` |
-| **Reginald "the Quiff"** | A (ODD EYES) | Stone-faced 74-year-old English butler, flawless deadpan dancer | Live in the studio; first video (Wednesday) in the Queue | [characters/reginald/bible.md](../characters/reginald/bible.md), `refs.json` |
+| **Reginald "the Quiff"** | A (ODD EYES) | Stone-faced mid-40s English butler, flawless deadpan dancer | Live in the studio; first video (Wednesday) in the Queue | [characters/reginald/bible.md](../characters/reginald/bible.md), `refs.json` |
 | ~~The Outsider~~ | A | 1852 Victorian gentleman; **retired 2026-10-06**, replaced by the Borat-type | n/a | [roadmap.md](roadmap.md) |
 | **The Singer** | A | Lip-syncs the greatest classics in the car, shower, while running (licensed in-app songs) | Concept | [roadmap.md](roadmap.md) |
 | **Lenny Gold** | B | Manic Hollywood super-agent | Complete; first full clip done | §3.1 |
