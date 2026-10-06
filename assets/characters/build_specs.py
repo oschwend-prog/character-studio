@@ -1,7 +1,7 @@
 """Build assets/characters/<slug>/spec.png: one-page character spec sheets (white, phone-legible, 1080 wide).
 
 Run from the repo root: ``uv run python assets/characters/build_specs.py``. It reads the reduced copies next to it
-(<slug>/turnaround.jpg, expressions.jpg, master.jpg, avatar.png); replace those files and re-run to refresh a spec.
+(<slug>/turnaround.jpg, expressions.jpg, master.jpg, closeup.jpg, avatar.png); replace those files and re-run to refresh a spec.
 The text mirrors characters/<slug>/bible.md (the bible wins if they differ). macOS system fonts (Didot, Avenir Next).
 """
 
@@ -113,30 +113,36 @@ def build(slug: str, c: dict) -> Path:
     p.heading("Expressions", "readable at thumbnail size")
     p.image(base / "expressions.jpg", c["expr_caption"])
 
-    # master + palette + thumbnail read
-    p.heading("Master, palette, thumbnail read")
-    top = p.y
-    mw = 300
-    master = Image.open(base / "master.jpg").convert("RGB")
-    mh = int(master.height * mw / master.width)
-    p.img.paste(master.resize((mw, mh), Image.LANCZOS), (M, top))
-    p.d.text((M, top + mh + 8), c["master_caption"], font=avenir(21, "medium"), fill=GREY)
-    x0 = M + mw + 36
-    y = top
+    # master + close-up (the identity references of the swaps), then palette + thumbnail read
+    p.heading("Master and close-up", "identity references · ODD EYES")
+    top, gap = p.y, 36
+    iw = (CW - gap) // 2
+    bottom = top
+    for i, (name, caption) in enumerate((("master.jpg", c["master_caption"]), ("closeup.jpg", c["closeup_caption"]))):
+        im = Image.open(base / name).convert("RGB")
+        ih = int(im.height * iw / im.width)
+        x = M + i * (iw + gap)
+        p.img.paste(im.resize((iw, ih), Image.LANCZOS), (x, top))
+        p.d.text((x, top + ih + 8), caption, font=avenir(21, "medium"), fill=GREY)
+        bottom = max(bottom, top + ih + 44)
+    p.y = bottom
+    p.heading("Palette, thumbnail read")
+    top = y = p.y
     for name, hx in c["palette"]:
-        p.d.rounded_rectangle((x0, y, x0 + 64, y + 64), radius=10, fill=hex_rgb(hx), outline=RULE, width=2)
-        p.d.text((x0 + 84, y + 2), name, font=avenir(27, "demi"), fill=INK)
-        p.d.text((x0 + 84, y + 34), hx.upper(), font=avenir(23, "medium"), fill=GREY)
+        p.d.rounded_rectangle((M, y, M + 64, y + 64), radius=10, fill=hex_rgb(hx), outline=RULE, width=2)
+        p.d.text((M + 84, y + 2), name, font=avenir(27, "demi"), fill=INK)
+        p.d.text((M + 84, y + 34), hx.upper(), font=avenir(23, "medium"), fill=GREY)
         y += 80
-    p.y = y + 10
+    x0 = M + iw + gap
+    p.y = top
     p.d.text((x0, p.y), "THUMBNAIL READ (50 FT, MUTED)", font=avenir(21, "demi"), fill=p.accent)
     p.y += 34
     p.runs([(c["thumbnail"], "regular")], size=27, x0=x0, width=W - M - x0, gap=6)
-    p.y = max(p.y, top + mh + 44)
+    p.y = max(p.y, y + 10)
 
-    p.heading("Signature move", "proposed, owner to confirm")
+    p.heading("Signature move", "locked by the owner 2026-10-06")
     p.runs(c["move"], size=30)
-    p.heading("Catchphrase", "proposed, owner to confirm")
+    p.heading("Catchphrase", "locked by the owner 2026-10-06")
     p.runs([(c["catchphrase"], "demi")], size=40, gap=4)
     p.runs([(c["catchphrase_alt"], "regular")], size=26, color=GREY)
     p.heading("How he talks")
@@ -162,20 +168,22 @@ R = "regular"
 B = "demi"
 CHARACTERS = {
     "franz": {
-        "name": "Franz", "accent": "#16213B", "status": "VOICE IN TEST",
+        "name": "Franz", "accent": "#16213B", "status": "VOICE APPROVED",
         "tagline": "The one dachshund: an outraged tiny aristocrat who thinks he is royalty. Permanently unimpressed.",
-        "turn_note": "gpt_image_2_5 · 86359d05",
-        "turn_caption": "Front · 3/4 · side profile (the extra-long body) · back. The crown in every view.",
-        "expr_caption": "Full body · haughty chin lift · appalled · smug / panicked · bored · rare delighted (7c13a0d0).",
-        "master_caption": "Master 8781919e",
+        "turn_note": "gpt_image_2_5 · a37318e2",
+        "turn_caption": "Front · 3/4 · side profile (the extra-long body) · back. The crown in every view; the odd eyes in the front view.",
+        "expr_caption": "Full body · haughty chin lift · appalled · smug / panicked · bored · rare delighted (8a9a109e).",
+        "master_caption": "Master 806498b8 (odd-eyes edit of 8781919e)",
+        "closeup_caption": "Close-up f933609f",
         "palette": [("Polo navy", "#16213B"), ("Cream coat", "#E8D3B4"), ("Pale honey ears", "#D2B697"),
-                    ("Crown gold", "#C9A227"), ("Interior beige", "#CDB89C")],
+                    ("Crown gold", "#C9A227"), ("Interior beige", "#CDB89C"), ("Right eye, ice-blue", "#8FD3FF"),
+                    ("Left eye, amber", "#FFB040")],
         "thumbnail": "An extra-long, low cream sausage silhouette, a dark navy polo block, a flash of gold crown on top, chin in the air.",
         "move": [("The Chin Lift: ", B), ("he stops, raises his nose, turns his head a quarter away and half-closes his eyes. One beat of disdain, then he carries on.", R)],
         "catchphrase": "“That is what people are for.”",
         "catchphrase_alt": "Alternative: “One does not.”",
         "talks": [
-            [("Voice: ", B), ("Alistair, preset d9d5c263-f84e-4752-97b5-3750fcc6fd2f (in test; model and speech_rate to set).", R)],
+            [("Voice: ", B), ("Alistair, preset d9d5c263-f84e-4752-97b5-3750fcc6fd2f (approved by the owner 2026-10-06; model and speech_rate to set).", R)],
             [("Tone: ", B), ("plummy, posh, deadpan. Every sentence a small verdict.", R)],
             "“One does not simply walk. One arrives.”",
             "“Disco? Absolutely not. ...Perhaps one song.”",
@@ -205,8 +213,9 @@ CHARACTERS = {
         "swap": [("Replaces a DOG star only ", B), ("(like for like). Never a person: a small dog can't replace a human dancer.", R)],
         "never": ["Human limbs, hands or standing like a person; human-sized next to people.",
                   "Logos on the polo; barking, baby talk or slang.",
-                  "Climbing a stair successfully; ODD EYES without the owner's C8 decision."],
-        "generation": ["gpt_image_2_5 · quality high · 2k · reference: master 8781919e (plus a sheet for a new pose).",
+                  "Climbing a stair successfully.",
+                  "The odd eyes swapped or glowing: his RIGHT eye (viewer's left) is ice-blue, his LEFT amber."],
+        "generation": ["gpt_image_2_5 · quality high · 2k · reference: master 806498b8 (plus a sheet for a new pose); spell out the odd eyes in every prompt.",
                        "Element a28cc772-0227-4ed1-b6a2-1c84fe3b78f2 for Element models (inside the prompt, never in medias).",
                        "Masters end on the dance: no eye close-up, glint or sting."],
     },
@@ -216,7 +225,8 @@ CHARACTERS = {
         "turn_note": "gpt_image_2_5 · 44af3625",
         "turn_caption": "Front · 3/4 · side · back. The quiff holds in profile and from behind; tails to the knee.",
         "expr_caption": "Full body · deadpan · raised eyebrow · side-eye / suppressed disapproval · glove-tug stare · single tear (1f02d943).",
-        "master_caption": "Master 42772b6a",
+        "master_caption": "Master 42772b6a (2K: 4fb61254)",
+        "closeup_caption": "Close-up 1afe9ed7",
         "palette": [("Tailcoat black", "#151517"), ("Piqué white", "#F6F6F2"), ("Right eye, ice-blue", "#8FD3FF"),
                     ("Left eye, amber", "#FFB040"), ("Racing green", "#0B3D2E"), ("Gold", "#C9A227")],
         "thumbnail": "A towering black quiff, the tallest thing in any frame, over a round black-and-white silhouette; white gloves flashing; round glasses and a curled moustache up close.",
@@ -253,18 +263,20 @@ CHARACTERS = {
                   "A real actor's or famous TV butler's likeness.",
                   "The odd eyes swapped: his RIGHT eye (viewer's left) is ice-blue, his LEFT amber."],
         "generation": ["gpt_image_2_5 · quality high · 2k · reference: master 42772b6a; spell out the odd eyes in every prompt.",
-                       "refs.json still names master 6c445225: the new ids are listed in his bible for the merge.",
+                       "refs.json: master 4fb61254 (2K of 42772b6a) · turnaround 44af3625 · close-up 1afe9ed7.",
                        "Masters end on the dance: no eye close-up, glint or sting."],
     },
     "lenny": {
         "name": "Lenny Gold", "accent": "#5A1A2A", "status": "VOICE LOCKED",
         "tagline": "Manic Hollywood super-agent. Explode in, collapse out. “You're welcome.”",
-        "turn_note": "gpt_image_2_5 · 71ed6fa5",
-        "turn_caption": "Front · 3/4 · side · back. The chalk stripe clear; brown suede loafers; gold watch and ring.",
-        "expr_caption": "Full body · mid-rant fury · smug calm · fake charm smile / “call my assistant” · shock · “you're welcome” wink (1ae9e12a).",
-        "master_caption": "Master c6864413",
+        "turn_note": "gpt_image_2_5 · 88ac10b9",
+        "turn_caption": "Front · 3/4 · side · back. The chalk stripe clear; brown suede loafers; gold watch and ring; the odd eyes in the front view.",
+        "expr_caption": "Full body · mid-rant fury · smug calm · fake charm smile / “call my assistant” · shock · “you're welcome” wink (37b754d4).",
+        "master_caption": "Master cc6a9f4c (odd-eyes edit of c6864413)",
+        "closeup_caption": "Close-up a411c915",
         "palette": [("Suit navy", "#1C2541"), ("Chalk stripe", "#D9D4C7"), ("Tie burgundy", "#5A1A2A"),
-                    ("Gold", "#C9A227"), ("Deep tan", "#A86B45"), ("Suede brown", "#4A3426")],
+                    ("Gold", "#C9A227"), ("Deep tan", "#A86B45"), ("Suede brown", "#4A3426"),
+                    ("Right eye, ice-blue", "#8FD3FF"), ("Left eye, amber", "#FFB040")],
         "thumbnail": "A dark power-suit block with very wide shoulders; the phone-to-ear silhouette, elbow up; a white-teeth snarl in a deep-tan face under a black pompadour.",
         "move": [("The Tie Snap: ", B), ("at the collapse he tugs his tie knot, shoots both cuffs and lifts his chin: his template's own gesture.", R)],
         "catchphrase": "“You're welcome.”",
@@ -299,8 +311,9 @@ CHARACTERS = {
         "swap": [("Replaces a PERSON star ", B), ("(a suit, a boss, anyone on the phone). Never an animal.", R)],
         "never": ["A real person's likeness or voice: no real agent, actor or TV character.",
                   "The name of a real person, agency or studio; logos on screen.",
-                  "Apologising, waiting, hanging up first or ending defeated."],
-        "generation": ["gpt_image_2_5 · quality high · 2k · reference: master c6864413.",
+                  "Apologising, waiting, hanging up first or ending defeated.",
+                  "The odd eyes swapped or glowing: his RIGHT eye (viewer's left) is ice-blue, his LEFT amber."],
+        "generation": ["gpt_image_2_5 · quality high · 2k · reference: master cc6a9f4c; spell out the odd eyes in every prompt.",
                        "Soul cdc73565-fa87-47f6-bca4-bb1e7884e483 (soul_2) on file; it flattens expressions toward the snarl.",
                        "Masters end on the dance: no eye close-up, glint or sting."],
     },
