@@ -116,6 +116,24 @@ Smaller differences, no decision needed (both are kept):
   3. The price is shown, and the owner taps **Make it**. No credits are spent without that tap.
   4. Genjutsu runs, then QA, then the video goes to the Queue.
 
+## 4a. Income lane: LaunchPoint "AI Invasion" (owner 2026-10-06)
+
+LaunchPoint isn't only for buying reach: it runs **paid creator campaigns**. "AI Invasion" pays creators of AI-influencer videos **$1 per 1,000 verified views, up to $2,000 per video** (owner's source; Higgsfield is a LaunchPoint customer with 700+ creators and 350M+ views).
+
+**Workflow:** read the campaign rules first, then make videos that fit them, post as the rules say, and submit through the campaign.
+
+**Rules as reported, to verify inside the LaunchPoint creator app** (they're behind a login, so the owner has to sign up and read them):
+- An original character: no celebrities, brands or movie characters.
+- **Your own recordings, or footage you have permission to use.**
+- LaunchPoint checks every post and catches copied videos and fake views before paying.
+
+**What this means for us:**
+- **Two lanes:**
+  - Our **channel growth** lane keeps Drop-in into downloaded viral clips (owner decision, section 1).
+  - The **income** lane needs **footage we own**. The simplest version: the owner (or friends) films short trend formats on a phone in real daylight in real places (the JeanPhil "reads as filmed" rule), and Genjutsu Object swap puts Reginald or Biscuit in. Image-to-video from our own character stills also counts as original.
+- **Downloaded clips (e.g. snapinsta) won't pass** as campaign submissions: they're copied footage. Never submit them.
+- **Owner step:** create the LaunchPoint creator account (Claude never creates accounts), open "AI Invasion", and share its rules (paste or screenshot, or let Claude read them in Chrome). Then we plan the first submission against the exact brief.
+
 ## 4b. Character design rules (the JeanPhil lesson, owner 2026-10-06)
 
 JeanPhil: an AI Frenchman (blond bob, handlebar moustache, houndstooth suit, slow air-punches down a Paris pavement, "Oui Madame") reached ~100M views in a week, and within days had a coin and lawyers. The moat is **designing someone people want to see a second time**: a casting and writing problem, not a rendering one. Every character must pass these five rules:
