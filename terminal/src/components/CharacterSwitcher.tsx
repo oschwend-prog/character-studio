@@ -1,16 +1,15 @@
-// The character switcher: Biscuit · Reginald · All, each with its picture and livery colour. The choice is shared by
+// The character switcher: Franz · Reginald · Lenny Gold · All (a retired one, with his history, last), each with its picture and livery colour. The choice is shared by
 // Picks, Queue and Library, remembered per viewer (localStorage, guarded) and can come from a ?c=<slug> deep link.
 import { characterFilterOptions } from '../lib/rules';
 import { useCharacterFilter } from '../lib/hooks';
+import { ROSTER } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import { Avatar } from './ui';
 
-const FALLBACK = [{ slug: 'biscuit', name: 'Biscuit' }, { slug: 'reginald', name: 'Reginald' }];
-
-/** The roster the switcher offers (the seeded characters; the two launch ones until they have loaded). */
+/** The roster the switcher offers (the seeded characters, in the owner's order; the roster until they have loaded). */
 export function useRoster() {
   const { data } = useStudio();
-  return data?.characters.length ? data.characters.map((c) => ({ slug: c.slug, name: c.name })) : FALLBACK;
+  return data?.characters.length ? data.characters.map((c) => ({ slug: c.slug, name: c.name })) : [...ROSTER];
 }
 
 export function useCharacterChoice(): [string, (v: string) => void, { slug: string; name: string }[]] {

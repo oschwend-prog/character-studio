@@ -192,7 +192,7 @@ describe('the demo data', () => {
     has(({ r }) => r.credits_spent > 0);
     expect(snap.tracker.some((r) => r.hook === "my eyes don't match. my moves do.")).toBe(false); // posted 13 days ago: off the list
     const groups = groupTracker(snap.tracker, snap.characters, NOW);
-    expect(groups.map((g) => g.slug)).toEqual(['biscuit', 'reginald']);
+    expect(groups.map((g) => g.slug)).toEqual(['franz', 'reginald', 'lenny', 'biscuit']);
   });
 
   it('carries every field of the long list on some new pick, and none of it on others', async () => {

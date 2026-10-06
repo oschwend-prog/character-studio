@@ -77,12 +77,20 @@ export const londonDate = (v: string | number | Date) => dateFmt.format(asDate(v
 /** "6 Oct, 19:00". */
 export const londonStamp = (v: string | number | Date) => stampFmt.format(asDate(v));
 
-const PREFIX: Record<string, string> = { biscuit: 'BSC', reginald: 'RGN' };
+const PREFIX: Record<string, string> = { franz: 'FRZ', reginald: 'RGN', lenny: 'LNY', biscuit: 'BSC' };
 
-/** A short flight-number style code for a clip: "BSC 3F9A". */
+/**
+ * A character's three-letter code (the livery plate, the clip code): the roster's own, else the first three letters or digits of
+ * the slug ("borat-type" -> "BOR"), "???" for a slug with none.
+ */
+export function characterCode(slug: string | null | undefined): string {
+  if (!slug) return '???';
+  return PREFIX[slug] ?? (slug.replace(/[^a-z0-9]/gi, '').slice(0, 3).toUpperCase() || '???');
+}
+
+/** A short flight-number style code for a clip: "FRZ 3F9A". */
 export function clipCode(id: string, characterSlug: string): string {
-  const prefix = PREFIX[characterSlug] ?? characterSlug.slice(0, 3).toUpperCase();
-  return `${prefix} ${id.replace(/-/g, '').slice(0, 4).toUpperCase()}`;
+  return `${characterCode(characterSlug)} ${id.replace(/-/g, '').slice(0, 4).toUpperCase()}`;
 }
 
 /** "TikTok" / "Instagram" / "YouTube". */

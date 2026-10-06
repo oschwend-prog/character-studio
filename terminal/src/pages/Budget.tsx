@@ -7,7 +7,9 @@ import { formatCredits } from '../lib/format';
 import { KILL_SWITCH_COPY, spendState } from '../lib/rules';
 import { useStudio } from '../lib/store';
 
-const SERIES: Record<string, string> = { biscuit: 'var(--series-biscuit)', reginald: 'var(--series-reginald)' };
+const SERIES: Record<string, string> = {
+  franz: 'var(--series-franz)', reginald: 'var(--series-reginald)', lenny: 'var(--series-lenny)', biscuit: 'var(--series-biscuit)',
+};
 
 export function Budget({ account }: { account?: ReactNode }) {
   const { data, backend, run, busy } = useStudio();

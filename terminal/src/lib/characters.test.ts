@@ -520,7 +520,11 @@ describe('the demo backend’s decidePick (what the sheet calls)', () => {
 
   it('serves every stage of the pipeline for both characters, and a finished scan', async () => {
     const { snap } = await fresh();
-    expect(snap.characters.map((c) => c.slug)).toEqual(['biscuit', 'reginald']);
+    // the roster of 2026-10-06 in the owner's order, Biscuit (retired, with his history) last
+    expect(snap.characters.map((c) => [c.slug, c.status])).toEqual([
+      ['franz', 'designing'], ['reginald', 'live'], ['lenny', 'designing'], ['biscuit', 'paused'],
+    ]);
+    expect(snap.characters.find((c) => c.slug === 'lenny')!.setup.planned_handles?.instagram).toBe('lennygold.agent');
     for (const slug of ['biscuit', 'reginald']) {
       const p = pipelineFor(slug, snap);
       expect([p.proposed.total, p.production.total, p.waiting.total, p.posted.total].map((n) => n > 0)).toEqual([true, true, true, true]);
@@ -529,7 +533,8 @@ describe('the demo backend’s decidePick (what the sheet calls)', () => {
     expect(s.state).toBe('finished');
     expect(s.last?.scan.picks_added).toBeGreaterThan(0);
     expect(s.creditsMonth).toBeGreaterThan(0);
-    const b = goLiveChecklist(snap.characters[0]);
+    const b = goLiveChecklist(snap.characters.find((c) => c.slug === 'reginald')!);
     expect(b.items.every((i) => i.done)).toBe(true);
+    expect(goLiveChecklist(snap.characters.find((c) => c.slug === 'franz')!).ready).toBe(false); // no accounts yet
   });
 });

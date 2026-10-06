@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  characterCode,
   clipCode,
   formatAge,
   formatCountdown,
@@ -88,8 +89,16 @@ describe('clipCode', () => {
     expect(clipCode('3f9a2c41-0000-4000-8000-000000000000', 'biscuit')).toBe('BSC 3F9A');
     expect(clipCode('a1b2c3d4-0000-4000-8000-000000000000', 'reginald')).toBe('RGN A1B2');
   });
+  it('has the roster’s own codes (owner 2026-10-06)', () => {
+    expect(clipCode('3f9a2c41-0000-4000-8000-000000000000', 'franz')).toBe('FRZ 3F9A');
+    expect(clipCode('3f9a2c41-0000-4000-8000-000000000000', 'lenny')).toBe('LNY 3F9A');
+    expect([characterCode('franz'), characterCode('reginald'), characterCode('lenny'), characterCode('biscuit')]).toEqual(['FRZ', 'RGN', 'LNY', 'BSC']);
+  });
   it('falls back to the first three letters for an unknown character', () => {
     expect(clipCode('0bad0000-0000-4000-8000-000000000000', 'outsider')).toBe('OUT 0BAD');
+    expect(characterCode('borat-type')).toBe('BOR'); // a character named later gets a code with no code change
+    expect(characterCode('x-1')).toBe('X1');
+    expect([characterCode('--'), characterCode(''), characterCode(null)]).toEqual(['???', '???', '???']);
   });
 });
 

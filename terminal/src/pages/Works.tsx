@@ -13,6 +13,7 @@ import { dropsFirst, isDropCard } from '../lib/drop';
 import { formatCredits } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
 import { compactCount } from '../lib/longlist';
+import { ROSTER } from '../lib/roster';
 import { TIER_LABELS } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import {
@@ -20,10 +21,6 @@ import {
 } from '../lib/tracker';
 import type { TrackerRow } from '../lib/types';
 
-const LAUNCH = [
-  { slug: 'biscuit', name: 'Biscuit' },
-  { slug: 'reginald', name: 'Reginald' },
-];
 
 export function Works() {
   const { data } = useStudio();
@@ -37,7 +34,7 @@ export function Works() {
       </div>
     );
   }
-  const roster = data.characters.length ? data.characters.map((c) => ({ slug: c.slug, name: c.name })) : LAUNCH;
+  const roster = data.characters.length ? data.characters.map((c) => ({ slug: c.slug, name: c.name })) : [...ROSTER];
   const groups = groupTracker(data.tracker, roster, now);
   return (
     <div className="page stack">

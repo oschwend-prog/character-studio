@@ -1,4 +1,4 @@
-// Viral Picks: the Scanner card and "How we scan", then the proposed videos by character (Biscuit, Reginald, then the unassigned ones), each
+// Viral Picks: the Scanner card and "How we scan", then the proposed videos by character (the roster, then the unassigned ones), each
 // section grouped by category (Broke the internet, Viral now, Up and coming, Ready to drop in) or by theme, best first with
 // the Genjutsu gallery as the backup. Each card says plainly what the video is, then Make it / Skip; a paste box for the
 // owner's own links; the decided picks with what they became. A switch at the top shows the same picks as one sortable Long list
@@ -22,10 +22,10 @@ import {
   TIERS, TIER_HINTS, TIER_LABELS, canonicalVideoUrl, groupPicksByCharacter, modeLine, tierCounts, tierOf,
   type PickSection,
 } from '../lib/rules';
+import { activeRoster, liveryClass } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import type { Pick, Tier } from '../lib/types';
 
-const CHARACTERS = ['biscuit', 'reginald'] as const;
 const SCORES: { key: keyof Pick; name: string; weight: string }[] = [
   { key: 'virality', name: 'Virality', weight: '25%' },
   { key: 'fit', name: 'Fit', weight: '20%' },
@@ -222,9 +222,10 @@ function GroupBlock({ id, icon, label, hint, count, children }: { id: string; ic
 }
 
 function PasteBox() {
-  const { backend, run, busy, toast } = useStudio();
+  const { backend, data, run, busy, toast } = useStudio();
   const [url, setUrl] = useState('');
-  const [slug, setSlug] = useState<string>('biscuit');
+  const choices = activeRoster(data?.characters);
+  const [slug, setSlug] = useState<string>(() => choices[0]?.slug ?? 'franz');
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
 
@@ -285,7 +286,7 @@ function PasteBox() {
       {url.trim() ? (
         <>
           <div className="paste-row">
-            <CharacterSeg value={slug} onChange={setSlug} label="Character for this link" />
+            <CharacterSeg value={slug} onChange={setSlug} label="Character for this link" choices={choices} />
           </div>
           <div className="paste-row">
             <label className="sr-only" htmlFor="paste-note">Note for the daily run (optional)</label>
@@ -307,12 +308,14 @@ function PasteBox() {
   );
 }
 
-function CharacterSeg({ value, onChange, label }: { value: string | null; onChange(v: string): void; label: string }) {
+function CharacterSeg({
+  value, onChange, label, choices,
+}: { value: string | null; onChange(v: string): void; label: string; choices: ReadonlyArray<{ slug: string; name: string }> }) {
   return (
     <div className="seg" role="group" aria-label={label}>
-      {CHARACTERS.map((c) => (
-        <button key={c} type="button" className={c} aria-pressed={value === c} onClick={() => onChange(c)}>
-          {characterName(c)}
+      {choices.map((c) => (
+        <button key={c.slug} type="button" className={liveryClass(c.slug)} aria-pressed={value === c.slug} onClick={() => onChange(c.slug)}>
+          {c.name}
         </button>
       ))}
     </div>

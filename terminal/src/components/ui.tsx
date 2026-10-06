@@ -2,7 +2,8 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { autopilotState, tabIndexAfter } from '../lib/rules';
-import { outlierBadge, platformName } from '../lib/format';
+import { characterCode, outlierBadge, platformName } from '../lib/format';
+import { liveryClass, nameOf } from '../lib/roster';
 
 const DRUM = ' ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:-.';
 const reducedMotion = () =>
@@ -79,9 +80,6 @@ export function Mark({ on = true, label }: { on?: boolean; label?: string }) {
   );
 }
 
-const LIVERY: Record<string, string> = { biscuit: 'BSC', reginald: 'RGN' };
-const NAME: Record<string, string> = { biscuit: 'Biscuit', reginald: 'Reginald' };
-
 export function Livery({ slug }: { slug: string | null }) {
   if (!slug) {
     return (
@@ -92,14 +90,14 @@ export function Livery({ slug }: { slug: string | null }) {
     );
   }
   return (
-    <span className={`livery ${slug in LIVERY ? slug : 'none'}`} title={NAME[slug] ?? slug}>
-      <span aria-hidden="true">{LIVERY[slug] ?? slug.slice(0, 3).toUpperCase()}</span>
-      <span className="sr-only">{NAME[slug] ?? slug}</span>
+    <span className={`livery ${liveryClass(slug)}`} title={nameOf(slug)}>
+      <span aria-hidden="true">{characterCode(slug)}</span>
+      <span className="sr-only">{nameOf(slug)}</span>
     </span>
   );
 }
 
-export const characterName = (slug: string | null) => (slug ? NAME[slug] ?? slug : 'Unassigned');
+export const characterName = (slug: string | null) => (slug ? nameOf(slug) : 'Unassigned');
 
 export function OutlierBadge({ x }: { x: number | null | undefined }) {
   const b = outlierBadge(x);
@@ -186,9 +184,15 @@ export function Skeleton({ h = 56 }: { h?: number }) {
   return <div className="skeleton" style={{ height: h }} aria-hidden="true" />;
 }
 
-/** A character's picture (terminal/public/avatars/<slug>.png); an unknown slug, or a picture that fails, shows initials. */
+const AVATAR_SOURCES: ReadonlyArray<(slug: string) => string> = [(s) => `/avatars/${s}.png`, (s) => `/artists/${s}/avatar.png`];
+
+/**
+ * A character's picture: terminal/public/avatars/<slug>.png, else the copy the build makes of assets/characters/<slug>/avatar.png
+ * (public/artists/<slug>/avatar.png, scripts/build-artists.mjs); a slug with neither, or pictures that fail, shows initials.
+ */
 export function Avatar({ slug, name, size = 48 }: { slug: string; name?: string; size?: number }) {
-  const [broken, setBroken] = useState(false);
+  const [step, setStep] = useState(0);
+  const broken = step >= AVATAR_SOURCES.length;
   const label = name ?? characterName(slug);
   const initials = label
     .split(/\s+/)
@@ -199,19 +203,20 @@ export function Avatar({ slug, name, size = 48 }: { slug: string; name?: string;
   const style = { width: size, height: size, fontSize: Math.round(size * 0.38) };
   if (broken)
     return (
-      <span className={`avatar initials ${slug in LIVERY ? slug : 'none'}`} style={style} aria-hidden="true">
+      <span className={`avatar initials ${liveryClass(slug)}`} style={style} aria-hidden="true">
         {initials}
       </span>
     );
   return (
     <img
       className="avatar"
-      src={`/avatars/${encodeURIComponent(slug)}.png`}
+      key={step}
+      src={AVATAR_SOURCES[step](encodeURIComponent(slug))}
       alt=""
       width={size}
       height={size}
       style={style}
-      onError={() => setBroken(true)}
+      onError={() => setStep((s) => s + 1)}
     />
   );
 }

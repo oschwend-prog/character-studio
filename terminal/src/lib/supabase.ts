@@ -4,6 +4,7 @@
 // v_tracker (migration 0010) feeds "In the works"; a database without it yet shows that tab empty instead of failing the load.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { orderRoster } from './roster';
 import { checkClipBasics, ownerClipPath } from './rules';
 import type { Backend, ChangeKind, ClipFile, DecideExtras, DropAdjust, Snapshot } from './types';
 
@@ -117,7 +118,8 @@ export class LiveBackend implements Backend {
       health: health.data ?? [],
       picks: (picks.data ?? []).map((r) => normalise(r, num)),
       history: (history.data ?? []).map((r) => normalise(r, num)),
-      characters: (characters.data ?? []).map((r) => ({ ...r, setup: r.setup ?? {}, accounts: r.accounts ?? [] })),
+      // the owner's order (Franz, Reginald, Lenny, then any other, a paused one last), not the view's alphabetical one
+      characters: orderRoster((characters.data ?? []).map((r) => ({ ...r, setup: r.setup ?? {}, accounts: r.accounts ?? [] }))),
       runs: runs.data ?? [],
       tracker: (tracker.error ? [] : tracker.data ?? []).map((r) =>
         normalise(r, ['views', 'outlier_x', 'velocity', 'credits_spent', 'latest_views']),

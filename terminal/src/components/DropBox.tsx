@@ -1,4 +1,4 @@
-// "Drop a video" (plan 2026-10-06): the box at the top of "In the works". Choose Biscuit or Reginald, pick one or more videos
+// "Drop a video" (plan 2026-10-06): the box at the top of "In the works". Choose the character (one not paused), pick one or more videos
 // from the phone (or paste a link): each becomes a card that moves by itself (Uploading → Checking → Ready). Files go one after
 // another, each straight to our own storage (sources/owner/<pick id>/), then the free check is asked for. Nothing is generated
 // here: only the card's Make it does that.
@@ -6,13 +6,10 @@ import { Link2, Upload } from 'lucide-react';
 import { useId, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
 import { DROP_HELP, dropLink, type UploadPhase } from '../lib/drop';
 import { validateClipFile } from '../lib/rules';
+import { activeRoster } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import { Spinner } from './ui';
 
-const LAUNCH = [
-  { slug: 'biscuit', name: 'Biscuit' },
-  { slug: 'reginald', name: 'Reginald' },
-];
 const KEY = 'oddeyes.drop.character';
 
 interface Upload {
@@ -55,7 +52,7 @@ const remembered = (slugs: string[]): string => {
 export function DropBox() {
   const { backend, data, run, refresh, toast } = useStudio();
   const ids = useId();
-  const roster = useMemo(() => (data?.characters.length ? data.characters.map((c) => ({ slug: c.slug, name: c.name })) : LAUNCH), [data?.characters]);
+  const roster = useMemo(() => activeRoster(data?.characters), [data?.characters]);
   const [character, setCharacter] = useState(() => remembered(roster.map((c) => c.slug)));
   const [link, setLink] = useState('');
   const [linkError, setLinkError] = useState<string | null>(null);

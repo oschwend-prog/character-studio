@@ -9,6 +9,7 @@ import { validateAdjust } from '../lib/drop';
 import { velocityPerDay } from '../lib/analyst';
 import { decisionTime, inTracker } from '../lib/tracker';
 import { londonDayKey, londonWallToIso } from '../lib/format';
+import { orderRoster } from '../lib/roster';
 import type {
   Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, Engagement, HealthRow, LibraryClip, OwnerMusic,
   Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow,
@@ -29,8 +30,16 @@ interface Fav {
   total_score: number | null; note: string | null; status: string; created_at: string; clip_id: string | null;
 }
 
-const NAMES: Record<string, string> = { biscuit: 'Biscuit', reginald: 'Reginald' };
-const SLOTS: Record<string, string> = { biscuit: '19:00', reginald: '19:30' };
+// The roster of 2026-10-06 (Franz, Reginald, Lenny Gold; the slots are the owner's) and Biscuit, retired (paused) with his history.
+const NAMES: Record<string, string> = { franz: 'Franz', reginald: 'Reginald', lenny: 'Lenny Gold', biscuit: 'Biscuit' };
+const SLOTS: Record<string, string> = { franz: '19:00', reginald: '19:30', lenny: '12:30', biscuit: '19:00' };
+const STATUS: Record<string, string> = { franz: 'designing', reginald: 'live', lenny: 'designing', biscuit: 'paused' };
+const BODIES: Record<string, string[]> = { franz: ['quadruped'], reginald: ['biped'], lenny: ['biped'], biscuit: ['biped', 'quadruped'] };
+/** The handles each character's social kit plans (characters/<slug>/social.md), for the ones with no account yet. */
+const PLANNED: Record<string, Record<string, string>> = {
+  franz: { instagram: 'franz.dachshund', tiktok: '@franz.dachshund' },
+  lenny: { instagram: 'lennygold.agent', tiktok: '@lennygold.agent' },
+};
 const CADENCE = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri']; // weeks 3+ cadence
 const DAY = 86_400_000;
 
@@ -568,6 +577,16 @@ export class DemoBackend implements Backend {
     });
     link(failedFav, failedClip);
     this.settled[failedClip.id] = 270;
+    // the roster's newcomers (2026-10-06): a checked drop for Franz (a dog star) and one being checked, and one for Lenny (a human star)
+    readyDrop(12, 'franz', 15, 'A dachshund refuses the walk, then betrays himself into a tiny shuffle on a cream rug.', {
+      slug: 'franz', star: dog('the dachshund on the cream rug'), seconds: 9, start: 1, duration: 12,
+      hooks: ['One does not walk. One arrives.', 'I was stretching to music.', 'Fetch it yourself.'], gadgets: ['tortoiseshell sunglasses'],
+    });
+    dropFav(13, 'franz', 6, { state: 'checking' });
+    readyDrop(14, 'lenny', 35, 'A man in a suit yells into his phone in a glass office, then hits the trend.', {
+      slug: 'lenny', star: person('the man in the navy suit by the window', 0.46), seconds: 8.5, start: 0.5, duration: 11,
+      hooks: ['NOON. Not 12:01.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['black smartphone'],
+    });
 
     // The run log: a finished scan on the latest scan day, an earlier one, and a day that did not scan.
     const scanDays = SCAN_DAYS;
@@ -693,7 +712,7 @@ export class DemoBackend implements Backend {
       const median = xs.length ? (xs.length % 2 ? xs[(xs.length - 1) / 2] : (xs[xs.length / 2 - 1] + xs[xs.length / 2]) / 2) : null;
       const approved = this.approvedPosts(a.id);
       return {
-        account_id: a.id, character_slug: a.character_slug, character_name: NAMES[a.character_slug], character_status: 'live',
+        account_id: a.id, character_slug: a.character_slug, character_name: NAMES[a.character_slug], character_status: STATUS[a.character_slug] ?? 'live',
         platform: a.platform, handle: a.handle, connected: a.connected, mode: a.mode, dropin_share: a.dropin_share,
         dropin_ratio: this.dropinRatio(a.id), approved_posts: approved, autopilot_min_approved: AUTOPILOT_MIN_APPROVED,
         autopilot_unlocked: approved >= AUTOPILOT_MIN_APPROVED,
@@ -756,7 +775,7 @@ export class DemoBackend implements Backend {
         };
       });
 
-    const bySlug: Record<string, number> = { biscuit: 0, reginald: 0 };
+    const bySlug: Record<string, number> = Object.fromEntries(Object.keys(NAMES).map((slug) => [slug, 0]));
     let settled = 0;
     for (const [id, cr] of Object.entries(this.settled)) {
       settled += cr;
@@ -816,15 +835,18 @@ export class DemoBackend implements Backend {
         clip_id: f.clip_id, clip_state: f.clip_id ? this.clips.find((c) => c.id === f.clip_id)?.state ?? null : null, ...ownerOf(f),
       }));
 
-    const characters: Character[] = Object.keys(NAMES).map((slug) => ({
-      slug, name: NAMES[slug], status: 'live', bodies: slug === 'biscuit' ? ['biped', 'quadruped'] : ['biped'],
+    const characters: Character[] = orderRoster(Object.keys(NAMES).map((slug) => ({
+      slug, name: NAMES[slug], status: STATUS[slug], bodies: BODIES[slug],
       setup: {
-        closeup: true,
-        planned_handles: Object.fromEntries(this.accounts.filter((a) => a.character_slug === slug).map((a) => [a.platform, a.handle])),
+        closeup: slug !== 'lenny', // Lenny has no close-up yet (refs.json)
+        planned_handles: {
+          ...PLANNED[slug],
+          ...Object.fromEntries(this.accounts.filter((a) => a.character_slug === slug).map((a) => [a.platform, a.handle])),
+        },
         traits: (traitsJson as Record<string, CharacterTraits>)[slug] ?? null,
       },
       accounts: this.accounts.filter((a) => a.character_slug === slug).map((a) => ({ platform: a.platform, handle: a.handle, has_postiz: a.connected, mode: a.mode })),
-    }));
+    })));
 
     const tracker: TrackerRow[] = this.favs
       .filter((f) => ['approved', 'analysed', 'queued', 'made'].includes(f.status))

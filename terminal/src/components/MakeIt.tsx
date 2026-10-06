@@ -9,6 +9,7 @@ import {
   CLIP_HELP, CLIP_MAX_SECONDS, NOTE_MAX, PROPS_MAX, PROP_MAX_CHARS, defaultMusicForMode, gadgetList, hasUsableSource, makeItPayload,
   musicOptionsFor, sheetEstimate, traitProps, validateClipFile, type MakeItChoice,
 } from '../lib/rules';
+import { activeRoster } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import type { OwnerMode, OwnerMusic, OwnerPresence, Pick } from '../lib/types';
 import { PickThumb } from './PickThumb';
@@ -29,9 +30,6 @@ export const PRESENCE_OPTIONS: { id: OwnerPresence; name: string; help: string }
   { id: 'featured', name: 'Featured', help: 'He takes the main performer’s moves; the original scene stays the star.' },
   { id: 'star', name: 'Star', help: 'He IS the video: full-body performance, every beat is his, framing favours him.' },
 ];
-
-/** The fallback when the studio has not loaded its characters (the two launch characters). */
-const LAUNCH = ['biscuit', 'reginald'];
 
 type Attach =
   | { phase: 'idle' }
@@ -65,7 +63,8 @@ export function MakeItSheet({ pick, onClose }: { pick: Pick; onClose(): void }) 
   const { backend, data, run, busy } = useStudio();
   const ids = useId();
   const roster = useMemo(() => {
-    const list = data?.characters.length ? data.characters : LAUNCH.map((slug) => ({ slug, name: slug.charAt(0).toUpperCase() + slug.slice(1) }));
+    // who a new video can be made with: not a paused (retired) character; the roster until the characters have loaded
+    const list = activeRoster(data?.characters);
     return {
       slugs: list.map((c) => c.slug),
       names: Object.fromEntries(list.map((c) => [c.slug, c.name])) as Record<string, string>,

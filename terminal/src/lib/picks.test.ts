@@ -265,7 +265,7 @@ describe('traitProps and traitRows', () => {
   });
 
   it('the demo’s traits cards are the real refs.json ones, so the demo cannot drift from what the seed writes', () => {
-    for (const slug of ['biscuit', 'reginald']) {
+    for (const slug of ['franz', 'reginald', 'lenny', 'biscuit']) {
       const refs = JSON.parse(readFileSync(new URL(`../../../characters/${slug}/refs.json`, import.meta.url), 'utf8')) as { traits: CharacterTraits };
       expect((traitsJson as Record<string, CharacterTraits>)[slug]).toEqual(refs.traits);
       expect(traitProps(refs.traits).length).toBeGreaterThanOrEqual(7);
@@ -513,8 +513,8 @@ describe('the demo data', () => {
   it('has picks for both characters and the unassigned group, in every tier, with a picture on most and a placeholder on some', async () => {
     const snap = await fresh();
     const sections = groupPicksByCharacter(snap.picks, snap.characters, { now: NOW_MS });
-    expect(sections.map((s) => s.slug)).toEqual(['biscuit', 'reginald', null]);
-    for (const s of sections) expect(s.picks.length).toBeGreaterThan(1);
+    expect(sections.map((s) => s.slug)).toEqual(['franz', 'reginald', 'lenny', 'biscuit', null]);
+    for (const s of sections) expect([s.slug, s.slug === 'franz' || s.slug === 'lenny' ? s.picks.length === 0 : s.picks.length > 1]).toEqual([s.slug, true]);
     const tiers = new Set(snap.picks.map((p) => tierOf(p, NOW_MS).tier));
     expect([...tiers].sort()).toEqual([...TIERS].sort() as Tier[]);
     for (const slug of ['biscuit', 'reginald']) {
