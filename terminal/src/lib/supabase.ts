@@ -1,10 +1,11 @@
 // The live backend: supabase-js with the publishable (anon) key, magic-link auth, RLS does the rest.
-// Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0008.
+// Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0008 and
+// 0012 (add_drop, request_job: "Drop a video").
 // v_tracker (migration 0010) feeds "In the works"; a database without it yet shows that tab empty instead of failing the load.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { checkClipBasics, ownerClipPath } from './rules';
-import type { Backend, ChangeKind, ClipFile, DecideExtras, Snapshot } from './types';
+import type { Backend, ChangeKind, ClipFile, DecideExtras, DropAdjust, Snapshot } from './types';
 
 const URL_ = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -181,6 +182,24 @@ export class LiveBackend implements Backend {
     }, onProgress);
     await this.rpc('attach_clip', { pick_id: pickId, storage_path: path });
     return path;
+  }
+  async addDrop(characterSlug: string, link: string | null) {
+    const r = await this.rpc('add_drop', { character_slug: characterSlug, link });
+    if (!r || typeof r.id !== 'string') throw new StudioError('The drop was not filed: try again');
+    return { pickId: r.id, duplicate: Boolean(r.duplicate) };
+  }
+  async requestJob(pickId: string, kind: 'process' | 'make', adjust: DropAdjust | null = null) {
+    const r = await this.rpc('request_job', {
+      pick_id: pickId, kind, ...(adjust && Object.keys(adjust).length ? { adjust } : {}),
+    });
+    return { dispatched: Boolean(r?.dispatched) };
+  }
+  async previewUrl(path: string) {
+    // a drop's preview strip lives under sources/owner/<pick id>/ (the owner may read there: storage policy of 0008)
+    if (!/^owner\/[0-9a-f-]{36}\/[^/\s]+$/i.test(path)) return null;
+    const { data, error } = await this.sb.storage.from('sources').createSignedUrl(path, 3600);
+    if (error) return null;
+    return data.signedUrl;
   }
   async signedUrl(path: string) {
     const { data, error } = await this.sb.storage.from('clips').createSignedUrl(path, 3600);

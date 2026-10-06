@@ -954,7 +954,7 @@ const httpsUrl = (value: unknown): URL | null => {
   }
 };
 const VIDEO_SUFFIX = /\.(mp4|webm|mov|m4v)$/i;
-const PLATFORM_CODE: Record<string, string> = { tiktok: 'TT', instagram: 'IG', youtube: 'YT', higgsfield: 'HF' };
+const PLATFORM_CODE: Record<string, string> = { tiktok: 'TT', instagram: 'IG', youtube: 'YT', higgsfield: 'HF', drop: 'YOU' };
 
 /**
  * Which picture a pick shows: its thumbnail (an https image URL a tool returned, or an inline data: image, as the demo
@@ -989,7 +989,7 @@ export function thumbFor(
   };
 }
 const platformLabel = (platform: string) =>
-  ({ tiktok: 'TikTok', instagram: 'Instagram', youtube: 'YouTube', higgsfield: 'the Genjutsu gallery' })[platform] ?? platform;
+  ({ tiktok: 'TikTok', instagram: 'Instagram', youtube: 'YouTube', higgsfield: 'the Genjutsu gallery', drop: 'your own upload' })[platform] ?? platform;
 
 // ---- the card's top line ---------------------------------------------------------------------------------------
 

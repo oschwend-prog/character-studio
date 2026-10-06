@@ -4,12 +4,13 @@
 // figure is SYNTHETIC and the UI says so. Actions follow the same rules as the SQL RPCs.
 import picksJson from './batch1-picks.json';
 import traitsJson from './traits.json';
-import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, SCAN_DAYS, checkClipBasics, ownerClipPath } from '../lib/rules';
+import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, SCAN_DAYS, checkClipBasics, estimateCredits, ownerClipPath } from '../lib/rules';
+import { validateAdjust } from '../lib/drop';
 import { velocityPerDay } from '../lib/analyst';
 import { decisionTime, inTracker } from '../lib/tracker';
 import { londonDayKey, londonWallToIso } from '../lib/format';
 import type {
-  Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, Engagement, HealthRow, LibraryClip, OwnerMusic,
+  Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, Engagement, HealthRow, LibraryClip, OwnerMusic,
   Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow,
 } from '../lib/types';
 
@@ -80,6 +81,16 @@ function demoWide(label: string, hue: number): string {
 }
 
 const MUSIC_ARMS = ['in_app', 'original', 'ai_beat'];
+const DEMO_JOB_MS = 2_000; // how long the demo's "cloud job" takes
+
+/** v_tracker.drop_card (migration 0012): proposal.drop without the job's internals. */
+function dropCardOf(f: { proposal: Record<string, unknown> }): DropCard | null {
+  const d = f.proposal.drop;
+  if (!d || typeof d !== 'object' || Array.isArray(d)) return null;
+  const { deconstruct: _d, make: _m, job: _j, ...card } = d as Record<string, unknown>;
+  void _d; void _m; void _j;
+  return card as unknown as DropCard;
+}
 
 const ownerOf = (f: { proposal: Record<string, unknown> }) => ({
   owner_note: (f.proposal.owner_note as string) ?? null,
@@ -468,6 +479,96 @@ export class DemoBackend implements Backend {
     this.settled[dropped.id] = 182;
     link(work(15, 'biscuit', 'made', "my eyes don't match. my moves do.", 'The first post: the eye close-up loop.', 24 * 14, { mode: 'recreate' }), byHook("my eyes don't match. my moves do."));
 
+    // "Drop a video" (migration 0012): the owner's own drops, SYNTHETIC like every clip here, one in every state of a drop card:
+    // uploading, checking, waiting (a link the cloud could not fetch), ready (a vertical clip and a landscape one with a crop),
+    // blocked (a watermark, the wrong star), making (before its clip, waiting for a key; and with its clip generating), made
+    // (waiting for your OK) and failed (the quality check failed twice).
+    const minute = 60_000;
+    const atMin = (m: number) => new Date(now - m * minute).toISOString();
+    const dropFav = (k: number, slug: string, minutesAgo: number, drop: Record<string, unknown>, extra: Partial<Fav> = {}): Fav => {
+      const id = uid(`fd${k}`);
+      const link = typeof extra.url === 'string';
+      const f: Fav = {
+        id, url: `owner-drop:${id}`, platform: 'drop', creator_handle: null, views: null, outlier_x: null, origin: 'owner',
+        character_slug: slug, scores: {}, total_score: null, note: null, status: 'approved', created_at: atMin(minutesAgo), clip_id: null,
+        ...extra,
+        proposal: {
+          decision: { decision: 'approve', by: 'owner', reason: "owner's own video", at: atMin(minutesAgo) },
+          ...(extra.proposal ?? {}),
+          drop: { state: 'uploading', kind: link ? 'link' : 'file', at: atMin(minutesAgo), reason: null, ...drop },
+        },
+      };
+      this.favs.push(f);
+      return f;
+    };
+    const checked = (id: string, o: { slug: string; star: DropCard['star']; seconds: number; start: number; duration: number; landscape?: boolean; hooks: string[]; gadgets: string[]; part?: string }) => ({
+      source_id: uid('sd'), duration_s: o.duration, width: o.landscape ? 1920 : 1080, height: o.landscape ? 1080 : 1920, has_audio: true,
+      window: { start_s: o.start, length_s: o.seconds }, crop_x: o.landscape ? o.star?.x_center ?? 0.5 : null, star: o.star, classic: o.seconds >= 12,
+      part: o.part ?? 'featured', gadgets: o.gadgets, hooks: o.hooks, hook: o.hooks[0], music: 'original', seconds: o.seconds,
+      credits: estimateCredits('dropin', o.seconds, 'original'), preview_path: `owner/${id}/preview.jpg`,
+    });
+    const person = (description: string, x = 0.5): DropCard['star'] => ({ kind: 'person', body: 'biped', description, x_center: x, full_body: true });
+    const dog = (description: string, body: 'biped' | 'quadruped' = 'quadruped'): DropCard['star'] => ({ kind: 'dog', body, description, x_center: 0.5, full_body: true });
+    const readyDrop = (k: number, slug: string, minutesAgo: number, concept: string, o: Parameters<typeof checked>[1], state = 'ready', drop: Record<string, unknown> = {}) => {
+      const f = dropFav(k, slug, minutesAgo, {});
+      f.proposal = {
+        ...f.proposal, mode: 'dropin', owner_mode: 'dropin', hook: o.hooks[0], concept,
+        drop: { ...(f.proposal.drop as Record<string, unknown>), ...checked(f.id, o), state, at: atMin(minutesAgo - 3), ...drop },
+      };
+      return f;
+    };
+    dropFav(1, 'biscuit', 2, { state: 'uploading' });
+    dropFav(2, 'reginald', 4, { state: 'checking' });
+    dropFav(3, 'biscuit', 180, { state: 'waiting', reason: 'the link could not be fetched in the cloud (login required): the Mac’s daily run tries again' }, {
+      url: 'https://www.tiktok.com/@demo.dropdancer/video/7700000000000000001', platform: 'tiktok', creator_handle: '@demo.dropdancer',
+    });
+    readyDrop(4, 'biscuit', 40, 'A dachshund trots across a sunlit kitchen and spins on the beat.', {
+      slug: 'biscuit', star: dog('the dachshund on the kitchen floor'), seconds: 9, start: 1.5, duration: 14.2,
+      hooks: ['kitchen is my stage', 'chef’s kiss, but with paws', 'the spin was not planned'], gadgets: ['gold chain'],
+    });
+    readyDrop(5, 'reginald', 25, 'A man in a grey suit does the shoulder shimmy down an office corridor.', {
+      slug: 'reginald', star: person('the man in the grey suit in the middle', 0.42), seconds: 12.5, start: 3, duration: 31, landscape: true,
+      hooks: ['The household is unaware.', 'Breakfast is at eight.', 'Kindly do not tell the Duchess.'], gadgets: ['silver tray + teapot'],
+    });
+    readyDrop(6, 'reginald', 90, 'Two friends film a dance in a car park; a watermark sits in the corner.', {
+      slug: 'reginald', star: person('the man on the left'), seconds: 8, start: 0, duration: 11, hooks: ['a', 'b', 'c'], gadgets: [],
+    }, 'blocked', { reason: 'a watermark or creator handle is burned in: paste the link instead', credits: undefined, window: undefined });
+    dropFav(7, 'reginald', 70, { state: 'blocked', reason: 'the wrong star: Reginald replaces a person, this clip’s star is a dog' });
+    const waitingKey = readyDrop(8, 'biscuit', 300, 'A pug walks a tightrope of sofa cushions, deadly serious.', {
+      slug: 'biscuit', star: dog('the pug on the cushions'), seconds: 8.5, start: 2, duration: 12, hooks: ['balance is a lifestyle', 'x', 'y'], gadgets: [],
+    }, 'making', { reason: 'waiting for the Higgsfield key: the next daily run makes it by hand' });
+    waitingKey.proposal = { ...waitingKey.proposal, make_requested: { at: atMin(60), by: 'owner' } };
+    const makingFav = readyDrop(9, 'reginald', 200, 'A man in an apron does the trend in a narrow kitchen.', {
+      slug: 'reginald', star: person('the man in the apron'), seconds: 9, start: 1, duration: 16, hooks: ['Dinner is served. Eventually.', 'x', 'y'], gadgets: ['feather duster'],
+    }, 'making', { reason: 'Higgsfield is still working (in_progress): the next run checks again' });
+    makingFav.proposal = { ...makingFav.proposal, make_requested: { at: atMin(50), by: 'owner' } };
+    makingFav.status = 'queued';
+    link(makingFav, clip('reginald', 'Dinner is served. Eventually.', 'dropin', 'generating', 0, {
+      master_path: null, cost: 102, created_at: atMin(45), state_since: atMin(44), qa: {},
+    }));
+    const madeFav = readyDrop(10, 'biscuit', 600, 'A dog in a hoodie does the hip-hop step on a skate ramp.', {
+      slug: 'biscuit', star: dog('the dog in the hoodie', 'biped'), seconds: 9, start: 0.5, duration: 13, hooks: ['ramp? i own it.', 'x', 'y'], gadgets: [],
+    }, 'made');
+    madeFav.proposal = { ...madeFav.proposal, make_requested: { at: atMin(400), by: 'owner' } };
+    madeFav.status = 'made';
+    const madeClip = clip('biscuit', 'ramp? i own it.', 'dropin', 'awaiting_approval', 0, {
+      cost: 102, created_at: atMin(380), state_since: atMin(60),
+      caption: 'Skate ramp step · dachshund edition\nramp? i own it. 💙\nwhich eye did you notice first?',
+      hashtags: ['#skaterdog', '#dachshund', '#dogdance', '#oddeyes'],
+    });
+    madeClip.features = { ...madeClip.features, first_comment: 'which eye did you notice first? 💙🧡', music: 'original', drop: true };
+    link(madeFav, madeClip);
+    this.settled[madeClip.id] = 102;
+    const failedFav = readyDrop(11, 'reginald', 900, 'A woman in a red coat dances in the rain under a lamppost.', {
+      slug: 'reginald', star: person('the woman in the red coat'), seconds: 12, start: 4, duration: 20, hooks: ['Umbrellas are for amateurs.', 'x', 'y'], gadgets: ['black umbrella'],
+    }, 'failed', { reason: 'the quality check failed twice: the original woman is still dancing at 3 s' });
+    const failedClip = clip('reginald', 'Umbrellas are for amateurs.', 'dropin', 'dropped', 0, {
+      master_path: null, cost: 135, created_at: atMin(800), state_since: atMin(700),
+      reject_reason: 'the quality check failed twice: the original woman is still dancing at 3 s',
+    });
+    link(failedFav, failedClip);
+    this.settled[failedClip.id] = 270;
+
     // The run log: a finished scan on the latest scan day, an earlier one, and a day that did not scan.
     const scanDays = SCAN_DAYS;
     const at0800 = (back: number) => londonWallToIso(`${londonDayKey(now - back * DAY)}T08:00`);
@@ -539,7 +640,45 @@ export class DemoBackend implements Backend {
 
   // ---- Backend ------------------------------------------------------------------------------------
 
+  /** The demo's cloud jobs, worked out lazily from the time (so tests drive them with the clock): a check requested over 2 s ago
+   * is ready, a Make it over 2 s ago has its clip generating. */
+  private tick() {
+    const now = this.now();
+    for (const f of this.favs) {
+      const d = f.proposal.drop as Record<string, unknown> | undefined;
+      if (!d || typeof d !== 'object') continue;
+      const req = (d.requested ?? {}) as { process?: string; make?: string };
+      if (d.state === 'checking' && req.process && now - Date.parse(req.process) >= DEMO_JOB_MS) {
+        const slug = f.character_slug ?? 'biscuit';
+        const star: DropCard['star'] = slug === 'biscuit' ? { kind: 'dog', body: 'quadruped', description: 'the dog in the middle', x_center: 0.5, full_body: true }
+          : { kind: 'person', body: 'biped', description: 'the person in the middle', x_center: 0.5, full_body: true };
+        const seconds = 9;
+        const hooks = slug === 'biscuit' ? ['main character energy', 'the beat asked for me', 'one take. obviously.'] : ['The household is unaware.', 'Breakfast is at eight.', 'Kindly do not tell the Duchess.'];
+        f.proposal = {
+          ...f.proposal, mode: 'dropin', owner_mode: 'dropin', hook: hooks[0], concept: 'SYNTHETIC: your video, checked (the demo makes up what it found)',
+          drop: {
+            ...d, state: 'ready', reason: null, at: new Date(now).toISOString(), source_id: uid('sd'), duration_s: 14, width: 1080, height: 1920,
+            window: { start_s: 1, length_s: seconds }, crop_x: null, star, classic: false, part: 'featured', gadgets: [], hooks, hook: hooks[0],
+            music: 'original', seconds, credits: estimateCredits('dropin', seconds, 'original'), preview_path: `owner/${f.id}/preview.jpg`,
+          },
+        };
+      }
+      if (d.state === 'making' && req.make && now - Date.parse(req.make) >= DEMO_JOB_MS && !this.clips.some((c) => c.features.fav_id === f.id && c.state !== 'dropped')) {
+        const hook = String((d.adjust as DropAdjust | undefined)?.hook ?? d.hook ?? 'demo');
+        const c: Clip = {
+          id: uid('cd'), character_slug: f.character_slug ?? 'biscuit', mode: 'dropin', state: 'generating', hook, caption: null, hashtags: [],
+          master_path: null, cost: Number(d.credits ?? 0), outlier_x: null, created_at: new Date(now).toISOString(), reject_reason: null,
+          qa: {}, features: { fav_id: f.id, drop: true, music: 'original' }, source: null,
+        };
+        this.clips.push(c);
+        f.clip_id = c.id;
+        f.status = 'queued';
+      }
+    }
+  }
+
   async load(): Promise<Snapshot> {
+    this.tick();
     const now = this.now();
     const today = londonDayKey(now);
     const acct = new Map(this.accounts.map((a) => [a.id, a]));
@@ -730,6 +869,8 @@ export class DemoBackend implements Backend {
       caption: c?.caption ?? null,
       hashtags: c ? c.hashtags : null,
       first_comment: c && typeof c.features.first_comment === 'string' ? c.features.first_comment : null,
+      drop_card: dropCardOf(f),
+      make_requested_at: (f.proposal.make_requested as { at?: string } | undefined)?.at ?? null,
     };
   }
 
@@ -906,6 +1047,89 @@ export class DemoBackend implements Backend {
     f.proposal = { ...f.proposal, owner_clip_path: path };
     this.emit('favorites');
     return path;
+  }
+
+  /** add_drop of migration 0012: a file drop (then attachClip and requestJob process) or a pasted link. */
+  async addDrop(characterSlug: string, link: string | null) {
+    if (!(characterSlug in NAMES)) throw new DemoError(`unknown character ${characterSlug}`);
+    const at = new Date(this.now()).toISOString();
+    const decision = { decision: 'approve', by: 'owner', reason: "owner's own video", at };
+    if (link == null) {
+      const id = uid('fn');
+      this.favs.push({
+        id, url: `owner-drop:${id}`, platform: 'drop', creator_handle: null, views: null, outlier_x: null, origin: 'owner',
+        character_slug: characterSlug, proposal: { decision, drop: { state: 'uploading', kind: 'file', at, reason: null } }, scores: {},
+        total_score: null, note: null, status: 'approved', created_at: at, clip_id: null,
+      });
+      this.emit('favorites');
+      return { pickId: id, duplicate: false };
+    }
+    const { platform, url } = canonicalVideoUrl(link);
+    const drop = { state: 'checking', kind: 'link', at, reason: null };
+    const existing = this.favs.find((f) => f.url === url && f.character_slug === characterSlug);
+    if (existing) {
+      if (existing.status !== 'queued' && existing.status !== 'made') {
+        const { hold_reason: _h, ...rest } = existing.proposal;
+        void _h;
+        existing.proposal = { ...rest, decision, drop };
+        existing.status = 'approved';
+        this.emit('favorites');
+      }
+      return { pickId: existing.id, duplicate: true };
+    }
+    const id = uid('fl');
+    const handle = platform === 'tiktok' ? `@${url.split('/@')[1].split('/')[0]}` : null;
+    this.favs.push({
+      id, url, platform, creator_handle: handle, views: null, outlier_x: null, origin: 'owner', character_slug: characterSlug,
+      proposal: { decision, drop }, scores: {}, total_score: null, note: null, status: 'approved', created_at: at, clip_id: null,
+    });
+    this.emit('favorites');
+    return { pickId: id, duplicate: false };
+  }
+
+  /** request_job of migration 0012 (the same refusals); the "cloud job" runs in tick() after 2 s. */
+  async requestJob(pickId: string, kind: 'process' | 'make', adjust: DropAdjust | null = null) {
+    if (kind !== 'process' && kind !== 'make') throw new DemoError(`kind must be process or make, got ${kind}`);
+    const f = this.favs.find((x) => x.id === pickId);
+    if (!f) throw new DemoError(`unknown pick ${pickId}`);
+    const d = f.proposal.drop as Record<string, unknown> | undefined;
+    if (!d || typeof d !== 'object') throw new DemoError(`pick ${pickId} is not a dropped video`);
+    if (f.status === 'made') throw new DemoError(`pick ${pickId} is already made`);
+    const at = new Date(this.now()).toISOString();
+    const requested = { ...((d.requested as Record<string, string>) ?? {}), [kind]: at };
+    if (kind === 'process') {
+      if (!['uploading', 'checking', 'waiting', 'failed'].includes(String(d.state))) {
+        throw new DemoError(`a check runs on an uploading, checking, waiting or failed drop; this one is ${d.state}`);
+      }
+      if (d.state === 'uploading' && !f.proposal.owner_clip_path) throw new DemoError('the upload has not finished: attach the video first');
+      f.proposal = { ...f.proposal, drop: { ...d, state: 'checking', reason: null, at, requested } };
+    } else {
+      if (!['ready', 'failed'].includes(String(d.state)) || d.credits == null || !d.source_id) {
+        throw new DemoError(`Make it needs a checked and priced drop (ready); this one is ${d.state}`);
+      }
+      if (adjust) {
+        const ok = validateAdjust(adjust, d as unknown as DropCard);
+        if (!ok.ok) throw new DemoError(ok.reason);
+      }
+      const { adjust: _a, ...rest } = d;
+      void _a;
+      f.proposal = {
+        ...f.proposal, make_requested: { at, by: 'owner' },
+        drop: { ...rest, state: 'making', reason: null, at, requested, ...(adjust && Object.keys(adjust).length ? { adjust } : {}) },
+      };
+    }
+    this.emit('favorites');
+    setTimeout(() => this.emit('favorites'), DEMO_JOB_MS + 100); // the board reloads when the demo's job is done
+    return { dispatched: true };
+  }
+
+  async previewUrl(path: string) {
+    // the demo stores no media: a labelled stand-in strip of five frames
+    const frames = Array.from({ length: 5 }, (_, i) =>
+      `<rect x="${i * 36}" y="0" width="35" height="64" fill="hsl(${(path.length * 7 + i * 23) % 360} 45% ${28 + i * 4}%)"/>` +
+      `<circle cx="${i * 36 + 17.5}" cy="26" r="8" fill="#fff" fill-opacity=".55"/>`).join('');
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 179 64">${frames}<text x="89" y="58" font-family="sans-serif" font-size="7" font-weight="700" fill="#fff" fill-opacity=".85" text-anchor="middle">DEMO SECTION</text></svg>`;
+    return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
   }
 
   async signedUrl() {

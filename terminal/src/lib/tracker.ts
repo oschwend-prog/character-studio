@@ -1,6 +1,7 @@
 // "In the works": where each approved pick is on its way to being posted. Pure functions over v_tracker rows (migration 0010): the
 // 8-step mapping with its flags, who is listed (a posted one stays 7 days), the order, the grouping by character and the words the
 // card shows. No browser.
+import { dropCredits, dropLine, isStaleUpload } from './drop';
 import { londonTime, londonWeekday } from './format';
 import { MUSIC_OPTIONS, defaultMusicForMode, tierOf } from './rules';
 import type { OwnerMode, OwnerMusic, Tier, TrackerRow } from './types';
@@ -85,6 +86,30 @@ export function trackerStep(r: TrackerRow, now: number): TrackerStep {
   const stuck = (step: TrackerStepNumber, note: string | null = null): TrackerStep =>
     hoursSince(r.clip_state_since, now) > STUCK_HOURS ? at(step, 'waiting', { reason: 'stuck?', note }) : at(step, 'ok', { note });
 
+  const d = r.drop_card;
+  if (d && r.clip_state == null) {
+    // a dropped video before its clip exists: its own states map onto the first three steps (Works shows its own card for them)
+    const since = d.at ?? r.approved_at;
+    const line = dropLine(d, now);
+    switch (d.state) {
+      case 'uploading':
+        return isStaleUpload(d, now) ? at(1, 'waiting', { since, reason: line }) : at(1, 'ok', { since, note: line });
+      case 'checking':
+        return at(1, 'ok', { since, note: line });
+      case 'waiting':
+        return at(1, 'waiting', { since, reason: line });
+      case 'blocked':
+        return at(1, 'failed', { since, reason: line });
+      case 'ready':
+        return at(2, 'ok', { since, note: `Ready: about ${dropCredits(d, d.adjust ?? {})} credits` });
+      case 'making':
+        return d.reason ? at(3, 'waiting', { since: r.make_requested_at ?? since, reason: d.reason }) : at(3, 'ok', { since: r.make_requested_at ?? since, note: line });
+      case 'failed':
+        return at(d.credits != null ? 3 : 1, 'failed', { since, reason: line });
+      case 'made':
+        return at(5, 'ok', { since });
+    }
+  }
   if (r.clip_state == null) {
     if (r.status === 'queued' || r.status === 'made') return at(3, 'ok', { since: r.approved_at, note: 'waiting for its clip to be created' });
     const ready = clipReady(r);
@@ -93,15 +118,16 @@ export function trackerStep(r: TrackerRow, now: number): TrackerStep {
       ? at(1, 'waiting', { since: r.approved_at, reason: 'no clip yet' })
       : at(1, 'ok', { since: r.approved_at });
   }
+  const job = d?.state === 'making' && d.reason ? d.reason : null; // what a cloud job waits for ("still working", a key)
   switch (r.clip_state) {
     case 'planned':
-      return stuck(3, 'queued for generation');
+      return stuck(3, job ?? 'queued for generation');
     case 'generating':
-      return stuck(3);
+      return stuck(3, job);
     case 'gen_failed':
       return at(3, 'failed', { reason: r.clip_failure ?? 'generation failed: the next run tries again' });
     case 'generated':
-      return stuck(4, 'waiting for the quality check');
+      return stuck(4, job ?? 'waiting for the quality check');
     case 'qa_passed':
       return stuck(4, 'passed, being built');
     case 'qa_failed':

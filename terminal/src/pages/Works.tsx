@@ -1,11 +1,15 @@
 // "In the works": every approved pick from Picks until it is posted (v_tracker, migration 0010), grouped by character and sorted by
 // its slot, else by when it was approved. Each card: the picture, what it is, the 8-step progress (done ticked, the current one lit,
 // the rest muted), how long it has been at that step, the credits spent so far, and a red flag with the reason when it is stuck or
-// something failed. The steps and flags come from trackerStep (lib/tracker.ts).
+// something failed. The steps and flags come from trackerStep (lib/tracker.ts). "Drop a video" (plan 2026-10-06) sits at the top:
+// a dropped video has its own card (DropCard) until the owner's Make it, then it joins the stepper like any other.
 import { AlertTriangle, Check, ExternalLink } from 'lucide-react';
+import { DropBox } from '../components/DropBox';
+import { DropCard } from '../components/DropCard';
 import { PickThumb } from '../components/PickThumb';
 import { PostText } from '../components/PostText';
 import { Avatar, Livery, Skeleton } from '../components/ui';
+import { isDropCard } from '../lib/drop';
 import { formatCredits } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
 import { compactCount } from '../lib/longlist';
@@ -27,6 +31,7 @@ export function Works() {
   if (!data) {
     return (
       <div className="page stack" aria-busy="true">
+        <Skeleton h={160} />
         <Skeleton h={120} />
         <Skeleton h={300} />
       </div>
@@ -39,14 +44,16 @@ export function Works() {
       <div>
         <h1 className="h1">In the works</h1>
         <p className="small muted" style={{ margin: '6px 0 0' }}>
-          Every clip you approved, from the pick to the post: where it is, how long it has been there and what it has cost so far.
+          Drop the videos you want made with our characters. Every one, from the drop to the post: where it is, how long it has
+          been there and what it has cost so far.
         </p>
       </div>
+      <DropBox />
       {groups.length === 0 ? (
         <div className="panel empty">
-          <b>Nothing approved yet.</b>
+          <b>Nothing in the works yet.</b>
           <span className="muted small">
-            Approve a clip in <a href={href('picks', undefined, { view: 'list' })}>Picks (Long list)</a> to start.
+            Drop a video above, or approve one in <a href={href('picks', undefined, { view: 'list' })}>Picks (Long list)</a>.
           </span>
         </div>
       ) : (
@@ -58,9 +65,7 @@ export function Works() {
               <span className="stage-count num on" aria-label={`${g.rows.length} in the works`}>{g.rows.length}</span>
             </header>
             <div className="picks-grid stack" style={{ gap: 12 }}>
-              {g.rows.map((r) => (
-                <WorkCard key={r.pick_id} row={r} now={now} />
-              ))}
+              {g.rows.map((r) => (isDropCard(r) ? <DropCard key={r.pick_id} row={r} now={now} /> : <WorkCard key={r.pick_id} row={r} now={now} />))}
             </div>
           </section>
         ))

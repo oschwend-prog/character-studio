@@ -379,6 +379,54 @@ export interface TrackerRow {
   first_comment: string | null;
   /** The decision record's checked time alone (migration 0011); null for an older record or before 0011. */
   decided_at?: string | null;
+  /** A video the owner dropped (migration 0012: proposal.drop without the job's internals); null for a scan or Picks pick. */
+  drop_card?: DropCard | null;
+  /** When the owner tapped Make it (proposal.make_requested.at, migration 0012). */
+  make_requested_at?: string | null;
+}
+
+/** Where a dropped video is ("Drop a video", 2026-10-06): studio.drop's states. */
+export type DropState = 'uploading' | 'checking' | 'waiting' | 'ready' | 'blocked' | 'making' | 'made' | 'failed';
+
+/** The owner's Adjust of a ready drop (sent with Make it; every field optional; checked again by the database and the CLI). */
+export interface DropAdjust {
+  /** Who is replaced, by position or clothes. */
+  star?: string;
+  part?: OwnerPresence;
+  gadgets?: string[];
+  hook?: string;
+  start_s?: number;
+  length_s?: number;
+  /** The centre of the 9:16 crop of a landscape clip (0 left, 1 right); null = no crop. */
+  crop_x?: number | null;
+}
+
+/** The drop card of a tracker row (v_tracker.drop_card): what the check found and what Make it will make. */
+export interface DropCard {
+  state: DropState;
+  /** One line: why it is blocked, waiting or failed, or what a making job waits for. */
+  reason?: string | null;
+  at?: string;
+  kind?: 'file' | 'link';
+  source_id?: string;
+  duration_s?: number;
+  width?: number;
+  height?: number;
+  window?: { start_s: number; length_s: number };
+  crop_x?: number | null;
+  star?: { kind: 'person' | 'dog' | 'animal' | 'none'; body: 'biped' | 'quadruped'; description: string; x_center: number; full_body?: boolean };
+  classic?: boolean;
+  part?: OwnerPresence;
+  gadgets?: string[];
+  hooks?: string[];
+  hook?: string;
+  music?: OwnerMusic;
+  seconds?: number;
+  credits?: number;
+  /** sources/owner/<pick id>/preview.jpg: five frames of the section (signed for the owner's browser). */
+  preview_path?: string | null;
+  adjust?: DropAdjust;
+  requested?: { process?: string; make?: string };
 }
 
 /** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */
@@ -519,6 +567,12 @@ export interface Backend {
    * Returns the storage path. We never download from TikTok or Instagram: this file comes from the owner.
    */
   attachClip(pickId: string, file: ClipFile, onProgress?: (pct: number) => void): Promise<string>;
+  /** "Drop a video" (add_drop, migration 0012): a file drop (link null, then attachClip + requestJob process) or a pasted link. */
+  addDrop(characterSlug: string, link: string | null): Promise<{ pickId: string; duplicate: boolean }>;
+  /** The owner's button (request_job): Checking (process) or Make it (make, with the Adjust). `dispatched` = the cloud job started now. */
+  requestJob(pickId: string, kind: 'process' | 'make', adjust?: DropAdjust | null): Promise<{ dispatched: boolean }>;
+  /** A signed URL of a drop's preview strip in the sources bucket (owner/<pick id>/preview.jpg), or null. */
+  previewUrl(path: string): Promise<string | null>;
   signedUrl(path: string): Promise<string | null>;
   /** Live updates; returns an unsubscribe. `onStatus` reports whether the live channel is up. */
   subscribe(onChange: (kind: ChangeKind) => void, onStatus: (up: boolean) => void): () => void;
