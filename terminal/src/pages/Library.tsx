@@ -3,6 +3,7 @@
 import { ExternalLink } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
+import { ClipPlayer } from '../components/ClipPlayer';
 import { Livery, OutlierBadge, Skeleton } from '../components/ui';
 import { clipCode, formatCredits, formatViews, londonStamp, platformName } from '../lib/format';
 import { useStudio } from '../lib/store';
@@ -94,6 +95,7 @@ export function Library({ focus }: { focus: string | null }) {
 }
 
 function Row({ clip: c, open, onToggle }: { clip: LibraryClip; open: boolean; onToggle(): void }) {
+  const { backend } = useStudio();
   return (
     <div role="listitem" className={open ? 'lib-item open' : 'lib-item'}>
       <button type="button" className="lib-row" onClick={onToggle} aria-expanded={open}>
@@ -114,6 +116,7 @@ function Row({ clip: c, open, onToggle }: { clip: LibraryClip; open: boolean; on
       </button>
       {open && (
         <div className="lib-detail">
+          {c.master_path && <ClipPlayer clip={c} demo={backend.kind === 'demo'} />}
           {c.caption && <span className="small muted">{c.caption}</span>}
           {c.reject_reason && <span className="small" style={{ color: 'var(--red)' }}>Reason: {c.reject_reason}</span>}
           {c.posts.length === 0 && <span className="small muted">No posts for this clip.</span>}
