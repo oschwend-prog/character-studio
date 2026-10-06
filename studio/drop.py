@@ -447,23 +447,26 @@ def next_engagement(store: Store, slug: str, clip_id: str | None = None) -> str:
 # ---- adding a drop (the terminal's RPC does the same: studio.add_drop, migration 0012) ----------------------------------------
 
 
-def add_drop(store: Store, character_slug: str, link: str | None, now: datetime | None = None) -> tuple[Favorite, bool]:
+def add_drop(
+    store: Store, character_slug: str, link: str | None, now: datetime | None = None, *, own_footage: bool = False
+) -> tuple[Favorite, bool]:
     """File a drop: ``(pick, duplicate)``. A file (``link`` None) is a new pick keyed ``owner-drop:<id>`` at ``uploading``; a link
     is its canonical URL at ``checking``, and a link already a pick of this character becomes that pick's drop (a pick already
-    queued or made is returned as it is, ``duplicate`` True)."""
+    queued or made is returned as it is, ``duplicate`` True). ``own_footage`` (owner 2026-10-06, for reporting later): the owner's
+    own recording or footage used with permission; the default is a downloaded clip (False). It does not change the generation."""
     now = now or now_london()
     if character_slug not in {c.slug for c in store.characters()}:
         raise ValueError(f"unknown character {character_slug!r}")
     record = {"decision": "approve", "by": "owner", "reason": "owner's own video", "at": now.isoformat()}
     if link is None:
         pick_id = str(uuid.uuid4())
-        drop = {"state": "uploading", "kind": "file", "at": now.isoformat(), "reason": None}
+        drop = {"state": "uploading", "kind": "file", "at": now.isoformat(), "reason": None, "own_footage": bool(own_footage)}
         return store.add_favorite(Favorite(
             id=pick_id, url=f"{DROP_URL_PREFIX}{pick_id}", platform=DROP_PLATFORM, origin="owner", character_slug=character_slug,
             proposal={"decision": record, "drop": drop}, status="approved",
         )), False  # fmt: skip
     platform, canonical = parse_video_url(link)
-    drop = {"state": "checking", "kind": "link", "at": now.isoformat(), "reason": None}
+    drop = {"state": "checking", "kind": "link", "at": now.isoformat(), "reason": None, "own_footage": bool(own_footage)}
     handle = canonical.split("/@", 1)[1].split("/", 1)[0] if platform == "tiktok" else None
     for f in store.list_favorites(url=canonical, character_slug=character_slug):
         if f.status in ("queued", "made"):
@@ -475,6 +478,14 @@ def add_drop(store: Store, character_slug: str, link: str | None, now: datetime 
         url=canonical, platform=platform, origin="owner", character_slug=character_slug,
         creator_handle=f"@{handle}" if handle else None, proposal={"decision": record, "drop": drop}, status="approved",
     )), False  # fmt: skip
+
+
+def set_own_footage(store: Store, pick_id: str, own_footage: bool) -> Favorite:
+    """The owner's toggle (``studio.set_drop_footage``, migration 0012): ``drop['own_footage']``, for reporting; any state."""
+    pick = _load(store, pick_id)
+    if not isinstance(own_footage, bool):
+        raise ValueError("own_footage must be true or false")
+    return store.update_favorite(pick.id, proposal={**pick.proposal, "drop": {**drop_of(pick), "own_footage": own_footage}})
 
 
 # ---- process -------------------------------------------------------------------------------------------------------------------
@@ -1200,11 +1211,14 @@ def _finish(outcome: Outcome) -> None:
 def add_command(
     character_slug: Annotated[str, typer.Option("--character", help="biscuit or reginald.")],
     link: Annotated[str | None, typer.Option("--link", help="A full TikTok / Instagram Reel / YouTube link (else a file drop).")] = None,
+    own_footage: Annotated[
+        bool, typer.Option("--own-footage", help="The owner's own recording or footage used with permission (default: a downloaded clip).")
+    ] = False,
 ) -> None:
     """File a drop like the terminal does (a link, or a file drop waiting for its upload)."""
     store = open_store()
     try:
-        pick, duplicate = add_drop(store, character_slug, link)
+        pick, duplicate = add_drop(store, character_slug, link, own_footage=own_footage)
     except ValueError as e:
         fail(str(e))
     emit({"pick_id": pick.id, "duplicate": duplicate, "drop": pick.proposal.get("drop")})

@@ -489,15 +489,18 @@ describe('hash routes with a query', () => {
     expect(parseHash('#/picks?c=biscuit')).toEqual({ route: 'picks', param: null, query: 'c=biscuit' });
     expect(parseHash('#/queue/abc-123')).toEqual({ route: 'queue', param: 'abc-123', query: '' });
     expect(parseHash('#/queue/abc-123?c=reginald')).toEqual({ route: 'queue', param: 'abc-123', query: 'c=reginald' });
-    expect(parseHash('')).toEqual({ route: 'today', param: null, query: '' });
-    expect(parseHash('#/nonsense?c=x').route).toBe('today');
+    // owner 2026-10-06: the app opens on "In the works" (the drops); Today has its own address
+    expect(parseHash('')).toEqual({ route: 'works', param: null, query: '' });
+    expect(parseHash('#/nonsense?c=x').route).toBe('works');
+    expect(parseHash('#/today')).toEqual({ route: 'today', param: null, query: '' });
   });
 
   it('builds the link the Characters page uses for “all picks of this character”', () => {
     expect(href('picks', undefined, { c: 'biscuit' })).toBe('#/picks?c=biscuit');
     expect(href('picks')).toBe('#/picks');
     expect(href('queue', 'abc')).toBe('#/queue/abc');
-    expect(href('today')).toBe('#/');
+    expect(href('works')).toBe('#/');
+    expect(href('today')).toBe('#/today');
   });
 });
 
@@ -594,5 +597,18 @@ describe('the demo data', () => {
     expect((await demo.load()).picks.find((x) => x.id === p.id)!.owner_clip_path).toBe(path);
     await expect(demo.attachClip(p.id, { name: 'notes.txt', size: 5, type: 'text/plain' })).rejects.toThrow(/not a video/);
     await expect(demo.attachClip('nope', { name: 'a.mp4', size: 5, type: 'video/mp4' })).rejects.toThrow(/unknown pick/);
+  });
+});
+
+describe('the tab bar (owner 2026-10-06: the drops first, the viral scan later)', () => {
+  it('opens on In the works, ends with Scan marked later, and keeps every page', async () => {
+    const { TABS } = await import('./tabs');
+    const { ROUTES, HOME } = await import('./hooks');
+    expect(HOME).toBe('works');
+    expect(TABS[0]).toEqual({ route: 'works', label: 'In the works' });
+    expect(TABS[TABS.length - 1]).toEqual({ route: 'picks', label: 'Scan', later: true });
+    expect(TABS.filter((t) => t.later).map((t) => t.route)).toEqual(['picks']);
+    expect(new Set(TABS.map((t) => t.route))).toEqual(new Set(ROUTES)); // nothing removed: the Long list and every page stay
+    expect(TABS.map((t) => t.label)).toEqual(['In the works', 'Today', 'Queue', 'Characters', 'Library', 'Budget', 'Scan']);
   });
 });

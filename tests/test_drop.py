@@ -340,6 +340,7 @@ def test_a_drop_is_never_in_the_daily_runs_queue(world, portrait):
 def test_add_drop_files_a_file_and_dedupes_a_link_per_character(world):
     store, _ = world
     a, _ = add_drop(store, "reginald", None, NOW)
+    assert a.proposal["drop"]["own_footage"] is False  # owner 2026-10-06: a downloaded clip unless the owner says otherwise
     assert a.url == f"owner-drop:{a.id}" and a.platform == "drop" and a.origin == "owner" and a.status == "approved"
     assert a.proposal["decision"]["by"] == "owner" and a.proposal["decision"]["at"]
     first, dup1 = add_drop(store, "reginald", TIKTOK, NOW)
@@ -662,3 +663,23 @@ def test_cli_make_refuses_without_the_owners_tap_and_pending_counts(monkeypatch,
     assert r.exit_code == 0 and json.loads(r.output)["results"][0]["reason"].startswith("waiting for the Higgsfield key")
     r = CliRunner().invoke(app, ["drop", "make", "not-a-pick"])
     assert r.exit_code == 2 and "unknown pick" in r.output
+
+
+def test_the_own_footage_flag_is_kept_through_the_check_and_never_reaches_the_swap(world, portrait):
+    """Owner 2026-10-06: "own footage" (his recording, or footage used with permission) or a "downloaded clip" (the default): for
+    reporting later, nothing in the generation reads it."""
+    store, storage = world
+    own, _ = add_drop(store, "reginald", None, NOW, own_footage=True)
+    assert own.proposal["drop"]["own_footage"] is True
+    pid = drop_file(store, storage, portrait)
+    assert store.get_favorite(pid).proposal["drop"]["own_footage"] is False
+    drop.set_own_footage(store, pid, True)
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
+    assert out.state == "ready" and store.get_favorite(pid).proposal["drop"]["own_footage"] is True
+    drop.set_own_footage(store, pid, False)
+    assert store.get_favorite(pid).proposal["drop"]["own_footage"] is False
+    with pytest.raises(ValueError, match="true or false"):
+        drop.set_own_footage(store, pid, "yes")
+    scan_pick = store.add_favorite(drop.Favorite(url=TIKTOK, platform="tiktok", character_slug="reginald", status="approved"))
+    with pytest.raises(DropError, match="not a dropped video"):
+        drop.set_own_footage(store, scan_pick.id, True)

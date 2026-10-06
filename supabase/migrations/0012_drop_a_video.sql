@@ -26,6 +26,9 @@
 --    logged; any failure of the dispatch is swallowed (dispatched false) and the sweep picks the job up.
 -- 4. v_tracker is re-created with every column of 0011, in the same order, and appended: `drop_card` (proposal.drop without
 --    the job's internals: the deconstruct, the make record with its signed URL, the lease) and `make_requested_at`.
+-- 5. set_drop_footage(pick_id, own_footage): the owner's toggle on a drop card (owner 2026-10-06, for the reporting of an income
+--    campaign later): "own footage" (the owner's recording, or footage used with permission) versus "downloaded clip" (the
+--    default, false). Security invoker (the owner's RLS applies), empty search_path; it changes nothing about the generation.
 
 -- ---- 1. pg_net -------------------------------------------------------------------------------------------------------------
 
@@ -61,7 +64,7 @@ begin
   end if;
   if clean is null then
     new_id := gen_random_uuid();
-    drop_ := jsonb_build_object('state', 'uploading', 'kind', 'file', 'at', now(), 'reason', null);
+    drop_ := jsonb_build_object('state', 'uploading', 'kind', 'file', 'at', now(), 'reason', null, 'own_footage', false);
     insert into studio.favorites (id, url, platform, origin, character_slug, proposal, status)
     values (new_id, 'owner-drop:' || new_id::text, 'drop', 'owner', add_drop.character_slug,
             jsonb_build_object('decision', rec, 'drop', drop_), 'approved')
@@ -80,7 +83,7 @@ begin
   if plat = 'tiktok' then
     handle := '@' || substring(clean from '^https://www\.tiktok\.com/@([[:alnum:]_.-]+)/video/');
   end if;
-  drop_ := jsonb_build_object('state', 'checking', 'kind', 'link', 'at', now(), 'reason', null);
+  drop_ := jsonb_build_object('state', 'checking', 'kind', 'link', 'at', now(), 'reason', null, 'own_footage', false);
   select * into f from studio.favorites fa
    where fa.url = clean and fa.character_slug = add_drop.character_slug
    order by fa.created_at, fa.id limit 1 for update;
@@ -237,6 +240,36 @@ begin
 end;
 $$;
 
+-- ---- 5. set_drop_footage ------------------------------------------------------------------------------------------------------
+
+create or replace function studio.set_drop_footage(pick_id uuid, own_footage boolean)
+returns jsonb
+language plpgsql
+volatile
+security invoker
+set search_path = ''
+as $$
+declare
+  f studio.favorites;
+begin
+  if set_drop_footage.own_footage is null then
+    raise exception 'own_footage must be true or false' using errcode = 'invalid_parameter_value';
+  end if;
+  select * into f from studio.favorites fa where fa.id = set_drop_footage.pick_id for update;
+  if not found then
+    raise exception 'unknown pick %', set_drop_footage.pick_id using errcode = 'no_data_found';
+  end if;
+  if jsonb_typeof(f.proposal -> 'drop') is distinct from 'object' then
+    raise exception 'pick % is not a dropped video', f.id using errcode = 'check_violation';
+  end if;
+  update studio.favorites fa
+     set proposal = jsonb_set(fa.proposal, '{drop,own_footage}', to_jsonb(set_drop_footage.own_footage))
+   where fa.id = f.id
+  returning fa.* into f;
+  return to_jsonb(f);
+end;
+$$;
+
 -- ---- 4. v_tracker (0011's columns, then the drop) ----------------------------------------------------------------------------
 
 create or replace view studio.v_tracker with (security_invoker = true) as
@@ -347,6 +380,8 @@ where f.status in ('approved', 'analysed', 'queued')
 
 revoke all on function studio.add_drop(text, text) from public;
 grant execute on function studio.add_drop(text, text) to authenticated;
+revoke all on function studio.set_drop_footage(uuid, boolean) from public;
+grant execute on function studio.set_drop_footage(uuid, boolean) to authenticated;
 revoke all on function studio.request_job(uuid, text, jsonb) from public;
 grant execute on function studio.request_job(uuid, text, jsonb) to authenticated;
 do $$

@@ -427,6 +427,9 @@ export interface DropCard {
   preview_path?: string | null;
   adjust?: DropAdjust;
   requested?: { process?: string; make?: string };
+  /** Owner 2026-10-06: his own recording or footage used with permission (true) or a downloaded clip (false, the default). For
+   * reporting later: the generation never reads it. */
+  own_footage?: boolean;
 }
 
 /** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */
@@ -571,6 +574,8 @@ export interface Backend {
   addDrop(characterSlug: string, link: string | null): Promise<{ pickId: string; duplicate: boolean }>;
   /** The owner's button (request_job): Checking (process) or Make it (make, with the Adjust). `dispatched` = the cloud job started now. */
   requestJob(pickId: string, kind: 'process' | 'make', adjust?: DropAdjust | null): Promise<{ dispatched: boolean }>;
+  /** The drop card's toggle (set_drop_footage, migration 0012): own footage (true) or a downloaded clip (false). */
+  setDropFootage(pickId: string, ownFootage: boolean): Promise<void>;
   /** A signed URL of a drop's preview strip in the sources bucket (owner/<pick id>/preview.jpg), or null. */
   previewUrl(path: string): Promise<string | null>;
   signedUrl(path: string): Promise<string | null>;

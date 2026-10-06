@@ -194,6 +194,9 @@ export class LiveBackend implements Backend {
     });
     return { dispatched: Boolean(r?.dispatched) };
   }
+  async setDropFootage(pickId: string, ownFootage: boolean) {
+    await this.rpc('set_drop_footage', { pick_id: pickId, own_footage: ownFootage });
+  }
   async previewUrl(path: string) {
     // a drop's preview strip lives under sources/owner/<pick id>/ (the owner may read there: storage policy of 0008)
     if (!/^owner\/[0-9a-f-]{36}\/[^/\s]+$/i.test(path)) return null;

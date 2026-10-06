@@ -303,6 +303,7 @@ def test_a_missing_table_fails_the_schema_check_naming_it(world):
         (("column", "decided_at"), "0011"),
         (("function", "request_job"), "0012"),
         (("function", "add_drop"), "0012"),
+        (("function", "set_drop_footage"), "0012"),
         (("column", "make_requested_at"), "0012"),
     ],
 )

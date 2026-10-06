@@ -4,6 +4,7 @@ import { Clapperboard, Clock3, Flame, Gauge, Library as LibraryIcon, ListChecks,
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Mark } from './components/ui';
 import { londonDate, londonTime } from './lib/format';
+import { TABS as TAB_SPECS } from './lib/tabs';
 import { href, useNow, useRoute, type Route } from './lib/hooks';
 import { StudioProvider, useStudio } from './lib/store';
 import type { Backend } from './lib/types';
@@ -97,15 +98,11 @@ function LiveGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-const TABS: { route: Route; label: string; Icon: ComponentType<{ 'aria-hidden'?: boolean }> }[] = [
-  { route: 'today', label: 'Today', Icon: Clock3 },
-  { route: 'picks', label: 'Picks', Icon: Flame },
-  { route: 'works', label: 'In the works', Icon: Clapperboard },
-  { route: 'queue', label: 'Queue', Icon: ListChecks },
-  { route: 'channels', label: 'Characters', Icon: Users },
-  { route: 'library', label: 'Library', Icon: LibraryIcon },
-  { route: 'budget', label: 'Budget', Icon: Gauge },
-];
+// The order, the labels and the "later" mark live in lib/tabs.ts (owner 2026-10-06: In the works first, the viral scan last).
+const ICONS: Record<Route, ComponentType<{ 'aria-hidden'?: boolean }>> = {
+  works: Clapperboard, today: Clock3, queue: ListChecks, channels: Users, library: LibraryIcon, budget: Gauge, picks: Flame,
+};
+const TABS = TAB_SPECS.map((t) => ({ ...t, Icon: ICONS[t.route] }));
 
 function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.ReactNode }) {
   const { data, live, error, toasts, refresh } = useStudio();
@@ -113,7 +110,6 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
   const now = useNow(10_000);
   const badge: Partial<Record<Route, { n: number; quiet?: boolean }>> = {
     queue: data?.queue.length ? { n: data.queue.length } : undefined,
-    picks: data?.picks.length ? { n: data.picks.length, quiet: true } : undefined,
     today: data?.health.length ? { n: data.health.length, quiet: true } : undefined,
   };
 
@@ -151,12 +147,17 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
         {route === 'budget' && <Budget account={account} />}
       </main>
       <nav className="tabbar" aria-label="Sections">
-        {TABS.map(({ route: r, label, Icon }) => (
+        {TABS.map(({ route: r, label, Icon, later }) => (
           <a key={r} className="tab" href={href(r)} aria-current={route === r ? 'page' : undefined}>
             <Icon aria-hidden />
             {label}
-            {badge[r] && (
-              <span className={`badge${badge[r]!.quiet ? ' quiet' : ''}`} aria-label={`${badge[r]!.n} ${r === 'queue' ? 'waiting' : r === 'picks' ? 'new' : 'alerts'}`}>
+            {later && (
+              <span className="badge later" aria-label="for later">
+                later
+              </span>
+            )}
+            {!later && badge[r] && (
+              <span className={`badge${badge[r]!.quiet ? ' quiet' : ''}`} aria-label={`${badge[r]!.n} ${r === 'queue' ? 'waiting' : 'alerts'}`}>
                 {badge[r]!.n}
               </span>
             )}

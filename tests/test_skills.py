@@ -395,3 +395,19 @@ def test_the_caption_follows_the_owners_formula_with_a_rotating_engagement_line_
         assert part in master, part
     assert "at most 5 hashtags, the caption passed" not in master  # the old one-line rule is gone
     assert "`--first-comment-file`" in text("daily-run").split("## Drop-in playbook", 1)[0]  # free text goes through a file
+
+
+# ---- the launch phase (owner 2026-10-06): production only from the owner's drops after Make it ---------------------------------
+
+
+def test_the_launch_phase_makes_only_the_owners_drops_and_turns_the_auto_approve_rule_off():
+    body = text("daily-run")
+    launch = body.split("## Launch phase (owner 2026-10-06)", 1)[1].split("## Drop-in playbook", 1)[0]
+    assert "**Production comes ONLY from the owner's drops after Make it**" in launch
+    assert "`proposal.make_requested`" in launch and "steps 3 to 9 are skipped" in launch
+    assert "**The scan may still file picks for later**" in launch and "**the standing auto-approve rule is OFF**" in launch
+    assert "every filed pick stays `new`" in launch and "Never approve a scan pick yourself" in launch
+    assert "`proposal.drop.own_footage`" in launch and "changes nothing in what you make" in launch
+    assert body.index("## Launch phase") < body.index("## 1. Orient")  # read before anything runs
+    scan = body.split("## 2. Scan", 1)[1].split("## 3. Plan", 1)[0]
+    assert "5. **Launch phase: skip this step**" in scan

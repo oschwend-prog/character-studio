@@ -971,10 +971,11 @@ def test_0012_creates_add_drop_request_job_and_v_tracker_and_nothing_else():
     )
     assert kinds == [
         "create or replace view studio.v_tracker", "grant execute on function studio.add_drop", "grant execute on function studio.request_job",
-        "grant select on studio.v_tracker", "revoke all on function studio.add_drop", "revoke all on function studio.request_job",
+        "grant execute on function studio.set_drop_footage", "grant select on studio.v_tracker", "revoke all on function studio.add_drop",
+        "revoke all on function studio.request_job", "revoke all on function studio.set_drop_footage",
     ]  # fmt: skip
-    assert DROPVIDEO_CODE.count("create or replace function") == 2
-    assert re.findall(r"create or replace function studio\.(\w+)", DROPVIDEO_CODE) == ["add_drop", "request_job"]
+    assert DROPVIDEO_CODE.count("create or replace function") == 3
+    assert re.findall(r"create or replace function studio\.(\w+)", DROPVIDEO_CODE) == ["add_drop", "request_job", "set_drop_footage"]
     assert not re.search(r"\b(truncate|delete|alter|create table|drop function|drop view|drop table)\b", DROPVIDEO_CODE, re.I)
     # the two do-blocks: pg_net only where the database has it, and the anon revoke only where the role exists
     assert "pg_available_extensions where name = 'pg_net'" in DROPVIDEO_CODE
@@ -1058,3 +1059,19 @@ def test_0012_v_tracker_is_0011s_with_the_drop_card_appended():
     )
     assert appended in whole_new and whole_new.replace(appended, "\n") == whole_old  # nothing else of 0011's view changed
     assert "grant select on studio.v_tracker to authenticated;" in DROPVIDEO_SQL
+
+
+def test_0012_the_own_footage_toggle_is_the_owners_and_defaults_to_a_downloaded_clip():
+    """Owner 2026-10-06: a drop is "own footage" (the owner's recording or footage used with permission) or a "downloaded clip"
+    (the default); it is for reporting later and changes nothing about the generation."""
+    body = _function(DROPVIDEO_SQL, "set_drop_footage")
+    assert "set_drop_footage(pick_id uuid, own_footage boolean)" in body
+    assert "security invoker" in body and "set search_path = ''" in body and "security definer" not in body
+    assert "own_footage must be true or false" in body and "is not a dropped video" in body and "for update" in body
+    assert "jsonb_set(fa.proposal, '{drop,own_footage}', to_jsonb(set_drop_footage.own_footage))" in body
+    add = _function(DROPVIDEO_SQL, "add_drop")
+    assert add.count("'own_footage', false") == 2  # a file and a link both start as a downloaded clip
+    assert "own_footage" not in _function(DROPVIDEO_SQL, "request_job")  # the generation never reads it
+    from studio import drop
+
+    assert "own_footage" not in drop.swap_prompt.__code__.co_names

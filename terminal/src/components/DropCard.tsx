@@ -34,6 +34,10 @@ export function DropCard({ row, now }: { row: TrackerRow; now: number }) {
   const make = (adjust: DropAdjust | null) =>
     run(key, () => backend.requestJob(row.pick_id, 'make', adjust), `Make it: ${row.character_name ?? 'he'} is on his way (about ${dropCredits(d, adjust ?? {})} credits)`);
   const recheck = () => run(key, () => backend.requestJob(row.pick_id, 'process'), 'Checking it again');
+  const own = d.own_footage === true;
+  const setFootage = (value: boolean) => {
+    if (value !== own) void run(key, () => backend.setDropFootage(row.pick_id, value), value ? 'Marked as your own footage' : 'Marked as a downloaded clip');
+  };
   const remove = () => run(key, () => backend.decidePick(row.pick_id, 'skip', 'removed by the owner from In the works', null), 'Removed');
 
   return (
@@ -72,6 +76,18 @@ export function DropCard({ row, now }: { row: TrackerRow; now: number }) {
           {(d.state === 'uploading' || d.state === 'checking') && <Spinner />} <span>{dropLine(d, now)}</span>
         </p>
       )}
+
+      <div className="drop-footage" role="group" aria-label="Where the video comes from">
+        <div className="seg">
+          <button type="button" aria-pressed={!own} disabled={working} onClick={() => setFootage(false)}>
+            Downloaded clip
+          </button>
+          <button type="button" aria-pressed={own} disabled={working} onClick={() => setFootage(true)}>
+            Own footage
+          </button>
+        </div>
+        <span className="hint">Own footage: your recording, or footage you may use. For the records; it does not change the video.</span>
+      </div>
 
       {actions.length > 0 && (
         <div className="drop-actions">

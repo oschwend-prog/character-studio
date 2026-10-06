@@ -199,3 +199,24 @@ describe('the demo', () => {
     expect((await demo.previewUrl('owner/x/preview.jpg'))?.startsWith('data:image/svg+xml')).toBe(true);
   });
 });
+
+describe('own footage or a downloaded clip (owner 2026-10-06)', () => {
+  it('starts as a downloaded clip, the toggle sets it, and the demo shows both', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    const demo = new DemoBackend(() => NOW);
+    const snap = await demo.load();
+    const drops = snap.tracker.filter((r) => r.drop_card);
+    expect(drops.some((r) => r.drop_card!.own_footage === true) && drops.some((r) => r.drop_card!.own_footage === false)).toBe(true);
+    const { pickId } = await demo.addDrop('biscuit', null);
+    const card = async () => (await demo.load()).tracker.find((r) => r.pick_id === pickId)!.drop_card!;
+    expect((await card()).own_footage).toBe(false);
+    await demo.setDropFootage(pickId, true);
+    expect((await card()).own_footage).toBe(true);
+    await expect(demo.setDropFootage(snap.tracker.find((r) => !r.drop_card)!.pick_id, true)).rejects.toThrow(/not a dropped video/);
+  });
+
+  it('never changes what Make it sends or costs', () => {
+    expect(dropCredits({ ...READY, own_footage: true })).toBe(dropCredits(READY));
+    expect(effectiveDrop({ ...READY, own_footage: true })).toEqual(effectiveDrop(READY));
+  });
+});

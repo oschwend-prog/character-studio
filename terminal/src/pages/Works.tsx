@@ -53,7 +53,7 @@ export function Works() {
         <div className="panel empty">
           <b>Nothing in the works yet.</b>
           <span className="muted small">
-            Drop a video above, or approve one in <a href={href('picks', undefined, { view: 'list' })}>Picks (Long list)</a>.
+            Drop a video above, or later approve one in <a href={href('picks', undefined, { view: 'list' })}>Scan (Long list)</a>.
           </span>
         </div>
       ) : (

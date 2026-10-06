@@ -12,13 +12,15 @@ export function useNow(ms = 15_000): number {
 }
 
 export type Route = 'today' | 'picks' | 'works' | 'queue' | 'channels' | 'library' | 'budget';
-export const ROUTES: Route[] = ['today', 'picks', 'works', 'queue', 'channels', 'library', 'budget'];
+export const ROUTES: Route[] = ['works', 'today', 'queue', 'channels', 'library', 'budget', 'picks'];
+/** Where the app opens (owner 2026-10-06: the channels start from the owner's own drops; the scan takes over later). */
+export const HOME: Route = 'works';
 
 /** `#/queue/<clip id>` and `#/picks?c=biscuit`: the route, its one path parameter and the query of the hash. */
 export function parseHash(hash: string): { route: Route; param: string | null; query: string } {
   const [pathPart, ...rest] = hash.replace(/^#\/?/, '').split('?');
   const [path, param] = pathPart.split('/');
-  return { route: (ROUTES as string[]).includes(path) ? (path as Route) : 'today', param: param || null, query: rest.join('?') };
+  return { route: (ROUTES as string[]).includes(path) ? (path as Route) : HOME, param: param || null, query: rest.join('?') };
 }
 
 const parse = () => parseHash(window.location.hash);
@@ -39,7 +41,7 @@ export function useRoute() {
 
 export const href = (route: Route, param?: string, query?: Record<string, string>) => {
   const q = query && Object.keys(query).length ? `?${new URLSearchParams(query).toString()}` : '';
-  return route === 'today' ? `#/${q}` : `#/${route}${param ? `/${param}` : ''}${q}`;
+  return route === HOME && !param ? `#/${q}` : `#/${route}${param ? `/${param}` : ''}${q}`;
 };
 
 const safeStorage = (): Storage | null => {

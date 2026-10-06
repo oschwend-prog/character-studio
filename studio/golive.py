@@ -131,9 +131,13 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
     # 0011 (when the owner decided): decide_pick and v_tracker re-created; the column v_tracker appends, `decided_at`, is what
     # tells 0011 from 0010 (the function and the view already exist after 0010).
     "0011": (("function", "decide_pick"), ("view", "v_tracker"), ("column", "decided_at")),
-    # 0012 (Drop a video): add_drop, request_job (the owner's button: pg_net + the Vault token) and v_tracker with the drop's
+    # 0012 (Drop a video): add_drop, request_job (the owner's button: pg_net + the Vault token), set_drop_footage (the own-footage
+    # toggle) and v_tracker with the drop's
     # card appended (drop_card, then make_requested_at: the last appended column tells it from 0011).
-    "0012": (("function", "add_drop"), ("function", "request_job"), ("view", "v_tracker"), ("column", "make_requested_at")),
+    "0012": (
+        ("function", "add_drop"), ("function", "request_job"), ("function", "set_drop_footage"), ("view", "v_tracker"),
+        ("column", "make_requested_at"),
+    ),
 }
 
 PROBE_SQL = """

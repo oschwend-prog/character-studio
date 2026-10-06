@@ -495,7 +495,7 @@ export class DemoBackend implements Backend {
         proposal: {
           decision: { decision: 'approve', by: 'owner', reason: "owner's own video", at: atMin(minutesAgo) },
           ...(extra.proposal ?? {}),
-          drop: { state: 'uploading', kind: link ? 'link' : 'file', at: atMin(minutesAgo), reason: null, ...drop },
+          drop: { state: 'uploading', kind: link ? 'link' : 'file', at: atMin(minutesAgo), reason: null, own_footage: false, ...drop },
         },
       };
       this.favs.push(f);
@@ -525,7 +525,7 @@ export class DemoBackend implements Backend {
     readyDrop(4, 'biscuit', 40, 'A dachshund trots across a sunlit kitchen and spins on the beat.', {
       slug: 'biscuit', star: dog('the dachshund on the kitchen floor'), seconds: 9, start: 1.5, duration: 14.2,
       hooks: ['kitchen is my stage', 'chef’s kiss, but with paws', 'the spin was not planned'], gadgets: ['gold chain'],
-    });
+    }, 'ready', { own_footage: true }); // the owner's own recording
     readyDrop(5, 'reginald', 25, 'A man in a grey suit does the shoulder shimmy down an office corridor.', {
       slug: 'reginald', star: person('the man in the grey suit in the middle', 0.42), seconds: 12.5, start: 3, duration: 31, landscape: true,
       hooks: ['The household is unaware.', 'Breakfast is at eight.', 'Kindly do not tell the Duchess.'], gadgets: ['silver tray + teapot'],
@@ -1058,14 +1058,14 @@ export class DemoBackend implements Backend {
       const id = uid('fn');
       this.favs.push({
         id, url: `owner-drop:${id}`, platform: 'drop', creator_handle: null, views: null, outlier_x: null, origin: 'owner',
-        character_slug: characterSlug, proposal: { decision, drop: { state: 'uploading', kind: 'file', at, reason: null } }, scores: {},
+        character_slug: characterSlug, proposal: { decision, drop: { state: 'uploading', kind: 'file', at, reason: null, own_footage: false } }, scores: {},
         total_score: null, note: null, status: 'approved', created_at: at, clip_id: null,
       });
       this.emit('favorites');
       return { pickId: id, duplicate: false };
     }
     const { platform, url } = canonicalVideoUrl(link);
-    const drop = { state: 'checking', kind: 'link', at, reason: null };
+    const drop = { state: 'checking', kind: 'link', at, reason: null, own_footage: false };
     const existing = this.favs.find((f) => f.url === url && f.character_slug === characterSlug);
     if (existing) {
       if (existing.status !== 'queued' && existing.status !== 'made') {
@@ -1121,6 +1121,17 @@ export class DemoBackend implements Backend {
     this.emit('favorites');
     setTimeout(() => this.emit('favorites'), DEMO_JOB_MS + 100); // the board reloads when the demo's job is done
     return { dispatched: true };
+  }
+
+  /** set_drop_footage of migration 0012. */
+  async setDropFootage(pickId: string, ownFootage: boolean) {
+    if (typeof ownFootage !== 'boolean') throw new DemoError('own_footage must be true or false');
+    const f = this.favs.find((x) => x.id === pickId);
+    if (!f) throw new DemoError(`unknown pick ${pickId}`);
+    const d = f.proposal.drop;
+    if (!d || typeof d !== 'object') throw new DemoError(`pick ${pickId} is not a dropped video`);
+    f.proposal = { ...f.proposal, drop: { ...(d as Record<string, unknown>), own_footage: ownFootage } };
+    this.emit('favorites');
   }
 
   async previewUrl(path: string) {
