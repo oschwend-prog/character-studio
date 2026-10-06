@@ -13,6 +13,18 @@
 
 ## 1. Open conflicts (Olivier decides)
 
+**Decided by Olivier on 2026-10-06** ("let's keep it simple"):
+- **C1, C2, C3: footage.** The main way to make a video is to **download the footage and drop our characters in with Genjutsu Object swap, keeping the original shot**. Famous clips are fine, as long as the real star is replaced. Motion transfer is only the fallback when there is no usable clip.
+- **Music:** the clip's original sound stays for now. Changing the music is an option for later.
+- **C4: downloading.**
+  - Olivier may download clips himself with a downloader site (e.g. snapinsta) and drop the files into the terminal.
+  - The system's own automated sourcing keeps to `yt-dlp` and owner uploads: no third-party download sites inside the automation, which would mean downloading from untrusted sources.
+  - Clips saved with the Instagram or TikTok app carry a watermark. The free check catches it.
+- **C9: publishing.** "Our social media manager" will handle hosting, captions and timing later. The focus now is on getting the videos made.
+
+Still open: C5 (two dachshunds), C6, C7 (Borat-type), C8 (one universe), C10 (rhythm), C11 (voice), C12 (shared credits).
+
+
 | # | Topic | Brief (B) says | Repo (A) does today | Decision needed |
 |---|---|---|---|---|
 | C1 | **Literal footage** | Copy the **format** (hook, beat, sound, structure), **never the literal footage**: legal exposure and re-upload detection. | **Drop-in:** Genjutsu **Object swap** into the real viral clip, keeping its setting, camera, timing and **original sound** (owner 2026-10-05/06: "drop our characters straight into viral videos with their sound"). Wednesday was made this way. | Is Drop-in allowed, or Recreate-only (motion transfer)? This decides C2, C3 and C4. |
