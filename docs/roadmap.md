@@ -42,3 +42,12 @@ Order: get Biscuit + Reginald running on Instagram first, then expand.
 - Monetisation angle: music channels pull high shares; brand fits = cars, headphones, showers/bathroom,
   sportswear.
 - First step when we get there: design 3 looks (1 credit each), pick, then a 5-clip test series.
+
+## After launch: the ODD EYES terminal as a subscription (owner, 2026-10-06)
+- Owner: "once done with this and live, we should also think about selling the odd eyes terminal on social media as
+  subscription; like this people can easily create their own characters."
+- Parked until the four characters are live. When we pick it up: who it is for (creators, small brands), what they get
+  (character design with spec sheets, drop a clip -> Object swap -> caption pill -> post), pricing against the Higgsfield
+  and Gemini costs per video, multi-user accounts (today the terminal is single-owner by design), each customer's own
+  Higgsfield/Postiz keys, and platform rules on AI labels. Our own channels are the demo.
+- Related parked idea: the 10-character library `docs/influencers/2026-10-06-character-library-v1.md`.
