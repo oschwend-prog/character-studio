@@ -10,6 +10,11 @@ is where the trimmed window began in the source), lays it under the output's pic
 the audio is AAC 48 kHz) and stops at the picture's length. This only restores the clip's own audio: it never adds
 anything the clip did not carry, and ``master build`` still refuses any other third-party audio.
 
+**A frame big enough for the Object swap** ("Drop a video", 2026-10-06): Higgsfield's Object swap needs at least 409,600
+pixels a frame. ``trim_clip(..., min_pixels=N)`` scales a window that is smaller (a 9:16 crop of a 720p landscape clip is
+404x720) up, keeping its shape, to the smallest even size of at least N pixels. ``proxy_clip`` makes the small copy of a clip
+(the longer side 640 px, 15 fps, mono AAC) that is sent to Gemini for the deconstruct: the same picture and sound, smaller.
+
 CLI: ``studio master mux-audio VIDEO SOURCE --start S --out OUT`` (and ``studio source trim`` for the trim of a
 catalogued source). Exit 2 for anything the caller must fix.
 """
@@ -25,6 +30,8 @@ from pathlib import Path
 from studio.media.qa import QAError, probe
 
 TRIM_MAX_SECONDS = 16.0  # the hard maximum of a master
+OBJECT_SWAP_MIN_PIXELS = 409_600  # Higgsfield's Object swap: at least this many pixels a frame
+PROXY_LONG_SIDE = 640
 _SLACK = 0.15  # a window may overshoot the end of the file by a frame or two of container rounding
 _FFMPEG = "ffmpeg"
 
@@ -78,6 +85,19 @@ def crop_window(width: int, height: int, centre_x: float) -> tuple[int, int, int
     return crop_w, height, x - x % 2
 
 
+def upscaled_size(width: int, height: int, min_pixels: int) -> tuple[int, int] | None:
+    """The smallest even ``(w, h)`` of the same shape with at least ``min_pixels`` pixels, or None when the frame has enough."""
+    if width <= 0 or height <= 0:
+        raise ValueError(f"not a frame size: {width}x{height}")
+    if width * height >= min_pixels:
+        return None
+    factor = math.sqrt(min_pixels / (width * height))
+    w, h = math.ceil(width * factor / 2) * 2, math.ceil(height * factor / 2) * 2
+    while w * h < min_pixels:  # rounding can land a few pixels short
+        w, h = w + 2, math.ceil((w + 2) * height / width / 2) * 2
+    return w, h
+
+
 def trim_clip(
     src: Path | str,
     out: Path | str,
@@ -86,12 +106,14 @@ def trim_clip(
     *,
     keep_audio: bool = True,
     crop_x: float | None = None,
+    min_pixels: int | None = None,
 ) -> Path:
     """Cut ``duration_s`` seconds from ``start_s`` of ``src`` into ``out`` (H.264 + AAC, re-encoded for an exact cut).
 
     ``crop_x`` (owner 2026-10-05: iconic clips are often landscape) also cuts the full-height 9:16 window centred at
     that fraction of the width (``crop_window``), so a landscape clip becomes a vertical source with its own sound.
-    ``ValueError`` for a window that makes no sense (non-positive or over 16 s, a negative start, or one that
+    ``min_pixels`` scales a smaller result up to at least that many pixels a frame (``upscaled_size``; the Object swap's
+    409,600). ``ValueError`` for a window that makes no sense (non-positive or over 16 s, a negative start, or one that
     ends after the clip does) or a crop that does (see ``crop_window``); ``QAError`` for a missing or unreadable file;
     ``ClipworkError`` when ffmpeg fails.
     """
@@ -109,16 +131,40 @@ def trim_clip(
     total = report.duration_s
     if start + duration > total + _SLACK:
         raise ValueError(f"the source ends at {total:.2f} s, before the window {start:g}-{start + duration:g} s does")
-    crop: list[str] = []
+    filters: list[str] = []
+    size = (report.width, report.height)
     if crop_x is not None:
         crop_w, crop_h, x = crop_window(report.width, report.height, crop_x)
-        crop = ["-vf", f"crop={crop_w}:{crop_h}:{x}:0"]
+        filters.append(f"crop={crop_w}:{crop_h}:{x}:0")
+        size = (crop_w, crop_h)
+    if min_pixels is not None and (bigger := upscaled_size(*size, min_pixels)) is not None:
+        filters.append(f"scale={bigger[0]}:{bigger[1]}:flags=lanczos,setsar=1")
+    crop = ["-vf", ",".join(filters)] if filters else []
     with tempfile.TemporaryDirectory(prefix="studio-trim-") as tmp:
         work = Path(tmp) / "trimmed.mp4"
         _ffmpeg(
             "-ss", f"{start:.3f}", "-t", f"{duration:.3f}", "-i", src, *crop,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
             *(["-c:a", "aac", "-b:a", "192k", "-ar", "48000"] if keep_audio else ["-an"]),
+            "-movflags", "+faststart", work,
+        )  # fmt: skip
+        return _finish(work, out)
+
+
+def proxy_clip(src: Path | str, out: Path | str, *, long_side: int = PROXY_LONG_SIDE) -> Path:
+    """A small copy of ``src`` for a model to watch: the longer side ``long_side`` px (never enlarged), 15 fps, H.264 CRF 30,
+    mono AAC 64k (the sound kept: it tells the trend). ``QAError`` for an unreadable file, ``ClipworkError`` when ffmpeg fails."""
+    src, out = Path(src), Path(out)
+    report = probe(src, loudness=False)
+    side = int(long_side)
+    scale = (
+        f"scale='if(gte(iw,ih),min({side},iw),-2)':'if(gte(iw,ih),-2,min({side},ih))':flags=bicubic"
+    )
+    with tempfile.TemporaryDirectory(prefix="studio-proxy-") as tmp:
+        work = Path(tmp) / "proxy.mp4"
+        _ffmpeg(
+            "-i", src, "-vf", f"{scale},fps=15,format=yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+            *(["-c:a", "aac", "-b:a", "64k", "-ac", "1"] if report.has_audio else ["-an"]),
             "-movflags", "+faststart", work,
         )  # fmt: skip
         return _finish(work, out)
@@ -152,4 +198,7 @@ def mux_source_audio(video: Path | str, source: Path | str, out: Path | str, sta
         return _finish(work, out)
 
 
-__all__ = ["ClipworkError", "QAError", "TRIM_MAX_SECONDS", "mux_source_audio", "trim_clip"]
+__all__ = [
+    "ClipworkError", "OBJECT_SWAP_MIN_PIXELS", "QAError", "TRIM_MAX_SECONDS", "mux_source_audio", "proxy_clip", "trim_clip",
+    "upscaled_size",
+]

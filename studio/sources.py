@@ -394,8 +394,11 @@ def trim_source(
     *,
     file: Path | str | None = None,
     crop_x: float | None = None,
+    min_pixels: int | None = None,
 ) -> Source:
     """Cut a window out of a source and catalogue it as a new ``owner_inbox`` source (see the module doc).
+
+    ``min_pixels`` scales a smaller window up (``clipwork.trim_clip``): the Object swap needs 409,600 pixels a frame.
 
     ``KeyError`` for an unknown source; ``ValueError`` for a window that makes no sense, a source that is not in
     Storage (and no ``file``), or a missing ``file``; ``QAError`` / ``ClipworkError`` / ``StorageError`` when the
@@ -417,7 +420,7 @@ def trim_source(
                 f"source {source_id} is not in Storage (a library source is used through its own url): "
                 "download its preview and pass it with --file"
             )
-        trimmed = trim_clip(local, work / "window.mp4", start_s, duration_s, crop_x=crop_x)
+        trimmed = trim_clip(local, work / "window.mp4", start_s, duration_s, crop_x=crop_x, min_pixels=min_pixels)
         seconds = probe(trimmed, loudness=False).duration_s
         key = f"{INBOX_PREFIX}/{uuid.uuid4()}.mp4"
         storage.upload(SOURCES_BUCKET, key, trimmed)

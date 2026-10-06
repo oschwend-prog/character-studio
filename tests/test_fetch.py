@@ -229,6 +229,18 @@ def test_a_failed_download_marks_the_pick_recreate_and_keeps_its_status(world):
     assert store.get_favorite(pick.id).proposal["owner_mode"] == "dropin"  # what the owner chose is kept as chosen
 
 
+def test_without_the_fallback_a_failed_download_raises_and_leaves_the_pick_alone(world):
+    """A dropped link (studio drop process) waits and is tried again by the Mac: it is never turned into a Recreate."""
+    store, storage, out_dir = world
+    pick = approved_pick(store)
+    runner = FakeYtDlp(None, returncode=1, stderr="ERROR: login required")
+    with pytest.raises(fetch.FetchFailed, match="login required"):
+        fetch_pick_clip(store, storage, pick.id, runner=runner, out_dir=out_dir, fall_back=False)
+    after = store.get_favorite(pick.id)
+    assert after.proposal == pick.proposal and after.source_id is None and store.list_sources() == []
+    assert not list(out_dir.glob("*")) if out_dir.exists() else True
+
+
 def test_yt_dlp_missing_a_timeout_or_no_file_are_failures_too(world, clip_file):
     store, storage, out_dir = world
     for i, runner in enumerate((

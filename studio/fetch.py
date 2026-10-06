@@ -127,8 +127,12 @@ def fetch_pick_clip(
     out_dir: Path | str | None = None,
     body: Body | str = Body.biped,
     bodies: int = 1,
+    fall_back: bool = True,
 ) -> dict[str, Any]:
     """Fetch the clip of one approved pick (see the module doc); the JSON-ready result.
+
+    ``fall_back=False`` (a dropped link, ``studio drop process``): a yt-dlp failure raises ``FetchFailed`` instead and the pick
+    is left as it is (the drop waits and the daily run on the Mac tries again; a dropped video is never made as a Recreate).
 
     ``KeyError`` for an unknown pick; ``ValueError`` for a pick that may not be fetched (status, gallery, owner choices, a
     URL that is not TikTok / Instagram / YouTube); ``StorageError`` when our own Storage refuses the upload. A yt-dlp
@@ -192,6 +196,8 @@ def fetch_pick_clip(
             raise FetchFailed(f"the clip is {seconds:.0f} s long: at most {FETCH_MAX_SECONDS:.0f} s are fetched")
     except FetchFailed as e:
         clear()
+        if not fall_back:
+            raise
         return _fall_back_to_recreate(store, pick, str(e))
 
     key = f"{INBOX_PREFIX}/{uuid.uuid4()}.mp4"

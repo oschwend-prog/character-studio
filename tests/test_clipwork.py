@@ -208,3 +208,41 @@ def test_cli_master_mux_audio_exit_codes(tmp_path, silent_source, genjutsu_outpu
     assert run(str(genjutsu_output), str(silent_source), "--start", "0", "--out", str(tmp_path / "m.mp4")).exit_code == 2  # no audio
     assert run(str(tmp_path / "nope.mp4"), str(silent_source), "--start", "0", "--out", str(tmp_path / "m.mp4")).exit_code == 2
     assert run(str(genjutsu_output), str(silent_source), "--out", str(tmp_path / "m.mp4")).exit_code == 2  # --start is required
+
+
+# ---- Drop a video: a window big enough for the Object swap, and the proxy for Gemini (2026-10-06) -------------------------
+
+
+def test_upscaled_size_keeps_the_shape_and_reaches_the_object_swap_minimum():
+    assert clipwork.upscaled_size(1080, 1920, clipwork.OBJECT_SWAP_MIN_PIXELS) is None  # already enough
+    w, h = clipwork.upscaled_size(404, 720, clipwork.OBJECT_SWAP_MIN_PIXELS)  # a 9:16 crop of a 720p landscape clip
+    assert w * h >= 409_600 and w % 2 == 0 and h % 2 == 0 and abs(w / h - 404 / 720) < 0.01
+    for size in ((270, 480), (320, 568), (100, 100), (479, 853)):
+        w, h = clipwork.upscaled_size(*size, 409_600)
+        assert w * h >= 409_600 and w % 2 == h % 2 == 0 and w * h < 409_600 * 1.05, size
+    with pytest.raises(ValueError):
+        clipwork.upscaled_size(0, 10, 100)
+
+
+def test_trim_scales_a_small_window_up_to_the_minimum(tmp_path, source):
+    out = trim_clip(source, tmp_path / "w.mp4", 1.0, 4.0, min_pixels=clipwork.OBJECT_SWAP_MIN_PIXELS)
+    r = probe(out, loudness=False)
+    assert r.width * r.height >= 409_600 and abs(r.width / r.height - 270 / 480) < 0.01 and r.has_audio
+    big = trim_clip(source, tmp_path / "b.mp4", 1.0, 4.0, min_pixels=1000)  # already enough: untouched
+    assert (probe(big, loudness=False).width, probe(big, loudness=False).height) == (270, 480)
+
+
+def test_trim_crops_then_scales_a_landscape_window(tmp_path, landscape_source):
+    out = trim_clip(landscape_source, tmp_path / "w.mp4", 0.0, 4.0, crop_x=0.5, min_pixels=clipwork.OBJECT_SWAP_MIN_PIXELS)
+    r = probe(out, loudness=False)
+    assert r.width < r.height and r.width * r.height >= 409_600
+
+
+def test_the_proxy_is_small_keeps_the_sound_and_never_enlarges(tmp_path, source, silent_source):
+    out = clipwork.proxy_clip(source, tmp_path / "p.mp4")
+    r = probe(out, loudness=False)
+    assert (r.width, r.height) == (270, 480) and r.has_audio and abs(r.fps - 15) < 0.01  # smaller than 640: kept
+    assert abs(r.duration_s - 10) < 0.2
+    assert not probe(clipwork.proxy_clip(silent_source, tmp_path / "s.mp4"), loudness=False).has_audio
+    small = clipwork.proxy_clip(source, tmp_path / "q.mp4", long_side=240)
+    assert probe(small, loudness=False).height == 240
