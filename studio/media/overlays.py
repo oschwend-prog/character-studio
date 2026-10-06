@@ -166,6 +166,89 @@ def hook_png(
     return _save(_shadowed(layer), out)
 
 
+# ---- the studio pill (owner 2026-10-06: the signature on-screen caption of every character) ------------------------------
+
+PILL_FONT = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "Figtree-Variable.ttf"  # OFL, committed: same on Mac and CI
+PILL_WEIGHT = b"SemiBold"
+PILL_SIZE = 54
+PILL_MIN_SIZE = 40
+PILL_MAX_TEXT_W = 780  # the text column; the pill adds the dots and the padding around it
+PILL_MAX_LINES = 2
+PILL_Y = 1300  # top of the pill: lower middle, clear of faces and of Instagram's bottom ~350 px of buttons
+PILL_FILL = (14, 17, 22, 215)
+PILL_RADIUS = 34
+PILL_PAD_X = 40
+PILL_PAD_Y = 25
+PILL_TEXT_X = 96  # from the pill's left edge: the dots sit in front of the text
+PILL_DOT_R = 10
+PILL_DOT_GAP = 26  # centre to centre
+SAFE_TOP, SAFE_BOTTOM = 250, FRAME[1] - 350
+
+
+def _pill_font(size: int) -> ImageFont.FreeTypeFont:
+    if PILL_FONT.is_file():
+        fnt = ImageFont.truetype(str(PILL_FONT), size)
+        try:
+            fnt.set_variation_by_name(PILL_WEIGHT)
+        except (OSError, ValueError):
+            pass  # a static build of the font: its own weight
+        return fnt
+    return ImageFont.truetype(str(font_path()), size)
+
+
+def _wrap(words: list[str], fnt: ImageFont.FreeTypeFont, width: int) -> list[str]:
+    draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+    lines: list[str] = []
+    for word in words:
+        if lines and draw.textlength(f"{lines[-1]} {word}", font=fnt) <= width:
+            lines[-1] = f"{lines[-1]} {word}"
+        else:
+            lines.append(word)
+    return lines
+
+
+def pill_png(lines: list[str], out: str | Path, y: int = PILL_Y) -> Path:
+    """The studio pill: a full-frame transparent PNG with the text in a dark rounded pill, the two ODD EYES dots in front.
+
+    The lines are joined and re-wrapped to at most ``PILL_MAX_LINES`` lines of ``PILL_MAX_TEXT_W`` px (the font shrinks to
+    ``PILL_MIN_SIZE`` first; past that the block keeps its lines). The pill is centred, its top at ``y``, moved up if it
+    would reach Instagram's bottom buttons. Drawn at 3x and scaled down so the curves and dots are smooth.
+    Raises ``ValueError`` for no text.
+    """
+    words = " ".join(_clean(lines)).split()
+    size = PILL_SIZE
+    while True:
+        fnt = _pill_font(size)
+        wrapped = _wrap(words, fnt, PILL_MAX_TEXT_W)
+        if len(wrapped) <= PILL_MAX_LINES or size <= PILL_MIN_SIZE:
+            break
+        size -= 2
+    pitch = round(size * 1.26)
+    probe = ImageDraw.Draw(Image.new("L", (1, 1)))
+    text_w = max(probe.textlength(line, font=fnt) for line in wrapped)
+    w, h = round(PILL_TEXT_X + text_w + PILL_PAD_X), pitch * len(wrapped) + 2 * PILL_PAD_Y
+    x0 = (FRAME[0] - w) // 2
+    y0 = max(SAFE_TOP, min(y, SAFE_BOTTOM - h))
+
+    k = 3  # supersample the pill on its own canvas
+    pill = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
+    d = ImageDraw.Draw(pill)
+    d.rounded_rectangle((0, 0, w * k - 1, h * k - 1), radius=PILL_RADIUS * k, fill=PILL_FILL)
+    cy = h * k / 2
+    for cx, colour in ((PILL_PAD_X * k, BUG_BLUE), ((PILL_PAD_X + PILL_DOT_GAP) * k, BUG_AMBER)):
+        r = PILL_DOT_R * k
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*colour, 255))
+    big = _pill_font(size * k)
+    for i, line in enumerate(wrapped):
+        top = PILL_PAD_Y * k + i * pitch * k
+        d.text((PILL_TEXT_X * k, top + (pitch - size) * k / 2), line, font=big, fill=(255, 255, 255, 255))
+    pill = pill.resize((w, h), Image.LANCZOS)
+
+    layer = Image.new("RGBA", FRAME, (0, 0, 0, 0))
+    layer.alpha_composite(pill, (x0, y0))
+    return _save(layer, out)
+
+
 def title_png(text: str, out: str | Path, y: int = 1400, size: int = 96, font: str | Path | None = None) -> Path:
     """A title card: ``text`` in small caps (upper case), ivory brand serif, on a dark band.
 

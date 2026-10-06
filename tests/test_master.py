@@ -126,6 +126,31 @@ def test_hook_png_y_moves_the_text_and_wide_lines_are_shrunk_to_fit(tmp_path):
     assert left >= 10 and right <= 1070, "an over-wide line is shrunk, never clipped"
 
 
+def test_the_studio_pill_is_a_full_frame_overlay_in_the_safe_zone_with_the_two_dots(tmp_path):
+    png = overlays.pill_png(["Kindly do not inform the Duchess."], tmp_path / "pill.png")
+    img = Image.open(png)
+    assert img.mode == "RGBA" and img.size == overlays.FRAME
+    left, top, right, bottom = img.getchannel("A").getbbox()
+    assert overlays.SAFE_TOP <= top and bottom <= overlays.SAFE_BOTTOM  # clear of Instagram's buttons
+    assert abs((left + right) / 2 - overlays.FRAME[0] / 2) <= 2  # centred
+    cy = (top + bottom) // 2
+    blue = img.getpixel((left + overlays.PILL_PAD_X, cy))[:3]
+    amber = img.getpixel((left + overlays.PILL_PAD_X + overlays.PILL_DOT_GAP, cy))[:3]
+    assert blue == overlays.BUG_BLUE and amber == overlays.BUG_AMBER  # the ODD EYES dots: blue first, amber second
+    assert overlays.PILL_FONT.is_file()  # the committed Figtree: the same caption on the Mac and in the cloud
+
+
+def test_a_long_hook_wraps_to_two_lines_and_a_low_pill_moves_up_out_of_the_buttons(tmp_path):
+    short = Image.open(overlays.pill_png(["The household is unaware."], tmp_path / "s.png")).getchannel("A").getbbox()
+    long = Image.open(overlays.pill_png(["Breakfast will be served at eight. As usual. Naturally."], tmp_path / "l.png"))
+    lb = long.getchannel("A").getbbox()
+    assert lb[3] - lb[1] > (short[3] - short[1]) * 1.5  # two lines
+    low = Image.open(overlays.pill_png(["hi"], tmp_path / "low.png", y=1900)).getchannel("A").getbbox()
+    assert low[3] <= overlays.SAFE_BOTTOM
+    with pytest.raises(ValueError):
+        overlays.pill_png(["  "], tmp_path / "x.png")
+
+
 def test_hook_png_rejects_empty_text(tmp_path):
     with pytest.raises(ValueError):
         overlays.hook_png([], tmp_path / "x.png")

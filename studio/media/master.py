@@ -7,7 +7,8 @@ This is the pipeline proven on Biscuit's debut, as code. For a spec with a close
 3. **outro** (0.7 s): the close-up held at zoom 1.30 with a glint (the sparkle) on the ice-blue eye
    (``blue_eye_xy``, in screen pixels at the outro zoom).
 4. The three are concatenated, then PNG overlays go on: hook line 1 over the intro, hook line 2 until
-   ``hook2_until_s``, the two-dot ODD EYES bug throughout (ffmpeg here has no ``drawtext``).
+   ``hook2_until_s``, both in the studio pill (``overlays.pill_png``, owner 2026-10-06: the signature caption of every
+   character), the two-dot ODD EYES bug throughout (ffmpeg here has no ``drawtext``).
 5. **audio**: the source beat from ``audio_offset_s``, faded out into the outro, the 0.6 s sting just
    after the dance ends, then a two-pass ``loudnorm`` to -14 LUFS with a **-1.5 dBTP** ceiling (the
    AAC encode adds ~0.1 dB of true peak, and the delivery spec is <= -1.0), encoded AAC 320k / 48 kHz.
@@ -545,9 +546,9 @@ def build_master(spec: MasterSpec) -> Path:
         for i, card in enumerate(e for e in items if isinstance(e, TitleCard)):
             shown.append(_boxed(overlays.title_png(card.text, work / f"title{i}.png"), 0.0, TITLE_CARD_SECONDS))
         if closeup and any(line.strip() for line in spec.hook1):
-            shown.append(_boxed(overlays.hook_png(spec.hook1, work / "hook1.png"), 0.0, intro_len))
+            shown.append(_boxed(overlays.pill_png(spec.hook1, work / "hook1.png"), 0.0, intro_len))
         if any(line.strip() for line in spec.hook2):
-            shown.append(_boxed(overlays.hook_png(spec.hook2, work / "hook2.png"), intro_len, spec.hook2_until_s))
+            shown.append(_boxed(overlays.pill_png(spec.hook2, work / "hook2.png"), intro_len, spec.hook2_until_s))
         for i, pop in enumerate(e for e in items if isinstance(e, TextPop)):
             png = overlays.hook_png([pop.text], work / f"pop{i}.png", y=TEXT_POP_Y, size=TEXT_POP_SIZE)
             shown.append(_boxed(png, out_time(pop.at_s, slow), out_time(pop.at_s + pop.dur_s, slow)))
