@@ -1075,3 +1075,110 @@ def test_0012_the_own_footage_toggle_is_the_owners_and_defaults_to_a_downloaded_
     from studio import drop
 
     assert "own_footage" not in drop.swap_prompt.__code__.co_names
+
+
+# ---- 0013: the character of a dropped video ------------------------------------------------------------------------------------
+
+DROPCHAR_PATH = MIGRATIONS / "0013_drop_character.sql"
+DROPCHAR_SQL = DROPCHAR_PATH.read_text()
+DROPCHAR_CODE = re.sub(r"--[^\n]*", "", DROPCHAR_SQL)
+
+
+def test_0013_is_add_drop_set_drop_character_and_their_grants_only():
+    code = re.sub(r"create or replace function studio\.\w+\(.*?\n\$\$;", "", DROPCHAR_CODE, flags=re.S)
+    code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
+    statements = [s.strip() for s in code.split(";") if s.strip()]
+    kinds = sorted(
+        re.match(r"(grant execute on function studio\.\w+|revoke all on function studio\.\w+)", s).group(1) for s in statements
+    )
+    assert kinds == [
+        "grant execute on function studio.add_drop", "grant execute on function studio.set_drop_character",
+        "revoke all on function studio.add_drop", "revoke all on function studio.set_drop_character",
+    ]  # fmt: skip
+    assert re.findall(r"create or replace function studio\.(\w+)", DROPCHAR_CODE) == ["add_drop", "set_drop_character"]
+    assert "create or replace view" not in DROPCHAR_CODE  # v_tracker's drop_card already carries recommended and character_by
+    assert not re.search(r"\b(truncate|delete|alter|create table|drop function|drop view|drop table)\b", DROPCHAR_CODE, re.I)
+    assert "revoke all on function studio.set_drop_character(uuid, text) from anon" in DROPCHAR_CODE
+    assert "to anon" not in DROPCHAR_CODE
+    # outside schema studio: only the owner rule (the Vault and pg_net stay inside request_job)
+    outside = set(re.findall(r"\b(?:public|auth|storage|extensions|vault|net)\.[a-z_]+", DROPCHAR_CODE))
+    assert outside == {"auth.jwt"}
+
+
+def test_0013_add_drop_keeps_its_signature_and_takes_no_character_as_the_studios_choice():
+    old, new = _function(DROPVIDEO_SQL, "add_drop"), _function(DROPCHAR_SQL, "add_drop")
+    assert "add_drop(character_slug text default null, link text default null)" in new  # the same (text, text): replaced in place
+    assert "security invoker" in new and "set search_path = ''" in new and "security definer" not in new
+    # no character: a provisional one, never a paused one, a person's character first (the seeded swap rule, else two legs only)
+    provisional = re.search(r"if slug_ is null then\n(.*?)\n    by_ := 'studio';", new, re.S).group(1)
+    assert "where ch.status <> 'paused'" in provisional
+    assert "(ch.setup #> '{swap,stars}') ? 'person'" in provisional
+    assert "'biped' = any (ch.bodies) and not 'quadruped' = any (ch.bodies)" in provisional
+    assert "order by" in provisional and "ch.slug\n     limit 1;" in provisional
+    assert "every one is paused" in provisional
+    # who chose is recorded on both kinds of drop; everything else of 0012's drop object is unchanged
+    for kind in ("'state', 'uploading', 'kind', 'file'", "'state', 'checking', 'kind', 'link'"):
+        assert f"jsonb_build_object({kind}, 'at', now(), 'reason', null, 'own_footage', false" in old
+        assert re.search(rf"jsonb_build_object\({kind}, 'at', now\(\), 'reason', null, 'own_footage', false,\s+'character_by', by_\)", new)
+    assert "by_ text := 'owner';" in new
+    # a link without a character matches every pick of the URL; with one, that character's pick as before
+    assert "where fa.url = clean and (by_ = 'studio' or fa.character_slug = slug_)" in new
+    assert "f.status in ('queued', 'made')" in new and "'duplicate', true" in new
+    for line in ("'owner-drop:' || new_id::text, 'drop', 'owner', slug_", "unknown character %", "not a canonical TikTok"):
+        assert line in new, line
+    # the canonical links are 0012's, character for character
+    links = lambda body: re.search(r"plat := case\n.*?\n  end;", body, re.S).group(0)  # noqa: E731
+    assert links(new) == links(old)
+    for line in ("revoke all on function studio.add_drop(text, text) from public;", "grant execute on function studio.add_drop(text, text) to authenticated;"):
+        assert line in DROPVIDEO_SQL and line in DROPCHAR_SQL
+
+
+def test_0013_set_drop_character_is_a_definer_with_the_owner_check_first():
+    body = _function(DROPCHAR_SQL, "set_drop_character")
+    assert "set_drop_character(pick_id uuid, character_slug text)" in body and "returns jsonb" in body
+    assert "security definer" in body and "set search_path = ''" in body and "security invoker" not in body
+    owner = "if coalesce((select auth.jwt() ->> 'email'), '') <> 'o.schwend@gmail.com' then"
+    assert owner in _function(DROPVIDEO_SQL, "request_job")  # the same rule as request_job, word for word
+    assert body.index(owner) < body.index("select * into f") < body.index("update studio.favorites")  # checked before anything
+    assert "insufficient_privilege" in body
+    for name in re.findall(r"\b(from|update|into)\s+(\w+)\.", body):  # schema-qualified (the empty search_path finds nothing)
+        assert name[1] in ("studio", "pg_catalog"), name
+
+
+def test_0013_set_drop_character_refuses_a_paused_or_unknown_character_and_a_drop_past_make_it():
+    body = _function(DROPCHAR_SQL, "set_drop_character")
+    assert "not exists (select 1 from studio.characters ch where ch.slug = slug_)" in body and "unknown character %" in body
+    assert "ch.status = 'paused'" in body and "is paused: he takes no new videos" in body
+    assert "for update" in body and "is not a dropped video" in body
+    assert "f.status in ('queued', 'made')" in body
+    assert "state_ not in ('uploading', 'checking', 'waiting', 'ready', 'blocked', 'failed')" in body
+    from studio import drop
+
+    assert set(drop.DROP_STATES) - {"uploading", "checking", "waiting", "ready", "blocked", "failed"} == {"making", "made"}
+
+
+def test_0013_set_drop_character_clears_the_old_characters_check_and_asks_for_it_again():
+    body = _function(DROPCHAR_SQL, "set_drop_character")
+    cleared = "(d - 'hooks' - 'hook' - 'part' - 'gadgets' - 'window' - 'seconds' - 'credits' - 'deconstruct' - 'adjust')"
+    assert cleared in body and "jsonb_build_object('character_by', 'owner')" in body
+    for kept in ("source_id", "star", "preview_path", "recommended", "own_footage", "job", "requested"):
+        assert f"'{kept}'" not in body, kept  # what does not depend on the character stays (and the running job's lease)
+    assert "set character_slug = slug_," in body
+    assert "proposal = (fa.proposal - 'hook' - 'make_requested') || jsonb_build_object('drop', d)" in body  # Make it was his
+    assert "jsonb_build_object('state', 'checking', 'reason', null, 'at', now())" in body
+    # an upload without its file stays uploading (its own request_job starts the check); else request_job dispatches it
+    assert "if state_ <> 'uploading' or coalesce(f.proposal ->> 'owner_clip_path', '') <> '' then" in body
+    assert body.count("return studio.request_job(f.id, 'process');") == 1
+    assert body.index("update studio.favorites fa\n     set character_slug") < body.index("return studio.request_job(f.id, 'process');")
+    # the token is request_job's alone: no Vault, no pg_net, no dispatch here
+    assert "vault" not in body and "net.http_post" not in body and "token" not in body
+    # the same character again only records the owner's choice
+    assert "if f.character_slug is not distinct from slug_ then" in body
+    assert "jsonb_set(fa.proposal, '{drop,character_by}', to_jsonb('owner'::text))" in body
+    assert "'dispatched', false" in body
+    # request_job takes a drop at checking (the state set first): the reuse is valid
+    assert "state_ not in ('uploading', 'checking', 'waiting', 'failed')" in _function(DROPVIDEO_SQL, "request_job")
+    # the CLI's own words: who chose
+    from studio import drop
+
+    assert drop.CHARACTER_BY == ("owner", "studio")

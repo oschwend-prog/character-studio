@@ -139,6 +139,9 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("function", "add_drop"), ("function", "request_job"), ("function", "set_drop_footage"), ("view", "v_tracker"),
         ("column", "make_requested_at"),
     ),
+    # 0013 (the character of a drop): add_drop re-created with the character optional (it exists after 0012 already) and
+    # set_drop_character, the owner's menu on a row of the drops table: the new function is what tells 0013 from 0012.
+    "0013": (("function", "add_drop"), ("function", "set_drop_character")),
 }
 
 PROBE_SQL = """
