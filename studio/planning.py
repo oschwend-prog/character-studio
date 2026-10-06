@@ -43,6 +43,12 @@ everywhere. A character with no connected account at all is therefore always ``r
 19:00 is 19:00 whether it is GMT or BST that day. ``upcoming_slot`` is the first slot still ahead of a
 moment: today's if today is a cadence day and the slot has not started, else the next cadence day's.
 
+**The cadence** is the ``studio.settings`` row (``cadence``: ``{slug: {"days": [...], "slot": "HH:MM"}}``), the one place
+the posting days and slots live; the SQL slot functions of the terminal read the same row. ``studio plan cadence`` prints it
+and changes it (``apply_cadence``): ``--slot franz=19:00`` sets or adds a character's slot (a new character starts on
+``LAUNCH_DAYS``, the weeks 1-2 days), ``--days`` sets the days of those characters (or of every character: the week-3 switch is
+``--days mon,tue,wed,thu,fri``), ``--drop`` removes a retired character's entry (its slot functions then refuse to schedule).
+
 CLI (``studio plan today``) prints JSON on stdout; exit 0 even when nothing is due (the caller
 reads ``due`` and ``kill_switch``), exit 2 for a cadence the caller must fix.
 """
@@ -116,6 +122,10 @@ ROLLING_WINDOW = 10
 WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
 
 _SLOT = re.compile(r"([01]\d|2[0-3]):([0-5]\d)")
+_SLUG = re.compile(r"[a-z0-9][a-z0-9-]{0,39}")
+# The posting days of a character's first two weeks (CLAUDE.md "Slots": weeks 1-2 Tue/Wed/Thu, from week 3 Mon-Fri): what a
+# character added to the cadence starts on.
+LAUNCH_DAYS: tuple[str, ...] = ("tue", "wed", "thu")
 
 
 @dataclass
@@ -339,6 +349,63 @@ def _cadence_days(entry: Any) -> set[str]:
     return {str(d).strip().lower()[:3] for d in raw or ()}
 
 
+def parse_days(raw: str) -> list[str]:
+    """``"mon,tue , Wed"`` -> ``["mon", "tue", "wed"]`` in week order; ``ValueError`` for an unknown day or none at all."""
+    days = {d.strip().lower()[:3] for d in raw.split(",") if d.strip()}
+    unknown = sorted(d for d in days if d not in WEEKDAYS)
+    if unknown or not days:
+        raise ValueError(f"days must be a comma list of {', '.join(WEEKDAYS)}, got {raw!r}")
+    return [d for d in WEEKDAYS if d in days]
+
+
+def apply_cadence(
+    current: Mapping[str, Any],
+    slots: Mapping[str, str] | None = None,
+    days: list[str] | None = None,
+    drop: Collection[str] = (),
+) -> dict[str, Any]:
+    """The cadence after a change (``studio plan cadence``), checked before anything is written.
+
+    ``slots`` sets each named character's ``slot`` ("HH:MM", London), adding a character that has no entry yet on
+    ``days`` or else ``LAUNCH_DAYS``; ``days`` sets the days of the ``slots`` characters, or of every character when no slot
+    is given (the week-3 switch); ``drop`` removes entries (a slug that has none is an error, so a typo never passes).
+    The other entries are kept as they are. ``ValueError`` names the first problem."""
+    slots = dict(slots or {})
+    out: dict[str, Any] = {slug: dict(entry) if isinstance(entry, Mapping) else entry for slug, entry in current.items()}
+    for slug in [*slots, *drop]:
+        if not _SLUG.fullmatch(slug):
+            raise ValueError(f"not a character slug: {slug!r} (lowercase letters, digits and dashes)")
+    both = sorted(set(slots) & set(drop))
+    if both:
+        raise ValueError(f"{', '.join(both)}: given to both --slot and --drop")
+    for slug in drop:
+        if slug not in out:
+            raise ValueError(f"{slug!r} has no cadence entry to drop (it has: {', '.join(sorted(out)) or 'none'})")
+        del out[slug]
+    for slug, slot in slots.items():
+        if not isinstance(slot, str) or not _SLOT.fullmatch(slot.strip()):
+            raise ValueError(f"slot for {slug!r} must be 'HH:MM' (London time), got {slot!r}")
+        entry = out.get(slug) if isinstance(out.get(slug), dict) else None
+        if entry is None:
+            out[slug] = {"days": list(days or LAUNCH_DAYS), "slot": slot.strip()}
+        else:
+            entry["slot"] = slot.strip()
+            if days is not None:
+                entry["days"] = list(days)
+    if days is not None and not slots:
+        if not out:
+            raise ValueError("there is no character in the cadence to give --days to")
+        for slug, entry in out.items():
+            if not isinstance(entry, dict):
+                raise ValueError(f"the cadence entry of {slug!r} is not an object: fix it with --slot {slug}=HH:MM")
+            entry["days"] = list(days)
+    for slug, entry in out.items():  # what the SQL slot functions refuse is refused here first
+        _slot_time(slug, out)
+        if not _cadence_days(entry) <= set(WEEKDAYS) or not _cadence_days(entry):
+            raise ValueError(f"the days of {slug!r} must be some of {', '.join(WEEKDAYS)}, got {entry.get('days')!r}")
+    return out
+
+
 def _has_clip_today(store: Store, character_slug: str, day: date) -> bool:
     """A clip of this character created on ``day`` (London) that is already beyond ``planned``."""
     return any(
@@ -448,5 +515,52 @@ def today_command() -> None:
             "due": plan.due,
             "deferred_over_cap": plan.deferred,
             "skipped_not_live": sorted(plan.skipped_not_live),
+        }
+    )
+
+
+@app.command("cadence")
+def cadence_command(
+    slot: Annotated[
+        list[str] | None,
+        typer.Option("--slot", help="slug=HH:MM (London): set a character's posting slot, or add the character; repeatable."),
+    ] = None,
+    days: Annotated[
+        str | None,
+        typer.Option(
+            "--days",
+            help="Comma list of mon..sun: the posting days of the --slot characters, or of every character when no --slot is "
+            "given (the week-3 switch: --days mon,tue,wed,thu,fri). A new character without it starts on tue,wed,thu.",
+        ),
+    ] = None,
+    drop: Annotated[
+        list[str] | None, typer.Option("--drop", help="Remove a character's entry (a retired character); repeatable.")
+    ] = None,
+) -> None:
+    """Show the posting cadence (days and London slot per character), or change it with --slot / --days / --drop."""
+    store = open_store()
+    current = store.get_settings().cadence
+    if not slot and days is None and not drop:
+        emit({"cadence": current})
+        return
+    slots: dict[str, str] = {}
+    for item in slot or []:
+        slug, sep, value = item.partition("=")
+        if not sep or not slug.strip():
+            fail(f"--slot takes slug=HH:MM, got {item!r}")
+        if slug.strip() in slots:
+            fail(f"--slot names {slug.strip()!r} twice")
+        slots[slug.strip()] = value.strip()
+    try:
+        new = apply_cadence(current, slots, parse_days(days) if days is not None else None, [d.strip() for d in drop or []])
+    except ValueError as e:
+        fail(str(e))
+    store.set_settings(cadence=new)
+    seeded = {c.slug for c in store.characters()}
+    emit(
+        {
+            "cadence": new,
+            "before": current,
+            "not_seeded": sorted(s for s in new if s not in seeded),  # planned only once seeded and live
         }
     )

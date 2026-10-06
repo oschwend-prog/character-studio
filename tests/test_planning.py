@@ -796,6 +796,71 @@ def test_plan_estimate_cli_refuses_what_the_function_refuses():
     assert run("estimate", "--mode", "remix").exit_code == 2
 
 
+# ---- the cadence (owner 2026-10-06: Franz 19:00, Reginald 19:30, Lenny 12:30; Biscuit retired) -----------------------------
+
+
+def test_plan_cadence_without_options_only_prints_it(cli_store):
+    before = cli_store.get_settings().cadence
+    r = run("cadence")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == {"cadence": before}
+    assert cli_store.get_settings().cadence == before
+
+
+def test_plan_cadence_sets_the_roster_and_drops_the_retired_character(cli_store):
+    r = run("cadence", "--slot", "franz=19:00", "--slot", "reginald=19:30", "--slot", "lenny=12:30", "--drop", "biscuit")
+    assert r.exit_code == 0, r.output
+    want = {
+        "franz": {"days": ["tue", "wed", "thu"], "slot": "19:00"},
+        "reginald": {"days": ["tue", "wed", "thu"], "slot": "19:30"},
+        "lenny": {"days": ["tue", "wed", "thu"], "slot": "12:30"},
+    }
+    out = json.loads(r.output)
+    assert out["cadence"] == want and cli_store.get_settings().cadence == want
+    assert "biscuit" in out["before"] and out["not_seeded"] == ["franz", "lenny"]  # the test store seeds biscuit and reginald
+    assert slot_for("lenny", date(2026, 10, 7), want) == datetime(2026, 10, 7, 12, 30, tzinfo=LONDON)
+    # a dropped character has no slot any more: the slot functions refuse to schedule him
+    with pytest.raises(ValueError, match="no posting slot"):
+        planning.upcoming_slot("biscuit", TUE, want)
+
+
+def test_plan_cadence_days_switch_every_character_for_week_three(cli_store):
+    r = run("cadence", "--days", "mon,tue,wed,thu,fri")
+    assert r.exit_code == 0, r.output
+    cadence = cli_store.get_settings().cadence
+    assert {slug: e["days"] for slug, e in cadence.items()} == {s: ["mon", "tue", "wed", "thu", "fri"] for s in ("biscuit", "reginald")}
+    assert {slug: e["slot"] for slug, e in cadence.items()} == {"biscuit": "19:00", "reginald": "19:30"}  # the slots are kept
+
+
+def test_plan_cadence_days_with_a_slot_only_change_that_character():
+    out = planning.apply_cadence(
+        {"reginald": {"days": ["tue"], "slot": "19:30"}}, {"lenny": "12:30"}, planning.parse_days("Fri, mon"),
+    )
+    assert out == {"reginald": {"days": ["tue"], "slot": "19:30"}, "lenny": {"days": ["mon", "fri"], "slot": "12:30"}}
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (["--slot", "lenny=12.30"], "HH:MM"),
+        (["--slot", "lenny=24:00"], "HH:MM"),
+        (["--slot", "lenny"], "slug=HH:MM"),
+        (["--slot", "Lenny Gold=12:30"], "not a character slug"),
+        (["--slot", "lenny=12:30", "--slot", "lenny=13:00"], "twice"),
+        (["--drop", "outsider"], "no cadence entry"),
+        (["--slot", "biscuit=19:00", "--drop", "biscuit"], "both"),
+        (["--days", "tue,someday"], "days must be"),
+        (["--days", ","], "days must be"),
+    ],
+)
+def test_plan_cadence_refuses_a_bad_change_and_writes_nothing(cli_store, args, message):
+    before = cli_store.get_settings().cadence
+    r = run("cadence", *args)
+    assert r.exit_code == 2, r.output
+    assert message in r.output
+    assert cli_store.get_settings().cadence == before
+
+
 # ---- only live characters are planned ---------------------------------------------------------------------
 
 

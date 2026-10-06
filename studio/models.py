@@ -95,7 +95,9 @@ DEFAULT_DROPIN_SHARE: dict[Platform, float] = {Platform.tiktok: 0.70, Platform.i
 # Owner decision 2026-10-05: Drop-in is the default for every video, so the launch accounts are seeded at 1.00
 # (characters/*/refs.json). 1.00 means "no cap": the planner treats a share of 1 as always under it.
 
-# Same JSON as the seed row in supabase/migrations/0001_studio.sql.
+# Same JSON as the seed row in supabase/migrations/0001_studio.sql: the launch roster's first-insert value (a fresh store and
+# the tests start from it). The live cadence is that row of studio.settings, shown and changed with `bin/studio plan cadence`
+# (owner 2026-10-06: Franz 19:00, Reginald 19:30, Lenny 12:30; Biscuit retired). Migrations are never edited after they ran.
 DEFAULT_CADENCE: dict[str, Any] = {
     "biscuit": {"days": ["tue", "wed", "thu"], "slot": "19:00"},
     "reginald": {"days": ["tue", "wed", "thu"], "slot": "19:30"},
