@@ -93,10 +93,10 @@ describe('groupPicksByCharacter', () => {
     card('o-2', { character_slug: 'someone-not-seeded', total_score: 65 }),
   ];
 
-  it('one section per character in roster order, then Unassigned / Outsider (later) at the bottom', () => {
+  it('one section per character in roster order, then Unassigned (no character yet) at the bottom', () => {
     const sections = groupPicksByCharacter(picks, ROSTER, { now: NOW });
     expect(sections.map((s) => [s.slug, s.name])).toEqual([['biscuit', 'Biscuit'], ['reginald', 'Reginald'], [null, UNASSIGNED_NAME]]);
-    expect(UNASSIGNED_NAME).toBe('Unassigned / Outsider (later)');
+    expect(UNASSIGNED_NAME).toBe('Unassigned (no character yet)');
     expect(sections[2].picks.map((p) => p.id)).toEqual(['o-2', 'o-1']); // a slug nobody seeded is unassigned too, best first
   });
 

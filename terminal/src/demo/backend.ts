@@ -838,7 +838,7 @@ export class DemoBackend implements Backend {
     const characters: Character[] = orderRoster(Object.keys(NAMES).map((slug) => ({
       slug, name: NAMES[slug], status: STATUS[slug], bodies: BODIES[slug],
       setup: {
-        closeup: slug !== 'lenny', // Lenny has no close-up yet (refs.json)
+        closeup: true, // every character of the roster has his close-up (refs.json, 2026-10-06)
         planned_handles: {
           ...PLANNED[slug],
           ...Object.fromEntries(this.accounts.filter((a) => a.character_slug === slug).map((a) => [a.platform, a.handle])),

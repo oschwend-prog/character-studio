@@ -844,7 +844,8 @@ export interface PickSection<P> {
   tiers: TierGroup<P>[];
   themes: ThemeGroup<P>[];
 }
-export const UNASSIGNED_NAME = 'Unassigned / Outsider (later)';
+/** Picks of nobody seeded (batch 1's talking-lane picks were the retired Outsider's; the Borat-type is not named yet). */
+export const UNASSIGNED_NAME = 'Unassigned (no character yet)';
 export const NO_THEME = 'No theme';
 
 /**
@@ -873,7 +874,7 @@ export function tierCounts(picks: ReadonlyArray<TierInput>, now: number): Record
 
 /**
  * The Picks page's structure: one section per character of the roster (always there, empty or not), then an
- * "Unassigned / Outsider (later)" section when some pick belongs to nobody seeded. Each section holds its picks in
+ * "Unassigned (no character yet)" section when some pick belongs to nobody seeded. Each section holds its picks in
  * `rankPicks` order, grouped by tier (Broke the internet, Viral now, Up and coming, Ready to drop in; empty
  * groups left out) and by theme (the best real clip's score first, themes of gallery clips only after them, "No
  * theme" last). `character` limits it to one character's section (no unassigned one); `tier` keeps one tier.
