@@ -1,6 +1,7 @@
 # Brand profile: ODD EYES studio
 
-Read first by every social skill (hook-writer, caption-writer, reels-script, instagram-seo, ...). The studio
+Read first by the installed social skills (`hook-writer`, `instagram-reels-publishing`,
+`tiktok-video-publishing`). The studio
 runs several AI characters; each one is its own brand with its own account. The character bible
 (`characters/<slug>/bible.md`) is the source of truth for that character and wins over this file and over any
 skill's advice. Voice per character: `voice.md`.
