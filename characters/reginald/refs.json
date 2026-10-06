@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references and account links for Reginald. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). closeup, closeup_center and blue_eye_xy stay null until the eye close-up is generated in the rehearsal (Task 16). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value (1.00: Drop-in is the default for every video, owner decision 2026-10-05): the Instagram guard and the terminal change it later and a re-seed leaves it alone. traits is the character's trait card (see studio/seed.py): the terminal shows it, its props are the Make-it chips and the daily run scores fit against it.",
+  "_doc": "Identity-lock references and account links for Reginald. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). closeup, closeup_center and blue_eye_xy stay null until the eye close-up is generated in the rehearsal (Task 16). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value (1.00: Drop-in is the default for every video, owner decision 2026-10-05): the Instagram guard and the terminal change it later and a re-seed leaves it alone. traits is the character's trait card (see studio/seed.py): the terminal shows it, its props are the Make-it chips and the daily run scores fit against it. reference_urls are the public Higgsfield CDN URLs of the masters, sheets and close-up (the image_urls of the cloud Object swap, Drop a video); swap is the like-for-like rule (noun: what the prompt calls him; stars: the kinds of star he replaces).",
   "slug": "reginald",
   "name": "Reginald",
   "status": "designing",
@@ -13,6 +13,12 @@
   "blue_eye_xy": [346, 968],
   "avatar": "assets/avatars/reginald.png",
   "sheets": {"biped": "a0216125-21c8-4f56-a79e-14a3388bdd85"},
+  "reference_urls": {
+    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_103634_6c445225-cf07-462f-b5da-8494381e7e58.png",
+    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_105726_a0216125-21c8-4f56-a79e-14a3388bdd85.png",
+    "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_104042_6bf83e23-8246-4b40-a747-ae4f2439bbfe.png"
+  },
+  "swap": {"noun": "butler", "stars": ["person"]},
   "traits": {
     "energy": "calm and dignified: a big man with light feet and a straight face that never cracks",
     "comedy": "deadpan under absurdity: he dances every trend perfectly, then resumes service as if nothing happened, and the quiff never moves",

@@ -760,3 +760,74 @@ def test_cli_seed_picks_bad_doc_exits_2_and_writes_nothing(cli_store, tmp_path):
     f.write_text("# nothing here\n")
     r = run("picks", str(f))
     assert r.exit_code == 2 and cli_store.list_favorites() == []
+
+
+# ---- Drop a video: the public reference images and the like-for-like rule (plan 2026-10-06) -------------------------
+
+CDN = "https://d8j0ntlcm91z4.cloudfront.net/user_x/"
+URLS = {
+    "master_biped": f"{CDN}m_b.png", "sheet_biped": f"{CDN}s_b.png",
+    "master_quadruped": f"{CDN}m_q.png", "sheet_quadruped": f"{CDN}s_q.png", "closeup": f"{CDN}c.png",
+}
+
+
+def test_reference_images_pick_the_master_and_sheet_of_the_stars_body_then_the_closeup(tmp_path):
+    loaded = {r["slug"]: r for r in seed.load_refs(write_refs(tmp_path, refs(BISCUIT, reference_urls=URLS), REGINALD))}
+    b = loaded["biscuit"]
+    assert seed.reference_images(b, "quadruped") == [URLS["master_quadruped"], URLS["sheet_quadruped"], URLS["closeup"]]
+    assert seed.reference_images(b, Body.biped) == [URLS["master_biped"], URLS["sheet_biped"], URLS["closeup"]]
+    with pytest.raises(ValueError, match="no reference_urls.master_biped"):
+        seed.reference_images(loaded["reginald"], "biped")  # this test's Reginald has none
+    with pytest.raises(ValueError, match="no quadruped body"):
+        seed.reference_images(refs(REGINALD, reference_urls={"master_biped": URLS["master_biped"]}), "quadruped")
+
+
+@pytest.mark.parametrize(
+    ("urls", "message"),
+    [
+        ("https://x.example/a.png", "reference_urls must be an object"),
+        ({"master_biped": "http://x.example/a.png"}, "must be an https URL"),
+        ({"master_biped": "https://x.example/a b.png"}, "must be an https URL"),
+        ({"master_biped": "https:///a.png"}, "must be an https URL"),
+        ({"master_quadruped": f"{CDN}q.png"}, "reference_urls.master_quadruped: not one of"),  # Reginald has no quadruped body
+        ({"avatar": f"{CDN}a.png"}, "reference_urls.avatar: not one of"),
+    ],
+)
+def test_a_malformed_reference_url_is_refused_before_anything_is_written(tmp_path, urls, message):
+    store = MemoryStore()
+    with pytest.raises(ValueError, match=message):
+        seed.seed_characters(store, write_refs(tmp_path, BISCUIT, refs(REGINALD, reference_urls=urls)))
+    assert store.characters() == []
+
+
+@pytest.mark.parametrize(
+    "swap",
+    [
+        "butler",
+        {"noun": "butler"},
+        {"noun": "butler", "stars": []},
+        {"noun": "butler", "stars": ["human"]},
+        {"noun": "", "stars": ["person"]},
+        {"noun": "butler", "stars": ["person", "person"]},
+        {"noun": "butler", "stars": ["person"], "extra": 1},
+    ],
+)
+def test_a_malformed_swap_rule_is_refused(tmp_path, swap):
+    with pytest.raises(ValueError, match="swap must be"):
+        seed.load_refs(write_refs(tmp_path, BISCUIT, refs(REGINALD, swap=swap)))
+
+
+def test_the_shipped_refs_carry_the_public_reference_images_and_the_like_for_like_rule():
+    """The cloud Object swap sends these as image_urls: Reginald replaces a person, Biscuit a dog or small animal."""
+    loaded = {r["slug"]: r for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
+    b, r = loaded["biscuit"], loaded["reginald"]
+    assert set(b["reference_urls"]) == set(URLS)
+    assert set(r["reference_urls"]) == {"master_biped", "sheet_biped", "closeup"}
+    for ref in (b, r):
+        for body in ref["bodies"]:
+            images = seed.reference_images(ref, body)
+            assert len(images) == 3 and all(seed.is_https_url(u) for u in images)
+            # the image is the one of the job id refs.json names: the master, the sheet and the close-up of that body
+            assert ref["masters"][body] in images[0] and ref["sheets"][body] in images[1] and ref["closeup"] in images[2]
+    assert b["swap"] == {"noun": "dog", "stars": ["dog", "animal"]}
+    assert r["swap"] == {"noun": "butler", "stars": ["person"]}

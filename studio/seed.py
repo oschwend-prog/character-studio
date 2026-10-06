@@ -27,6 +27,13 @@
   id of its character sheet: the daily run passes the matching sheet to Genjutsu as a reference image together with the
   master (Higgsfield best practice). The seed copies it into ``characters.setup.sheets``; ``masters`` and ``closeup``
   are the owner's and are not touched by it.
+* ``reference_urls`` (optional, "Drop a video", plan 2026-10-06) are the public Higgsfield CDN URLs of the character's
+  images, the ``image_urls`` the cloud Object swap is given: ``master_<body>`` and ``sheet_<body>`` for any of the
+  character's ``bodies`` and ``closeup``, each an https URL (validated here, never fetched by the CLI). ``reference_images``
+  picks the set for a swap: the master and the sheet of the star's body, then the close-up.
+* ``swap`` (optional) is the like-for-like rule of the Object swap: ``noun`` (what the prompt calls him: "butler", "dog") and
+  ``stars`` (the kinds of star he may replace: ``person``, ``dog``, ``animal``). Reginald replaces a person, Biscuit a dog or a
+  small animal, never a dog for a person (Genjutsu then inserts the dog and keeps the people).
 * ``dropin_share`` is the first-insert value of a new account row (owner decision 2026-10-05: ``characters/*/refs.json``
   ships 1.00 for every account, Drop-in is the default for every video); the controller updates live rows.
 * ``studio seed status`` prints every character with its status, traits and accounts (what the daily run reads).
@@ -69,6 +76,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
 import typer
 
@@ -88,6 +96,9 @@ TRAIT_PROP_MAX = 40  # a prop becomes a Make-it chip, and an owner prop is at mo
 TRAIT_JOB_MAX = 120
 TRAIT_LIST_MAX = 8
 TRAIT_PROPS_MAX = 12
+REFERENCE_URL_MAX = 2048
+SWAP_STARS = ("person", "dog", "animal")  # the kinds of star a drop can name (studio.drop reads the clip's star into one)
+SWAP_NOUN_MAX = 40
 
 RULE_MIN_TOTAL = 80  # `by` is the rule from this total up (spec 4.4b), the analyst below
 RULE_MIN_FEASIBILITY = 7
@@ -103,6 +114,27 @@ def _require(cond: bool, path: Path, message: str) -> None:
 
 def _is_str(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
+
+
+def is_https_url(value: Any) -> bool:
+    """An https URL with a host, no whitespace, at most ``REFERENCE_URL_MAX`` characters (only stored and handed on)."""
+    if not isinstance(value, str) or not value or len(value) > REFERENCE_URL_MAX or re.search(r"\s", value):
+        return False
+    parts = urlsplit(value)
+    return parts.scheme == "https" and bool(parts.hostname)
+
+
+def reference_images(ref: dict[str, Any], body: Body | str) -> list[str]:
+    """The ``image_urls`` of an Object swap for this star's ``body``: the master and the sheet of that body, then the
+    close-up (those present, in that order). ``ValueError`` when the character has no master URL for the body."""
+    body = Body(body).value
+    urls = ref.get("reference_urls") or {}
+    if body not in ref.get("bodies", []):
+        raise ValueError(f"{ref.get('slug')} has no {body} body (bodies: {', '.join(ref.get('bodies', []))})")
+    master = urls.get(f"master_{body}")
+    if not master:
+        raise ValueError(f"characters/{ref.get('slug')}/refs.json has no reference_urls.master_{body}")
+    return [u for u in (master, urls.get(f"sheet_{body}"), urls.get("closeup")) if u]
 
 
 def _is_prop(item: Any) -> bool:
@@ -188,6 +220,30 @@ def _validate_ref(ref: Any, path: Path) -> dict[str, Any]:
         for body, job in sheets.items():
             _require(body in bodies, path, f"sheets.{body}: not one of this character's bodies {bodies}")
             _require(_is_str(job), path, f"sheets.{body} must be a Higgsfield job id")
+
+    urls = ref.get("reference_urls")
+    if urls is not None:
+        _require(isinstance(urls, dict), path, "reference_urls must be an object of image name -> https URL")
+        allowed = {"closeup", *(f"{kind}_{body}" for kind in ("master", "sheet") for body in bodies)}
+        for name, url in urls.items():
+            _require(
+                name in allowed, path,
+                f"reference_urls.{name}: not one of {', '.join(sorted(allowed))} (master_<body> / sheet_<body> of this "
+                "character's bodies, closeup)",
+            )
+            _require(is_https_url(url), path, f"reference_urls.{name} must be an https URL, got {url!r:.80}")
+    swap = ref.get("swap")
+    if swap is not None:
+        ok = (
+            isinstance(swap, dict) and set(swap) == {"noun", "stars"}
+            and _is_str(swap["noun"]) and len(swap["noun"]) <= SWAP_NOUN_MAX
+            and isinstance(swap["stars"], list) and bool(swap["stars"])
+            and len(set(swap["stars"])) == len(swap["stars"]) and all(s in SWAP_STARS for s in swap["stars"])
+        )
+        _require(
+            ok, path,
+            f"swap must be {{noun: 1-{SWAP_NOUN_MAX} characters, stars: a list from {', '.join(SWAP_STARS)}}}, got {swap!r:.80}",
+        )
 
     accounts = ref.get("accounts", [])
     _require(isinstance(accounts, list), path, "accounts must be a list")

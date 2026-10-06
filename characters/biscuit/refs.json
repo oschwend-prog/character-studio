@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references and account links for Biscuit. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value (1.00: Drop-in is the default for every video, owner decision 2026-10-05): the Instagram guard and the terminal change it later and a re-seed leaves it alone. traits is the character's trait card (see studio/seed.py): the terminal shows it, its props are the Make-it chips and the daily run scores fit against it. closeup_center / blue_eye_xy are pixels of the 1080x1920 close-up (centre of the push-in) and of the screen at the outro zoom 1.3 (where the glint sits).",
+  "_doc": "Identity-lock references and account links for Biscuit. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value (1.00: Drop-in is the default for every video, owner decision 2026-10-05): the Instagram guard and the terminal change it later and a re-seed leaves it alone. traits is the character's trait card (see studio/seed.py): the terminal shows it, its props are the Make-it chips and the daily run scores fit against it. closeup_center / blue_eye_xy are pixels of the 1080x1920 close-up (centre of the push-in) and of the screen at the outro zoom 1.3 (where the glint sits). reference_urls are the public Higgsfield CDN URLs of the masters, sheets and close-up (the image_urls of the cloud Object swap, Drop a video); swap is the like-for-like rule (noun: what the prompt calls him; stars: the kinds of star he replaces).",
   "slug": "biscuit",
   "name": "Biscuit",
   "status": "designing",
@@ -13,6 +13,14 @@
   "blue_eye_xy": [251, 559],
   "avatar": "assets/avatars/biscuit.png",
   "sheets": {"biped": "a81a474c-4c7f-4bcd-9b23-43a822c7c004", "quadruped": "aad0f3d0-9694-4148-acbe-eb1f4bf34891"},
+  "reference_urls": {
+    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261004_210238_e07675a2-38a5-4325-8326-1de2e0d326ba.png",
+    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_105919_a81a474c-4c7f-4bcd-9b23-43a822c7c004.png",
+    "master_quadruped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261004_203044_d863df81-54f8-45df-9676-cf44338d07fa.png",
+    "sheet_quadruped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_105920_aad0f3d0-9694-4148-acbe-eb1f4bf34891.png",
+    "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261005_101817_4f7fc954-4dca-491a-bb72-d1781a063c06.png"
+  },
+  "swap": {"noun": "dog", "stars": ["dog", "animal"]},
   "traits": {
     "energy": "bouncy and puppy-cute: smooth, never clumsy, adorable but somehow dances better than you",
     "comedy": "wholesome ego: a tiny dog with big main-character confidence, the caption carries the attitude and never explains the joke",
