@@ -40,6 +40,12 @@ function fail(error: { message: string; code?: string } | null): void {
   if (error) throw new StudioError(error.message, error.code);
 }
 
+/** An expired sign-in (PostgREST PGRST301/PGRST303, "JWT expired"): a phone that slept past the token's life. */
+export const isJwtExpired = (e: unknown) => {
+  const x = e as { code?: string; message?: string } | null | undefined;
+  return Boolean(x && (x.code === 'PGRST301' || x.code === 'PGRST303' || /jwt expired/i.test(x.message ?? '')));
+};
+
 /** PostgREST's "no such table or view" (PGRST205; 42P01 from Postgres itself): a migration not applied yet. */
 export const isMissingRelation = (e: { code?: string; message?: string } | null | undefined) =>
   Boolean(e && (e.code === 'PGRST205' || e.code === '42P01' || /could not find the table/i.test(e.message ?? '')));
@@ -87,7 +93,20 @@ export class LiveBackend implements Backend {
   readonly kind = 'live' as const;
   private sb = supabase();
 
+  /** The snapshot; an expired sign-in is renewed once and the load retried, so a phone back from sleep just loads. */
   async load(): Promise<Snapshot> {
+    await this.sb.auth.getSession(); // renews a token that ran out while the app slept
+    try {
+      return await this.loadOnce();
+    } catch (e) {
+      if (!isJwtExpired(e)) throw e;
+      const { error } = await this.sb.auth.refreshSession();
+      if (error) throw new StudioError('Your sign-in ran out: sign in again with the email link', error.code);
+      return this.loadOnce();
+    }
+  }
+
+  private async loadOnce(): Promise<Snapshot> {
     const sb = this.sb;
     const [channels, queue, library, budget, health, picks, history, characters, runs, tracker] = await Promise.all([
       sb.from('v_channels').select('*'),
