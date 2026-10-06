@@ -145,3 +145,67 @@ def test_go_live_documents_the_pinned_version_and_the_monthly_minutes():
     doc = (Path(__file__).resolve().parents[1] / "docs" / "launch" / "go-live.md").read_text(encoding="utf-8")
     assert f"postiz@{POSTIZ_VERSION}" in doc and "VERIFY at go-live" in doc
     assert "1,500 minutes" in doc and "2,000" in doc
+
+
+# ---- studio-drop: the cloud jobs of "Drop a video" (plan 2026-10-06) ------------------------------------------------------
+
+DROP_SECRETS = ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "HF_API_KEY_ID", "HF_API_KEY_SECRET", "GEMINI_API_KEY")
+
+
+def test_drop_runs_on_the_two_dispatch_types_a_two_hourly_sweep_and_by_hand():
+    t = text("studio-drop")
+    assert re.search(r"(?m)^name: studio-drop$", t)
+    assert re.search(r"(?m)^  repository_dispatch:\n    types: \[drop-process, drop-make\]$", t)
+    assert re.findall(r"- cron: '([^']+)'", t) == ["17 */2 * * *"]
+    assert re.search(r"(?m)^  workflow_dispatch:", t)
+
+
+def test_drop_is_one_job_per_pick_and_never_cancelled():
+    t = text("studio-drop")
+    assert re.search(
+        r"(?m)^concurrency:\n  group: studio-drop-\$\{\{ github\.event\.client_payload\.pick_id \|\| 'sweep' \}\}\n  cancel-in-progress: false$", t
+    )
+    assert "cancel-in-progress: true" not in t
+    assert re.search(r"(?m)^permissions:\n  contents: read$", t) and re.search(r"(?m)^    runs-on: ubuntu-24\.04$", t)
+
+
+def test_drop_is_gated_on_the_secrets_like_the_other_workflows():
+    blocks = steps("studio-drop")
+    gate, rest = blocks[0], blocks[1:]
+    assert "id: gate" in gate and '[ -z "${DATABASE_URL:-}" ]' in gate and "exit 1" not in gate
+    assert all(GATE.split(" == ")[0] in block for block in rest), "a step would run without the secrets"
+
+
+def test_the_pick_id_is_checked_and_never_pasted_into_a_script():
+    t = text("studio-drop")
+    code = "\n".join(line for line in t.splitlines() if not line.lstrip().startswith("#"))
+    # the payload reaches a script only through env: no ${{ ... client_payload ... }} inside a run: block
+    for block in steps("studio-drop"):
+        run = block.split("run:", 1)[1] if "run:" in block else ""
+        assert "${{" not in run, block[:60]
+    assert "PICK_ID: ${{ github.event.client_payload.pick_id }}" in code
+    assert "grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'" in code
+    assert 'uv run studio drop "$COMMAND" "$PICK"' in code and "uv run studio drop sweep" in code
+    assert "drop-process) echo \"command=process\"" in code and "drop-make) echo \"command=make\"" in code
+
+
+def test_drop_installs_ffmpeg_and_yt_dlp_only_when_there_is_work():
+    t = text("studio-drop")
+    assert "sudo apt-get update" in t and "sudo apt-get install -y ffmpeg fonts-dejavu-core fontconfig" in t
+    assert "uv tool install 'yt-dlp[default,curl-cffi]'" in t and 'uv tool dir --bin >> "$GITHUB_PATH"' in t
+    assert "uv run studio drop pending --count" in t
+    install = next(b for b in steps("studio-drop") if b.startswith("name: Install ffmpeg"))
+    assert "steps.pending.outputs.count != '0'" in install
+
+
+def test_drop_secrets_reach_only_the_job_that_needs_them():
+    blocks = steps("studio-drop")
+    command = blocks[-1]
+    for secret in DROP_SECRETS:
+        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in command
+    assert "POSTIZ_API_KEY" not in text("studio-drop")  # nothing here posts
+    for block in blocks[1:-1]:
+        names = set(re.findall(r"secrets\.([A-Z_]+)", block))
+        assert names <= {"DATABASE_URL"}, block[:60]  # the pending count reads the database, nothing else
+    assert "env:" not in text("studio-drop").split("    steps:")[0].split("jobs:")[1]
+    assert set(re.findall(r"secrets\.([A-Z_]+)", text("studio-drop"))) == set(DROP_SECRETS)

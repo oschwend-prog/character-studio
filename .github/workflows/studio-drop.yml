@@ -1,0 +1,106 @@
+# Drop a video (docs/superpowers/plans/2026-10-06-drop-a-video.md): the cloud jobs of a video the owner dropped on "In the
+# works", so it happens even when the Mac is closed.
+#
+# Triggers:
+# - repository_dispatch from studio.request_job (migration 0012: pg_net with the Supabase Vault secret github_dispatch_token):
+#   `drop-process` (the free check) and `drop-make` (paid, only after the owner's Make it: `studio drop make` refuses a pick
+#   without proposal.make_requested), the pick id in client_payload.pick_id;
+# - every 2 hours, a sweep (`studio drop sweep`) for anything left pending (a dispatch that never came, a slow Higgsfield job,
+#   a run that stopped); a manual run is a sweep too.
+#
+# Secrets (repo secrets): DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY (as the other workflows) and, for Drop a video,
+# HF_API_KEY_ID, HF_API_KEY_SECRET and GEMINI_API_KEY (until they exist the jobs record "waiting for the key" and the daily run
+# on the Mac does those steps by hand). Until DATABASE_URL exists the job prints a notice and every later step is skipped.
+#
+# One job per pick: the concurrency group is the pick id (every sweep shares the group `studio-drop-sweep`); `studio drop` also
+# takes a lease on the pick, so a sweep and a dispatched job never work on the same drop at once. Nothing is ever cancelled
+# mid-job. The pick id is checked as a uuid and reaches the command through the environment only (never pasted into a script).
+# A sweep with nothing pending stops before installing ffmpeg and yt-dlp (it bills about a minute).
+name: studio-drop
+
+on:
+  repository_dispatch:
+    types: [drop-process, drop-make]
+  schedule:
+    - cron: '17 */2 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: studio-drop-${{ github.event.client_payload.pick_id || 'sweep' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  drop:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check secrets
+        id: gate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "secrets not configured — skipping"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Read the job
+        id: job
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          PICK_ID: ${{ github.event.client_payload.pick_id }}
+        run: |
+          if [ "$EVENT" != "repository_dispatch" ]; then
+            echo "command=sweep" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! printf %s "$PICK_ID" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; then
+            echo "client_payload.pick_id is not a pick id" >&2
+            exit 1
+          fi
+          case "$ACTION" in
+            drop-process) echo "command=process" >> "$GITHUB_OUTPUT" ;;
+            drop-make) echo "command=make" >> "$GITHUB_OUTPUT" ;;
+            *) echo "unknown dispatch type" >&2; exit 1 ;;
+          esac
+          echo "pick=$PICK_ID" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.configured == 'true'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.configured == 'true'
+      - name: Anything pending
+        id: pending
+        if: steps.gate.outputs.configured == 'true' && steps.job.outputs.command == 'sweep'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: echo "count=$(uv run studio drop pending --count)" >> "$GITHUB_OUTPUT"
+      - name: Install ffmpeg, fonts and yt-dlp
+        if: steps.gate.outputs.configured == 'true' && (steps.job.outputs.command != 'sweep' || steps.pending.outputs.count != '0')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fontconfig
+          uv tool install 'yt-dlp[default,curl-cffi]'
+          uv tool dir --bin >> "$GITHUB_PATH"
+      - name: Run the drop job
+        if: steps.gate.outputs.configured == 'true' && (steps.job.outputs.command != 'sweep' || steps.pending.outputs.count != '0')
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          HF_API_KEY_ID: ${{ secrets.HF_API_KEY_ID }}
+          HF_API_KEY_SECRET: ${{ secrets.HF_API_KEY_SECRET }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          COMMAND: ${{ steps.job.outputs.command }}
+          PICK: ${{ steps.job.outputs.pick }}
+        run: |
+          if [ "$COMMAND" = "sweep" ]; then
+            uv run studio drop sweep
+          else
+            uv run studio drop "$COMMAND" "$PICK"
+          fi
