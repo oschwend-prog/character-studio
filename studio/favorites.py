@@ -916,18 +916,31 @@ def apply_rule(store: Store, id: str) -> Favorite:
 # ---- production ------------------------------------------------------------------------
 
 
+DROP_PLATFORM = "drop"  # a video the owner dropped as a file ("Drop a video", 2026-10-06): its key is owner-drop:<pick id>
+DROP_URL_PREFIX = "owner-drop:"
+
+
+def is_drop(proposal: Mapping[str, Any]) -> bool:
+    """A video the owner dropped on "In the works" (``proposal['drop']``): made by ``studio drop`` after the owner's Make it,
+    never by the daily run's queue."""
+    return isinstance(proposal.get("drop"), Mapping)
+
+
 def next_favorites(store: Store, limit: int, character: str | None = None) -> list[Favorite]:
     """Up to ``limit`` picks ready to produce: ``approved`` or ``analysed``, oldest first.
 
     ``character`` limits the queue to that character's picks, so a character is never starved by
-    older picks of another (the daily run asks once per due clip).
+    older picks of another (the daily run asks once per due clip). A dropped video (``is_drop``) is never in it: it is made
+    only after the owner's Make it, by ``studio drop make`` (owner 2026-10-06: "always check with me if we generate new videos").
     """
     if limit < 0:
         raise ValueError(f"limit must be 0 or more, got {limit!r}")
     if character is not None:
         _require_character(store, character)
     extra = {} if character is None else {"character_slug": character}
-    ready = [f for status in ("approved", "analysed") for f in store.list_favorites(status=status, **extra)]
+    ready = [
+        f for status in ("approved", "analysed") for f in store.list_favorites(status=status, **extra) if not is_drop(f.proposal)
+    ]
     ready.sort(key=lambda f: f.created_at.timestamp() if f.created_at else 0.0)
     return ready[:limit]
 
@@ -948,7 +961,8 @@ def seen_ids(store: Store, limit: int) -> list[str]:
     rows = store.list_favorites()
     rows.sort(key=lambda f: f.created_at.timestamp() if f.created_at else 0.0, reverse=True)
     # one video can be two rows (the terminal's "Both" files a sibling for the other character): name it once
-    ids = list(dict.fromkeys(content_id(f.url) for f in rows if f.platform != GALLERY_PLATFORM))  # no platform id to exclude
+    # a gallery preset or a dropped file has no platform id to exclude
+    ids = list(dict.fromkeys(content_id(f.url) for f in rows if f.platform not in (GALLERY_PLATFORM, DROP_PLATFORM)))
     return ids[:limit]
 
 
