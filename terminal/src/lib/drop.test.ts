@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ADJUST_KEYS, DROP_STATE_LABEL, STALE_UPLOAD_MINUTES, adjustChanges, dropActions, dropCredits, dropLine, dropLink, dropTitle, effectiveDrop,
+  ADJUST_KEYS, DROP_STATE_LABEL, dropsFirst, STALE_UPLOAD_MINUTES, adjustChanges, dropActions, dropCredits, dropLine, dropLink, dropTitle, effectiveDrop,
   isDropCard, isLandscape, sectionLabel, validateAdjust,
 } from './drop';
 import { estimateCredits } from './rules';
@@ -218,5 +218,15 @@ describe('own footage or a downloaded clip (owner 2026-10-06)', () => {
   it('never changes what Make it sends or costs', () => {
     expect(dropCredits({ ...READY, own_footage: true })).toBe(dropCredits(READY));
     expect(effectiveDrop({ ...READY, own_footage: true })).toEqual(effectiveDrop(READY));
+  });
+});
+
+describe('the order in a group', () => {
+  it('puts the drops on their own card first, newest on top, then the rest as the tracker orders them', () => {
+    const a = row({ ...READY, at: ago(30) }, { pick_id: 'a' });
+    const b = row({ state: 'checking', at: ago(2) }, { pick_id: 'b' });
+    const scan = row(null, { pick_id: 's' });
+    const made = row({ ...READY, state: 'made' }, { pick_id: 'm', clip_id: 'c', clip_state: 'awaiting_approval' });
+    expect(dropsFirst([scan, a, made, b]).map((r) => r.pick_id)).toEqual(['b', 'a', 's', 'm']);
   });
 });

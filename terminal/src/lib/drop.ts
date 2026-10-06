@@ -35,6 +35,16 @@ export function isDropCard(r: Pick<TrackerRow, 'drop_card' | 'clip_id' | 'clip_s
   return r.clip_state == null;
 }
 
+/**
+ * A group's rows with the dropped videos still on their own card first, the newest drop on top (the owner's turn: Make it),
+ * then every other row in the tracker's own order.
+ */
+export function dropsFirst<R extends Pick<TrackerRow, 'drop_card' | 'clip_id' | 'clip_state' | 'approved_at'>>(rows: ReadonlyArray<R>): R[] {
+  const at = (r: R) => Date.parse(r.drop_card?.at ?? r.approved_at) || 0;
+  const cards = rows.filter((r) => isDropCard(r)).sort((a, b) => at(b) - at(a));
+  return [...cards, ...rows.filter((r) => !isDropCard(r))];
+}
+
 /** The card's title: what happens in the clip (the check's own sentence), else "Your video" / "Your link". */
 export function dropTitle(r: Pick<TrackerRow, 'concept' | 'drop_card'>): string {
   const line = (r.concept ?? '').split(/\r?\n/).map((l) => l.trim()).find(Boolean);

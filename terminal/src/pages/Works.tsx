@@ -9,7 +9,7 @@ import { DropCard } from '../components/DropCard';
 import { PickThumb } from '../components/PickThumb';
 import { PostText } from '../components/PostText';
 import { Avatar, Livery, Skeleton } from '../components/ui';
-import { isDropCard } from '../lib/drop';
+import { dropsFirst, isDropCard } from '../lib/drop';
 import { formatCredits } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
 import { compactCount } from '../lib/longlist';
@@ -65,7 +65,7 @@ export function Works() {
               <span className="stage-count num on" aria-label={`${g.rows.length} in the works`}>{g.rows.length}</span>
             </header>
             <div className="picks-grid stack" style={{ gap: 12 }}>
-              {g.rows.map((r) => (isDropCard(r) ? <DropCard key={r.pick_id} row={r} now={now} /> : <WorkCard key={r.pick_id} row={r} now={now} />))}
+              {dropsFirst(g.rows).map((r) => (isDropCard(r) ? <DropCard key={r.pick_id} row={r} now={now} /> : <WorkCard key={r.pick_id} row={r} now={now} />))}
             </div>
           </section>
         ))
