@@ -193,6 +193,25 @@ Also:
   - A Seedream still ≈ 1 credit.
   - Renders take about 12–16 minutes. Wait in the background, then do one `jobs_wait` (15 s max per call).
 
+## 5b. Standard models (owner 2026-10-06)
+
+**Images:** `gpt_image_2_5` for every character image. It's photoreal and follows the wardrobe detail.
+- Comparisons: quality medium, 1k (0.5 credits).
+- Final sheets: quality high, 2k (2.75 credits).
+
+**Video:** `seedance_2_5` is the standard once the character pictures exist.
+- **Modes:**
+  - `omni_reference`: character images, plus an optional reference video or audio.
+  - `video_edit`: edit one reference clip.
+  - `video_extension`: make a clip longer.
+  - `t2v`: text to video.
+- 4-30 s, up to 1080p, with audio, `bitrate_mode: high`.
+- **Draft first, always:**
+  1. `draft: true` makes a 480p draft (12 s ≈ 36 credits).
+  2. The owner looks at it.
+  3. Finalize at 1080p with `draft_job_id` (12 s at 1080p ≈ 144 credits) within 7 days.
+- **Drop-ins into downloaded clips:** test Genjutsu Object swap against Seedance `video_edit` on the first clip (#18, Reginald), both as cheap drafts. Keep whichever looks better.
+
 ## 6. Asset register
 
 All URLs share the prefix `https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/`.
