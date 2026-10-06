@@ -9,7 +9,7 @@
 - **Signature outfit:** one-piece pale baby-blue velour tracksuit (hex `#A7C7E7`), white side stripes, front zip, no waist gap.
 - **Look:** adorable, puppy-like — round face, huge sparkly eyes, fluffy cream coat, happy tongue blep (owner: "make the dog adorable and cute").
 - **Moves:** super slick, smooth, highly skilled — never clumsy. The joke: adorable, but somehow dances better than you.
-- **Signature closing beat:** ends every clip with a slow, knowing look straight down the lens (eyes are the brand).
+- **Signature look** (was "signature closing beat"): a slow, knowing look straight down the lens (eyes are the brand), used inside a clip when it fits, never as a required ending: **masters end on the dance, with no eye close-up, glint or sting** (`CLAUDE.md`, owner 2026-10-05). Biscuit is retired (C5, 2026-10-06; Franz is the one dachshund); this bible stays as a format example.
 
 ## Wardrobe system (changes per video, chosen to fit the trend)
 Gold chain (hip-hop) · shades (summer / "cool" trends) · DJ headphones (party, house) · tiny crown (king / "main character" trends) · bucket hat (90s) · sweatband (workout trends) · bow tie (formal / crossovers with Reginald) · Santa hat (Christmas) · sleep mask on forehead ("good morning" loops). One prop per clip, max. The tracksuit stays on.

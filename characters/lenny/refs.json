@@ -1,0 +1,96 @@
+{
+  "_doc": "Identity-lock references for Lenny Gold (strand B, in the roster since 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/lenny/bible.md. soul_id is his Higgsfield Soul (model soul_2); voice_id is the Emmett preset (seed_audio, speech_rate 2, locked). masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). No close-up yet (masters end on the dance; a close-up would be an identity reference only). accounts stays empty until the owner creates the accounts (social.md).",
+  "slug": "lenny",
+  "name": "Lenny Gold",
+  "status": "designing",
+  "bodies": [
+    "biped"
+  ],
+  "masters": {
+    "biped": "c6864413-6cae-4c0f-92a5-f3414a3e0657",
+    "quadruped": null
+  },
+  "closeup": null,
+  "closeup_center": null,
+  "blue_eye_xy": null,
+  "avatar": "assets/characters/lenny/avatar.png",
+  "sheets": {
+    "biped": "71ed6fa5-2068-4957-a822-ed9d95f42c00"
+  },
+  "reference_urls": {
+    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_061010_c6864413-6cae-4c0f-92a5-f3414a3e0657.png",
+    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_062429_71ed6fa5-2068-4957-a822-ed9d95f42c00.png"
+  },
+  "soul_id": "cdc73565-fa87-47f6-bca4-bb1e7884e483",
+  "voice_id": "3c7d32be-0182-5c5e-aa6a-663409bfbb26",
+  "swap": {
+    "noun": "Hollywood agent",
+    "stars": [
+      "person"
+    ]
+  },
+  "traits": {
+    "energy": "manic and loud: a power-walking, finger-jabbing agent mid-deal, phone glued to his ear, who never waits and never hangs up first",
+    "comedy": "explode in, collapse out: a mid-tantrum phone call, then he rides the trend, then fury drops into smug calm and \"You're welcome.\"",
+    "best_formats": [
+      "when they put me on hold",
+      "boss reacts to a mundane problem",
+      "closing the deal on a trend",
+      "tonal whiplash: rage to calm",
+      "office comedy skit"
+    ],
+    "settings": [
+      "glass-walled corner office",
+      "sleek office corridor",
+      "back of a black town car",
+      "hotel pool deck",
+      "red carpet rope line"
+    ],
+    "moves": [
+      "power-walk with the phone at his ear",
+      "finger-jab at the lens",
+      "the Tie Snap: tie tug, cuffs shot, chin up",
+      "finger-guns on the beat",
+      "hangs up and pockets the phone without looking"
+    ],
+    "props": [
+      {
+        "name": "black smartphone",
+        "job": "the whole template: the mid-fight call is the hook"
+      },
+      {
+        "name": "gold watch",
+        "job": "tapped at \"NOON!\": the deadline gag"
+      },
+      {
+        "name": "gold signet ring",
+        "job": "the finger-point and the knuckle-rap on the desk"
+      },
+      {
+        "name": "gold tie bar + burgundy tie",
+        "job": "the Tie Snap at the collapse"
+      },
+      {
+        "name": "white pocket square",
+        "job": "dabs his brow after the explosion"
+      },
+      {
+        "name": "second phone",
+        "job": "two calls at once, one per ear: the escalation gag"
+      },
+      {
+        "name": "gold-rimmed aviators",
+        "job": "poolside and \"out of office\" formats, whipped off on \"NOON!\""
+      }
+    ],
+    "music": "the clip's original sound for a Drop-in; tense staccato strings and brass stabs under the rant as his own bed; the trend's in-app sound",
+    "never": [
+      "a real person's likeness or voice (no real agent or actor)",
+      "naming a real person, agency or studio",
+      "apologising, waiting or hanging up first",
+      "ending defeated",
+      "brand names or logos on screen"
+    ]
+  },
+  "accounts": []
+}

@@ -356,7 +356,8 @@ def test_an_empty_characters_folder_is_an_error(tmp_path):
 
 def test_the_shipped_refs_files_load_and_match_the_brief():
     loaded = {r["slug"]: r for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
-    assert sorted(loaded) == ["biscuit", "reginald"]
+    # the roster of 2026-10-06: Franz and Lenny Gold joined (designing, no accounts yet); Biscuit is retired but kept
+    assert sorted(loaded) == ["biscuit", "franz", "lenny", "reginald"]
     b, r = loaded["biscuit"], loaded["reginald"]
     assert b["masters"] == BISCUIT["masters"] and b["closeup"] == BISCUIT["closeup"]
     assert (b["closeup_center"], b["blue_eye_xy"], b["bodies"]) == ([584, 738], [251, 559], ["biped", "quadruped"])
@@ -391,7 +392,7 @@ def test_the_shipped_refs_keep_the_real_live_accounts():
 
 def test_the_shipped_refs_carry_a_traits_card_that_fits_the_bible():
     loaded = {r["slug"]: r["traits"] for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
-    assert sorted(loaded) == ["biscuit", "reginald"]
+    assert sorted(loaded) == ["biscuit", "franz", "lenny", "reginald"]
     for slug, t in loaded.items():
         assert set(t) == set(seed.TRAIT_TEXT_KEYS) | set(seed.TRAIT_LIST_KEYS), slug
         for key in seed.TRAIT_LIST_KEYS:
@@ -414,12 +415,12 @@ def test_seeding_the_shipped_refs_puts_the_traits_into_the_database():
     assert all(c.setup["traits"]["props"] for c in store.characters())
 
 
-def test_seeding_the_shipped_refs_creates_two_characters_and_exactly_the_accounts_that_have_a_handle():
+def test_seeding_the_shipped_refs_creates_the_roster_and_exactly_the_accounts_that_have_a_handle():
     refs_ = seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)
     with_handle = {(r["slug"], a["platform"]) for r in refs_ for a in r["accounts"] if a["handle"]}
     store = MemoryStore()
     report = seed.seed_characters(store, seed.DEFAULT_CHARACTERS_DIR)
-    assert [c.slug for c in store.characters()] == ["biscuit", "reginald"]
+    assert [c.slug for c in store.characters()] == ["biscuit", "franz", "lenny", "reginald"]
     assert {(a.character_slug, a.platform.value) for a in store.accounts()} == with_handle
     assert len(store.accounts()) + len(report.skipped) == 4  # every account is either seeded or reported as not there yet
 
