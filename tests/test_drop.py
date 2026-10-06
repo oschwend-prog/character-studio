@@ -677,6 +677,46 @@ def test_cli_make_refuses_without_the_owners_tap_and_pending_counts(monkeypatch,
     assert r.exit_code == 2 and "unknown pick" in r.output
 
 
+def test_check_keys_asks_both_services_for_free_and_never_shows_a_key():
+    import httpx
+
+    urls: list[str] = []
+
+    def higgsfield(request: httpx.Request) -> httpx.Response:
+        urls.append(f"{request.method} {request.url}")
+        return httpx.Response(404, json={"detail": "Request not found"})  # an unknown request: the key was accepted
+
+    def google(request: httpx.Request) -> httpx.Response:
+        urls.append(f"{request.method} {request.url}")
+        return httpx.Response(400, json={"error": {"message": "API key not valid. Please pass a valid API key.", "status": "INVALID_ARGUMENT"}})
+
+    env = {"HF_API_KEY_ID": "kid-9", "HF_API_KEY_SECRET": "very-secret", "GEMINI_API_KEY": "AIza-secret"}
+    out = drop.check_keys(env, hf_transport=httpx.MockTransport(higgsfield), gemini_transport=httpx.MockTransport(google))
+    assert out["higgsfield"] == "ok" and out["gemini"].startswith("invalid: HTTP 400")
+    assert all(u.startswith("GET ") for u in urls) and len(urls) == 2  # two reads, nothing submitted
+    assert not any(secret in json.dumps(out) for secret in ("kid-9", "very-secret", "AIza-secret"))
+
+
+def test_cli_check_keys_exits_1_unless_both_keys_are_ok(monkeypatch):
+    for name in ("HF_API_KEY_ID", "HF_API_KEY_SECRET", "GEMINI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    r = CliRunner().invoke(app, ["drop", "check-keys"])
+    assert r.exit_code == 1
+    out = json.loads(r.output)
+    assert out["higgsfield"].startswith("missing:") and out["gemini"].startswith("missing:")
+    monkeypatch.setattr(drop, "check_keys", lambda: {"higgsfield": "ok", "gemini": "ok"})
+    r = CliRunner().invoke(app, ["drop", "check-keys"])
+    assert r.exit_code == 0 and json.loads(r.output) == {"higgsfield": "ok", "gemini": "ok"}
+
+
+def test_the_prompts_view_of_each_roster_character_reads_its_bible():
+    """Owner 2026-10-06 roster: the caption title's edition word comes from the bible (Lenny's swap noun is "Hollywood agent")."""
+    for slug, noun, edition in (("franz", "dachshund", "dachshund"), ("reginald", "butler", "butler"), ("lenny", "Hollywood agent", "agent")):
+        _, who = drop.character(slug)
+        assert (who.noun, who.edition) == (noun, edition), slug
+        assert who.voice and who.keywords and who.traits.get("never"), slug
+
+
 def test_the_own_footage_flag_is_kept_through_the_check_and_never_reaches_the_swap(world, portrait):
     """Owner 2026-10-06: "own footage" (his recording, or footage used with permission) or a "downloaded clip" (the default): for
     reporting later, nothing in the generation reads it."""

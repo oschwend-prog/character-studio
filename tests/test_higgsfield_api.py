@@ -257,3 +257,41 @@ def test_a_failed_download_leaves_no_file(tmp_path: Path):
     assert list(tmp_path.iterdir()) == []
     with pytest.raises(ValueError, match="https"):
         client(Fake()).download("http://cdn.example/o.mp4", tmp_path / "gen.mp4")
+
+
+# ---- the free key check (studio drop check-keys) ----------------------------------------------------------------------------------
+
+
+def test_the_key_check_is_one_status_read_of_a_random_request_and_a_404_means_ok():
+    """docs.higgsfield.ai get-request-status: 401 = missing or invalid credentials, 404 = no such request for this account."""
+    fake = Fake((404, {"detail": "Request not found"}))
+    assert client(fake).check_credentials() == "ok"
+    (req,) = fake.requests
+    assert req.method == "GET" and req.url.host == "api.higgsfield.ai"
+    path = req.url.path.split("/")
+    assert path[:2] == ["", "requests"] and path[3] == "status" and len(path) == 4
+    import uuid
+
+    assert uuid.UUID(path[2]).version == 4  # a fresh random id: it cannot be one of ours
+    assert req.headers["Authorization"] == f"Key {KEY_ID}:{SECRET}" and not req.content
+
+
+def test_a_rejected_key_is_invalid_and_other_answers_are_errors_never_showing_the_key():
+    bad = client(Fake((401, {"detail": "Invalid credentials"}))).check_credentials()
+    assert bad.startswith("invalid: HTTP 401") and "Invalid credentials" in bad
+    echoed = client(Fake((401, f"bad key {KEY_ID}:{SECRET}"))).check_credentials()
+    assert SECRET not in echoed and KEY_ID not in echoed and "***" in echoed
+    assert client(Fake((503, {"detail": "busy"}))).check_credentials().startswith("error: HTTP 503")
+    assert client(Fake((200, {"status": "completed"}))).check_credentials() == "ok"
+    down = client(Fake(httpx.ConnectError("refused"))).check_credentials()
+    assert down == "error: no answer from Higgsfield (ConnectError)"
+
+
+def test_the_key_check_from_the_environment_says_missing_without_a_key():
+    from studio.higgsfield_api import check_credentials
+
+    assert check_credentials({}).startswith("missing:")
+    assert check_credentials({"HF_API_KEY_ID": KEY_ID}).startswith("missing:")
+    fake = Fake((404, {"detail": "not found"}))
+    env = {"HF_API_KEY_ID": KEY_ID, "HF_API_KEY_SECRET": SECRET}
+    assert check_credentials(env, transport=httpx.MockTransport(fake)) == "ok" and len(fake.requests) == 1

@@ -3,7 +3,7 @@
 Owner: "keep the terminal simpler. I will drop in videos and it will animate for our characters", "it should happen even when
 the Mac is closed" and "always check with me if we generate new videos". Genjutsu is used the way Higgsfield designed it:
 **Object swap** keeps the clip's setting, camera, timing and sound and replaces its star, like for like (refs.json ``swap``:
-Reginald replaces a person, Biscuit a dog or a small animal).
+a character drawn as a person replaces a person, a dog replaces a dog).
 
 **A drop is a pick** (``favorites``, origin ``owner``, status ``approved``) carrying ``proposal['drop']``. The terminal files it
 with the ``studio.add_drop`` RPC (migration 0012): a file drop is keyed ``owner-drop:<pick id>`` (platform ``drop``) and its
@@ -54,6 +54,10 @@ stops at ``making`` ("waiting for the Higgsfield key"); ``drop make <pick> --pre
 the MCP Object swap, and ``drop make <pick> --generated-file F --credits N`` goes on from the downloaded output (the frame QA by
 hand with ``--qa-file``).
 
+**Are the keys good?** ``studio drop check-keys`` asks Higgsfield (a status read of a random request id) and Gemini (a model read)
+for free and prints ``{"higgsfield": "ok|invalid: ..|error: ..|missing: ..", "gemini": ...}``, never the keys (the workflow's manual
+``job: check-keys`` runs it with the GitHub secrets); exit 1 unless both are ``ok``.
+
 CLI (``studio drop ...``) prints JSON. Exit 0 when the step was recorded (whatever the drop's state), 1 when a job stopped on a
 failure it recorded (the JSON says), 2 for anything the caller must fix, 3 when the budget refused the reservation.
 """
@@ -81,6 +85,7 @@ from studio.captions import compose_content
 from studio.cli_support import emit, fail, open_storage, open_store, text_option
 from studio.config import now_london
 from studio.favorites import DROP_PLATFORM, DROP_URL_PREFIX, is_drop, mark_favorite, parse_video_url, validate_analysis
+from studio import higgsfield_api
 from studio.higgsfield_api import (
     HiggsfieldClient,
     HiggsfieldError,
@@ -226,10 +231,11 @@ def character(slug: str, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DI
         raise DropError(f"characters/{slug}/refs.json has no swap rule (noun, stars)")
     bible_path = Path(characters_dir) / slug / "bible.md"
     bible = bible_path.read_text(encoding="utf-8") if bible_path.is_file() else ""
+    voice = gemini.bible_section(bible, "Voice (captions)")
     return ref, gemini.Character(
         slug=slug, name=ref["name"], noun=swap["noun"], stars=tuple(swap["stars"]),
-        voice=gemini.bible_section(bible, "Voice (captions)"), keywords=gemini.bible_section(bible, "Search keywords"),
-        traits=ref.get("traits") or {},
+        voice=voice, keywords=gemini.bible_section(bible, "Search keywords"),
+        traits=ref.get("traits") or {}, edition=gemini.bible_edition(voice),
     )
 
 
@@ -1209,7 +1215,7 @@ def _finish(outcome: Outcome) -> None:
 
 @app.command("add")
 def add_command(
-    character_slug: Annotated[str, typer.Option("--character", help="biscuit or reginald.")],
+    character_slug: Annotated[str, typer.Option("--character", help="A character slug (the folder name in characters/, e.g. franz).")],
     link: Annotated[str | None, typer.Option("--link", help="A full TikTok / Instagram Reel / YouTube link (else a file drop).")] = None,
     own_footage: Annotated[
         bool, typer.Option("--own-footage", help="The owner's own recording or footage used with permission (default: a downloaded clip).")
@@ -1269,6 +1275,26 @@ def make_command(
     except (DropError, StorageError, ValueError) as e:
         fail(str(e))
     _finish(outcome)
+
+
+def check_keys(
+    env: Mapping[str, str] | None = None, *, hf_transport: Any = None, gemini_transport: Any = None
+) -> dict[str, str]:
+    """Both keys of the cloud jobs, checked for free (a Higgsfield status read, a Gemini model read; nothing is generated or
+    spent): ``{"higgsfield": "ok|invalid: ..|error: ..|missing: ..", "gemini": ...}``. The keys never appear in it."""
+    return {
+        "higgsfield": higgsfield_api.check_credentials(env, transport=hf_transport),
+        "gemini": gemini.check_key(env, transport=gemini_transport),
+    }
+
+
+@app.command("check-keys")
+def check_keys_command() -> None:
+    """Check the Higgsfield and Gemini keys for free: nothing is generated or spent. Exit 1 unless both are ok."""
+    out = check_keys()
+    emit(out)
+    if any(v != "ok" for v in out.values()):
+        raise typer.Exit(EXIT_FAILED)
 
 
 @app.command("pending")

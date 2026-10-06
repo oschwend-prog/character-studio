@@ -325,8 +325,66 @@ def test_the_prompts_carry_the_odd_eyes_rule_and_the_like_for_like_rule():
 
 
 def test_the_bible_sections_the_prompt_reads_exist():
-    for slug in ("biscuit", "reginald"):
+    for slug in ("franz", "reginald", "lenny"):  # the roster (owner 2026-10-06); Biscuit is retired
         text = (ROOT / "characters" / slug / "bible.md").read_text(encoding="utf-8")
         assert len(bible_section(text, "Voice (captions)")) > 100
         assert bible_section(text, "Search keywords")
     assert bible_section("## A\nx\n## B\ny", "B") == "y" and bible_section("## A\nx", "C") == ""
+
+
+def test_the_caption_title_uses_the_bibles_edition_word_not_the_swap_noun():
+    """Lenny's swap noun is "Hollywood agent" but his title is "· agent edition" (bible post formula)."""
+    assert gemini.bible_edition("1. Searchable title: `<famous moment or format> · agent edition`, carrying") == "agent"
+    assert gemini.bible_edition("no formula here") == ""
+    lenny = Character(slug="lenny", name="Lenny Gold", noun="Hollywood agent", stars=("person",), edition="agent")
+    prompt = gemini.deconstruct_prompt(lenny)
+    assert '"<famous moment or format> · agent edition"' in prompt and "Hollywood agent edition" not in prompt
+    assert '"<famous moment or format> · butler edition"' in gemini.deconstruct_prompt(REGINALD)  # no edition: the noun
+    for slug, word in (("franz", "dachshund"), ("reginald", "butler"), ("lenny", "agent")):
+        text = (ROOT / "characters" / slug / "bible.md").read_text(encoding="utf-8")
+        assert gemini.bible_edition(bible_section(text, "Voice (captions)")) == word, slug
+
+
+def test_the_frame_qa_looks_for_what_this_character_never_does():
+    qa = gemini.frame_qa_prompt(REGINALD, 6)
+    assert "anything Reginald never does: smiling" in qa
+    assert "a smile on Reginald" not in gemini.frame_qa_prompt(Character(slug="franz", name="Franz", noun="dachshund", stars=("dog",)), 6)
+    assert "never does" not in gemini.frame_qa_prompt(Character(slug="x", name="X", noun="x", stars=("dog",)), 6)
+
+
+# ---- the free key check (studio drop check-keys) ----------------------------------------------------------------------------------
+
+
+def test_the_key_check_reads_the_models_card_with_the_key_in_a_header():
+    fake = Fake((200, {"name": f"models/{DEFAULT_MODEL}", "displayName": "Flash"}))
+    assert client(fake).check_key() == "ok"
+    (req,) = fake.requests
+    assert req.method == "GET" and str(req.url) == f"https://generativelanguage.googleapis.com/v1beta/models/{DEFAULT_MODEL}"
+    assert req.headers["x-goog-api-key"] == KEY and KEY not in str(req.url) and not req.content
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "start"),
+    [
+        (401, {"error": {"code": 401, "status": "UNAUTHENTICATED"}}, "invalid: HTTP 401"),
+        (403, {"error": {"code": 403, "status": "PERMISSION_DENIED"}}, "invalid: HTTP 403"),
+        (400, {"error": {"code": 400, "message": "API key not valid. Please pass a valid API key.", "details": [{"reason": "API_KEY_INVALID"}]}}, "invalid: HTTP 400"),
+        (400, {"error": {"code": 400, "message": "bad request"}}, "error: HTTP 400"),
+        (404, {"error": {"code": 404, "status": "NOT_FOUND"}}, f"error: the model {DEFAULT_MODEL} was not found"),
+        (503, {"error": {"code": 503}}, "error: HTTP 503"),
+    ],
+)
+def test_the_key_check_names_a_bad_key_and_never_retries_or_shows_it(status, body, start):
+    fake = Fake((status, body))
+    line = client(fake).check_key()
+    assert line.startswith(start), line
+    assert len(fake.requests) == 1 and KEY not in line
+
+
+def test_the_key_check_from_the_environment():
+    assert gemini.check_key({}) == "missing: GEMINI_API_KEY is not set"
+    fake = Fake((200, {"name": "models/m"}))
+    assert gemini.check_key({"GEMINI_API_KEY": KEY, "GEMINI_MODEL": "gemini-x"}, transport=httpx.MockTransport(fake)) == "ok"
+    assert str(fake.requests[0].url).endswith("/v1beta/models/gemini-x")
+    down = client(Fake(httpx.ReadTimeout("slow"))).check_key()
+    assert down == "error: no answer from Gemini (ReadTimeout)"

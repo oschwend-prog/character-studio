@@ -23,6 +23,11 @@ ever repeats the identical body with that stored key; a new attempt (the one re-
 not https is refused, and the key is only ever sent to the API's own host (a ``status_url`` elsewhere is refused, never
 followed). Error messages never carry the key.
 
+**Is the key good?** ``check_credentials`` asks for free: ``GET /requests/<a random uuid>/status``
+(docs.higgsfield.ai/docs/api-reference/requests/get-request-status: ``401`` "Missing or invalid API credentials", ``404`` "The request
+does not exist or belongs to another account"). A status read creates and spends nothing, so a 404 for a request that cannot exist
+means the key was accepted, and a 401 that it was not (``studio drop check-keys``).
+
 Tests drive the client with an ``httpx.MockTransport``; nothing here is called without the owner's keys.
 """
 
@@ -30,6 +35,7 @@ from __future__ import annotations
 
 import os
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -279,6 +285,24 @@ class HiggsfieldClient:
                 raise PollTimeout(f"still {last or 'unknown'} after {timeout_s / 60:.0f} min", status_url, last)
             self._sleep(interval_s)
 
+    # ---- the key check ------------------------------------------------------------------------------------------------
+
+    def check_credentials(self) -> str:
+        """Whether Higgsfield accepts this key pair, for free (see the module doc): ``"ok"`` (an unknown request id answers 404,
+        or, by a one-in-2^122 chance, 200), ``"invalid: ..."`` (401) or ``"error: ..."`` (anything else, or no answer). The key
+        never appears in the line."""
+        url = f"{self._root}/requests/{uuid.uuid4()}/status"
+        try:
+            response = self._client.get(url, headers=self._auth())
+        except httpx.HTTPError as e:
+            return f"error: no answer from Higgsfield ({type(e).__name__})"
+        if response.status_code in (200, 404):
+            return "ok"
+        detail = f"HTTP {response.status_code}: {self._body(response)}".rstrip(": ")
+        if response.status_code == 401:
+            return f"invalid: {detail}"
+        return f"error: {detail}"
+
     # ---- the output -------------------------------------------------------------------------------------------------
 
     def download(self, url: str, dest: Path | str) -> Path:
@@ -330,7 +354,18 @@ def parse_status(data: Mapping[str, Any]) -> RequestStatus:
     )
 
 
+def check_credentials(env: Mapping[str, str] | None = None, **kw: Any) -> str:
+    """``HiggsfieldClient.check_credentials`` for the key pair in the environment; ``"missing: ..."`` when it is not set."""
+    client = HiggsfieldClient.from_env(env, **kw)
+    if client is None:
+        return "missing: HF_API_KEY_ID and HF_API_KEY_SECRET are not both set"
+    try:
+        return client.check_credentials()
+    finally:
+        client.close()
+
+
 __all__ = [
     "HiggsfieldClient", "HiggsfieldError", "PollTimeout", "RequestStatus", "SubmitUncertain", "Submitted", "UnexpectedResponse",
-    "parse_status",
+    "check_credentials", "parse_status",
 ]
