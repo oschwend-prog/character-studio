@@ -42,6 +42,8 @@ FILE_ACTIVE_TIMEOUT_S = 180.0
 FILE_POLL_S = 3.0
 _TIMEOUT = httpx.Timeout(180.0, connect=15.0)
 _BODY_CHARS = 300
+BUSY_STATUSES = frozenset({429, 500, 502, 503, 504})  # "busy, try later": asked again after a wait, never a 4xx refusal
+BUSY_WAITS_S = (5.0, 15.0, 45.0)  # the first live drop (2026-10-06) stopped on one 503 "high demand"
 
 STAR_KINDS = ("person", "dog", "animal", "none")
 BODIES = ("biped", "quadruped")
@@ -123,13 +125,18 @@ class GeminiClient:
         return response.text.strip()[:_BODY_CHARS].replace(self._key, "***")
 
     def _call(self, method: str, url: str, **kw: Any) -> httpx.Response:
-        try:
-            response = self._client.request(method, url, **kw)
-        except httpx.HTTPError as e:
-            raise GeminiError(f"the Gemini call failed ({type(e).__name__})") from None
-        if not response.is_success:
-            raise GeminiError(f"Gemini answered HTTP {response.status_code}: {self._body(response)}", response.status_code)
-        return response
+        """One request; a busy answer (``BUSY_STATUSES``) is asked again after each wait of ``BUSY_WAITS_S``."""
+        for wait in (*BUSY_WAITS_S, None):
+            try:
+                response = self._client.request(method, url, **kw)
+            except httpx.HTTPError as e:
+                raise GeminiError(f"the Gemini call failed ({type(e).__name__})") from None
+            if response.is_success:
+                return response
+            if response.status_code not in BUSY_STATUSES or wait is None:
+                raise GeminiError(f"Gemini answered HTTP {response.status_code}: {self._body(response)}", response.status_code)
+            self._sleep(wait)
+        raise AssertionError("unreachable")
 
     # ---- the Files API (a file over the inline limit) ------------------------------------------------------------------
 

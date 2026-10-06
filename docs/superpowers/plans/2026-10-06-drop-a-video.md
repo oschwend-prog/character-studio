@@ -40,5 +40,5 @@ like for like (Reginald replaces a human star, Biscuit a dog or small-animal sta
 1. Higgsfield API key at console.higgsfield.ai → GitHub secrets `HF_API_KEY_ID`, `HF_API_KEY_SECRET` (check how the API
    is billed: plan credits or separate API credits).
 2. Gemini API key → GitHub secret `GEMINI_API_KEY`.
-3. A fine-grained GitHub token for this repo only (Actions: read and write) → Supabase Vault secret `github_dispatch_token`.
+3. A fine-grained GitHub token for this repo only (Contents: read and write; corrected 2026-10-06: repository_dispatch needs Contents) → Supabase Vault secret `github_dispatch_token`.
 Until they exist, drops wait at Checking / Make it and the next Claude run does the steps by hand.

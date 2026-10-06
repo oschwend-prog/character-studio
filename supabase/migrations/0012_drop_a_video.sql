@@ -4,7 +4,7 @@
 -- applied to Supabase project hkcafvzjwkeibbmvskko ("faceless-youtube") as migration `studio_0012_drop_a_video`, AFTER 0011;
 -- the controller (or the owner) applies it, it is never run from the studio CLI. Apply it BEFORE the terminal that calls
 -- add_drop / request_job is deployed. Owner step after applying it: a fine-grained GitHub token for this repo only
--- (Actions: read and write) stored in Supabase Vault under the name `github_dispatch_token`. Until it exists, request_job
+-- (Contents: read and write) stored in Supabase Vault under the name `github_dispatch_token`. Until it exists, request_job
 -- records the request and the 2-hourly `studio-drop` sweep picks it up.
 --
 -- 1. pg_net (net.http_post) is enabled when the database has it (Supabase does); elsewhere nothing happens.

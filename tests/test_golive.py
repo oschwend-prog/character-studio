@@ -961,7 +961,7 @@ def test_a_missing_vault_token_fails_and_the_value_is_never_selected(world):
     world.vault = [(0,)]
     checks = world.run()
     assert failing(checks) == {"drop:vault"}
-    assert "github_dispatch_token" in checks["drop:vault"].fix and "Actions: read and write" in checks["drop:vault"].fix
+    assert "github_dispatch_token" in checks["drop:vault"].fix and "Contents: read and write" in checks["drop:vault"].fix
     assert "decrypted" not in golive.VAULT_SQL and "secret," not in golive.VAULT_SQL and golive.VAULT_SQL.startswith("select count(*)")
     world.vault = RuntimeError('relation "vault.secrets" does not exist')
     assert world.run()["drop:vault"].status == "fail"

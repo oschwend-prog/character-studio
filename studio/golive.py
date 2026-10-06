@@ -582,7 +582,7 @@ def check_vault(env: Env) -> Check:
         return Check(cid, title, "pass", "present (the value is not read)")
     return Check(
         cid, title, "fail", "missing: drops are picked up by the 2-hourly sweep only",
-        f"a fine-grained GitHub token for this repo only (Actions: read and write) into Supabase > Vault as {VAULT_SECRET}",
+        f"a fine-grained GitHub token for this repo only (Contents: read and write) into Supabase > Vault as {VAULT_SECRET}",
     )  # fmt: skip
 
 

@@ -16,6 +16,7 @@ import pytest
 
 from studio import gemini
 from studio.gemini import (
+    BUSY_WAITS_S,
     DEFAULT_MODEL,
     Character,
     GeminiBlocked,
@@ -183,6 +184,25 @@ def test_an_http_error_never_shows_the_key(clip):
     assert info.value.status == 403 and KEY not in str(info.value)
     with pytest.raises(GeminiError, match="ReadTimeout"):
         deconstruct(client(Fake(httpx.ReadTimeout("slow"))), clip, REGINALD)
+
+
+def test_a_busy_model_is_asked_again_after_a_wait(clip):
+    # the first live drop (2026-10-06) stopped on one HTTP 503 "high demand": a busy answer is retried, a refusal is not
+    waits: list[float] = []
+    fake = Fake((503, "high demand"), (429, "rate limited"), (200, answer(GOOD)))
+    c = GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append)
+    assert deconstruct(c, clip, REGINALD)["caption"]["title"] == GOOD["caption"]["title"]
+    assert waits == list(BUSY_WAITS_S[:2])
+    fake = Fake(*[(503, "high demand")] * (len(BUSY_WAITS_S) + 1))
+    waits.clear()
+    with pytest.raises(GeminiError) as info:
+        deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
+    assert info.value.status == 503 and waits == list(BUSY_WAITS_S)
+    assert len(fake.requests) == len(BUSY_WAITS_S) + 1
+    fake = Fake((400, "bad request"))
+    with pytest.raises(GeminiError):
+        deconstruct(client(fake), clip, REGINALD)
+    assert len(fake.requests) == 1
 
 
 def test_a_big_file_goes_through_the_files_api_and_is_deleted_afterwards(clip, monkeypatch):
