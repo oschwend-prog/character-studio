@@ -21,7 +21,7 @@ from typer.testing import CliRunner
 from studio import budget, drop
 from studio.cli import app
 from studio.config import now_london
-from studio.drop import DropError, add_drop, drop_window, make_drop, pending, process_drop, validate_adjust
+from studio.drop import DropError, add_drop, attach_file, drop_window, make_drop, pending, process_drop, validate_adjust
 from studio.favorites import next_favorites
 from studio.gemini import GeminiBlocked, GeminiError
 from studio.higgsfield_api import PollTimeout, RequestStatus, Submitted, SubmitUncertain
@@ -363,6 +363,25 @@ def test_add_drop_files_a_file_and_dedupes_a_link_per_character(world):
         add_drop(store, "nobody", None, NOW)
     with pytest.raises(ValueError, match="short links"):
         add_drop(store, "reginald", "https://vm.tiktok.com/abc/", NOW)
+
+
+def test_a_saved_file_is_dropped_from_the_mac_exactly_as_the_terminal_does(world, tmp_path):
+    # owner 2026-10-06: "let's make some with the videos I saved" (inbox/drops): upload to sources/owner/<pick>/, attach
+    store, storage = world
+    clip = tmp_path / "SnapInsta-Ai_1_2.mp4"
+    clip.write_bytes(b"\x00\x00\x00\x18ftypmp42 a saved clip")
+    pick, _ = add_drop(store, "reginald", None, NOW)
+    path = attach_file(store, storage, pick.id, clip, NOW)
+    assert path == f"owner/{pick.id}/{int(NOW.timestamp() * 1000)}.mp4"
+    assert store.get_favorite(pick.id).proposal["owner_clip_path"] == path
+    back = storage.download("sources", path, tmp_path / "back.mp4")
+    assert back.read_bytes() == clip.read_bytes()
+    assert [p["pick_id"] for p in pending(store)] == [pick.id]  # an uploading drop with its file attached is taken by the next run
+    with pytest.raises(DropError, match="not a video"):
+        attach_file(store, storage, pick.id, tmp_path / "notes.txt", NOW)
+    link, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    with pytest.raises(DropError, match="file drop"):
+        attach_file(store, storage, link.id, clip, NOW)
 
 
 # ---- the window --------------------------------------------------------------------------------------------------------------

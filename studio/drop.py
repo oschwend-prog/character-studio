@@ -486,6 +486,32 @@ def add_drop(
     )), False  # fmt: skip
 
 
+CLIP_EXTENSIONS = ("mp4", "mov", "m4v")
+CLIP_MAX_BYTES = 200 * 1024 * 1024  # the terminal's limit for a dropped video
+
+
+def attach_file(store: Store, storage: Storage, pick_id: str, file: Path, now: datetime | None = None) -> str:
+    """Upload a saved video for a file drop and attach it, exactly as the terminal does (``sources/owner/<pick>/<ms>.<ext>``,
+    then ``attach_clip``): the owner's saved clips on the Mac (``inbox/drops``) go in without the browser. Returns the path.
+    ``DropError`` for a link drop, a drop already past ``uploading``, or a file that is not a video under the size limit."""
+    now = now or now_london()
+    pick = _load(store, pick_id)
+    d = drop_of(pick)
+    if d.get("kind") != "file":
+        raise DropError(f"pick {pick.id} is not a file drop")
+    if d.get("state") != "uploading":
+        raise DropError(f"pick {pick.id} is {d.get('state')}: a file is attached only while it is uploading")
+    ext = file.suffix.lower().lstrip(".")
+    if ext not in CLIP_EXTENSIONS or not file.is_file():
+        raise DropError(f"{file.name} is not a video file (.mp4, .mov or .m4v)")
+    if file.stat().st_size > CLIP_MAX_BYTES:
+        raise DropError(f"{file.name} is over {CLIP_MAX_BYTES // (1024 * 1024)} MB")
+    path = f"owner/{pick.id}/{int(now.timestamp() * 1000)}.{ext}"
+    storage.upload("sources", path, file)
+    store.update_favorite(pick.id, proposal={**pick.proposal, "owner_clip_path": path}, source_id=None)
+    return path
+
+
 def set_own_footage(store: Store, pick_id: str, own_footage: bool) -> Favorite:
     """The owner's toggle (``studio.set_drop_footage``, migration 0012): ``drop['own_footage']``, for reporting; any state."""
     pick = _load(store, pick_id)
@@ -1220,14 +1246,20 @@ def add_command(
     own_footage: Annotated[
         bool, typer.Option("--own-footage", help="The owner's own recording or footage used with permission (default: a downloaded clip).")
     ] = False,
+    file: Annotated[
+        Path | None, typer.Option("--file", help="A saved video on this Mac: uploaded and attached as the terminal does (else a link or an empty file drop).")
+    ] = None,
 ) -> None:
-    """File a drop like the terminal does (a link, or a file drop waiting for its upload)."""
+    """File a drop like the terminal does (a link, a saved video with --file, or a file drop waiting for its upload)."""
+    if file is not None and link is not None:
+        fail("give --link or --file, not both")
     store = open_store()
     try:
         pick, duplicate = add_drop(store, character_slug, link, own_footage=own_footage)
-    except ValueError as e:
+        path = attach_file(store, open_storage(), pick.id, file) if file is not None else None
+    except (ValueError, DropError) as e:
         fail(str(e))
-    emit({"pick_id": pick.id, "duplicate": duplicate, "drop": pick.proposal.get("drop")})
+    emit({"pick_id": pick.id, "duplicate": duplicate, "owner_clip_path": path, "drop": pick.proposal.get("drop")})
 
 
 @app.command("process")
