@@ -199,18 +199,17 @@ Also:
 - Comparisons: quality medium, 1k (0.5 credits).
 - Final sheets: quality high, 2k (2.75 credits).
 
-**Video:** `seedance_2_5` is the standard once the character pictures exist.
-- **Modes:**
-  - `omni_reference`: character images, plus an optional reference video or audio.
-  - `video_edit`: edit one reference clip.
-  - `video_extension`: make a clip longer.
-  - `t2v`: text to video.
-- 4-30 s, up to 1080p, with audio, `bitrate_mode: high`.
-- **Draft first, always:**
-  1. `draft: true` makes a 480p draft (12 s ≈ 36 credits).
-  2. The owner looks at it.
-  3. Finalize at 1080p with `draft_job_id` (12 s at 1080p ≈ 144 credits) within 7 days.
-- **Drop-ins into downloaded clips:** test Genjutsu Object swap against Seedance `video_edit` on the first clip (#18, Reginald), both as cheap drafts. Keep whichever looks better.
+**Video, the standard way (owner 2026-10-06, corrected):** **Genjutsu Object swap** (`hf_mult_replace_object`) drops the character into the clip and keeps the original shot. Every video is made this way.
+- Like for like: a person for a person, a dog for a dog.
+- 1080p, short prompt, ≈ 11-12.5 credits per second.
+- Get the price first (free), and generate only on the owner's go.
+
+**Seedance 2.5** (`seedance_2_5`) is a secondary tool, used only where there is no clip to swap into:
+- original clips from the character pictures (e.g. LaunchPoint "AI Invasion" own-content);
+- extending a clip;
+- edits.
+
+Seedance details: `omni_reference`, `video_edit` and `video_extension` modes, 4-30 s, up to 1080p. Use **draft first** (`draft: true` gives a 480p draft, 12 s ≈ 36 credits), then finalize at 1080p (12 s ≈ 144 credits).
 
 ## 6. Asset register
 
