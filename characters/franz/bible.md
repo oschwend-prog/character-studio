@@ -1,17 +1,17 @@
 # Franz — character bible
 
-**Status:** designing. Owner decision C5 (2026-10-06): Franz is the ONE dachshund; Biscuit is retired. Voice: Alistair (approved by the owner 2026-10-06). Owner 2026-10-06: **the exaggerated look is canon** ("always go for exaggerated 2"): the extra-long sausage body and the tiny gold crown. Owner 2026-10-06 ("yes, do all"): **GPT Image 2.5 is the model for every character image**; canon master `8781919e`, final sheets `86359d05` (turnaround) and `7c13a0d0` (expressions).
+**Status:** designing. Owner decision C5 (2026-10-06): Franz is the ONE dachshund; Biscuit is retired. Voice: Alistair (approved by the owner 2026-10-06). Owner 2026-10-06: **the exaggerated look is canon** ("always go for exaggerated 2"): the extra-long sausage body and the tiny gold crown. Owner 2026-10-06 ("yes, do all"): **GPT Image 2.5 is the model for every character image**. Owner 2026-10-06: **ODD EYES for every character** (the studio signature). Canon master `806498b8` (the odd-eyes edit of `8781919e`), final sheets `a37318e2` (turnaround) and `8a9a109e` (expressions), close-up `f933609f`.
 **Concept:** the outraged tiny aristocrat. A cream miniature dachshund who believes he is royalty and is permanently unimpressed.
 
 ## Identity and personality (never changes)
 - Original fictional dog: an adult cream long-haired **miniature dachshund**. Real dog anatomy: a long low body, short legs, a deep chest, a plumed tail. Small: knee-high to a person at most.
 - Personality: an outraged tiny aristocrat who thinks he is royalty. Permanently unimpressed. Never rushes. Everything is beneath him, until the beat drops and he betrays himself.
 - Old money, European casual-luxury: polo and loafers energy, understated, no logos. The one flourish is the tiny gold crown (canon since the exaggerated v2, 2026-10-06).
-- **No ODD EYES yet.** His eyes are dark. C8 (one ODD EYES universe or standalone brands) is still open: never add heterochromia or the two-dot bug without the owner.
+- **ODD EYES** (owner 2026-10-06, the studio signature viewers recognise): his **RIGHT eye is ice-blue** (on the viewer's LEFT when he faces the camera) and his **LEFT eye is amber** (on the viewer's RIGHT). Real dog eyes in natural colours, never glowing. Nothing else about his look changed.
 
 ## Look lock (head to toe)
 - **Head:** refined long muzzle, black nose, softly domed skull, chin slightly raised; a smug, effortlessly superior old-money expression.
-- **Eyes:** big dark brown, almost black, with naturally muted catchlights.
+- **Eyes:** big, with naturally muted catchlights. **ODD EYES:** his right eye (viewer's left) a pale natural ice-blue `#8FD3FF`, his left eye (viewer's right) a warm natural amber `#FFB040`; never glowing. In a 3/4 view or a profile facing the viewer's right, the near eye is his right one (ice-blue). (Dark brown, almost black, until 2026-10-06.)
 - **Ears:** long, silky, feathered, hanging below the jaw, a shade warmer (pale honey) than the face.
 - **Coat:** soft cream to pale honey, long and silky, feathered on the chest, legs, belly and tail; natural, slightly wavy, never blow-dried perfect.
 - **Body (exaggerated canon):** a comically long, low sausage body, about twice a normal dachshund's length, on four short legs, paws on the ground. He is a dog: no human limbs, no hands, never standing like a person.
@@ -43,7 +43,7 @@ What makes him "a Franz" at 50 feet, muted, mid-scroll:
 - the dark **navy polo block** on the cream fur;
 - the **raised chin**, nose in the air.
 
-The dark eyes don't read at thumbnail size: the polo and the chin carry him. With the **sunglasses** (near-signature) he is unmistakable.
+The odd eyes don't read at thumbnail size (they carry the close-up and the face-on shots): the polo and the chin carry him. With the **sunglasses** (near-signature) he is unmistakable.
 
 ## Signature move (locked by the owner 2026-10-06)
 **The Chin Lift:** he stops, raises his chin, turns his head a quarter away from the lens and half-closes his eyes. One beat (about 1 s) of total disdain, then he carries on. It closes every provoked scramble. It is a gesture inside the clip, not a required ending: **masters end on the dance, with no eye close-up, glint or sting** (`CLAUDE.md`, owner 2026-10-05).
@@ -86,7 +86,7 @@ Examples: "I was not dancing. I was stretching to music. 🥂" · "The stairs ha
 3. ONE engagement line, a different kind from the last post: a send trigger ("send this to ..."), a question, or a series tease ("next week: ...").
 4. Credit: `🎵 <song> – <artist>` when known, then ` · dance: @<creator>` (or `trend: @<handle>` / `original: <creator>`); no handle known, no credit line.
 5. The AI disclosure (added automatically).
-6. 3-5 hashtags: the moment, the niche, the format. Never #fyp, #foryou, #foryoupage, #viral or #explore. (#oddeyes only if C8 puts him in the ODD EYES universe.)
+6. 3-5 hashtags: the moment, the niche, the format. Never #fyp, #foryou, #foryoupage, #viral or #explore. (He has the odd eyes since 2026-10-06; whether his posts carry #oddeyes and the two-dot bug follows the rest of C8, one universe or standalone brands, still the owner's call.)
 
 **First comment** (the owner pins it): "Requests may be submitted to my staff. In writing."
 
@@ -126,12 +126,14 @@ Like for like: **Franz replaces a dog star** (refs.json `swap`: noun "dachshund"
 ## References
 CDN prefix as above.
 - **Element:** `a28cc772-0227-4ed1-b6a2-1c84fe3b78f2`. Embed `<<<a28cc772-0227-4ed1-b6a2-1c84fe3b78f2>>>` **inside `params.prompt`**, never in `medias`. Image models: `nano_banana_pro`, `nano_banana_2`, `gpt_image_2`, `seedream_v4_5`, `seedream_v5_lite`, `cinematic_studio_2_5`. Video models: `cinematic_studio_video_v2`, `cinematic_studio_3_0`, `seedance_2_0`, `kling3_0`.
-- **Master (quadruped), CANON (owner 2026-10-06):** `8781919e-93f2-4b4f-87f8-07180f22f888` → `hf_20261006_061003_8781919e-93f2-4b4f-87f8-07180f22f888.png` (`gpt_image_2_5`, 9:16, 752×1344: the extra-long body, the tilted crown, the navy polo with the stitched side pocket, standing on a cream rug in a sunlit room, chin up).
-- **Final sheets (CANON, `gpt_image_2_5`, quality high, 2K, 16:9, 2.75 credits each, passed review first time):**
-  - turnaround `86359d05-4376-4a41-ba5a-103dd3014958` → `hf_20261006_062428_86359d05-4376-4a41-ba5a-103dd3014958.png`: front, 3/4, side profile (the long body clear), back; the crown in every view; photoreal;
-  - expression sheet `7c13a0d0-11ec-4da5-8a1d-3eb9c551e5d8` → `hf_20261006_062428_7c13a0d0-11ec-4da5-8a1d-3eb9c551e5d8.png`: full body + haughty chin lift, appalled, smug, panicked, bored, delighted; the crown in all seven.
+- **Master (quadruped), CANON (owner 2026-10-06, ODD EYES):** `806498b8-c9aa-476d-b86c-169acf80ab0b` → `hf_20261006_082402_806498b8-c9aa-476d-b86c-169acf80ab0b.png` (`gpt_image_2_5` high 2K edit of the 2K master `14f5f717`, 9:16, 1520×2688: only the eyes changed; his right eye, the near one under the crown, ice-blue; his left eye, the far one past the bridge of the muzzle, amber, a sliver visible at this angle; the extra-long body, the tilted crown, the navy polo with the stitched side pocket, the cream rug, the sunlit room, chin up). refs.json `masters.quadruped` and `reference_urls.master_quadruped`.
+- **Final sheets (CANON, ODD EYES, `gpt_image_2_5`, quality high, 2K, 16:9, 2.75 credits each, 2026-10-06; references: the master plus the old sheet for the layout only):**
+  - turnaround `a37318e2-e37a-404c-af34-84ff4f5d39dc` → `hf_20261006_082702_a37318e2-e37a-404c-af34-84ff4f5d39dc.png`: front, 3/4, side profile (the long body clear), back; the crown in every view; in the front view the ice-blue right eye on the viewer's left and the amber left eye on the viewer's right; the ice-blue near eye in the 3/4 and the profile. refs.json `sheets.quadruped` and `reference_urls.sheet_quadruped`;
+  - expression sheet `8a9a109e-8e50-41d6-8f6c-58cafdfd0054` → `hf_20261006_082714_8a9a109e-8e50-41d6-8f6c-58cafdfd0054.png`: full body + haughty chin lift, appalled, smug, panicked, bored, delighted; the crown in all seven; the odd eyes on the correct sides in every face-on panel.
+- **Close-up (CANON, refs.json `closeup`; an identity reference for the swaps, not an end beat):** `f933609f-1dcf-446c-ade0-f44432a3d8c6` → `hf_20261006_082726_f933609f-1dcf-446c-ade0-f44432a3d8c6.png` (`gpt_image_2_5` high 2K, 9:16: head and chest, almost face-on, chin slightly raised, smug and unimpressed, the whole crown in frame, the polo collar; the ice-blue right eye on the viewer's left, the amber left eye on the viewer's right; the sunlit room soft behind).
+- **Superseded on 2026-10-06 (the look before the odd eyes, dark eyes):** master `8781919e-93f2-4b4f-87f8-07180f22f888` → `hf_20261006_061003_8781919e-93f2-4b4f-87f8-07180f22f888.png` (`gpt_image_2_5`, 752×1344) and its 2K upscale `14f5f717-f935-4202-b160-b32de67975e1` → `hf_20261006_070927_14f5f717-f935-4202-b160-b32de67975e1.png` (refs.json master until the odd eyes); turnaround `86359d05-4376-4a41-ba5a-103dd3014958` → `hf_20261006_062428_86359d05-4376-4a41-ba5a-103dd3014958.png`; expression sheet `7c13a0d0-11ec-4da5-8a1d-3eb9c551e5d8` → `hf_20261006_062428_7c13a0d0-11ec-4da5-8a1d-3eb9c551e5d8.png`; close-up `5f2a9b92-1816-4f18-9d96-c88c93ca3524` → `hf_20261005_185741_5f2a9b92-1816-4f18-9d96-c88c93ca3524.png` (front pose, no crown).
+- **Rejected (2026-10-06):** the first odd-eyes edit of the master, `615795da-733e-47b9-b158-0ecf14401b05` → `hf_20261006_081858_615795da-733e-47b9-b158-0ecf14401b05.png`: an amber ring inside the blue eye and the far eye still dark.
 - **Earlier masters (superseded):** exaggerated v2 `a0d7bef1-ebd4-432e-9577-503b78389430` (Seedream 4.5 with the Element); the first master `94ac099b-4268-4b99-b36d-03cab38eb01e` (Soul 2, lounging).
-- **Close-up (refs.json `closeup`, an identity reference, not an end beat):** front pose `5f2a9b92-1816-4f18-9d96-c88c93ca3524` → `hf_20261005_185741_5f2a9b92-1816-4f18-9d96-c88c93ca3524.png` (no crown: the face reference only).
 - **Poses (nano_banana_2, Element):** profile `9f565adb-2bff-40a1-8674-0fcf94e43c7f` (`hf_20261005_185745_…`), full-body side `2ef41ae7-87a9-4804-b114-1908c3834d79` (`hf_20261005_185749_…`), haughty `38ea3c74-df45-477b-a768-0e2c79aa7ba0` (`hf_20261005_185752_…`), happy `b10cf4b7-6b47-474f-86dd-ae6b11e74032` (`hf_20261005_185756_…`), scared `028fb465-d7ff-4af6-96d8-7dd62a16446f` (`hf_20261005_185801_…`).
 - **Do not use:** the old reference sheet `8d3a3010-0082-4f52-9d6f-e1587c920b62`: it is an illustration, not photoreal, and its "alert" panel has upright ears (off-model).
 - **Video and audio:** silent recast `hf_20261005_194731_3897d093-4196-41b2-ac37-0132728fb7c9.mp4`; Alistair test `hf_20261006_043131_892db83e-6d5e-4b2e-abca-ad998634b223.wav`.
@@ -144,14 +146,14 @@ CDN prefix as above.
 
 ## Final HD sheets: generation settings (owner 2026-10-06)
 "Top high-def quality with great facial expressions." For every final sheet and still:
-- **Model: `gpt_image_2_5`, `quality: high`, `resolution: 2k`** (owner 2026-10-06, "yes, do all": the model for every character image; photoreal and it follows wardrobe detail; 2.75 credits an image at these settings, 0.25 at the defaults). Pass the canon master `8781919e` as `image_references` (add a sheet for a new pose). It does not take the Element; the Element `<<<a28cc772-0227-4ed1-b6a2-1c84fe3b78f2>>>` stays for the Element models (Seedream, Nano Banana, Kling, Seedance). Tried and dropped on 2026-10-06: `nano_banana_pro` 4K (4 credits; stylised the turnaround), `seedream_v4_5` (1 credit).
+- **Model: `gpt_image_2_5`, `quality: high`, `resolution: 2k`** (owner 2026-10-06, "yes, do all": the model for every character image; photoreal and it follows wardrobe detail; 2.75 credits an image at these settings, 0.25 at the defaults). Pass the canon master `806498b8` as `image_references` (add a sheet for a new pose, as a layout-only reference) and spell out the odd eyes in every prompt: his right eye ice-blue, on the viewer's left in a front view; his left eye amber. It does not take the Element; the Element `<<<a28cc772-0227-4ed1-b6a2-1c84fe3b78f2>>>` stays for the Element models (Seedream, Nano Banana, Kling, Seedance). Tried and dropped on 2026-10-06: `nano_banana_pro` 4K (4 credits; stylised the turnaround), `seedream_v4_5` (1 credit).
 - **Workflow:** Higgsfield's `character-sheet` workflow: its slot order (written for a dog: breed, coat, eyes, natural fur texture, a long low body, short legs), the `photoreal-unretouched` realism module adapted to fur (individual strands, flyaways, uneven tone, no smoothing, no glare), soft diffused studio light, a pure white seamless background, and its negative tail ("no text, no watermark, no logos, no frame borders", a single subject, an original character). Add "a real photograph of a real dog, not a 3D render, not CGI, not anthropomorphic, no human eyelids, no smirk": Nano Banana Pro drifted to a cartoon without it.
 - **Dog-anatomy guard** in every prompt (see "Motion").
 - **Two sheets, 16:9:** a turnaround (front, 3/4, side profile, back; the long body must show in the profile) and an expression sheet (one full body plus six faces, the crown in every panel).
 - **The six expressions** (strong, readable at thumbnail size, the same face every time): haughty chin lift · appalled · smug · panicked scramble face · bored · rare delighted. Write each as a dog's face: ears, eyelids, muzzle angle and mouth (e.g. appalled = head pulled back, ears flat, eyes wide, lips drawn back).
 
 ## Brand (proposed)
-Colours: polo navy `#16213B`, cream coat `#E8D3B4`, pale honey `#D2B697`, warm interior beige `#CDB89C`, gold accent `#C9A227`. Hook-text font: an elegant serif italic (e.g. Cormorant Garamond Bold Italic), cream on a thin navy band.
+Colours: polo navy `#16213B`, cream coat `#E8D3B4`, pale honey `#D2B697`, warm interior beige `#CDB89C`, gold accent `#C9A227`; the eyes: right ice-blue `#8FD3FF`, left amber `#FFB040`. Hook-text font: an elegant serif italic (e.g. Cormorant Garamond Bold Italic), cream on a thin navy band.
 
 ## Scan profile (daily trend scan)
 - vidIQ queries (rotate): "dog refuses to walk", "dachshund funny video", "posh dog reaction", "dog dancing to a trend"
@@ -160,4 +162,4 @@ Colours: polo navy `#16213B`, cream coat `#E8D3B4`, pale honey `#D2B697`, warm i
 - Motion types: dog-star clips (Object swap); biped dance drivers only as a Recreate, with the dog-anatomy guard.
 
 ## Never
-Human limbs, human hands or standing like a person; human-sized next to people; logos or brands on the polo; barking, baby talk or slang; rushing (except when provoked); climbing a stair successfully; ODD EYES without the owner's C8 decision; any real person's likeness or famous IP (a famous moment, meme or dance is fine: only the moves, never the original costume, look or likeness; the real star is always replaced by Franz); no unlabelled AI; no third-party audio added (a Drop-in keeps the clip's own original audio by default; nothing else third-party goes in).
+Human limbs, human hands or standing like a person; human-sized next to people; logos or brands on the polo; barking, baby talk or slang; rushing (except when provoked); climbing a stair successfully; the odd eyes swapped, missing or glowing (his RIGHT eye, the viewer's left, is ice-blue; his LEFT amber); any real person's likeness or famous IP (a famous moment, meme or dance is fine: only the moves, never the original costume, look or likeness; the real star is always replaced by Franz); no unlabelled AI; no third-party audio added (a Drop-in keeps the clip's own original audio by default; nothing else third-party goes in).

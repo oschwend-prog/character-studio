@@ -24,7 +24,7 @@ Biscuit is retired (C5) and `biscuit.moves` is a live, Postiz-connected Instagra
 - **TikTok (52 of 80):** Old money. Short legs. Unimpressed. 👑 · AI character
 
 ## Profile picture
-`assets/characters/franz/avatar.png` (640×640): the haughty chin-lift panel of the canon expression sheet `7c13a0d0`, crop box (1050, 40, 1560, 550) of the 2688×1520 sheet. The crown and the raised nose read in the circle. If the circle clips the crown, re-crop 30 px lower.
+`assets/characters/franz/avatar.png` (640×640): the haughty chin-lift panel of the canon expression sheet `8a9a109e` (ODD EYES, 2026-10-06; his ice-blue right eye is the one in view), crop box (990, 40, 1500, 550) of the 2688×1520 sheet. The crown and the raised nose read in the circle. (Before the odd eyes: the same panel of `7c13a0d0`, box (1050, 40, 1560, 550).) If the circle clips the crown, re-crop 30 px lower.
 
 ## Highlights (3)
 1. **The Staff:** his rankings of the humans who serve him.

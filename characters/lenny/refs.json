@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references for Lenny Gold (strand B, in the roster since 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/lenny/bible.md. soul_id is his Higgsfield Soul (model soul_2); voice_id is the Emmett preset (seed_audio, speech_rate 2, locked). masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). No close-up yet (masters end on the dance; a close-up would be an identity reference only). accounts stays empty until the owner creates the accounts (social.md).",
+  "_doc": "Identity-lock references for Lenny Gold (strand B, in the roster since 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/lenny/bible.md. soul_id is his Higgsfield Soul (model soul_2); voice_id is the Emmett preset (seed_audio, speech_rate 2, locked). ODD EYES (owner 2026-10-06, the studio signature): his RIGHT eye ice-blue, his LEFT eye amber, in the master, the sheets and the close-up. masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"; odd-eyes versions 2026-10-06): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). closeup is the head-and-shoulders identity reference only (masters end on the dance), so closeup_center / blue_eye_xy stay null. accounts stays empty until the owner creates the accounts (social.md).",
   "slug": "lenny",
   "name": "Lenny Gold",
   "status": "designing",
@@ -7,19 +7,20 @@
     "biped"
   ],
   "masters": {
-    "biped": "5334053f-4821-4cbe-a088-2fceb047af3a",
+    "biped": "cc6a9f4c-2ff0-484f-a540-b48b0f30b796",
     "quadruped": null
   },
-  "closeup": null,
+  "closeup": "a411c915-1532-4fc9-b719-e68450e6f619",
   "closeup_center": null,
   "blue_eye_xy": null,
   "avatar": "assets/characters/lenny/avatar.png",
   "sheets": {
-    "biped": "71ed6fa5-2068-4957-a822-ed9d95f42c00"
+    "biped": "88ac10b9-399c-4ea7-8c7a-f2dcf5737d1d"
   },
   "reference_urls": {
-    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_070932_5334053f-4821-4cbe-a088-2fceb047af3a.png",
-    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_062429_71ed6fa5-2068-4957-a822-ed9d95f42c00.png"
+    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_081912_cc6a9f4c-2ff0-484f-a540-b48b0f30b796.png",
+    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082732_88ac10b9-399c-4ea7-8c7a-f2dcf5737d1d.png",
+    "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082743_a411c915-1532-4fc9-b719-e68450e6f619.png"
   },
   "soul_id": "cdc73565-fa87-47f6-bca4-bb1e7884e483",
   "voice_id": "3c7d32be-0182-5c5e-aa6a-663409bfbb26",

@@ -20,7 +20,7 @@ Never "official", "verified" or the name of a real agency or studio in a handle:
 - **TikTok (53 of 80):** Hollywood super-agent. I don't wait. 📞 · AI character
 
 ## Profile picture
-`assets/characters/lenny/avatar.png` (640×640): the mid-rant panel of the canon expression sheet `1ae9e12a` (phone at his ear, teeth bared, the chalk-stripe lapel and burgundy tie), crop box (700, 20, 1330, 650) of the 2688×1520 sheet. It is the thumbnail read in one frame: a tan, a snarl and a phone.
+`assets/characters/lenny/avatar.png` (640×640): the mid-rant panel of the canon expression sheet `37b754d4` (ODD EYES, 2026-10-06; phone at his ear, teeth bared, the ice-blue and amber eyes through the squint, the chalk-stripe lapel and burgundy tie), crop box (700, 20, 1330, 650) of the 2688×1520 sheet. (Before the odd eyes: the same panel of `1ae9e12a`.) It is the thumbnail read in one frame: a tan, a snarl and a phone.
 
 ## Highlights (3)
 1. **On Hold:** every clip where someone dares to put him on hold.
