@@ -140,7 +140,7 @@ def test_the_run_opens_a_log_row_first_and_closes_it_with_the_same_start_and_the
         assert option in closing, option
     assert body.index("--open") < body.index("1. `bin/studio seed status`")  # before anything can fail
     # the scan step writes the exact shape studio.health.validate_details accepts and the card reads
-    assert '{"scan": {"queries": ["biscuit #2 concept"], "outliers": 9, "picks_added": 4, "auto_approved": 1, "held": 1, "skipped": 2, "vidiq_credits": 5}}' in body
+    assert '{"scan": {"queries": ["franz #2 concept"], "outliers": 9, "picks_added": 4, "auto_approved": 1, "held": 1, "skipped": 2, "vidiq_credits": 5}}' in body
     from studio.health import validate_details
 
     validate_details(json.loads(re.search(r"`(\{\"scan\": \{\"queries\".*?\}\})`", body).group(1)))
@@ -251,16 +251,21 @@ def test_the_character_sheet_goes_to_genjutsu_with_the_master_and_the_gallery_is
 
 def test_scan_json_has_a_theme_per_rotation_entry_and_fit_rules_that_reference_the_traits():
     scan = json.loads((ROOT / "config" / "scan.json").read_text())
-    for slug in ("biscuit", "reginald", "outsider"):
+    assert set(scan["characters"]) == {"franz", "reginald", "lenny"}  # the roster (owner 2026-10-06); Biscuit and the Outsider retired
+    for slug in ("franz", "reginald", "lenny"):
         rotation = scan["characters"][slug]["rotation"]
         themes = [r["theme"] for r in rotation]
         assert all(isinstance(t, str) and 0 < len(t) <= 60 for t in themes), slug
         assert len(set(themes)) == len(themes), slug  # a theme names one entry
     assert [r["theme"] for r in scan["characters"]["reginald"]["rotation"]][0] == "deadpan at work"
     assert "elder out-dances the young" in [r["theme"] for r in scan["characters"]["reginald"]["rotation"]]
-    assert "pet with a human job" in [r["theme"] for r in scan["characters"]["biscuit"]["rotation"]]
-    for slug in ("biscuit", "reginald"):
+    assert "dog refuses, then gives in" in [r["theme"] for r in scan["characters"]["franz"]["rotation"]]
+    assert "on hold, then the drop" in [r["theme"] for r in scan["characters"]["lenny"]["rotation"]]
+    for slug in ("franz", "reginald", "lenny"):
         assert any("traits card" in rule for rule in scan["characters"][slug]["fit_rules"]), slug
+    # like for like: the dog scans for dog stars, the two humans for human stars
+    assert any("a dog star only" in rule for rule in scan["characters"]["franz"]["fit_rules"])
+    assert any("an adult human star" in rule for rule in scan["characters"]["lenny"]["fit_rules"])
     assert "tier" in scan["pick_card_fields"] and "theme" in scan["pick_card_fields"] and "thumbnail_url" in scan["pick_card_fields"]
 
 
@@ -302,7 +307,7 @@ def test_the_scan_is_one_instagram_and_tiktok_search_each_weekday_inside_the_150
     for part in (
         "Instagram + TikTok viral clips only", "ONE search each weekday", "`vidiq_instagram_tiktok_outlier_search`", "One call a day, never a second",
         "`vidiq_balance` first", '`{"vidiq": "skipped, balance N, refills <date>"}`', "5 × ISO week number + (Mon 0, Tue 1, Wed 2, Thu 3, Fri 4)",
-        "Biscuit and Reginald in turn", "rotates through its own themes", "YouTube is used only for the stats of an iconic moment",
+        "Franz, Lenny and Reginald in turn", "rotates through its own themes", "YouTube is used only for the stats of an iconic moment",
         "**Launch rule**", "first posts are absolute hits people know", "**Owner-pasted links**", "always analysed and filed",
         "`bin/studio fav rescore <id> --freshness F --fit T --feasibility S --saturation A --proposal-file renders/tmp/p.json`",
     ):  # fmt: skip
@@ -319,7 +324,7 @@ def test_the_scan_is_one_instagram_and_tiktok_search_each_weekday_inside_the_150
 
 def test_background_people_are_fine_and_only_a_second_dancing_star_waits_for_the_multi_body_test():
     cfg = json.loads((ROOT / "config" / "scan.json").read_text())
-    for slug in ("biscuit", "reginald"):
+    for slug in ("franz", "reginald", "lenny"):
         first = cfg["characters"][slug]["fit_rules"][0]
         assert "people in the background are fine" in first and "not a gate" in first, slug
         assert "a second dancing star is still filed with needs multi_body" in first, slug
@@ -383,14 +388,15 @@ def test_the_caption_follows_the_owners_formula_with_a_rotating_engagement_line_
     """Owner 2026-10-05: title, joke, ONE rotating engagement line, credit; the disclosure is automatic; 3-5 clean hashtags."""
     master = text("daily-run").split("## 9. Master", 1)[1].split("## 10.", 1)[0]
     for part in (
-        "searchable title of at most 40 characters", "`<famous moment or format> · dachshund edition`", "`· butler edition`",
+        "searchable title of at most 40 characters", "`<famous moment or format> · dachshund edition`", "`· butler edition`", "`· agent edition`",
         "`## Search keywords`", "a label, not the character speaking", "never mention dancing",
         "ONE engagement line, rotating per character", "a send trigger", "a question", "a series tease",
         "Read the character's last 2 captions (`bin/studio clip list --character X`", "never use the kind of the last post again",
         "`🎵 <song> – <artist>`", "` · dance: @<creator>`", "` · trend: <credit_handle>`", "` · original: <creator>`", "no handle known, no credit line",
         "Publishing adds the AI disclosure line", "never write it", "3-5", "#oddeyes", "never #fyp, #foryou, #foryoupage, #viral or #explore",
         "`humanizer` skill", "must fit 2,200 characters", "**First comment**", "at most 300 characters", "the owner pins it",
-        "--first-comment-file renders/<id>/first_comment.txt", "Wednesday dance · butler edition", "Single Ladies · dachshund edition",
+        "--first-comment-file renders/<id>/first_comment.txt", "Wednesday dance · butler edition", "Dog dance trend · dachshund edition",
+        "On hold · agent edition", "Requests may be submitted to my staff. In writing.", "Requests go through my assistant. My assistant is busy.",
     ):  # fmt: skip
         assert part in master, part
     assert "at most 5 hashtags, the caption passed" not in master  # the old one-line rule is gone

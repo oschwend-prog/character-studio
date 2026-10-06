@@ -63,7 +63,7 @@ export function HowWeScan() {
 
         <Block
           title="What we scan"
-          hint="Instagram and TikTok viral clips only: one search each weekday, Biscuit and Reginald in turn, each rotating through his themes. The Genjutsu gallery is the backup on a day the search could not run or found fewer than 2 usable clips; the first posts of a channel are Broke the internet moments."
+          hint="Instagram and TikTok viral clips only: one search each weekday, the live characters in turn, each rotating through his themes. The Genjutsu gallery is the backup on a day the search could not run or found fewer than 2 usable clips; the first posts of a channel are Broke the internet moments."
         >
           {view.characters.map((c) => (
             <div className="how-char" key={c.slug} data-char={c.slug}>

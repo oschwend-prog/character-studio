@@ -69,8 +69,8 @@ class World:
     probe: list[tuple[str, str]] = field(default_factory=probe_rows)
     people: list[tuple] = field(
         default_factory=lambda: [
-            ("biscuit", "live", "instagram", "ig-int-1"),
-            ("biscuit", "live", "tiktok", "tt-int-1"),
+            ("franz", "live", "instagram", "ig-int-1"),
+            ("franz", "live", "tiktok", "tt-int-1"),
             ("reginald", "live", "instagram", "ig-int-2"),
             ("reginald", "live", "tiktok", "tt-int-2"),
         ]
@@ -86,7 +86,7 @@ class World:
         ]
     )
     gh_result: subprocess.CompletedProcess[str] | Exception | None = None  # overrides both gh calls
-    tracked: list[str] = field(default_factory=lambda: ["README.md", "studio/cli.py", "characters/biscuit/refs.json"])
+    tracked: list[str] = field(default_factory=lambda: ["README.md", "studio/cli.py", "characters/franz/refs.json"])
     git_result: subprocess.CompletedProcess[str] | Exception | None = None
     postiz_installed: bool = True
     postiz_status: subprocess.CompletedProcess[str] = field(default_factory=cp)
@@ -157,7 +157,7 @@ class World:
 def world(tmp_path) -> World:
     chars = tmp_path / "characters"
     for slug, data in {
-        "biscuit": refs("biscuit", bodies=("biped", "quadruped")),
+        "franz": refs("franz", bodies=("biped", "quadruped")),
         "reginald": refs("reginald"),
     }.items():
         (chars / slug).mkdir(parents=True)
@@ -449,8 +449,8 @@ def test_missing_supabase_settings_fail_without_a_request(world, field_name):
 def test_characters_pass_when_live_with_masters_closeup_and_postiz_ids(world):
     checks = world.run()
     assert checks["characters:live"].status == "pass"
-    assert "biscuit" in checks["characters:live"].detail
-    assert checks["characters:biscuit"].status == "pass"
+    assert "franz" in checks["characters:live"].detail
+    assert checks["characters:franz"].status == "pass"
     assert checks["characters:reginald"].status == "pass"
     assert checks["characters:refs"].status == "pass"
 
@@ -464,7 +464,7 @@ def test_no_live_character_fails_and_says_how_to_flip_one(world):
 
 
 def test_one_live_character_is_enough_for_the_live_check(world):
-    world.people = [(s, "live" if s == "biscuit" else "designing", p, i) for s, _, p, i in world.people]
+    world.people = [(s, "live" if s == "franz" else "designing", p, i) for s, _, p, i in world.people]
     assert world.run()["characters:live"].status == "pass"
 
 
@@ -473,7 +473,7 @@ def test_characters_not_in_the_database_yet_say_to_seed(world):
     checks = world.run()
     assert checks["characters:live"].status == "fail"
     assert "seed" in checks["characters:live"].fix
-    assert checks["characters:biscuit"].status == "fail" and "seed" in checks["characters:biscuit"].fix
+    assert checks["characters:franz"].status == "fail" and "seed" in checks["characters:franz"].fix
 
 
 def test_a_character_without_a_closeup_fails_naming_it(world):
@@ -485,7 +485,7 @@ def test_a_character_without_a_closeup_fails_naming_it(world):
 
 
 def test_a_character_without_a_master_fails_in_the_refs_check(world):
-    write_refs(world, "biscuit", refs("biscuit", bodies=("biped", "quadruped"), masters={"biped": "x", "quadruped": None}))
+    write_refs(world, "franz", refs("franz", bodies=("biped", "quadruped"), masters={"biped": "x", "quadruped": None}))
     checks = world.run()
     assert "characters:refs" in failing(checks)
     assert "quadruped" in checks["characters:refs"].detail
@@ -518,7 +518,7 @@ def test_a_paused_character_is_left_out_of_the_readiness_rows(world):
 
 
 def test_invalid_refs_json_fails_one_row_and_no_character_rows(world):
-    (world.root / "characters" / "biscuit" / "refs.json").write_text("{not json")
+    (world.root / "characters" / "franz" / "refs.json").write_text("{not json")
     checks = world.run()
     assert "characters:refs" in failing(checks)
     assert not any(k.startswith("characters:") and k not in {"characters:refs", "characters:live"} for k in checks)
@@ -530,7 +530,7 @@ def test_a_database_failure_still_checks_masters_and_closeup(world):
     checks = world.run()
     assert checks["characters:live"].status == "fail" and "not reachable" in checks["characters:live"].detail
     assert "close-up" in checks["characters:reginald"].detail
-    assert "not reachable" in checks["characters:biscuit"].detail
+    assert "not reachable" in checks["characters:franz"].detail
 
 
 # ---- (e) GitHub ------------------------------------------------------------------------------------

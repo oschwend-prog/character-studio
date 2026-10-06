@@ -1,7 +1,7 @@
 """Idempotent publishing: claim due posts, hand each clip master to a ``Publisher``, record the outcome.
 
 ``publish_due(store, storage, publisher, now)`` is the whole job (``studio publish due``, on GitHub Actions: every
-15 minutes through the 17:00-20:59 UTC posting window and every 3 hours otherwise). The rules, in the order they run:
+15 minutes through the 17:00-20:59 UTC posting window, at 11:30 and 12:30 UTC for the midday slot, and every 3 hours otherwise). The rules, in the order they run:
 
 0. **Reconcile.** A clip still ``scheduled`` whose posts are ALL ``posted`` moves to ``posted``: this
    heals a crash between the post write and the clip transition. It never publishes anything.

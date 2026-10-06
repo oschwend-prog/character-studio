@@ -32,8 +32,8 @@
   character's ``bodies`` and ``closeup``, each an https URL (validated here, never fetched by the CLI). ``reference_images``
   picks the set for a swap: the master and the sheet of the star's body, then the close-up.
 * ``swap`` (optional) is the like-for-like rule of the Object swap: ``noun`` (what the prompt calls him: "butler", "dog") and
-  ``stars`` (the kinds of star he may replace: ``person``, ``dog``, ``animal``). Reginald replaces a person, Biscuit a dog or a
-  small animal, never a dog for a person (Genjutsu then inserts the dog and keeps the people).
+  ``stars`` (the kinds of star he may replace: ``person``, ``dog``, ``animal``). A person replaces a person and a dog a dog
+  (or a small animal), never a dog for a person (Genjutsu then inserts the dog and keeps the people).
 * ``dropin_share`` is the first-insert value of a new account row (owner decision 2026-10-05: ``characters/*/refs.json``
   ships 1.00 for every account, Drop-in is the default for every video); the controller updates live rows.
 * ``studio seed status`` prints every character with its status, traits and accounts (what the daily run reads).
@@ -51,7 +51,7 @@ How a row becomes a pick: ``url``, ``platform`` and ``creator`` (the handle in t
 URL's), ``views`` and ``outlier_x`` (``43.4M · 1,393×``), the four judged sub-scores and the total, and a
 ``proposal`` with ``mode`` (``dropin`` | ``recreate``; the talking-lane table has none and none is
 invented), ``mode_note``, ``hook``, ``prop`` (``—`` means none), ``concept`` (the "Our version" cell),
-``button_line`` (Outsider), ``enhancement`` (only for a pick with a row of its own in the decisions table;
+``button_line`` (the talking lane), ``enhancement`` (only for a pick with a row of its own in the decisions table;
 a shared row holds an order note, not an enhancement) and ``needs``: ``multi_body`` when the Mode cell
 names 2+ bodies, ``talking_lane`` for the talking-lane table.
 
@@ -64,7 +64,7 @@ still ``new`` and has none, so a re-run changes nothing: an owner's skip or a la
 Picks are filed in the document's rank order, one transaction each: the database stamps ``created_at`` per
 transaction, so the production queue (oldest first) then follows the rank (each character starts with its
 best pick), and a run that dies half way is simply re-run. A pick whose character is not seeded (the
-Outsider) is stored with no ``character_slug`` and ``proposal['intended_character']``.
+retired Outsider's) is stored with no ``character_slug`` and ``proposal['intended_character']``.
 
 CLI prints JSON on stdout; exit 2 for anything the caller must fix.
 """

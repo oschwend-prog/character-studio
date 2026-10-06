@@ -1,5 +1,6 @@
 # Publish due posts through Postiz (`studio publish due`): every 15 minutes through the evening posting window
-# (17:00-20:59 UTC) and every 3 hours otherwise, to stay inside GitHub's free minutes (see below).
+# (17:00-20:59 UTC), at 11:30 and 12:30 UTC for the midday slot, and every 3 hours otherwise, to stay inside GitHub's free
+# minutes (see below).
 #
 # Secrets (repo secrets, added by the owner at go-live): DATABASE_URL, SUPABASE_URL,
 # SUPABASE_SERVICE_KEY, POSTIZ_API_KEY. Until DATABASE_URL exists the job prints a notice and
@@ -13,10 +14,12 @@ name: publish
 
 on:
   schedule:
-    # Every 15 minutes through the posting window (Biscuit 19:00 and Reginald 19:30 London are 18:00 / 18:30
-    # UTC in BST and 19:00 / 19:30 UTC in GMT, so 17:00-20:59 UTC covers both with a margin), plus a
-    # 3-hourly catch-up for the time the owner picks himself: 24 runs a day, not 96.
+    # Every 15 minutes through the evening window (Franz 19:00 and Reginald 19:30 London are 18:00 / 18:30
+    # UTC in BST and 19:00 / 19:30 UTC in GMT, so 17:00-20:59 UTC covers both with a margin), Lenny's 12:30 London
+    # on the dot (11:30 UTC in BST, 12:30 UTC in GMT; the 12:40 catch-up retries it), plus a 3-hourly catch-up for
+    # the time the owner picks himself: 26 runs a day, not 96.
     - cron: '*/15 17-20 * * *'
+    - cron: '30 11,12 * * *'
     - cron: '40 */3 * * *'
   workflow_dispatch:
 

@@ -586,7 +586,7 @@ def data_command() -> None:
 @app.command("save")
 def save_command(
     week: Annotated[str, typer.Option(help="ISO week like 2026-W41, or any YYYY-MM-DD date in it.")],
-    character: Annotated[str, typer.Option(help="Character slug (biscuit, reginald).")],
+    character: Annotated[str, typer.Option(help="Character slug (the folder name in characters/, e.g. franz).")],
     report_file: Annotated[
         Path, typer.Option("--report-file", help="The markdown report (written with the Write tool).")
     ],

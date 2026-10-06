@@ -2,6 +2,8 @@
 
 Built from the 4 Oct 2026 outlier scans (animal loop dancers 30–375× creator median; "GOOD MORNING!" text loops; Jean Phil deadpan contrast; Granny Spills openly-AI personality; series formats drive follows). Hooks use proven patterns from `viral-hook-creator` (The Unexpected, Achievement with Constraint, Myth-Busting, insider/amplifier trigger words). On-screen hook ≤ 30 characters, lands in the first second. Every clip: 10–15 s, perfect loop where possible, AI label on.
 
+> **Roster update (owner, 2026-10-06):** Biscuit is retired (Franz is the one dachshund), the Outsider is retired (the Borat-type replaces him, still unnamed) and Lenny Gold joins. Slots: Franz 19:00, Reginald 19:30, Lenny 12:30 London; weeks 1-2 Tue/Wed/Thu, from week 3 Mon-Fri. The Biscuit and Outsider parts below are kept as the launch record; the roster's master is `docs/AI_INFLUENCERS.md` and each character's `characters/<slug>/bible.md`.
+
 Cadence (Lean): Biscuit Mon/Wed/Fri, Reginald Tue/Thu/Sat, 18:00–19:00 UK; the playbook moves these once data exists.
 
 ## Biscuit (dog / pet audience)

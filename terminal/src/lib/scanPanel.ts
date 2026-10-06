@@ -6,7 +6,7 @@ import {
   CREDITS, TIER_LABELS, TIERS, estimateCredits, tierOf, type ScannerStatus,
 } from './rules';
 import {
-  GLOBAL_REJECT_RULES, SCAN_ACCESS, SCAN_BUDGET, SCAN_CHARACTERS, SCAN_DEFAULTS, TIER_RULES, VIDEO_REQUIREMENTS, type ScanTheme,
+  GLOBAL_REJECT_RULES, SCAN_ACCESS, SCAN_BUDGET, SCAN_CHARACTERS, SCAN_DEFAULTS, TIER_RULES, VIDEO_REQUIREMENTS, type ScanCharacter, type ScanTheme,
 } from './scanConfig';
 import type { Tier } from './types';
 
@@ -68,14 +68,17 @@ export interface ScanCharacterView {
   audience: string | null;
   themes: ReadonlyArray<ScanTheme>;
   fitRules: ReadonlyArray<string>;
-  /** Why it is not scanned yet (the Outsider waits for the voice lane); null when it is. */
+  /** Why it is not scanned yet (scan.json `_status`); null when it is. */
   inactive: string | null;
 }
 
 /** What is scanned for each character of the roster, in roster order (a character with no scan settings is left out). */
-export function scanCharacters(roster: ReadonlyArray<{ slug: string; name: string }>): ScanCharacterView[] {
+export function scanCharacters(
+  roster: ReadonlyArray<{ slug: string; name: string }>,
+  settings: Readonly<Record<string, ScanCharacter>> = SCAN_CHARACTERS,
+): ScanCharacterView[] {
   return roster.flatMap((c) => {
-    const cfg = SCAN_CHARACTERS[c.slug];
+    const cfg = settings[c.slug];
     if (!cfg) return [];
     return [{ slug: c.slug, name: c.name, ...parseAudience(cfg.audienceQuery), themes: cfg.rotation, fitRules: cfg.fit_rules, inactive: cfg.status ?? null }];
   });

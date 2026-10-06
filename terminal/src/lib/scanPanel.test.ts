@@ -45,25 +45,30 @@ describe('what is scanned', () => {
   });
 
   it('reads the audience of a character out of its audience query', () => {
-    expect(parseAudience(SCAN_CHARACTERS.biscuit.audienceQuery)).toEqual({
-      region: 'US/UK English-speaking',
-      audience: 'dog lovers and Gen Z/millennials 16-40 who watch cute pet and dance content',
+    expect(parseAudience(SCAN_CHARACTERS.franz.audienceQuery)).toEqual({
+      region: 'UK/US English-speaking',
+      audience: 'dog lovers and Gen Z/millennials 16-40 who watch funny pet and dance content',
     });
     expect(parseAudience('nothing useful')).toEqual({ region: null, audience: null });
   });
 
   it('gives each rostered character its themes and queries, and leaves out one with no scan settings', () => {
-    const roster = [{ slug: 'biscuit', name: 'Biscuit' }, { slug: 'reginald', name: 'Reginald' }, { slug: 'nobody', name: 'Nobody' }];
+    const roster = [
+      { slug: 'franz', name: 'Franz' }, { slug: 'reginald', name: 'Reginald' }, { slug: 'lenny', name: 'Lenny Gold' },
+      { slug: 'biscuit', name: 'Biscuit' }, // retired 2026-10-06: no scan settings any more
+    ];
     const views = scanCharacters(roster);
-    expect(views.map((v) => v.slug)).toEqual(['biscuit', 'reginald']);
-    expect(views[0].themes.map((t) => t.theme)).toEqual(['skilled upright dance', 'dog leads the dancers', 'stare, then hits every beat', 'pet with a human job']);
+    expect(views.map((v) => v.slug)).toEqual(['franz', 'reginald', 'lenny']);
+    expect(views[0].themes.map((t) => t.theme)).toEqual(['dog refuses, then gives in', 'unimpressed dog reaction', 'dog does the trend', 'posh dog day-in-the-life']);
     expect(views[1].themes[0]).toMatchObject({ theme: 'deadpan at work', embeddingType: 'concept' });
+    expect(views[2].themes[0]).toMatchObject({ theme: 'on hold, then the drop', embeddingType: 'hook' });
     expect(views.every((v) => v.inactive === null && v.themes.every((t) => t.query.length > 10) && v.fitRules.length > 0)).toBe(true);
   });
 
   it('marks a character whose scan has not started', () => {
-    const [outsider] = scanCharacters([{ slug: 'outsider', name: 'Outsider' }]);
-    expect(outsider.inactive).toMatch(/voice lane/);
+    const cfg = { ...SCAN_CHARACTERS, later: { ...SCAN_CHARACTERS.reginald, status: 'inactive until the voice lane' } };
+    const views = scanCharacters([{ slug: 'later', name: 'Later' }], cfg);
+    expect(views[0].inactive).toMatch(/voice lane/);
   });
 });
 

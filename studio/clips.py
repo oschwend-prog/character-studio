@@ -374,7 +374,7 @@ def _json_object(raw: str, what: str) -> dict[str, Any]:
 
 @app.command("new")
 def new_command(
-    character: Annotated[str, typer.Option(help="Character slug (biscuit, reginald).")],
+    character: Annotated[str, typer.Option(help="Character slug (the folder name in characters/, e.g. franz).")],
     mode: Annotated[Mode, typer.Option(help="dropin or recreate.")],
     features: Annotated[
         str | None,

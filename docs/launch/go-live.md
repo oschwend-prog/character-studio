@@ -9,13 +9,13 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - [ ] Tell Claude: it reads the balance with the Higgsfield `balance` tool.
 
 ## 2. Create the social accounts
-- [ ] Create 4 accounts: TikTok and Instagram for Biscuit and for Reginald. All 4 must be **Creator**, not Business.
-- [ ] Instagram: on **Reginald's** account only, Edit profile, turn on the **AI-generated profile** label (Meta, 31 Aug 2026: required for profiles featuring an AI person; owner decision 2026-10-05: Biscuit's account has none). Every caption carries the AI disclosure (enforced in code); TikTok's per-post AI label is set by the publisher.
-- [ ] Bios, handles and display names: `docs/launch/social-pages.md`. Avatars: `assets/avatars/biscuit.png`, `assets/avatars/reginald.png`.
-- [ ] 2-factor on everywhere. Note the 4 final handles for step 3.
+- [ ] Create the accounts, TikTok and Instagram for each character of the roster (Franz, Reginald, Lenny Gold; owner 2026-10-06), all **Creator**, not Business. Franz takes over Instagram `biscuit.moves` (renamed `franz.dachshund`, `characters/franz/social.md`).
+- [ ] Instagram: on each account featuring an AI person (Reginald, Lenny), Edit profile, turn on the **AI-generated profile** label (Meta, 31 Aug 2026; owner decision 2026-10-05: a dog's account has none). Every caption carries the AI disclosure (enforced in code); TikTok's per-post AI label is set by the publisher.
+- [ ] Bios, handles and display names: `characters/<slug>/social.md` (Reginald also `docs/launch/social-pages.md`). Avatars: `assets/characters/<slug>/avatar.png`.
+- [ ] 2-factor on everywhere. Note the final handles for step 3.
 
 ## 3. Postiz Cloud
-- [ ] Sign up at postiz.com (Standard plan), Add channel x4: TikTok and Instagram for each character (for Instagram use the standalone login if both are offered).
+- [ ] Sign up at postiz.com (Standard plan), Add channel: TikTok and Instagram for each character (for Instagram use the standalone login if both are offered).
 - [ ] Settings > Public API: copy the key. Store it now (paste when prompted, input is hidden):
   `security add-generic-password -s cs-postiz-api-key -a "$USER" -w`
 - [ ] Install the CLI at the pinned version and list the channel ids:
@@ -51,7 +51,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - [ ] **Hold `health.yml` until step 11**: it fails, and GitHub emails you every 3 hours, until the first daily run is logged.
 - [ ] Drop a video (the cloud jobs, `.github/workflows/studio-drop.yml`): make the keys and set them, `gh` asks for each value (nothing typed inline): `gh secret set HF_API_KEY_ID` and `gh secret set HF_API_KEY_SECRET` (console.higgsfield.ai > API keys; check there whether the API spends your plan credits or separate API credits), `gh secret set GEMINI_API_KEY` (aistudio.google.com > Get API key). Then `gh workflow enable studio-drop.yml`.
 - [ ] A fine-grained GitHub token for this repo only (Contents: read and write; the repository_dispatch endpoint needs Contents, not Actions), stored in Supabase > Project Settings > Vault as `github_dispatch_token`: the terminal's Checking / Make it then starts the job at once (without it the 2-hourly sweep picks it up).
-- Expected GitHub Actions use: about 1,500 minutes a month of the 2,000 free (private repo) before Drop a video, whose sweep adds about 360 (12 short runs a day) and each drop about 5 (check) + 15-30 (make, mostly waiting on Higgsfield): with more than a few drops a week the month goes over the free 2,000 (GitHub then bills about $0.008 a minute, or set a spending limit of $0 to stop instead): `publish` 24 runs a day (every 15 min from 17:00 to 20:59 UTC, which covers the 19:00 / 19:30 London slots in BST and GMT, plus a 3-hourly catch-up), `metrics` 4, `health` 8, about 1 to 1.5 billed minutes each. A time you choose yourself in the terminal outside that window posts within about 3 hours.
+- Expected GitHub Actions use: about 1,590 minutes a month of the 2,000 free (private repo) before Drop a video, whose sweep adds about 360 (12 short runs a day) and each drop about 5 (check) + 15-30 (make, mostly waiting on Higgsfield): with more than a few drops a week the month goes over the free 2,000 (GitHub then bills about $0.008 a minute, or set a spending limit of $0 to stop instead): `publish` 26 runs a day (every 15 min from 17:00 to 20:59 UTC, which covers the 19:00 / 19:30 London slots in BST and GMT, 11:30 and 12:30 UTC for Lenny's 12:30, plus a 3-hourly catch-up), `metrics` 4, `health` 8, about 1 to 1.5 billed minutes each. A time you choose yourself in the terminal outside that window posts within about 3 hours.
 - Schedules run from the repo's default branch (today `build/slice1`); if you merge to `main` and change the default, they follow.
 - Turns ✅: `github: secret DATABASE_URL`, `... SUPABASE_URL`, `... SUPABASE_SERVICE_KEY`, `... POSTIZ_API_KEY`, `github: workflow publish enabled`, `github: workflow metrics enabled`, `github: workflow studio-drop enabled`, `drop: vault secret github_dispatch_token`, `repo: no secret files tracked`.
 
@@ -67,15 +67,16 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - [ ] Open the URL, log in by magic link (only `o.schwend@gmail.com` can see data), then finish step 5's two items.
 
 ## 9. Flip the characters to live
-- [ ] In `characters/biscuit/refs.json` and `characters/reginald/refs.json` set `"status": "live"` (there is no separate CLI; seeding is how status changes), with the handles and Postiz ids from step 3.
+- [ ] In `characters/<slug>/refs.json` (franz, reginald, lenny) set `"status": "live"` (there is no separate CLI; seeding is how status changes), with the handles and Postiz ids from step 3.
 - [ ] `bin/studio seed`, then `bin/studio seed status` (each character shows `live: true`). Commit and push the refs files (ids are not secrets).
 - The daily run skips Reginald until his close-up exists (step 10).
-- Turns ✅: `characters: at least one live`, `characters: refs.json valid`, `characters: biscuit ready`.
+- Then the posting slots, once: `bin/studio plan cadence --slot franz=19:00 --slot reginald=19:30 --slot lenny=12:30 --drop biscuit` (weeks 1-2 Tue/Wed/Thu; from week 3 `bin/studio plan cadence --days mon,tue,wed,thu,fri`).
+- Turns ✅: `characters: at least one live`, `characters: refs.json valid`, `characters: franz ready`.
 
 ## 10. Rehearsal (Claude runs it with you present, about 260 credits)
 - [ ] Genjutsu multi-body test with 3 dancers: decides the held picks D1, D3, B4, B5, B6.
 - [ ] Quiff Butler dance on the slick driver; generate Reginald's close-up and set `closeup` in his refs.json, re-seed.
-- [ ] Cute-Biscuit debut re-render. Make it the first clip, or "picks first" would produce D2 before the debut.
+- [ ] (Biscuit is retired, 2026-10-06: his debut re-render is no longer needed.)
 - [ ] `postiz integrations:settings <id>` for one TikTok and one Instagram channel: compare with `TIKTOK_SETTINGS` / `INSTAGRAM_SETTINGS` in `studio/publish/postiz.py` (unknown keys are silently dropped).
 - [ ] `postiz analytics:post <id> -d 7` on a real post: compare with `POSTIZ_METRIC_LABELS` / `POSTIZ_SERIES_MODE` in `studio/metrics.py` (cumulative or per-day).
 - [ ] vidIQ Instagram insights (connect the 2 Instagram accounts to vidIQ first): compare the keys with the `IG_*` constants and check the `platform_post_id` match.
@@ -90,6 +91,6 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 
 ## 12. First posts
 - [ ] Approve the first queued clips in the terminal (Today or Queue). Until an account has 6 approved posts, every post needs your approval.
-- [ ] The next `publish.yml` run (every 15 min from 17:00 to 20:59 UTC, else within 3 hours) posts them at the slot (Biscuit 19:00, Reginald 19:30 London).
+- [ ] The next `publish.yml` run (every 15 min from 17:00 to 20:59 UTC, at 11:30 and 12:30 UTC, else within 3 hours) posts them at the slot (Franz 19:00, Reginald 19:30, Lenny 12:30 London).
 - [ ] A post stuck in `needs_check` or `failed` (the terminal and `bin/studio health` show it): look at the platform, then `bin/studio publish resolve <post-id> --live --platform-post-id <id>` (it is live), `--retry` (it is not, send it again) or `--drop --reason-file F` (forget it).
 - [ ] Open each post on TikTok and Instagram: AI label visible, 1080p, post URL stored (Queue / Library).

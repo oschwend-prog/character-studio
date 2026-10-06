@@ -122,41 +122,42 @@ export interface ScanCharacter {
   audienceQuery: string;
   rotation: ReadonlyArray<ScanTheme>;
   fit_rules: ReadonlyArray<string>;
-  /** Set while the character is not scanned yet (the Outsider waits for the voice lane). */
+  /** Set while the character is not scanned yet (scan.json `_status`; none of the roster today). */
   status?: string;
 }
 export const SCAN_CHARACTERS: Readonly<Record<string, ScanCharacter>> = {
-  "biscuit": {
-    "audienceQuery": "Culture/Region: US/UK English-speaking; Global: true; Demographics: dog lovers and Gen Z/millennials 16-40 who watch cute pet and dance content;",
+  "franz": {
+    "audienceQuery": "Culture/Region: UK/US English-speaking; Global: true; Demographics: dog lovers and Gen Z/millennials 16-40 who watch funny pet and dance content;",
     "rotation": [
       {
-        "embeddingType": "format",
-        "theme": "skilled upright dance",
-        "query": "clothed animal standing upright doing a skilled trend dance, seamless loop, music only"
-      },
-      {
         "embeddingType": "concept",
-        "theme": "dog leads the dancers",
-        "query": "small dog front and centre leading human backup dancers in a trending dance"
+        "theme": "dog refuses, then gives in",
+        "query": "small dog stubbornly refuses to walk or join in, then gives in to the beat and dances"
       },
       {
         "embeddingType": "hook",
-        "theme": "stare, then hits every beat",
-        "query": "small dog in an outfit stares into the camera, then hits every beat of a high-energy track"
+        "theme": "unimpressed dog reaction",
+        "query": "small dog stares into the camera, completely unimpressed, while a trend plays around it"
+      },
+      {
+        "embeddingType": "format",
+        "theme": "dog does the trend",
+        "query": "one small dog doing a viral trend dance or move, full body, static camera, music only"
       },
       {
         "embeddingType": "concept",
-        "theme": "pet with a human job",
-        "query": "pet with a human job or an ego caption doing a viral trend"
+        "theme": "posh dog day-in-the-life",
+        "query": "pampered small dog in an outfit living a luxury day-in-the-life, one dog on camera"
       }
     ],
     "fit_rules": [
-      "one animal or one dancer as the star; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes",
+      "one dog as the star; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes",
+      "a dog star only (like for like: Franz replaces a dog, never a person or a dancer on two legs)",
       "full body visible",
       "mostly static camera",
       "music-driven (no dialogue needed)",
-      "upright/biped motion for the biped master; four-legged head-bob for the quadruped master",
-      "fits Biscuit's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): bouncy, puppy-cute, a wholesome ego, never clumsy, no voice"
+      "a real dog's movement on four paws (the dog-anatomy guard): nothing athletic, no jumping",
+      "fits Franz's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): dignified and permanently unimpressed, betrays himself into tiny disco, never barks, never rushes"
     ]
   },
   "reginald": {
@@ -191,27 +192,38 @@ export const SCAN_CHARACTERS: Readonly<Record<string, ScanCharacter>> = {
       "fits Reginald's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): calm, deadpan, a straight face under absurdity, never smiling, the quiff never moves"
     ]
   },
-  "outsider": {
-    "audienceQuery": "Culture/Region: UK/US English-speaking; Global: true; Demographics: millennials and Gen Z 18-40 who watch character comedy and history content;",
+  "lenny": {
+    "audienceQuery": "Culture/Region: US/UK English-speaking; Global: true; Demographics: Gen Z and millennials 18-40 who watch office comedy, memes and dance trends;",
     "rotation": [
       {
+        "embeddingType": "hook",
+        "theme": "on hold, then the drop",
+        "query": "man in a suit furious on a phone call, then the beat drops and he dances"
+      },
+      {
         "embeddingType": "concept",
-        "theme": "stranger baffled by a modern object",
-        "query": "naive confident character from another era baffled by a modern everyday object"
+        "theme": "boss vs a mundane problem",
+        "query": "boss in a suit reacts to a mundane office problem with total outrage, office comedy skit"
       },
       {
         "embeddingType": "format",
-        "theme": "numbered episode to camera",
-        "query": "openly AI recurring character talks to a handheld camera, numbered episode"
+        "theme": "businessman does the trend",
+        "query": "one man in a suit does a viral trend dance in an office or a corridor, full body, static camera"
       },
       {
-        "embeddingType": "hook",
-        "theme": "formal speaker meets modern slang",
-        "query": "over-formal verbose speaker reacts to modern slang"
+        "embeddingType": "concept",
+        "theme": "rage to smug calm",
+        "query": "person explodes on the phone, then switches instantly to smug calm, tonal whiplash comedy"
       }
     ],
-    "fit_rules": [],
-    "status": "inactive until the voice lane (Slice 3)"
+    "fit_rules": [
+      "one performer as the star; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes",
+      "an adult human star (like for like: Lenny replaces a person, best a man in a suit, a boss or anyone on the phone; never a dog or another animal)",
+      "full body visible",
+      "the joke survives his template: a mid-tantrum start, then smug calm",
+      "no real person's likeness, real agent, agency or studio as the joke",
+      "fits Lenny's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): manic and loud, explode in, collapse out, never waits or apologises"
+    ]
   }
 };
 

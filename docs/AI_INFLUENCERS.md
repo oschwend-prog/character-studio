@@ -42,8 +42,15 @@
   our own, not one letter from the film character's name and not a real nationality's surname (C7).
 - Children are fine in a clip (crowds, families, spectators); only the star our character replaces must be an adult, which is
   also the like-for-like rule. Still rejected: sexualised content, and a child as the star or main subject.
+- **C8 decided: one studio signature, separate brands.** ODD EYES on every character (his right eye, on the viewer's left,
+  ice-blue; his left eye amber) and the two-dot mark on every video (`studio/media/master.py` adds it to every master, whatever
+  the character). Each character is his own brand with his own accounts. Biscuit is retired (status `paused`, kept for history).
+- **C10 decided: the slots.** Franz 19:00, Reginald 19:30, Lenny 12:30 (London); the same days for all: weeks 1-2 Tue/Wed/Thu,
+  from week 3 Mon-Fri; at most 2 posts per account per day. The live cadence is set with `bin/studio plan cadence`.
+- Nothing is generated now: infrastructure, process and characters are set up first.
 
-Still open: C6 (posh British twice: Franz and Reginald), C8 (one universe, ODD EYES, or standalone), C10 (rhythm), C11 (voice in the studio), C12 (shared credits).
+Still open: C6 (posh British twice: Franz and Reginald), C11 (voice in the studio), C12 (shared credits), and the Borat-type's name
+(he joins the studio, scan and terminal through `characters/<slug>/` once named, with no code change).
 
 
 | # | Topic | Brief (B) says | Repo (A) does today | Decision needed |

@@ -1,6 +1,6 @@
 # ODD EYES Character Studio
 
-Machine that turns trends into approved, posted 1080p AI-character clips (Biscuit, Reginald)
+Machine that turns trends into approved, posted 1080p AI-character clips (Franz, Reginald, Lenny Gold; Biscuit retired)
 on TikTok + Instagram Reels, with a terminal to approve, track spend and see results.
 
 ## How it works
@@ -21,11 +21,11 @@ on TikTok + Instagram Reels, with a terminal to approve, track spend and see res
 - Cost model (`studio.planning.estimate_credits`, one source of truth): Recreate 160; Drop-in `ceil(seconds x 11) + 3`, +30 for an `ai_beat` (91 for 8 s). `bin/studio plan estimate` prices the actual trimmed seconds.
 - Music (`features.music`, `proposal.owner_music`): `original` (default for a Drop-in: the clip's own audio via the Genjutsu output, muxed back with `bin/studio master mux-audio` if lost), `in_app` (silent master; fallback when Instagram mutes a chart song; never posted on autopilot), `ai_beat` (Seedance render, +30; a Recreate's default).
 - Never: scrape/download from TikTok/Instagram on the automation's own initiative (no crawling, no bulk grabbing); the main source is the owner's own saved TikTok/Instagram clips, dropped on the terminal as a file or a link (owner 2026-10-06; `bin/studio source fetch --pick <id>` and the cloud drop job take ONE dropped or approved pick's public clip with yt-dlp, no login, no cookies; `source purge` deletes it after posting); ADD third-party audio we sourced ourselves (owner amendment 2026-10-05: Drop-ins keep the original clip audio by default, i.e. the audio the clip already carries; nothing else third-party goes in); post without the AI label; post more than 2x per account per day; spend past the monthly cap (default 6,000 Higgsfield credits).
-- Slots (Europe/London, `zoneinfo`, never naive datetimes): Biscuit 19:00, Reginald 19:30; weeks 1-2 Tue/Wed/Thu, from week 3 Mon-Fri.
+- Slots (Europe/London, `zoneinfo`, never naive datetimes): Franz 19:00, Reginald 19:30, Lenny 12:30; weeks 1-2 Tue/Wed/Thu, from week 3 Mon-Fri (owner 2026-10-06; live in `studio.settings`, `bin/studio plan cadence`).
 - KPI bars are binding and must not be renegotiated after seeing data (see plan header).
 
 ## Where things live
-- **AI-influencer master (single source of truth for the whole roster, both strands):** `docs/AI_INFLUENCERS.md` (ODD EYES: Biscuit, Reginald, Outsider, Singer + the claude.ai/Higgsfield strand: Lenny Gold, Franz, Borat-type). Read it first; its section 1 lists OPEN CONFLICTS between the strands (footage, recast method, downloading, the two dachshunds, the Borat-type, one universe, publishing, rhythm, credits): they are the owner's to decide, and until he does the rules below stay as they are. The original claude.ai brief is kept verbatim in `docs/influencers/`.
+- **AI-influencer master (single source of truth for the whole roster, both strands):** `docs/AI_INFLUENCERS.md` (roster 2026-10-06: Franz, Reginald, Lenny Gold, the Borat-type (unnamed, no refs.json yet); Biscuit and the Outsider retired; the Singer a later concept; one studio signature: ODD EYES + the two-dot mark on every character). Read it first; its section 1 lists OPEN CONFLICTS between the strands (footage, recast method, downloading, the two dachshunds, the Borat-type, one universe, publishing, rhythm, credits): they are the owner's to decide, and until he does the rules below stay as they are. The original claude.ai brief is kept verbatim in `docs/influencers/`.
 - Spec: `docs/superpowers/specs/2026-10-04-character-studio-design.md`; plan: `docs/superpowers/plans/2026-10-04-character-studio-slice1.md` (Global Constraints + Review Focus at the top).
 - Character bibles: `characters/<name>/bible.md`. Strategy: `docs/launch/`, `docs/research/`, `docs/spike/`.
 - Scan settings: `config/scan.json`. Avatars: `assets/avatars/`.

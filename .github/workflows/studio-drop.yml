@@ -6,7 +6,10 @@
 #   `drop-process` (the free check) and `drop-make` (paid, only after the owner's Make it: `studio drop make` refuses a pick
 #   without proposal.make_requested), the pick id in client_payload.pick_id;
 # - every 2 hours, a sweep (`studio drop sweep`) for anything left pending (a dispatch that never came, a slow Higgsfield job,
-#   a run that stopped); a manual run is a sweep too.
+#   a run that stopped); a manual run is a sweep too, unless its `job` input is `check-keys`;
+# - by hand, `gh workflow run studio-drop.yml -f job=check-keys`: `studio drop check-keys` asks Higgsfield and Gemini for free
+#   whether the keys are good (a status read of a random request, a model read; nothing is generated or spent) and prints
+#   {"higgsfield": "ok|invalid ..|error ..", "gemini": ...} without the keys; the run fails unless both are ok.
 #
 # Secrets (repo secrets): DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY (as the other workflows) and, for Drop a video,
 # HF_API_KEY_ID, HF_API_KEY_SECRET and GEMINI_API_KEY (until they exist the jobs record "waiting for the key" and the daily run
@@ -24,6 +27,12 @@ on:
   schedule:
     - cron: '17 */2 * * *'
   workflow_dispatch:
+    inputs:
+      job:
+        description: 'sweep (the pending drops) or check-keys (are the Higgsfield and Gemini keys good? free)'
+        type: choice
+        options: [sweep, check-keys]
+        default: sweep
 
 concurrency:
   group: studio-drop-${{ github.event.client_payload.pick_id || 'sweep' }}
@@ -55,9 +64,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           ACTION: ${{ github.event.action }}
           PICK_ID: ${{ github.event.client_payload.pick_id }}
+          JOB_INPUT: ${{ inputs.job }}
         run: |
           if [ "$EVENT" != "repository_dispatch" ]; then
-            echo "command=sweep" >> "$GITHUB_OUTPUT"
+            if [ "$EVENT" = "workflow_dispatch" ] && [ "$JOB_INPUT" = "check-keys" ]; then
+              echo "command=check-keys" >> "$GITHUB_OUTPUT"
+            else
+              echo "command=sweep" >> "$GITHUB_OUTPUT"
+            fi
             exit 0
           fi
           if ! printf %s "$PICK_ID" | grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'; then
@@ -81,7 +95,7 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
         run: echo "count=$(uv run studio drop pending --count)" >> "$GITHUB_OUTPUT"
       - name: Install ffmpeg, fonts and yt-dlp
-        if: steps.gate.outputs.configured == 'true' && (steps.job.outputs.command != 'sweep' || steps.pending.outputs.count != '0')
+        if: steps.gate.outputs.configured == 'true' && steps.job.outputs.command != 'check-keys' && (steps.job.outputs.command != 'sweep' || steps.pending.outputs.count != '0')
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-dejavu-core fontconfig
@@ -101,6 +115,8 @@ jobs:
         run: |
           if [ "$COMMAND" = "sweep" ]; then
             uv run studio drop sweep
+          elif [ "$COMMAND" = "check-keys" ]; then
+            uv run studio drop check-keys
           else
             uv run studio drop "$COMMAND" "$PICK"
           fi

@@ -19,11 +19,12 @@ SECRETS = ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "POSTIZ_API_K
 POSTIZ_VERSION = "2.0.16"
 
 # name -> (crons, command, needs the Node + Postiz CLI)
-# publish: every 15 minutes through the posting window 17:00-20:59 UTC (Biscuit 19:00 and Reginald 19:30
-# London are 18:00 / 18:30 UTC in BST and 19:00 / 19:30 UTC in GMT) + a 3-hourly catch-up for the times the
-# owner picks himself. That is 24 runs a day, not 96: GitHub's free minutes are 2,000 a month.
+# publish: every 15 minutes through the posting window 17:00-20:59 UTC (Franz 19:00 and Reginald 19:30
+# London are 18:00 / 18:30 UTC in BST and 19:00 / 19:30 UTC in GMT), Lenny's 12:30 London at 11:30 and 12:30 UTC
+# (BST and GMT) + a 3-hourly catch-up for the times the owner picks himself. That is 26 runs a day, not 96:
+# GitHub's free minutes are 2,000 a month.
 SPEC = {
-    "publish": (("*/15 17-20 * * *", "40 */3 * * *"), "uv run studio publish due", True),
+    "publish": (("*/15 17-20 * * *", "30 11,12 * * *", "40 */3 * * *"), "uv run studio publish due", True),
     "metrics": (("7 */6 * * *",), "uv run studio metrics pull", True),
     "health": (("23 */3 * * *",), "uv run studio health", False),
 }
@@ -123,28 +124,35 @@ def test_publish_runs_through_both_posting_windows_in_gmt_and_in_bst():
     assert 0 in range(0, 60, 15) and 30 in range(0, 60, 15)  # a run lands on :00 and :30
 
 
+def test_publish_runs_at_lennys_midday_slot_in_bst_and_in_gmt():
+    """Lenny 12:30 London (owner 2026-10-06) is 11:30 UTC in BST and 12:30 UTC in GMT; the 12:40 UTC catch-up retries it."""
+    midday = SPEC["publish"][0][1].split()
+    assert midday[0] == "30" and midday[1] == "11,12" and midday[2:] == ["*", "*", "*"]
+    assert 12 in _hours(SPEC["publish"][0][2].split()[1]) and SPEC["publish"][0][2].split()[0] == "40"
+
+
 def test_publish_has_a_three_hourly_catch_up_for_owner_chosen_times():
-    catch_up = SPEC["publish"][0][1].split()
+    catch_up = SPEC["publish"][0][2].split()
     assert catch_up[1] == "*/3" and len(_hours(catch_up[1])) == 8
 
 
 def test_health_is_every_three_hours_and_the_estimate_fits_the_free_minutes():
     assert SPEC["health"][0][0].split()[1] == "*/3"
     runs_per_day = {
-        "publish": 4 * len(_hours(SPEC["publish"][0][0].split()[1])) + len(_hours("*/3")),
+        "publish": 4 * len(_hours(SPEC["publish"][0][0].split()[1])) + len(SPEC["publish"][0][1].split()[1].split(",")) + len(_hours("*/3")),
         "metrics": len(_hours("*/6")),
         "health": len(_hours("*/3")),
     }
-    assert runs_per_day == {"publish": 24, "metrics": 4, "health": 8}
+    assert runs_per_day == {"publish": 26, "metrics": 4, "health": 8}
     billed = {"publish": 1.5, "metrics": 1.5, "health": 1.0}  # minutes a run bills: setup + uv sync + the command
     monthly_minutes = sum(runs_per_day[w] * billed[w] * 30 for w in runs_per_day)
-    assert monthly_minutes == 1500, monthly_minutes  # the estimate docs/launch/go-live.md states; free tier is 2,000
+    assert monthly_minutes == 1590, monthly_minutes  # the estimate docs/launch/go-live.md states; free tier is 2,000
 
 
 def test_go_live_documents_the_pinned_version_and_the_monthly_minutes():
     doc = (Path(__file__).resolve().parents[1] / "docs" / "launch" / "go-live.md").read_text(encoding="utf-8")
     assert f"postiz@{POSTIZ_VERSION}" in doc and "VERIFY at go-live" in doc
-    assert "1,500 minutes" in doc and "2,000" in doc
+    assert "1,590 minutes" in doc and "2,000" in doc
 
 
 # ---- studio-drop: the cloud jobs of "Drop a video" (plan 2026-10-06) ------------------------------------------------------
@@ -187,6 +195,22 @@ def test_the_pick_id_is_checked_and_never_pasted_into_a_script():
     assert "grep -Eqx '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'" in code
     assert 'uv run studio drop "$COMMAND" "$PICK"' in code and "uv run studio drop sweep" in code
     assert "drop-process) echo \"command=process\"" in code and "drop-make) echo \"command=make\"" in code
+
+
+def test_a_manual_run_can_check_the_keys_for_free_instead_of_sweeping():
+    """`gh workflow run studio-drop.yml -f job=check-keys`: the free key check, no ffmpeg, the input reaching the script by env."""
+    t = text("studio-drop")
+    assert re.search(
+        r"(?m)^  workflow_dispatch:\n    inputs:\n      job:\n(?:        .*\n)*?        type: choice\n        options: \[sweep, check-keys\]\n        default: sweep$",
+        t,
+    )
+    job = next(b for b in steps("studio-drop") if b.startswith("name: Read the job"))
+    assert "JOB_INPUT: ${{ inputs.job }}" in job and '[ "$JOB_INPUT" = "check-keys" ]' in job and 'echo "command=check-keys"' in job
+    assert job.index('"$EVENT" != "repository_dispatch"') < job.index("check-keys")  # a dispatch from the database never becomes a key check
+    install = next(b for b in steps("studio-drop") if b.startswith("name: Install ffmpeg"))
+    assert "steps.job.outputs.command != 'check-keys'" in install
+    command = steps("studio-drop")[-1]
+    assert 'elif [ "$COMMAND" = "check-keys" ]; then\n            uv run studio drop check-keys' in command
 
 
 def test_drop_installs_ffmpeg_and_yt_dlp_only_when_there_is_work():

@@ -2,6 +2,8 @@
 
 Session 2026-10-04 (evening). Built on `docs/research/2026-10-04-niche-playbook.md` (evidence-labelled) and the owner's Spotify taste. Status: **APPROVED by the owner 2026-10-04** — the KPI bars in §3.3 are now binding (pre-registered, never renegotiated after data).
 
+> **Roster update (owner, 2026-10-06):** Biscuit is retired (Franz is the one dachshund), the Outsider is retired (the Borat-type replaces him, still unnamed) and Lenny Gold joins. Slots: Franz 19:00, Reginald 19:30, Lenny 12:30 London; weeks 1-2 Tue/Wed/Thu, from week 3 Mon-Fri. The Biscuit and Outsider parts below are kept as the launch record; the roster's master is `docs/AI_INFLUENCERS.md` and each character's `characters/<slug>/bible.md`.
+
 ---
 
 ## 1. The three channels
