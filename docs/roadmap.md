@@ -96,3 +96,18 @@ Credits: one character posting Mon-Fri at 91 credits a video is about 2,000 cred
   partnership" label, the AI label stays); brand logos only for paid, contracted deals (today's rule: no brands in prompts);
   pricing per post/package; Stripe checkout; the brand's own approval step; contracts and usage rights; never a real
   person's likeness.
+
+- **Pitch narrative (owner, 2026-10-07):** "we focus on short content of 10-15 s, which happens to be the most desired and
+  most viewed, but is not paid for by social media; so we are inventing this new branding/marketing channel: think
+  premium brand placements."
+  - Why it holds: the platforms' payouts skip this length (TikTok Creator Rewards needs 1-minute videos, Instagram has no
+    UK Reels bonus, Shorts pays cents per 1,000 views), so a short-form character earns from brands or not at all.
+  - What makes it ours (the pitch, not the format): product placement inside the scene, worn or held by a recurring
+    character (Franz in the activewear, Lenny's watch and phone, Reginald serving the drink), not an ad read; videos short
+    enough to be watched to the end and looped; always on (5 a week per character), any wardrobe, instant revisions, no
+    scandal risk.
+  - What a brand will check: completion and loop rate, shares and saves per 1,000 views, follower quality (the KPI bars
+    first); the paid-partnership label and the AI label on every placement; that the video is ours (a Recreate or own
+    footage, never a swap into someone else's clip); craft over "AI slop" (negative sentiment about AI content is high).
+  - Working line: "The 10-second placement: premium product placement in the most-watched format, which nobody else
+    sells."
