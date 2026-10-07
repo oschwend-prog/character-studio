@@ -47,6 +47,7 @@ def deconstruct(**over) -> dict:
         "first_comment": "Requests for next week may be left below. Within reason.",
         "hashtags": ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes"], "notes": "",
         "watermark_spans": [], "burned_in_text_spans": [],
+        "potential": {"score": 7, "reason": " a shimmy many people do, moving from the first second "},
     }
     base.update(over)
     if "recommended" not in over:  # like for like among the test roster (biscuit: a dog or an animal; reginald: a person)
@@ -1106,3 +1107,163 @@ def test_the_cut_section_carries_its_own_clean_flags(world, synth_video, gen_out
     clip = store.get_clip(store.get_favorite(pid).clip_id)
     child = next(iter(store.list_sources(id=clip.source_id)))
     assert child.has_overlay is False and child.has_watermark is False  # the section Genjutsu was given has none
+
+
+# ---- the clip score (terminal v3, spec section 3): free, stored only when the check ends ready --------------------------------
+
+W = {"start_s": 5.0, "length_s": 8.0}  # the section 5-13 s
+
+
+def swap_points(look, avoid=(), has_audio=True) -> int:
+    return drop.drop_score(look, W, list(avoid), has_audio)["swap"]
+
+
+def test_drop_score_points():
+    base = deconstruct()  # one person, full body, static, clear, with sound, not a classic: 3 + 2 + 2 + 1 + 1
+    assert swap_points(base) == 9
+    # one person in frame 3, two 1, three or more 0
+    assert [swap_points(deconstruct(people_count=n)) for n in (1, 2, 3, 7)] == [9, 7, 6, 6]
+    # a dog star is the one in frame: alone 3, with a person beside it 1
+    assert swap_points(deconstruct(star=DOG_STAR, people_count=0)) == 9
+    assert swap_points(deconstruct(star=DOG_STAR, people_count=1)) == 7
+    assert swap_points(deconstruct(star={**deconstruct()["star"], "full_body": False})) == 7  # full body 2
+    assert [swap_points(deconstruct(camera=c)) for c in ("static", "handheld", "moving")] == [9, 8, 7]  # static 2, handheld 1
+    # clear of every text or watermark span by 1 s or more 1, nearer 0
+    for span, points in (
+        ({"start_s": 0.0, "end_s": 4.0}, 9), ({"start_s": 0.0, "end_s": 4.5}, 8), ({"start_s": 14.0, "end_s": 20.0}, 9),
+        ({"start_s": 13.5, "end_s": 20.0}, 8), ({"start_s": 6.0, "end_s": 7.0}, 8),
+    ):
+        assert swap_points(base, [{**span, "what": "text"}]) == points, span
+    assert swap_points(base, [{"start_s": 0.0, "end_s": 1.0, "what": "text"}, {"start_s": 13.2, "end_s": 15.0, "what": "watermark"}]) == 8
+    assert swap_points(base, has_audio=False) == 8  # sound 1
+    assert swap_points(deconstruct(classic=True)) == 10  # a classic 1: every point, the cap
+    worst = deconstruct(people_count=4, star={**deconstruct()["star"], "full_body": False}, camera="moving")
+    assert swap_points(worst, [{"start_s": 0.0, "end_s": 30.0, "what": "text"}], has_audio=False) == 0
+
+
+def test_drop_score_total():
+    """total = round(10 x (0.6 x potential + 0.4 x swap)), reason = the potential's reason."""
+    top = deconstruct(classic=True, potential={"score": 8, "reason": "a classic everyone knows"})
+    assert drop.drop_score(top, W, [], True) == {"total": 88, "potential": 8, "swap": 10, "reason": "a classic everyone knows"}
+    none = deconstruct(people_count=3, star={**deconstruct()["star"], "full_body": False}, camera="moving",
+                       potential={"score": 0, "reason": "another creator's own skit"})
+    assert drop.drop_score(none, W, [{"start_s": 5.0, "end_s": 6.0, "what": "text"}], False)["total"] == 0
+    mid = deconstruct(potential={"score": 7, "reason": "x"}, camera="moving")  # swap 7
+    assert drop.drop_score(mid, W, [], True)["total"] == round(10 * (0.6 * 7 + 0.4 * 7)) == 70
+    assert drop.drop_score(deconstruct(potential={"score": 10, "reason": "x"}, classic=True), W, [], True)["total"] == 100
+
+
+def test_ready_drop_stores_score(world, portrait):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    d = store.get_favorite(pid).proposal["drop"]
+    # one person, full body, static, clear, with sound: swap 9; potential 7 -> round(10 x (4.2 + 3.6)) = 78
+    assert d["score"] == {"total": 78, "potential": 7, "swap": 9, "reason": "a shimmy many people do, moving from the first second"}
+    assert d["deconstruct"]["potential"]["reason"] == d["score"]["reason"]  # the reason is the potential's, trimmed
+    assert d["score"] == drop.drop_score(d["deconstruct"], d["window"], d["avoid"], d["has_audio"])
+
+
+def test_blocked_drop_has_no_score(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(star=DOG_STAR)), now=NOW, job="t")
+    assert out.state == "blocked" and "score" not in store.get_favorite(pid).proposal["drop"]
+    pid = drop_file(store, storage, portrait)
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(GeminiError("HTTP 503")), now=NOW, job="t")
+    assert out.state == "failed" and "score" not in store.get_favorite(pid).proposal["drop"]
+
+
+# ---- recheck: a ready drop checked again (free), never one the owner sent with Make it ------------------------------------------
+
+
+def test_recheck_moves_ready_to_checking(world, portrait):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    f = store.get_favorite(pid)  # a drop checked before this build: ready with no score
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {k: v for k, v in f.proposal["drop"].items() if k != "score"}})
+    later = NOW + timedelta(hours=1)
+    out = drop.request_recheck(store, pid, later)
+    d = out.proposal["drop"]
+    assert d["state"] == "checking" and d["reason"] is None and d["at"] == later.isoformat() and d["requested"]["process"] == later.isoformat()
+    assert store.get_favorite(pid).proposal["drop"] == d and out.status == "approved" and "make_requested" not in out.proposal
+    assert pending(store, now=later) == [{"pick_id": pid, "job": "process", "state": "checking"}]  # the cloud sweep takes it
+    g = FakeGemini(deconstruct())
+    again = process_drop(store, storage, pid, gemini_client=g, now=later, job="t")
+    assert again.state == "ready" and len(g.calls) == 1 and len(store.list_sources()) == 1  # the same source, looked at again
+    assert store.get_favorite(pid).proposal["drop"]["score"]["total"] == 78
+    assert store.list_clips() == [] and store.ledger_month(NOW.strftime("%Y-%m")) == []  # free
+    # a scored drop asked again loses the old score until its new check ends
+    assert "score" not in drop.request_recheck(store, pid, later).proposal["drop"]
+
+
+def test_recheck_refuses_make_requested_making_made(world, portrait):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)  # the owner's Make it: a recheck would move a paid job
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": "ready"}})  # even back at ready
+    with pytest.raises(DropError, match="Make it"):
+        drop.request_recheck(store, pid, NOW)
+    f = store.get_favorite(pid)
+    clean = {k: v for k, v in f.proposal.items() if k != "make_requested"}
+    for state in ("making", "made"):
+        store.update_favorite(pid, proposal={**clean, "drop": {**clean["drop"], "state": state}})
+        with pytest.raises(DropError, match=f"is {state}"):
+            drop.request_recheck(store, pid, NOW)
+    for status in ("made", "queued"):
+        store.update_favorite(pid, status=status, proposal={**clean, "drop": {**clean["drop"], "state": "ready"}})
+        with pytest.raises(DropError, match=f"already {status}"):
+            drop.request_recheck(store, pid, NOW)
+    store.update_favorite(pid, status="approved")
+    for state in ("uploading", "checking", "waiting", "blocked", "failed"):  # only a ready drop is checked again
+        store.update_favorite(pid, proposal={**clean, "drop": {**clean["drop"], "state": state}})
+        with pytest.raises(DropError, match="only a ready drop"):
+            drop.request_recheck(store, pid, NOW)
+    assert store.get_favorite(pid).proposal["drop"]["state"] == "failed"  # nothing moved
+    with pytest.raises(KeyError):
+        drop.request_recheck(store, "nope", NOW)
+
+
+def test_cli_drop_recheck_one_or_every_ready_drop(monkeypatch, tmp_path, portrait):
+    store, storage = make_store(), LocalStorage(tmp_path / "s")
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    a = ready_drop(store, storage, portrait)
+    b = ready_drop(store, storage, portrait)
+    made = ready_drop(store, storage, portrait)
+    tap_make(store, made)  # making, with the owner's Make it: never rechecked
+    queued = ready_drop(store, storage, portrait)
+    store.update_favorite(queued, status="queued")  # ready, no Make it, but already queued: refused, named
+    blocked = drop_file(store, storage, portrait)
+    process_drop(store, storage, blocked, gemini_client=FakeGemini(deconstruct(star=DOG_STAR)), now=NOW, job="t")
+    r = CliRunner().invoke(app, ["drop", "recheck", a])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == {"rechecked": [a], "refused": []}
+    r = CliRunner().invoke(app, ["drop", "recheck", made])
+    assert r.exit_code == 2 and json.loads(r.output)["refused"][0]["pick_id"] == made
+    assert "Make it" in json.loads(r.output)["refused"][0]["reason"]
+    r = CliRunner().invoke(app, ["drop", "recheck", "--all-ready"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["rechecked"] == [b] and [x["pick_id"] for x in out["refused"]] == [queued]
+    assert store.get_favorite(made).proposal["drop"]["state"] == "making" and store.get_favorite(blocked).proposal["drop"]["state"] == "blocked"
+    r = CliRunner().invoke(app, ["drop", "recheck", "nope"])
+    assert r.exit_code == 2 and json.loads(r.output)["refused"] == [{"pick_id": "nope", "reason": "unknown pick nope"}]
+    for args in ([], [a, "--all-ready"]):
+        r = CliRunner().invoke(app, ["drop", "recheck", *args])
+        assert r.exit_code == 2 and "a pick or --all-ready" in r.output
+
+
+# ---- Franz takes a person too (owner 2026-10-07: "franz not only replaces dogs") ------------------------------------------------
+
+
+def test_a_person_star_is_like_for_like_for_franz(world, portrait):
+    ref, who = drop.character("franz")
+    assert ref["swap"]["stars"] == ["dog", "person"] and who.stars == ("dog", "person") and "biped" in ref["bodies"]
+    person = deconstruct()["star"]
+    assert drop.like_for_like(person, ref, "Franz") is None and drop.like_for_like(DOG_STAR, ref, "Franz") is None
+    assert "Franz replaces a dog or a person" in drop.like_for_like({**DOG_STAR, "kind": "animal"}, ref, "Franz")
+    store, storage = world
+    store.add_character(Character(slug="franz", name="Franz", bodies=[Body.biped, Body.quadruped]))
+    pid = ready_drop(store, storage, portrait, slug="franz")  # the owner's choice: a man doing the shimmy, Franz upright
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["state"] == "ready" and d["star"]["body"] == "biped" and store.get_favorite(pid).character_slug == "franz"

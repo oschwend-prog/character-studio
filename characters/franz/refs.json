@@ -31,7 +31,8 @@
   "swap": {
     "noun": "dachshund",
     "stars": [
-      "dog"
+      "dog",
+      "person"
     ]
   },
   "style": {
@@ -73,8 +74,8 @@
     ],
     "props": [
       {
-        "name": "tiny gold crown",
-        "job": "his canon flourish: king of the dance floor, a flash of gold at thumbnail size"
+        "name": "cool cap",
+        "job": "his signature look: casual-luxury streetwear, a flash of attitude at thumbnail size"
       },
       {
         "name": "tortoiseshell sunglasses",
@@ -100,7 +101,7 @@
     "music": "the clip's original sound for a Drop-in; lounge nu-disco with brass stabs (110-120 BPM) as his own bed; the trend's in-app sound",
     "never": [
       "human hands or human-sized next to people",
-      "logos or brands on the polo",
+      "logos or brands on his clothes",
       "sad, grumpy or bored on the drop",
       "baby talk or slang in captions",
       "nationality jokes or clichés (he is a dachshund, not a German stereotype)"

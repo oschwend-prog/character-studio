@@ -81,21 +81,29 @@ The odd eyes don't read at thumbnail size (they carry the close-up and the face-
 - **Caption voice:** see "Voice (captions)" below.
 
 ## Voice (captions)
-Posh, dry, first person, short full sentences. Never barks, never baby talk, never explains the joke. He is above everything, until the beat drops. Emoji palette: 🥂 👑 🐾.
-Examples: "I was not dancing. I was stretching to music. 🥂" · "The stairs have been informed of my displeasure." · "Fetch it yourself. 👑"
+**The happy show-off** (owner 2026-10-07). Proud, upbeat, first person, short bouncy lines. A tiny long dog who is sure he is the best dancer in the room and loves the spotlight: he brags, he celebrates himself, he invites you to watch. Never posh, never aloof; no crown (his look is a cool cap with casual-luxury streetwear). Never barks, never baby talk or slang, never explains the joke, no nationality jokes. Catchphrase: **"Sausage coming through!"** (in a joke line or a first comment, not in every post). Signature move: **the Wiggle**, a full-body sausage wiggle from nose to tail on the drop: name it when the clip has one. Emoji palette: 🐾 ✨ 🧢.
+Hooks: first person, one proud claim the clip proves ("I own this hallway.", "Watch the tail.").
+Examples: "Sausage coming through! 🐾" · "Short legs. Big moves. ✨" · "Nobody asked me to dance. I danced anyway. 🧢" · "The Wiggle was not planned. The Wiggle is never planned. 🐾"
 
 **Post formula** (same as Reginald's, every post, Instagram Reels first; the daily-run skill writes it):
 1. Searchable title, at most 40 characters: `<famous moment or format> · dachshund edition`, carrying a literal search phrase (the moment's name or one of the search keywords below). A label, not Franz speaking.
-2. The joke in Franz's voice (posh, dry, short full sentences).
+2. The joke in Franz's voice (proud, upbeat, first person, short bouncy lines).
 3. ONE engagement line, a different kind from the last post: a send trigger ("send this to ..."), a question, or a series tease ("next week: ...").
 4. Credit: `🎵 <song> – <artist>` when known, then ` · dance: @<creator>` (or `trend: @<handle>` / `original: <creator>`); no handle known, no credit line.
 5. The AI disclosure (added automatically).
 6. 3-5 hashtags: the moment, the niche, the format. Never #fyp, #foryou, #foryoupage, #viral or #explore. (He has the odd eyes since 2026-10-06; whether his posts carry #oddeyes and the two-dot bug follows the rest of C8, one universe or standalone brands, still the owner's call.)
 
-**First comment** (the owner pins it): "Requests may be submitted to my staff. In writing."
+**First comment** (the owner pins it; a two-option vote for his next clip, in his voice): "Next move: <option A> or <option B>? You pick, I dance. 🐾" (e.g. "Next move: the Wiggle at a wedding or the Wiggle at the gym? You pick, I dance. 🐾"). With no two options to offer: "Drop your requests for my next move below. I read them all. 🐾"
+
+## Superseded 2026-10-07 (posh voice)
+History only: Franz's caption voice and first comment until the owner made him the happy show-off (2026-10-07). The check reads `## Voice (captions)` above, never this section.
+- Voice: "Posh, dry, first person, short full sentences. Never barks, never baby talk, never explains the joke. He is above everything, until the beat drops. Emoji palette: 🥂 👑 🐾."
+- Examples: "I was not dancing. I was stretching to music. 🥂" · "The stairs have been informed of my displeasure." · "Fetch it yourself. 👑"
+- Post formula line 2: "The joke in Franz's voice (posh, dry, short full sentences)." (the rest of the formula is unchanged).
+- First comment: "Requests may be submitted to my staff. In writing."
 
 ## Search keywords
-dachshund · sausage dog · dancing dachshund · posh dog · dog dance (line 1 of a caption carries one of them, or the moment's name).
+dachshund · sausage dog · dancing dachshund · dog dance (line 1 of a caption carries one of them, or the moment's name).
 
 ## Music
 - **Drop-in (default):** the clip's original sound (owner 2026-10-06).
@@ -125,7 +133,7 @@ One gadget per clip at most. The polo stays on, except in the two athleisure loo
 Warm minimalist living room (the master) · marble townhouse hallway with the one stair · Riviera terrace · back seat of a chauffeured car · country-club lawn · members' club armchair.
 
 ## Swap rule
-Like for like: **Franz replaces a dog star** (refs.json `swap`: noun "dachshund", stars `dog`). He never replaces a person: a small dog cannot replace a human dancer (Genjutsu inserts him instead, or he comes out human-sized). Always add the dog-anatomy guard.
+Like for like, **Franz replaces a dog or a person** (owner 2026-10-07: "franz not only replaces dogs"; refs.json `swap`: noun "dachshund", stars `dog` and `person`): a dog star with his four-paw body, a person star with his upright body (bodies biped + quadruped). Genjutsu has answered a dog-for-person swap by inserting the dog and keeping the people (or he came out human-sized), so the frame QA must check that no original person is left and that he stays dog-sized next to people. Always add the dog-anatomy guard. (Until 2026-10-07 he replaced a dog star only.)
 
 ## References
 CDN prefix as above.
@@ -163,7 +171,7 @@ Colours: polo navy `#16213B`, cream coat `#E8D3B4`, pale honey `#D2B697`, warm i
 - vidIQ queries (rotate): "dog refuses to walk", "dachshund funny video", "posh dog reaction", "dog dancing to a trend"
 - Audience string: `Culture/Region: UK/US English-speaking; Global: true; Demographics: dog lovers and Gen Z/millennials 16-40 who watch funny pet and dance content;`
 - Hashtags to watch: #dachshund #sausagedog #doxie #dogsoftiktok #poshdog
-- Motion types: dog-star clips (Object swap); biped dance drivers only as a Recreate, with the dog-anatomy guard.
+- Motion types: dog-star clips and person-star clips (Object swap, like for like: his four-paw body for a dog, his upright body for a person, owner 2026-10-07); a Recreate keeps the dog-anatomy guard.
 
 ## Never
 Human limbs, human hands or standing like a person; human-sized next to people; logos or brands on the polo; barking, baby talk or slang; rushing (except when provoked); climbing a stair successfully; the odd eyes swapped, missing or glowing (his RIGHT eye, the viewer's left, is ice-blue; his LEFT amber); any real person's likeness or famous IP (a famous moment, meme or dance is fine: only the moves, never the original costume, look or likeness; the real star is always replaced by Franz); no unlabelled AI; no third-party audio added (a Drop-in keeps the clip's own original audio by default; nothing else third-party goes in).

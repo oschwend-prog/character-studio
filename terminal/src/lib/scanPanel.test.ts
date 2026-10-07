@@ -59,7 +59,7 @@ describe('what is scanned', () => {
     ];
     const views = scanCharacters(roster);
     expect(views.map((v) => v.slug)).toEqual(['franz', 'reginald', 'lenny']);
-    expect(views[0].themes.map((t) => t.theme)).toEqual(['dog refuses, then gives in', 'unimpressed dog reaction', 'dog does the trend', 'posh dog day-in-the-life']);
+    expect(views[0].themes.map((t) => t.theme)).toEqual(['dog refuses, then gives in', 'unimpressed dog reaction', 'dog does the trend', 'show-off dog steals the show']);
     expect(views[1].themes[0]).toMatchObject({ theme: 'deadpan at work', embeddingType: 'concept' });
     expect(views[2].themes[0]).toMatchObject({ theme: 'on hold, then the drop', embeddingType: 'hook' });
     expect(views.every((v) => v.inactive === null && v.themes.every((t) => t.query.length > 10) && v.fitRules.length > 0)).toBe(true);

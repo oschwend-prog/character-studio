@@ -41,7 +41,10 @@ handle, burned-in text, setting, what happens, his part, gadgets from the traits
 one the daily run wrote by hand (``--deconstruct-file``), the checks, the window (``drop_window``: a classic 12-15 s, any other
 clip 8-10 s, inside one shot, on the beat), the crop of a landscape clip around the star, the price (``planning.estimate_credits``
 for the window) and a preview strip in ``sources/owner/<pick id>/preview.jpg`` (the owner's browser may read ``owner/``). Then
-``ready``.
+``ready``, with the clip's **score** (terminal v3, ``drop_score``: ``drop['score'] = {total 0-100, potential 0-10, swap 0-10,
+reason}``, the potential from the deconstruct, the swap points from the check); a blocked or failed check has none. A ready
+drop without the owner's Make it can be checked again for free (``request_recheck``, ``studio drop recheck <pick>`` or
+``--all-ready``): it goes back to ``checking`` for the sweep, so a drop checked before the score gets one.
 
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
 record (``{"at", "by": "owner"}``, written only by ``request_job``; nothing in this CLI writes it). The owner's Adjust
@@ -102,7 +105,7 @@ import typer
 from studio import budget, clips, fetch, gemini, seed, sources
 from studio.budget import BudgetRefused
 from studio.captions import compose_content
-from studio.cli_support import emit, fail, open_storage, open_store, text_option
+from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
 from studio.config import now_london
 from studio.favorites import DROP_PLATFORM, DROP_URL_PREFIX, is_drop, mark_favorite, parse_video_url, validate_analysis
 from studio import higgsfield_api
@@ -146,6 +149,7 @@ STAR_WORDS = gemini.STAR_WORDS
 CHARACTER_BY = ("owner", "studio")  # who chose the drop's character: the owner's choice is never overridden
 SPAN_PAD_S = 0.5  # Gemini's times are approximate: a section keeps this far from text or a watermark on screen
 CHANGE_RESTARTS = 2  # the owner changed the character mid-check this often in a row: the next run checks it again
+SCORE_CLEAR_S = 1.0  # the score's "clear" point: the section keeps this far from every text or watermark span (terminal v3)
 
 EXIT_FAILED = 1
 EXIT_REFUSED = 3
@@ -417,6 +421,35 @@ def drop_window(
     return {"start_s": round(start, 3), "length_s": round(length, 3)}
 
 
+def _clear_by(start: float, length: float, avoid: list[Mapping[str, Any]], gap: float) -> bool:
+    """Is the section ``start``..``start + length`` at least ``gap`` seconds away from every ``avoid`` span?"""
+    end = start + length
+    return all(float(s["start_s"]) - end >= gap - 1e-9 or start - float(s["end_s"]) >= gap - 1e-9 for s in avoid)
+
+
+def drop_score(look: Mapping[str, Any], window: Mapping[str, float], avoid: list[Mapping[str, Any]], has_audio: bool) -> dict[str, Any]:
+    """The clip's score (terminal v3, spec section 3; pure): ``{"total": 0-100, "potential": 0-10, "swap": 0-10, "reason"}``.
+
+    ``potential`` and ``reason`` are the deconstruct's (Gemini: how likely the clip gets views). ``swap`` is how easy the clip is
+    to swap, from the check: one body in frame 3 (two 1, more 0; a dog or animal star counts as one besides the people), the
+    star's full body 2, a static camera 2 (handheld 1), the section at least ``SCORE_CLEAR_S`` away from every text or watermark
+    span 1, sound 1, a classic 1; capped at 10. ``total`` = round(10 x (0.6 x potential + 0.4 x swap))."""
+    star = look["star"]
+    in_frame = int(look["people_count"]) + (1 if star.get("kind") in ("dog", "animal") else 0)
+    swap = {1: 3, 2: 1}.get(in_frame, 0)
+    swap += 2 if star.get("full_body") else 0
+    swap += {"static": 2, "handheld": 1}.get(look["camera"], 0)
+    swap += 1 if _clear_by(float(window["start_s"]), float(window["length_s"]), avoid, SCORE_CLEAR_S) else 0
+    swap += 1 if has_audio else 0
+    swap += 1 if look["classic"] else 0
+    swap = min(swap, 10)
+    potential = int(look["potential"]["score"])
+    return {
+        "total": round(10 * (0.6 * potential + 0.4 * swap)), "potential": potential, "swap": swap,
+        "reason": look["potential"]["reason"],
+    }
+
+
 def crop_for(width: int, height: int, x_center: float | None) -> float | None:
     """The ``--crop-x`` of a landscape clip (the star's centre, kept inside the frame); None for a vertical one."""
     if width <= height * 9 / 16 + 1:
@@ -664,6 +697,31 @@ def request_check(store: Store, pick_id: str, now: datetime | None = None) -> Fa
         raise DropError("the upload has not finished: attach the video first")
     requested = {**(d.get("requested") or {}), "process": now.isoformat()}
     return _update(store, pick, now, state="checking", reason=None, at=now.isoformat(), requested=requested)
+
+
+def request_recheck(store: Store, pick_id: str, now: datetime | None = None) -> Favorite:
+    """Check a ``ready`` drop again (free, terminal v3): a drop checked before the score existed gets one, and any drop is looked
+    at again with the current hit rules. The drop goes to ``checking`` stamped exactly as ``request_check`` stamps it, and its old
+    ``score`` goes (only the new check's end may give one); the cloud sweep or the next dispatch takes it (nothing is dispatched
+    here).
+
+    ``DropError`` (one line) for a pick the owner sent with Make it (``proposal.make_requested``: re-checking would move a paid
+    job), a drop that is ``making`` or ``made``, a pick already ``made`` or ``queued``, or any state but ``ready``; ``KeyError``
+    for an unknown pick."""
+    now = now or now_london()
+    pick = _load(store, pick_id)
+    state = drop_of(pick).get("state")
+    if pick.proposal.get("make_requested") is not None:
+        raise DropError(f"pick {pick.id} has the owner's Make it: a recheck would move a paid job")
+    if state in ("making", "made"):
+        raise DropError(f"pick {pick.id} is {state}: a recheck would move a paid job")
+    if pick.status in ("made", "queued"):
+        raise DropError(f"pick {pick.id} is already {pick.status}")
+    if state != "ready":
+        raise DropError(f"only a ready drop is checked again; pick {pick.id} is {state}")
+    d = drop_of(pick)
+    requested = {**(d.get("requested") or {}), "process": now.isoformat()}
+    return _update(store, pick, now, state="checking", reason=None, at=now.isoformat(), requested=requested, score=None)
 
 
 def set_own_footage(store: Store, pick_id: str, own_footage: bool) -> Favorite:
@@ -928,6 +986,7 @@ def _process(
             "recommended": recommended, "avoid": avoid,
             # the longest section Make it takes for him (validate_adjust's cap): the terminal's Adjust checks it before Make it
             "max_length_s": round(MASTER_MAX_S - style_lead_s(ref.get("style")), 3),
+            "score": drop_score(look, window, avoid, basics["has_audio"]),  # only a check that ends ready has one
         },
     }
     proposal["drop"] = {k: v for k, v in proposal["drop"].items() if v is not None or k in ("reason", "crop_x")}
@@ -1523,6 +1582,40 @@ def process_command(
     except (DropError, StorageError) as e:
         fail(str(e))
     _finish(outcome)
+
+
+@app.command("recheck")
+def recheck_command(
+    pick: Annotated[str | None, typer.Argument(help="A ready drop's pick id.")] = None,
+    all_ready: Annotated[
+        bool, typer.Option("--all-ready", help="Every ready drop without the owner's Make it (the ones checked before the score).")
+    ] = False,
+) -> None:
+    """Check ready drops again for free (the score, the current hit rules): each goes back to checking for the cloud sweep. Prints
+    {"rechecked": [...], "refused": [{"pick_id", "reason"}]}; exit 2 when the one pick named was refused. Nothing is dispatched."""
+    if (pick is None) == (not all_ready):
+        fail("give a pick or --all-ready (not both)")
+    store = open_store()
+    if pick is not None:
+        ids = [pick]
+    else:
+        ids = [
+            f.id for f in store.list_favorites()
+            if is_drop(f.proposal) and f.proposal["drop"].get("state") == "ready" and f.proposal.get("make_requested") is None
+        ]
+    rechecked: list[str] = []
+    refused: list[dict[str, str]] = []
+    for pick_id in ids:
+        try:
+            request_recheck(store, pick_id)
+            rechecked.append(pick_id)
+        except KeyError:
+            refused.append({"pick_id": pick_id, "reason": f"unknown pick {pick_id}"})
+        except DropError as e:
+            refused.append({"pick_id": pick_id, "reason": str(e)})
+    emit({"rechecked": rechecked, "refused": refused})
+    if pick is not None and refused:
+        raise typer.Exit(EXIT_USAGE)
 
 
 @app.command("make")

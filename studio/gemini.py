@@ -23,6 +23,12 @@ person, whenever the roster has one), the reason is one concrete line of at most
 ``burned_in_text`` flags, the deconstruct says WHEN each is on screen (``watermark_spans``, ``burned_in_text_spans``: lists of
 ``{start_s, end_s}``); ``studio.drop`` keeps its section clear of them and blocks a clip only when no clean section of 6 s is left.
 
+**What gets views now** (terminal v3, spec section 3). The deconstruct also rates the clip's ``potential`` (a whole score 0-10
+and a one-line reason of at most ``REASON_MAX`` characters: how likely this clip, with our character swapped in, gets views),
+by a rubric in the prompt. The studio's current hit rules (``config/hit_rules.md``, owner-editable, at most 20 lines;
+``hit_rules``) go into the prompt under "What gets views now" and steer that score, the hooks and the first comment; without
+the file there is no such block. ``studio.drop.drop_score`` turns the potential into the clip's score.
+
 **One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 42, a hashtag list that is
 not 3-5 tags), the same request is made once more with the problems appended to the prompt; a second miss raises
 ``GeminiUnexpected`` naming them. Anything the video says is data: the prompt says so and nothing it returns is executed.
@@ -84,6 +90,8 @@ HASHTAGS = (3, 5)
 STAR_WORDS = {"person": "a person", "dog": "a dog", "animal": "a small animal"}
 SPANS_MAX = 12  # moments with text or a watermark on screen (owner 2026-10-06: only the section we use is judged)
 SPAN_KEYS = ("watermark_spans", "burned_in_text_spans")
+POTENTIAL_MAX = 10  # the clip's potential, a whole score 0-10 (terminal v3)
+HIT_RULES_PATH = Path(__file__).resolve().parents[1] / "config" / "hit_rules.md"  # the owner's "What gets views now"
 
 
 class GeminiError(RuntimeError):
@@ -458,13 +466,32 @@ DECONSTRUCT_SCHEMA: dict[str, Any] = {
             },
             "required": ["slug", "reason"],
         },
+        "potential": {
+            "type": "object",
+            "properties": {
+                "score": {
+                    "type": "integer", "minimum": 0, "maximum": POTENTIAL_MAX,
+                    "description": "how likely this clip, with our character swapped in, gets views: 0 none, 10 a sure hit",
+                },
+                "reason": {**_STR, "description": f"the one thing that decides it, one line of at most {REASON_MAX} characters"},
+            },
+            "required": ["score", "reason"],
+        },
     },
     "required": [
         "people_count", "star", "minors", "watermark", "watermark_spans", "burned_in_text", "burned_in_text_spans", "camera",
         "setting", "what_happens", "classic", "moment_name", "suggested_part", "gadgets", "hooks", "caption", "first_comment",
-        "hashtags", "notes", "recommended",
+        "hashtags", "notes", "recommended", "potential",
     ],
 }
+
+
+def hit_rules() -> str:
+    """The studio's current hit rules (``HIT_RULES_PATH``, the owner's file), trimmed; "" when there is no such file."""
+    try:
+        return HIT_RULES_PATH.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return ""
 
 
 def crew_of(c: Character, roster: Sequence[Character] = ()) -> tuple[Character, ...]:
@@ -493,6 +520,8 @@ def deconstruct_prompt(c: Character, roster: Sequence[Character] = ()) -> str:
     """Our prompt for the deconstruct of a dropped clip (see the module doc); ``roster`` = the characters it may recommend."""
     crew = crew_of(c, roster)
     stars = " or ".join(STAR_WORDS[s] for s in c.stars)
+    rules = hit_rules()  # no file, no heading
+    views = f"What gets views now (the studio's hit rules: they steer potential, hooks and first_comment):\n{rules}\n\n" if rules else ""
     return f"""You are the analyst of ODD EYES, a studio of AI characters. The owner dropped this clip to be remade with {c.name}, \
 the {c.noun} of our reference images: Higgsfield's Object swap keeps the clip's setting, camera, timing and sound and replaces its \
 star with {c.name}. The swap is like for like: {c.name} replaces {stars}, nothing else.
@@ -513,24 +542,31 @@ use is judged, so time them closely: a caption in the first seconds only is one 
 - classic: true only for a famous moment almost everyone knows; moment_name: its name or the trend's name ("" when none).
 - suggested_part: cameo, featured or star (how big {c.name}'s part should be).
 - gadgets: 0-3 names copied exactly from the gadget list below that would make this clip better.
-- hooks: 3 different on-screen hooks in {c.name}'s voice, at most {HOOK_MAX} characters each: the line in the caption pill \
-for the first seconds, read with the sound off, so it must land in one glance. Each one is TRUE to what happens in this clip (the \
-video pays it off) and opens a gap the viewer needs the clip to close: a deadpan understatement of an absurd moment, a mundane \
-frame on a wild one, a confident claim the clip proves wrong. Use a different angle for each; the strongest first. Never explain \
-the joke, never a greeting, never "POV:" or "wait for it", never mention AI.
+- hooks: 3 different on-screen hooks in {c.name}'s voice, at most 7 words and {HOOK_MAX} characters each: the line in the \
+caption pill for the first seconds, read with the sound off, so it must land in one glance. Each one is ONE claim the clip proves \
+within its first 3 seconds, TRUE to what happens in this clip (the video pays it off), and opens a gap the viewer needs the clip \
+to close: a deadpan understatement of an absurd moment, a mundane frame on a wild one, a confident claim the clip proves wrong. \
+Use a different angle for each; the strongest first. When the clip has a trend or moment name, one of the three names it. Never \
+explain the joke, never a greeting, never "POV:" or "wait for it", never mention AI.
 - caption: title = a searchable label of at most {TITLE_MAX} characters, "<famous moment or format> · {c.edition or c.noun} edition", carrying \
 a literal search phrase (the moment's name or a search keyword below); joke = one line in {c.name}'s voice (at most {JOKE_MAX} \
 characters); send = a send trigger ("send this to ..."); question = a question to the viewer; tease = a series tease ("next \
 week: ..."). Never mention AI, never explain the joke.
-- first_comment: one line in {c.name}'s voice, at most {FIRST_COMMENT_MAX} characters, that starts a thread.
+- first_comment: a two-option vote for {c.name}'s next clip, in his voice: two concrete options the viewer answers with one \
+word, one line of at most {FIRST_COMMENT_MAX} characters.
 - hashtags: 3-5: the moment, the niche, the format and #oddeyes. Never #fyp, #foryou, #foryoupage, #viral or #explore.
 - notes: anything the editor should know (cuts, crowds, fast camera), at most {NOTES_MAX} characters, "" when nothing.
 - recommended: which of our characters below should replace this clip's star, whoever it was dropped for: slug = one of \
 {", ".join(r.slug for r in crew)}; reason = why him, one concrete line of at most {REASON_MAX} characters naming what in the clip \
 fits him ("gym setting: Reginald's sweatband gag"). Like for like is a hard rule: a dog star goes to a character who replaces a \
 dog, a person to one who replaces a person; among those, the one whose energy, comedy, settings and gadgets fit this clip best.
+- potential: score = a whole number 0-10, how likely this clip, with our character swapped in, gets views: the star moves in \
+the first second and pays off by second 3; a recognisable moment or a trend many people do; a hook that lands in one glance; \
+the clip's own sound is a rising trend sound; not another creator's own character skit (that one scores low whatever else it \
+has). 0 = none of these, 10 = all of them, strongly. reason = the one thing that decides it, one line of at most {REASON_MAX} \
+characters ("a classic everyone knows, moving from frame one").
 
-Our characters (for recommended):
+{views}Our characters (for recommended):
 {chr(10).join(roster_card(r) for r in crew)}
 
 {c.name}'s voice (captions):
@@ -623,6 +659,21 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character, roster: Sequen
         if not HASHTAGS[0] <= len(cleaned) <= HASHTAGS[1]:
             p.append(f"hashtags must be {HASHTAGS[0]}-{HASHTAGS[1]} distinct tags")
     p.extend(recommendation_problems(answer["recommended"], star, crew_of(c, roster)))
+    p.extend(potential_problems(answer["potential"]))
+    return p
+
+
+def potential_problems(potential: Any) -> list[str]:
+    """The rules ``potential`` breaks: an object with a whole ``score`` of 0-``POTENTIAL_MAX`` and a ``reason`` of one line of
+    1-``REASON_MAX`` characters."""
+    if not isinstance(potential, Mapping):
+        return ["potential must be an object"]
+    p: list[str] = []
+    score = potential.get("score")
+    if isinstance(score, bool) or not isinstance(score, int) or not 0 <= score <= POTENTIAL_MAX:
+        p.append(f"potential.score must be a whole number from 0 to {POTENTIAL_MAX}")
+    if not _text(potential.get("reason"), REASON_MAX):
+        p.append(f"potential.reason must be one line of 1-{REASON_MAX} characters")
     return p
 
 
@@ -674,6 +725,7 @@ def tidy_deconstruct(answer: Mapping[str, Any], c: Character) -> dict[str, Any]:
     for key in ("setting", "what_happens", "moment_name", "notes"):
         out[key] = answer[key].strip()
     out["recommended"] = {"slug": answer["recommended"]["slug"], "reason": answer["recommended"]["reason"].strip()}
+    out["potential"] = {"score": answer["potential"]["score"], "reason": answer["potential"]["reason"].strip()}
     for key in SPAN_KEYS:  # in time order, rounded: only what the window search reads
         out[key] = sorted(
             ({"start_s": round(float(x["start_s"]), 2), "end_s": round(float(x["end_s"]), 2)} for x in answer[key]),
@@ -779,5 +831,6 @@ def frame_qa(client: GeminiClient, sheet: Path | str, c: Character, frames: int 
 __all__ = [
     "Character", "DECONSTRUCT_SCHEMA", "DEFAULT_MODEL", "FRAME_QA_SCHEMA", "FrameVerdict", "GeminiBlocked", "GeminiClient",
     "GeminiError", "GeminiUnexpected", "bible_section", "crew_of", "deconstruct", "deconstruct_problems", "deconstruct_schema",
-    "frame_qa", "judge_frames", "parse_answer", "recommendation_problems", "roster_card", "tidy_deconstruct",
+    "frame_qa", "hit_rules", "judge_frames", "parse_answer", "potential_problems", "recommendation_problems", "roster_card",
+    "tidy_deconstruct",
 ]

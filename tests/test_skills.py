@@ -263,8 +263,10 @@ def test_scan_json_has_a_theme_per_rotation_entry_and_fit_rules_that_reference_t
     assert "on hold, then the drop" in [r["theme"] for r in scan["characters"]["lenny"]["rotation"]]
     for slug in ("franz", "reginald", "lenny"):
         assert any("traits card" in rule for rule in scan["characters"][slug]["fit_rules"]), slug
-    # like for like: the dog scans for dog stars, the two humans for human stars
-    assert any("a dog star only" in rule for rule in scan["characters"]["franz"]["fit_rules"])
+    # like for like: the two humans scan for human stars; Franz takes a dog or a person (owner 2026-10-07, his upright body)
+    assert any("a dog or a person as the star" in rule for rule in scan["characters"]["franz"]["fit_rules"])
+    assert not any("a dog star only" in rule for rule in scan["characters"]["franz"]["fit_rules"])
+    assert "posh" not in json.dumps(scan["characters"]["franz"]).lower()  # owner 2026-10-07: the happy show-off, never posh
     assert any("an adult human star" in rule for rule in scan["characters"]["lenny"]["fit_rules"])
     assert "tier" in scan["pick_card_fields"] and "theme" in scan["pick_card_fields"] and "thumbnail_url" in scan["pick_card_fields"]
 
@@ -396,7 +398,7 @@ def test_the_caption_follows_the_owners_formula_with_a_rotating_engagement_line_
         "Publishing adds the AI disclosure line", "never write it", "3-5", "#oddeyes", "never #fyp, #foryou, #foryoupage, #viral or #explore",
         "`humanizer` skill", "must fit 2,200 characters", "**First comment**", "at most 300 characters", "the owner pins it",
         "--first-comment-file renders/<id>/first_comment.txt", "Wednesday dance · butler edition", "Dog dance trend · dachshund edition",
-        "On hold · agent edition", "Requests may be submitted to my staff. In writing.", "Requests go through my assistant. My assistant is busy.",
+        "On hold · agent edition", "Drop your requests for my next move below. I read them all.", "Requests go through my assistant. My assistant is busy.",
     ):  # fmt: skip
         assert part in master, part
     assert "at most 5 hashtags, the caption passed" not in master  # the old one-line rule is gone
@@ -417,6 +419,14 @@ def test_the_launch_phase_makes_only_the_owners_drops_and_turns_the_auto_approve
     assert body.index("## Launch phase") < body.index("## 1. Orient")  # read before anything runs
     scan = body.split("## 2. Scan", 1)[1].split("## 3. Plan", 1)[0]
     assert "5. **Launch phase: skip this step**" in scan
+
+
+def test_the_swap_rule_lets_franz_take_a_dog_or_a_person_and_keeps_the_leftover_person_warning():
+    """Owner 2026-10-07: "franz not only replaces dogs" (his upright body takes a person); the frame QA still checks for a leftover."""
+    genjutsu = text("daily-run").split("## 7. Genjutsu", 1)[1].split("## 8. QA", 1)[0]
+    assert "Reginald and Lenny replace a person; Franz replaces a dog or a person (his upright body)" in genjutsu
+    assert "never a person-only character for a dog" in genjutsu and "Franz a dog star" not in genjutsu
+    assert "inserting the dog and keeping the people" in genjutsu and "no original person is left" in genjutsu
 
 
 def test_the_drops_by_hand_section_uses_the_cli_for_every_step_and_never_makes_without_make_it():

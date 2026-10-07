@@ -146,18 +146,18 @@ export const SCAN_CHARACTERS: Readonly<Record<string, ScanCharacter>> = {
       },
       {
         "embeddingType": "concept",
-        "theme": "posh dog day-in-the-life",
-        "query": "pampered small dog in an outfit living a luxury day-in-the-life, one dog on camera"
+        "theme": "show-off dog steals the show",
+        "query": "small dog in a cool outfit proudly showing off for the camera, strutting and dancing, one dog on camera"
       }
     ],
     "fit_rules": [
-      "one dog as the star; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes",
-      "a dog star only (like for like: Franz replaces a dog, never a person or a dancer on two legs)",
+      "one star, a dog or a person; people in the background are fine (other_people is recorded, not a gate); a second dancing star is still filed with needs multi_body and held until the multi-body test passes",
+      "a dog or a person as the star (like for like: Franz replaces a dog with his four-paw body, or a person with his upright body; owner 2026-10-07)",
       "full body visible",
       "mostly static camera",
       "music-driven (no dialogue needed)",
-      "a real dog's movement on four paws (the dog-anatomy guard): nothing athletic, no jumping",
-      "fits Franz's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): dignified and permanently unimpressed, betrays himself into tiny disco, never barks, never rushes"
+      "nothing athletic, no jumping: a dog star moves like a real dog on four paws (the dog-anatomy guard), a person star's dance suits his short-legged upright body",
+      "fits Franz's traits card (energy, comedy, moves, settings, props: `bin/studio seed status` > traits): the happiest show-off, bouncy and proud, all-in on the drop, never barks"
     ]
   },
   "reginald": {
