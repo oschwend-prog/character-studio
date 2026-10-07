@@ -30,6 +30,12 @@
       "dog"
     ]
   },
+  "style": {
+    "pill": {"fill": "#F4EBDD", "text": "#1F2A44", "font": "PlayfairDisplay-Italic-Variable.ttf", "weight": "Medium", "radius": 34},
+    "entrance": "fade_rise",
+    "hook_edit": "push_in",
+    "tone": "warm"
+  },
   "traits": {
     "energy": "dignified and slow: a stiff gala-trot with his chin up, never rushes, until he is provoked into a frantic little-legged scramble",
     "comedy": "outraged tiny aristocrat: permanently unimpressed and above it all, until the beat drops and he betrays himself into tiny disco",

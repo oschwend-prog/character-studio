@@ -6,10 +6,12 @@ white text, a 3 px dark stroke and a blurred drop shadow; the ODD EYES bug is tw
 character's right eye ice-blue ``#8FD3FF`` on the viewer's left, the left eye amber ``#FFB040``)
 top-right at (972, 268); the sparkle is a four-point star with a soft glow.
 
-Fonts are not committed (system licences). ``font_path()`` is Arial Rounded Bold on macOS and
+System fonts are not committed (their licences). ``font_path()`` is Arial Rounded Bold on macOS and
 otherwise whatever ``fc-match`` resolves ``DejaVu Sans:bold`` to (the CI image installs
 ``fonts-dejavu-core``); ``serif_font_path()`` is the same idea for the title card (Georgia Bold /
-DejaVu Serif Bold).
+DejaVu Serif Bold). The caption pill is the exception: its fonts are OFL files committed in
+``assets/fonts/`` with their licences (Figtree for the default pill; Playfair Display, Cormorant SC,
+Oswald and Anton for the per-character kits), so it looks the same on the Mac and in the cloud.
 
 The two sounds are written with the standard library only: a 0.6 s three-partial chime (the
 sting that ends every master) and a short low thump (the ``impact_sfx`` enhancement). Both are
@@ -18,12 +20,16 @@ sting that ends every master) and a short low thump (the ``impact_sfx`` enhancem
 
 from __future__ import annotations
 
+import dataclasses
 import math
+import re
 import struct
 import subprocess
 import sys
 import wave
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Literal
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
@@ -168,81 +174,300 @@ def hook_png(
 
 # ---- the studio pill (owner 2026-10-06: the signature on-screen caption of every character) ------------------------------
 
-PILL_FONT = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "Figtree-Variable.ttf"  # OFL, committed: same on Mac and CI
-PILL_WEIGHT = b"SemiBold"
+FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "fonts"  # OFL files, committed with their licences: the same on Mac and CI
+PILL_FONT = FONT_DIR / "Figtree-Variable.ttf"  # the default pill's font
 PILL_SIZE = 54
 PILL_MIN_SIZE = 40
 PILL_MAX_TEXT_W = 780  # the text column; the pill adds the dots and the padding around it
 PILL_MAX_LINES = 2
 PILL_Y = 1300  # top of the pill: lower middle, clear of faces and of Instagram's bottom ~350 px of buttons
-PILL_FILL = (14, 17, 22, 215)
-PILL_RADIUS = 34
 PILL_PAD_X = 40
 PILL_PAD_Y = 25
 PILL_TEXT_X = 96  # from the pill's left edge: the dots sit in front of the text
 PILL_DOT_R = 10
 PILL_DOT_GAP = 26  # centre to centre
+PILL_RING_PX = 2  # the ring round each dot on a light pill
 SAFE_TOP, SAFE_BOTTOM = 250, FRAME[1] - 350
 
+PILL_CASES = ("none", "upper", "smallcaps")
 
-def _pill_font(size: int) -> ImageFont.FreeTypeFont:
-    if PILL_FONT.is_file():
-        fnt = ImageFont.truetype(str(PILL_FONT), size)
+
+@dataclass(frozen=True)
+class PillStyle:
+    """How a character's caption pill looks (the kit's ``style.pill`` in ``characters/<slug>/refs.json``).
+
+    ``DEFAULT_PILL`` (all defaults) is the studio's dark pill, drawn exactly as before the kits existed.
+
+    * ``fill`` / ``fill_alpha`` / ``text``: ``#RRGGBB`` colours and the fill's opacity (0-255).
+    * ``font`` is a file in ``assets/fonts/``; ``weight`` the named instance of a variable font (``Medium``, ``Bold``; a static
+      font ignores it).
+    * ``case``: ``none`` as written, ``upper``, or ``smallcaps`` (the text as written, set in a small-caps face such as Cormorant SC).
+    * ``tracking``: extra pixels between letters (at 1x). ``border``: ``(colour, width px)`` rule just inside the edge.
+    * ``tilt_deg``: counter-clockwise when negative (the pill rises to the right), as in a design tool; ``shear``: forward lean
+      (the top moves right by ``shear`` px per px of height). ``block``: ``(colour, dx, dy)``, a solid copy of the pill behind it.
+    The two ODD EYES dots are always drawn; on a light fill (luminance over 50%) each gets a 2 px ring in the text colour.
+    """
+
+    fill: str = "#0E1116"
+    fill_alpha: int = 215
+    text: str = "#FFFFFF"
+    font: str = "Figtree-Variable.ttf"
+    weight: str | None = "SemiBold"
+    radius: int = 34
+    border: tuple[str, int] | None = None
+    case: Literal["none", "upper", "smallcaps"] = "none"
+    tracking: int = 0
+    tilt_deg: float = 0.0
+    shear: float = 0.0
+    block: tuple[str, int, int] | None = None
+
+
+DEFAULT_PILL = PillStyle()
+_HEX = re.compile(r"#[0-9A-Fa-f]{6}")
+
+
+def _rgb(colour: str) -> tuple[int, int, int]:
+    return int(colour[1:3], 16), int(colour[3:5], 16), int(colour[5:7], 16)
+
+
+def _luminance(colour: str) -> float:
+    """Rec. 709 luma of an ``#RRGGBB`` colour, 0 (black) to 1 (white)."""
+    r, g, b = _rgb(colour)
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255
+
+
+def _whole(value: Any, low: int, high: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _number(value: Any, low: float, high: float) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and low <= value <= high
+
+
+def pill_style(style: dict[str, Any] | None) -> PillStyle:
+    """The ``PillStyle`` of a kit's ``style.pill`` object; ``None`` (a character with no kit) is ``DEFAULT_PILL``.
+
+    Strict: an unknown key, a colour that is not ``#RRGGBB``, a number out of range or a font that is not in ``assets/fonts/``
+    raises ``ValueError`` (the seed turns it into an error naming the file).
+    """
+    if style is None:
+        return DEFAULT_PILL
+    if not isinstance(style, dict):
+        raise ValueError(f"pill must be an object, got {style!r:.40}")
+    names = [f.name for f in dataclasses.fields(PillStyle)]
+    unknown = sorted(set(style) - set(names))
+    if unknown:
+        raise ValueError(f"pill has no key {', '.join(unknown)} (the keys are {', '.join(names)})")
+
+    def colour(key: str, value: Any) -> str:
+        if not (isinstance(value, str) and _HEX.fullmatch(value)):
+            raise ValueError(f"pill {key} must be a #RRGGBB colour, got {value!r:.40}")
+        return value
+
+    fields = dict(style)
+    for key in ("fill", "text"):
+        if key in fields:
+            fields[key] = colour(key, fields[key])
+    if "fill_alpha" in fields and not _whole(fields["fill_alpha"], 0, 255):
+        raise ValueError(f"pill fill_alpha must be a whole number from 0 to 255, got {fields['fill_alpha']!r:.40}")
+    if "radius" in fields and not _whole(fields["radius"], 0, 200):
+        raise ValueError(f"pill radius must be a whole number from 0 to 200, got {fields['radius']!r:.40}")
+    if "tracking" in fields and not _whole(fields["tracking"], 0, 20):
+        raise ValueError(f"pill tracking must be a whole number of pixels from 0 to 20, got {fields['tracking']!r:.40}")
+    if "tilt_deg" in fields:
+        if not _number(fields["tilt_deg"], -15, 15):
+            raise ValueError(f"pill tilt_deg must be a number from -15 to 15, got {fields['tilt_deg']!r:.40}")
+        fields["tilt_deg"] = float(fields["tilt_deg"])
+    if "shear" in fields:
+        if not _number(fields["shear"], -0.5, 0.5):
+            raise ValueError(f"pill shear must be a number from -0.5 to 0.5, got {fields['shear']!r:.40}")
+        fields["shear"] = float(fields["shear"])
+    if "case" in fields and fields["case"] not in PILL_CASES:
+        raise ValueError(f"pill case must be one of {', '.join(PILL_CASES)}, got {fields['case']!r:.40}")
+    if "weight" in fields and fields["weight"] is not None and not (isinstance(fields["weight"], str) and fields["weight"].strip()):
+        raise ValueError(f"pill weight must be a named weight such as Medium or null, got {fields['weight']!r:.40}")
+    if "font" in fields:
+        font = fields["font"]
+        if not (isinstance(font, str) and font == Path(font).name and (FONT_DIR / font).is_file()):
+            raise ValueError(f"pill font {font!r:.60} is not a file in assets/fonts/")
+    if fields.get("border") is not None:
+        border = fields["border"]
+        if not (isinstance(border, (list, tuple)) and len(border) == 2 and _whole(border[1], 1, 12)):
+            raise ValueError(f"pill border must be [#RRGGBB, width 1-12], got {border!r:.60}")
+        fields["border"] = (colour("border", border[0]), border[1])
+    if fields.get("block") is not None:
+        block = fields["block"]
+        if not (isinstance(block, (list, tuple)) and len(block) == 3 and _whole(block[1], -40, 40) and _whole(block[2], -40, 40)):
+            raise ValueError(f"pill block must be [#RRGGBB, dx, dy] with the offsets within 40 px, got {block!r:.60}")
+        fields["block"] = (colour("block", block[0]), block[1], block[2])
+    return PillStyle(**fields)
+
+
+def _apply_weight(fnt: ImageFont.FreeTypeFont, weight: str | None) -> bool:
+    """Select a variable font's named instance (``Medium``, or ``Medium Italic`` in an italic file); False when it did not take.
+
+    A static font has no instances: it keeps its own weight, which is not an error.
+    """
+    if not weight:
+        return False
+    for name in (weight, f"{weight} Italic"):
         try:
-            fnt.set_variation_by_name(PILL_WEIGHT)
+            fnt.set_variation_by_name(name)
+            return True
         except (OSError, ValueError):
-            pass  # a static build of the font: its own weight
+            continue
+    return False
+
+
+def _pill_font(size: int, style: PillStyle = DEFAULT_PILL) -> ImageFont.FreeTypeFont:
+    path = FONT_DIR / style.font
+    if path.is_file():
+        fnt = ImageFont.truetype(str(path), size)
+        _apply_weight(fnt, style.weight)
         return fnt
     return ImageFont.truetype(str(font_path()), size)
 
 
-def _wrap(words: list[str], fnt: ImageFont.FreeTypeFont, width: int) -> list[str]:
-    draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+def _text_w(text: str, fnt: ImageFont.FreeTypeFont, tracking: int = 0) -> float:
+    probe = ImageDraw.Draw(Image.new("L", (1, 1)))
+    return probe.textlength(text, font=fnt) + max(len(text) - 1, 0) * tracking
+
+
+def _wrap(words: list[str], fnt: ImageFont.FreeTypeFont, width: int, tracking: int = 0) -> list[str]:
     lines: list[str] = []
     for word in words:
-        if lines and draw.textlength(f"{lines[-1]} {word}", font=fnt) <= width:
+        if lines and _text_w(f"{lines[-1]} {word}", fnt, tracking) <= width:
             lines[-1] = f"{lines[-1]} {word}"
         else:
             lines.append(word)
     return lines
 
 
-def pill_png(lines: list[str], out: str | Path, y: int = PILL_Y) -> Path:
-    """The studio pill: a full-frame transparent PNG with the text in a dark rounded pill, the two ODD EYES dots in front.
+def _cap_mid(fnt: ImageFont.FreeTypeFont) -> float:
+    """Distance from the top of the text box (the ``la`` anchor) to the middle of the capitals."""
+    _, top, _, bottom = fnt.getbbox("H", anchor="la")
+    return (top + bottom) / 2
+
+
+def _lift(style: PillStyle, size_k: int, fnt: ImageFont.FreeTypeFont) -> float:
+    """Pixels (at 3x) to move the text down so each font's capitals sit where Figtree's do in the studio pill.
+
+    Fonts differ in how much room they leave above and below the capitals, so the same box would seat Oswald or Playfair low.
+    Mixed-case text keeps Figtree's seat (a little low: the descenders hang below); all-caps and small-caps text, which have none,
+    are centred on the line. The default pill is untouched (0), pixel for pixel.
+    """
+    if style.font == DEFAULT_PILL.font and style.case == "none":
+        return 0.0
+    seat = size_k / 2  # the middle of the line box, measured from the text box's top
+    drop = _cap_mid(_pill_font(size_k, DEFAULT_PILL)) - seat if style.case == "none" else 0.0
+    return seat + drop - _cap_mid(fnt)
+
+
+def _draw_line(
+    d: ImageDraw.ImageDraw, xy: tuple[float, float], line: str, fnt: ImageFont.FreeTypeFont, fill: tuple[int, ...], tracking: float
+) -> None:
+    """One line of text; with ``tracking`` each letter is placed ``tracking`` px further than the font's own advance."""
+    if not tracking:
+        d.text(xy, line, font=fnt, fill=fill)
+        return
+    x, y = xy
+    for i, ch in enumerate(line):
+        d.text((x + d.textlength(line[:i], font=fnt) + i * tracking, y), ch, font=fnt, fill=fill)
+
+
+def _with_block(pill: Image.Image, style: PillStyle, k: int) -> Image.Image:
+    """``pill`` on a canvas grown by the block's offset, a solid copy of its shape behind it (visible only beyond its edge)."""
+    colour, dx, dy = style.block  # type: ignore[misc]
+    w, h = pill.size
+    gx, gy = abs(dx) * k, abs(dy) * k
+    size = (w + gx, h + gy)
+    pill_at, block_at = (max(-dx, 0) * k, max(-dy, 0) * k), (max(dx, 0) * k, max(dy, 0) * k)
+
+    def shape(at: tuple[int, int]) -> Image.Image:
+        mask = Image.new("L", size, 0)
+        ImageDraw.Draw(mask).rounded_rectangle(
+            (at[0], at[1], at[0] + w - 1, at[1] + h - 1), radius=style.radius * k, fill=255
+        )
+        return mask
+
+    back = Image.new("RGBA", size, (*_rgb(colour), 0))
+    back.putalpha(ImageChops.subtract(shape(block_at), shape(pill_at)))  # knocked out under the pill: its fill stays pure
+    front = Image.new("RGBA", size, (0, 0, 0, 0))
+    front.alpha_composite(pill, pill_at)
+    return Image.alpha_composite(back, front)
+
+
+def _lean_and_tilt(img: Image.Image, shear: float, tilt_deg: float) -> Image.Image:
+    """Shear (the top moves right by ``shear`` px per px of height) then rotate (negative = counter-clockwise), canvas grown to fit.
+
+    Done on premultiplied pixels, so the transparent edge does not darken the soft rim.
+    """
+    img = img.convert("RGBa")
+    if shear:
+        w, h = img.size
+        off = math.ceil(abs(shear) * h / 2)
+        img = img.transform((w + 2 * off, h), Image.AFFINE, (1, shear, -off - shear * h / 2, 0, 1, 0), resample=Image.BICUBIC)
+    if tilt_deg:
+        img = img.rotate(-tilt_deg, resample=Image.BICUBIC, expand=True)  # PIL turns counter-clockwise for a positive angle
+    return img.convert("RGBA")
+
+
+def pill_png(lines: list[str], out: str | Path, y: int = PILL_Y, style: PillStyle = DEFAULT_PILL) -> Path:
+    """The studio pill: a full-frame transparent PNG with the text in a rounded pill, the two ODD EYES dots in front.
 
     The lines are joined and re-wrapped to at most ``PILL_MAX_LINES`` lines of ``PILL_MAX_TEXT_W`` px (the font shrinks to
     ``PILL_MIN_SIZE`` first; past that the block keeps its lines). The pill is centred, its top at ``y``, moved up if it
-    would reach Instagram's bottom buttons. Drawn at 3x and scaled down so the curves and dots are smooth.
+    would reach Instagram's bottom buttons. Drawn at 3x and scaled down so the curves and dots are smooth. ``style`` is the
+    character's kit (``PillStyle``); the default is the studio's dark pill. A tilted or sheared pill (or one with a block) is
+    placed by what it covers: that whole shape stays between ``SAFE_TOP`` and ``SAFE_BOTTOM``.
     Raises ``ValueError`` for no text.
     """
     words = " ".join(_clean(lines)).split()
+    if style.case == "upper":
+        words = [word.upper() for word in words]
     size = PILL_SIZE
     while True:
-        fnt = _pill_font(size)
-        wrapped = _wrap(words, fnt, PILL_MAX_TEXT_W)
+        fnt = _pill_font(size, style)
+        wrapped = _wrap(words, fnt, PILL_MAX_TEXT_W, style.tracking)
         if len(wrapped) <= PILL_MAX_LINES or size <= PILL_MIN_SIZE:
             break
         size -= 2
     pitch = round(size * 1.26)
-    probe = ImageDraw.Draw(Image.new("L", (1, 1)))
-    text_w = max(probe.textlength(line, font=fnt) for line in wrapped)
+    text_w = max(_text_w(line, fnt, style.tracking) for line in wrapped)
     w, h = round(PILL_TEXT_X + text_w + PILL_PAD_X), pitch * len(wrapped) + 2 * PILL_PAD_Y
-    x0 = (FRAME[0] - w) // 2
-    y0 = max(SAFE_TOP, min(y, SAFE_BOTTOM - h))
+    ink = (*_rgb(style.text), 255)
 
     k = 3  # supersample the pill on its own canvas
     pill = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
     d = ImageDraw.Draw(pill)
-    d.rounded_rectangle((0, 0, w * k - 1, h * k - 1), radius=PILL_RADIUS * k, fill=PILL_FILL)
+    shape = (0, 0, w * k - 1, h * k - 1)
+    d.rounded_rectangle(shape, radius=style.radius * k, fill=(*_rgb(style.fill), style.fill_alpha))
+    if style.border:
+        d.rounded_rectangle(shape, radius=style.radius * k, outline=(*_rgb(style.border[0]), 255), width=style.border[1] * k)
     cy = h * k / 2
+    ring = PILL_RING_PX * k if _luminance(style.fill) > 0.5 else 0
     for cx, colour in ((PILL_PAD_X * k, BUG_BLUE), ((PILL_PAD_X + PILL_DOT_GAP) * k, BUG_AMBER)):
         r = PILL_DOT_R * k
+        if ring:  # on a light pill the pale blue and amber would sink into the fill: edge them in the text colour
+            d.ellipse((cx - r - ring, cy - r - ring, cx + r + ring, cy + r + ring), fill=ink)
         d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*colour, 255))
-    big = _pill_font(size * k)
+    big = _pill_font(size * k, style)
+    lift = _lift(style, size * k, big)
     for i, line in enumerate(wrapped):
         top = PILL_PAD_Y * k + i * pitch * k
-        d.text((PILL_TEXT_X * k, top + (pitch - size) * k / 2), line, font=big, fill=(255, 255, 255, 255))
-    pill = pill.resize((w, h), Image.LANCZOS)
+        _draw_line(d, (PILL_TEXT_X * k, top + (pitch - size) * k / 2 + lift), line, big, ink, style.tracking * k)
+
+    if style.block or style.tilt_deg or style.shear:
+        if style.block:
+            pill = _with_block(pill, style, k)
+        pill = _lean_and_tilt(pill, style.shear, style.tilt_deg)
+        pill = pill.resize((math.ceil(pill.width / k), math.ceil(pill.height / k)), Image.LANCZOS)
+        pill = pill.crop(pill.getchannel("A").getbbox())  # place what is actually covered, not the empty canvas round it
+        w, h = pill.size
+    else:
+        pill = pill.resize((w, h), Image.LANCZOS)
+    x0 = (FRAME[0] - w) // 2
+    y0 = max(SAFE_TOP, min(y, SAFE_BOTTOM - h))
 
     layer = Image.new("RGBA", FRAME, (0, 0, 0, 0))
     layer.alpha_composite(pill, (x0, y0))

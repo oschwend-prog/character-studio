@@ -19,6 +19,12 @@
     "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_081941_1afe9ed7-3bfd-463c-9595-2af133c748ba.png"
   },
   "swap": {"noun": "butler", "stars": ["person"]},
+  "style": {
+    "pill": {"fill": "#0E0F12", "text": "#F2F0EA", "border": ["#E8E6E1", 2], "font": "CormorantSC-Medium.ttf", "weight": null, "case": "smallcaps", "tracking": 3, "radius": 6},
+    "entrance": "none",
+    "hook_edit": "pause",
+    "tone": "cool"
+  },
   "traits": {
     "energy": "calm and dignified: a big man with light feet and a straight face that never cracks",
     "comedy": "deadpan under absurdity: he dances every trend perfectly, then resumes service as if nothing happened, and the quiff never moves",

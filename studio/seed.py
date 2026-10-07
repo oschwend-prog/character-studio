@@ -34,6 +34,11 @@
 * ``swap`` (optional) is the like-for-like rule of the Object swap: ``noun`` (what the prompt calls him: "butler", "dog") and
   ``stars`` (the kinds of star he may replace: ``person``, ``dog``, ``animal``). A person replaces a person and a dog a dog
   (or a small animal), never a dog for a person (Genjutsu then inserts the dog and keeps the people).
+* ``style`` (optional, Terminal v2 part C) is the character's kit: the caption ``pill`` (``studio.media.overlays.PillStyle``: colours,
+  font from ``assets/fonts/``, case, tracking, border, tilt, shear, block), how it comes in (``entrance``), the edit on the hook
+  (``hook_edit``) and the colour ``tone``. ``validate_style`` checks it (a bad hex, an unknown name or a missing font refuses the file);
+  ``bin/studio master build`` reads the file, so the seed stores nothing. No kit keeps today's dark pill. The parked DJ's kit is
+  ``characters/dj/style.json`` (no refs.json, so he is not seeded).
 * ``dropin_share`` is the first-insert value of a new account row (owner decision 2026-10-05: ``characters/*/refs.json``
   ships 1.00 for every account, Drop-in is the default for every video); the controller updates live rows.
 * ``studio seed status`` prints every character with its status, traits and accounts (what the daily run reads).
@@ -82,6 +87,7 @@ import typer
 
 from studio.cli_support import emit, fail, open_store
 from studio.favorites import add_pick, decide, parse_video_url, score_pick
+from studio.media.overlays import pill_style
 from studio.models import DEFAULT_DROPIN_SHARE, Account, Body, Character, Platform
 from studio.store import Store
 
@@ -99,6 +105,11 @@ TRAIT_PROPS_MAX = 12
 REFERENCE_URL_MAX = 2048
 SWAP_STARS = ("person", "dog", "animal")  # the kinds of star a drop can name (studio.drop reads the clip's star into one)
 SWAP_NOUN_MAX = 40
+# a character's style kit (Terminal v2, part C): how his caption pill comes in, the edit on the hook, the colour tone
+STYLE_KEYS = ("pill", "entrance", "hook_edit", "tone")
+STYLE_ENTRANCES = ("none", "fade_rise", "slam", "word_pop")
+STYLE_HOOK_EDITS = ("none", "push_in", "pause", "punch_in", "drop_flash")
+STYLE_TONES = ("none", "warm", "cool", "golden", "punchy")
 
 RULE_MIN_TOTAL = 80  # `by` is the rule from this total up (spec 4.4b), the analyst below
 RULE_MIN_FEASIBILITY = 7
@@ -183,6 +194,28 @@ def _validate_traits(traits: Any, path: Path) -> None:
         )
 
 
+def validate_style(style: Any, path: Path) -> dict[str, Any]:
+    """A style kit (``refs.json`` ``style``, or the parked ``characters/<slug>/style.json``), or ``ValueError`` naming ``path``.
+
+    Keys (each optional, an absent one is today's default): ``pill`` (the ``overlays.PillStyle`` fields: colours ``#RRGGBB``,
+    ``font`` a file in ``assets/fonts/``, ...), ``entrance`` (``none`` | ``fade_rise`` | ``slam`` | ``word_pop``), ``hook_edit``
+    (``none`` | ``push_in`` | ``pause`` | ``punch_in`` | ``drop_flash``) and ``tone`` (``none`` | ``warm`` | ``cool`` | ``golden`` |
+    ``punchy``). Returns a copy of the kit as written (a JSON object).
+    """
+    _require(isinstance(style, dict), path, f"style must be an object with {', '.join(STYLE_KEYS)}, got {style!r:.60}")
+    unknown = sorted(set(style) - set(STYLE_KEYS))
+    _require(not unknown, path, f"style has no key {', '.join(unknown)} (the keys are {', '.join(STYLE_KEYS)})")
+    for key, allowed in (("entrance", STYLE_ENTRANCES), ("hook_edit", STYLE_HOOK_EDITS), ("tone", STYLE_TONES)):
+        if key in style:
+            _require(style[key] in allowed, path, f"style.{key} must be one of {', '.join(allowed)}, got {style[key]!r:.40}")
+    if "pill" in style:
+        try:
+            pill_style(style["pill"])
+        except ValueError as e:
+            raise ValueError(f"{path}: style.pill: {e}") from None
+    return dict(style)
+
+
 def _validate_ref(ref: Any, path: Path) -> dict[str, Any]:
     _require(isinstance(ref, dict), path, "must be a JSON object")
     ref = dict(ref)
@@ -244,6 +277,8 @@ def _validate_ref(ref: Any, path: Path) -> dict[str, Any]:
             ok, path,
             f"swap must be {{noun: 1-{SWAP_NOUN_MAX} characters, stars: a list from {', '.join(SWAP_STARS)}}}, got {swap!r:.80}",
         )
+    if "style" in ref:
+        ref["style"] = validate_style(ref["style"], path)
 
     accounts = ref.get("accounts", [])
     _require(isinstance(accounts, list), path, "accounts must be a list")

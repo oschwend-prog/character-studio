@@ -47,6 +47,7 @@ REGINALD = {
 
 
 def write_refs(tmp_path: Path, *refs: dict) -> Path:
+    tmp_path.mkdir(exist_ok=True)
     for r in refs:
         d = tmp_path / r["slug"]
         d.mkdir(exist_ok=True)
@@ -340,6 +341,78 @@ def test_bad_refs_are_refused_before_anything_is_written(tmp_path, over, message
     with pytest.raises(ValueError, match=message):
         seed.seed_characters(store, d)
     assert store.characters() == []  # reginald was fine, but the run is all or nothing
+
+
+FRANZ_KIT = {
+    "pill": {"fill": "#F4EBDD", "text": "#1F2A44", "font": "PlayfairDisplay-Italic-Variable.ttf", "weight": "Medium", "radius": 34},
+    "entrance": "fade_rise",
+    "hook_edit": "push_in",
+    "tone": "warm",
+}
+
+
+def test_a_valid_style_block_loads_untouched(tmp_path):
+    (loaded,) = seed.load_refs(write_refs(tmp_path, refs(REGINALD, style=FRANZ_KIT)))
+    assert loaded["style"] == FRANZ_KIT
+    (plain,) = seed.load_refs(write_refs(tmp_path / "plain", REGINALD))
+    assert "style" not in plain, "a character without a kit has none"
+
+
+@pytest.mark.parametrize(
+    ("style", "message"),
+    [
+        ({**FRANZ_KIT, "pill": {**FRANZ_KIT["pill"], "fill": "cream"}}, r"style\.pill.*fill"),  # a bad hex
+        ({**FRANZ_KIT, "pill": {**FRANZ_KIT["pill"], "text": "#1F2A4"}}, r"style\.pill.*text"),
+        ({**FRANZ_KIT, "entrance": "spin"}, "entrance"),  # an unknown entrance
+        ({**FRANZ_KIT, "hook_edit": "wobble"}, "hook_edit"),
+        ({**FRANZ_KIT, "tone": "neon"}, "tone"),
+        ({**FRANZ_KIT, "pill": {**FRANZ_KIT["pill"], "font": "Nope-Regular.ttf"}}, r"font.*assets/fonts"),  # a font that is not committed
+        ({**FRANZ_KIT, "pill": {**FRANZ_KIT["pill"], "font": "../../README.md"}}, "font"),
+        ({**FRANZ_KIT, "pill": {**FRANZ_KIT["pill"], "case": "title"}}, "case"),
+        ({**FRANZ_KIT, "pill": {**FRANZ_KIT["pill"], "colour": "#FFFFFF"}}, "colour"),  # a key that is not in the kit
+        ({**FRANZ_KIT, "voice": "posh"}, "voice"),
+        ({"pill": "dark"}, r"style\.pill"),
+        ("dark", "style"),
+        ([], "style"),
+    ],
+)
+def test_style_block_is_validated(tmp_path, style, message):
+    store = MemoryStore()
+    d = write_refs(tmp_path, refs(REGINALD, style=style))
+    with pytest.raises(ValueError, match=message):
+        seed.seed_characters(store, d)
+    assert store.characters() == []
+
+
+def test_a_kit_may_name_only_some_of_its_parts():
+    ok = seed.validate_style({"entrance": "slam"}, Path("x/refs.json"))
+    assert ok == {"entrance": "slam"}  # the pill, hook edit and tone stay at today's defaults
+    assert seed.validate_style({}, Path("x/refs.json")) == {}
+
+
+def test_the_roster_kits_load():
+    """Franz, Reginald and Lenny carry their kit in refs.json, the DJ's (parked, no refs.json) sits in characters/dj/style.json."""
+    loaded = {r["slug"]: r for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
+    assert "dj" not in loaded, "no refs.json: the seed ignores the DJ's folder"
+    assert "style" not in loaded["biscuit"], "retired Biscuit keeps today's pill"
+    f, r, ln = (loaded[s]["style"] for s in ("franz", "reginald", "lenny"))
+    assert f == FRANZ_KIT  # cream card, navy italic serif, round corners; fades and rises; slow push-in; warm
+    assert r == {
+        "pill": {"fill": "#0E0F12", "text": "#F2F0EA", "border": ["#E8E6E1", 2], "font": "CormorantSC-Medium.ttf", "weight": None,
+                 "case": "smallcaps", "tracking": 3, "radius": 6},
+        "entrance": "none", "hook_edit": "pause", "tone": "cool",
+    }
+    assert ln == {
+        "pill": {"fill": "#E8B931", "text": "#141414", "font": "Oswald-Variable.ttf", "weight": "Bold", "case": "upper", "radius": 16},
+        "entrance": "slam", "hook_edit": "punch_in", "tone": "golden",
+    }
+    dj_path = seed.DEFAULT_CHARACTERS_DIR / "dj" / "style.json"
+    dj = seed.validate_style(json.loads(dj_path.read_text()), dj_path)
+    assert dj == {
+        "pill": {"fill": "#E6FF00", "text": "#111111", "font": "Anton-Regular.ttf", "weight": None, "case": "upper", "shear": 0.2,
+                 "tilt_deg": -4, "block": ["#FF7A00", 10, 10], "radius": 12},
+        "entrance": "word_pop", "hook_edit": "drop_flash", "tone": "punchy",
+    }
 
 
 def test_refs_that_are_not_json_are_refused(tmp_path):

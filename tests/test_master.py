@@ -14,7 +14,7 @@ import wave
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageChops, ImageStat
+from PIL import Image, ImageChops, ImageFont, ImageStat
 from typer.testing import CliRunner
 
 from studio.cli import app
@@ -157,6 +157,223 @@ def test_the_text_pop_and_the_title_band_never_reach_the_studio_pill(tmp_path):
     pop = Image.open(overlays.hook_png(["WOW"], tmp_path / "pop.png", y=master.TEXT_POP_Y, size=master.TEXT_POP_SIZE))
     title = Image.open(overlays.title_png("TEA TIME", tmp_path / "t.png", y=master.TITLE_CARD_Y))
     assert pop.getchannel("A").getbbox()[3] < pill_top and title.getchannel("A").getbbox()[3] < pill_top
+
+
+# ---- the style kits (C1): a caption pill per character ----------------------------------------
+
+ROOT = Path(__file__).resolve().parents[1]
+ROSTER = ("franz", "reginald", "lenny", "dj")
+FRANZ_NAVY = (0x1F, 0x2A, 0x44)
+
+
+def kit(slug: str) -> dict:
+    """The character's style kit as the master will read it: refs.json ``style``, else ``style.json`` (the parked DJ)."""
+    folder = ROOT / "characters" / slug
+    if (folder / "refs.json").is_file():
+        return json.loads((folder / "refs.json").read_text())["style"]
+    return json.loads((folder / "style.json").read_text())
+
+
+def pill_for(slug: str, lines: list[str], out: Path, y: int = overlays.PILL_Y) -> Image.Image:
+    style = overlays.pill_style(kit(slug)["pill"])
+    return Image.open(overlays.pill_png(lines, out, y=y, style=style))
+
+
+def near(a, b, tol: int = 3) -> bool:
+    return all(abs(x - y) <= tol for x, y in zip(a[:3], b[:3], strict=True))
+
+
+def has_opaque(img: Image.Image, rgb, tol: int = 3, alpha: int = 255) -> bool:
+    """Is there a pixel of this colour (within ``tol`` per channel) at this alpha? (The pill's fill is 215, its text 255.)"""
+    return any(c[3] == alpha and near(c, rgb, tol) for _, c in img.getcolors(maxcolors=1 << 24))
+
+
+def legacy_pill_png(lines: list[str], out: Path, y: int = 1300) -> Path:
+    """The dark pill exactly as ``pill_png`` drew it before the style kits (a port of that body): the pixel reference for
+    ``DEFAULT_PILL``. Self-contained on purpose, so a later change to the new code cannot move the reference."""
+    from PIL import ImageDraw
+
+    def font(size: int):
+        fnt = ImageFont.truetype(str(overlays.PILL_FONT), size)
+        fnt.set_variation_by_name(b"SemiBold")
+        return fnt
+
+    def wrap(words, fnt, width):
+        draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+        out_lines: list[str] = []
+        for word in words:
+            if out_lines and draw.textlength(f"{out_lines[-1]} {word}", font=fnt) <= width:
+                out_lines[-1] = f"{out_lines[-1]} {word}"
+            else:
+                out_lines.append(word)
+        return out_lines
+
+    words = " ".join(line for line in lines if line.strip()).split()
+    size = 54
+    while True:
+        fnt = font(size)
+        wrapped = wrap(words, fnt, 780)
+        if len(wrapped) <= 2 or size <= 40:
+            break
+        size -= 2
+    pitch = round(size * 1.26)
+    probe_draw = ImageDraw.Draw(Image.new("L", (1, 1)))
+    text_w = max(probe_draw.textlength(line, font=fnt) for line in wrapped)
+    w, h = round(96 + text_w + 40), pitch * len(wrapped) + 2 * 25
+    x0 = (1080 - w) // 2
+    y0 = max(250, min(y, 1570 - h))
+    k = 3
+    pill = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
+    d = ImageDraw.Draw(pill)
+    d.rounded_rectangle((0, 0, w * k - 1, h * k - 1), radius=34 * k, fill=(14, 17, 22, 215))
+    cy = h * k / 2
+    for cx, colour in ((40 * k, (0x8F, 0xD3, 0xFF)), (66 * k, (0xFF, 0xB0, 0x40))):
+        r = 10 * k
+        d.ellipse((cx - r, cy - r, cx + r, cy + r), fill=(*colour, 255))
+    big = font(size * k)
+    for i, line in enumerate(wrapped):
+        top = 25 * k + i * pitch * k
+        d.text((96 * k, top + (pitch - size) * k / 2), line, font=big, fill=(255, 255, 255, 255))
+    pill = pill.resize((w, h), Image.LANCZOS)
+    layer = Image.new("RGBA", (1080, 1920), (0, 0, 0, 0))
+    layer.alpha_composite(pill, (x0, y0))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    layer.save(out)
+    return out
+
+
+@pytest.mark.parametrize(
+    ("lines", "y"),
+    [
+        (["Kindly do not inform the Duchess."], 1300),  # one line
+        (["Breakfast will be served at eight. As usual. Naturally."], 1300),  # wraps to two lines
+        (["one", "two"], 1900),  # a low pill moves up out of the buttons
+        (["hi"], 0),  # and one too high moves down
+    ],
+)
+def test_default_pill_is_unchanged(tmp_path, lines, y):
+    """A character without a style kit keeps today's pill, pixel for pixel."""
+    legacy = Image.open(legacy_pill_png(lines, tmp_path / "legacy.png", y=y))
+    plain = Image.open(overlays.pill_png(lines, tmp_path / "plain.png", y=y))
+    styled = Image.open(overlays.pill_png(lines, tmp_path / "styled.png", y=y, style=overlays.DEFAULT_PILL))
+    assert ImageChops.difference(plain, legacy).getbbox() is None, "no style: not one pixel moved"
+    assert ImageChops.difference(styled, legacy).getbbox() is None, "DEFAULT_PILL is the same pill"
+    assert overlays.pill_style(None) is overlays.DEFAULT_PILL and overlays.pill_style({}) == overlays.DEFAULT_PILL
+
+
+def test_styled_pill_uses_the_kit_colours(tmp_path):
+    img = pill_for("franz", ["Kindly do not inform the Duchess."], tmp_path / "franz.png")
+    left, top, right, bottom = img.getchannel("A").getbbox()
+    cy = (top + bottom) // 2
+    px = img.getpixel((right - 14, cy))  # the padding after the text: the fill
+    assert near(px, (0xF4, 0xEB, 0xDD), 2) and px[3] == overlays.pill_style(kit("franz")["pill"]).fill_alpha
+    assert has_opaque(img, FRANZ_NAVY, 2), "the italic serif text is navy #1F2A44"
+    reginald = pill_for("reginald", ["Kindly do not inform the Duchess."], tmp_path / "reg.png")
+    assert has_opaque(reginald, (0xF2, 0xF0, 0xEA), 2), "the off-white small caps"
+    assert has_opaque(reginald, (0xE8, 0xE6, 0xE1), 6), "and the thin rule #E8E6E1 round the card (a little soft at 3x -> 1x)"
+    lenny = pill_for("lenny", ["Kindly do not inform the Duchess."], tmp_path / "lenny.png")
+    _, ltop, lright, lbottom = lenny.getchannel("A").getbbox()
+    assert has_opaque(lenny, (0x14, 0x14, 0x14), 2) and near(lenny.getpixel((lright - 14, (ltop + lbottom) // 2)), (0xE8, 0xB9, 0x31), 2)
+
+
+@pytest.mark.parametrize("slug", ROSTER)
+def test_dots_survive_every_kit(tmp_path, slug):
+    img = pill_for(slug, ["Breakfast will be served at eight. As usual. Naturally."], tmp_path / f"{slug}.png")
+    assert has_opaque(img, overlays.BUG_BLUE, 4), f"{slug}: the right-eye blue dot #8FD3FF"
+    assert has_opaque(img, overlays.BUG_AMBER, 4), f"{slug}: the left-eye amber dot #FFB040"
+
+
+def test_a_light_pill_rings_its_dots(tmp_path):
+    light = overlays.PillStyle(fill="#F4EBDD", text="#1F2A44")
+    dark = overlays.DEFAULT_PILL
+    for style in (light, dark):
+        img = Image.open(overlays.pill_png(["Kindly do not inform the Duchess."], tmp_path / "p.png", style=style))
+        left, top, right, bottom = img.getchannel("A").getbbox()
+        cx, cy = left + overlays.PILL_PAD_X, (top + bottom) // 2
+        ring = img.getpixel((cx - overlays.PILL_DOT_R - 1, cy))
+        assert img.getpixel((cx, cy))[:3] == overlays.BUG_BLUE, "the dot itself keeps its exact colour"
+        if style is light:
+            assert near(ring, FRANZ_NAVY, 12) and ring[3] == 255, "a 2 px ring in the text colour (soft at its 1x edges)"
+            assert near(img.getpixel((cx - overlays.PILL_DOT_R - 4, cy)), (0xF4, 0xEB, 0xDD), 8), "and no wider than that"
+        else:
+            assert max(ring[:3]) < 60, "a dark pill needs no ring: the pixel beside the dot is still the dark fill"
+
+
+@pytest.mark.parametrize("y", [0, 1300, 1900])
+@pytest.mark.parametrize("hook", [["DROP"], ["Breakfast will be served at eight. As usual. Naturally."]])
+def test_tilted_pill_stays_in_the_band(tmp_path, y, hook):
+    img = pill_for("dj", hook, tmp_path / "dj.png", y=y)
+    left, top, right, bottom = img.getchannel("A").getbbox()
+    assert overlays.SAFE_TOP <= top and bottom <= overlays.SAFE_BOTTOM, "tilt, shear and block stay in the band"
+    assert 0 < left and right < overlays.FRAME[0]
+    assert abs((left + right) / 2 - overlays.FRAME[0] / 2) <= 3, "still centred"
+
+
+def test_the_tilt_and_the_block_are_really_drawn(tmp_path):
+    flat = Image.open(overlays.pill_png(["DROP THE BEAT"], tmp_path / "flat.png", style=overlays.PillStyle(font="Anton-Regular.ttf", case="upper")))
+    dj = pill_for("dj", ["DROP THE BEAT"], tmp_path / "dj.png")
+    fb, db = flat.getchannel("A").getbbox(), dj.getchannel("A").getbbox()
+    assert db[3] - db[1] > (fb[3] - fb[1]) + 30, "the tilt and the shear make the pill taller than the flat one"
+    alpha = dj.getchannel("A")
+    quarter = (db[2] - db[0]) // 4
+    left_top = alpha.crop((db[0], db[1], db[0] + quarter, db[3])).getbbox()[1] + db[1]
+    right_top = alpha.crop((db[2] - quarter, db[1], db[2], db[3])).getbbox()[1] + db[1]
+    assert right_top < left_top - 10, "tilt_deg -4: counter-clockwise, the pill rises to the right"
+    assert has_opaque(dj, (0xFF, 0x7A, 0x00), 3), "the orange block #FF7A00 behind the pill"
+    assert has_opaque(dj, (0xE6, 0xFF, 0x00), 3, alpha=215), "and the neon yellow fill #E6FF00 in front, not tinted by the block"
+
+
+def test_case_tracking_and_weight_follow_the_style(tmp_path):
+    upper = overlays.PillStyle(case="upper")
+    a = Image.open(overlays.pill_png(["go go"], tmp_path / "a.png", style=upper))
+    b = Image.open(overlays.pill_png(["GO GO"], tmp_path / "b.png", style=upper))
+    assert ImageChops.difference(a, b).getbbox() is None, "upper: the same as typing capitals"
+    assert a.getchannel("A").getbbox() == Image.open(overlays.pill_png(["GO GO"], tmp_path / "c.png")).getchannel("A").getbbox(), "same pill"
+
+    def width(im: Image.Image) -> int:
+        left, _, right, _ = im.getchannel("A").getbbox()
+        return right - left
+
+    plain = Image.open(overlays.pill_png(["ODD EYES"], tmp_path / "p.png"))
+    spaced = Image.open(overlays.pill_png(["ODD EYES"], tmp_path / "s.png", style=overlays.PillStyle(tracking=3)))
+    assert 19 <= width(spaced) - width(plain) <= 24, "tracking 3 adds 3 px between each of the 8 letters (7 gaps)"
+    for slug in ("franz", "lenny"):  # the variable fonts really take their weight (no silent fallback to the default)
+        style = overlays.pill_style(kit(slug)["pill"])
+        raw = ImageFont.truetype(str(overlays.FONT_DIR / style.font), 40)
+        assert overlays._apply_weight(raw, style.weight), slug
+    medium = overlays.pill_style(kit("franz")["pill"])
+    assert width(Image.open(overlays.pill_png(["Kindly do not inform"], tmp_path / "m.png", style=medium))) != width(
+        Image.open(overlays.pill_png(["Kindly do not inform"], tmp_path / "r.png", style=dataclasses.replace(medium, weight=None)))
+    ), "Medium Italic is wider than the font's default weight"
+    ghost = overlays.PillStyle(font="Nope-Regular.ttf")
+    assert overlays.pill_png(["a font that is gone falls back"], tmp_path / "g.png", style=ghost).is_file()
+
+
+def test_pill_style_reads_the_refs_block_and_refuses_the_rest():
+    s = overlays.pill_style({"fill": "#F4EBDD", "border": ["#E8E6E1", 2], "block": ["#FF7A00", 10, 10], "case": "smallcaps", "tilt_deg": -4, "shear": 0.2})
+    assert s.border == ("#E8E6E1", 2) and s.block == ("#FF7A00", 10, 10) and s.case == "smallcaps"
+    assert (s.tilt_deg, s.shear, s.font, s.weight) == (-4.0, 0.2, "Figtree-Variable.ttf", "SemiBold")
+    bad = [
+        {"fill": "red"}, {"fill": "#FFF"}, {"text": "#12345G"}, {"colour": "#FFFFFF"}, {"case": "title"}, {"font": "Nope.ttf"},
+        {"font": "../x.ttf"}, {"radius": -1}, {"fill_alpha": 300}, {"border": ["#E8E6E1"]}, {"border": ["#E8E6E1", 0]},
+        {"block": ["#FF7A00", 10]}, {"block": ["orange", 1, 1]}, {"tilt_deg": 45}, {"shear": 2}, {"tracking": True}, {"weight": 600},
+    ]
+    for style in bad:
+        with pytest.raises(ValueError):
+            overlays.pill_style(style)
+    with pytest.raises(ValueError):
+        overlays.pill_style("dark")  # type: ignore[arg-type]
+
+
+def test_every_shipped_font_has_its_ofl_licence_and_the_kits_fit_in_a_few_megabytes():
+    fonts = sorted((ROOT / "assets" / "fonts").glob("*.ttf"))
+    assert {f.name for f in fonts} >= {
+        "Figtree-Variable.ttf", "PlayfairDisplay-Italic-Variable.ttf", "CormorantSC-Medium.ttf", "Oswald-Variable.ttf", "Anton-Regular.ttf"
+    }
+    for f in fonts:
+        licence = f.with_name(f"{f.stem.split('-')[0]}-OFL.txt")
+        assert licence.is_file() and "SIL Open Font License" in licence.read_text(), f.name
+    assert sum(f.stat().st_size for f in fonts) < 3_000_000
 
 
 def test_hook_png_rejects_empty_text(tmp_path):

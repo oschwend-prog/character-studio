@@ -1,0 +1,6 @@
+{
+  "pill": {"fill": "#E6FF00", "text": "#111111", "font": "Anton-Regular.ttf", "weight": null, "case": "upper", "shear": 0.2, "tilt_deg": -4, "block": ["#FF7A00", 10, 10], "radius": 12},
+  "entrance": "word_pop",
+  "hook_edit": "drop_flash",
+  "tone": "punchy"
+}
