@@ -47,3 +47,6 @@ Three look tests on gpt_image_2_5 (high, 2K, about 2.75 credits each, about 8 in
   sniffing or jaw clench, no drug jokes in captions): 1 bed-head mop `2b65da9f-402c-4643-adee-4738730c6ac3`, 2 frosted
   mullet + rat-tail `77b43857-6c07-4b15-b5fa-cc04b89acf42`, 3 cockatoo crest with ice-blue/amber sides
   `27e1ef0a-15b9-46bc-a70b-59077af3d50f`. 8.25 credits; 44 in total for the DJ.
+- Sixth round (owner: most DJs wear something on their head: beanie, cap, headband): 1 giant slouchy beanie
+  `b023ea80-8be1-4bee-ad8a-2e061d754311`, 2 backwards trucker cap + crest `165be352-8eaf-4ff2-b547-7ba02f11dcc4`, 3 neon
+  headband + palm-tree mop `9c0f9769-1307-43e5-bd59-d293559c5171`. 8.25 credits; 52.25 in total for the DJ.
