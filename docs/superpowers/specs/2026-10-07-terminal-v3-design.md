@@ -167,3 +167,23 @@ free. A clip that has versions shows them ("Also: Lenny, ready"). The **All clip
 - **Retention (owner 2026-10-07):** finished masters and all data rows are kept; the original clip behind a posted video goes
   once every family member is made (today's purge); a hit filed but never made is deleted after 30 days, the owner's own
   upload after 60 days, unless marked Keep (a toggle on the clip card); the owner's Mac folder is never touched.
+
+## 11. The reach pack (owner 2026-10-08: "make sure we use all tools to max views like hashtags etc")
+Every approved Reel goes out with every free lever Postiz offers (checked on 2026-10-08: `posts:create` takes several `-c`
+values, the first is the post and the next are comments; Instagram settings `post_type` post|story, `is_trial_reel`,
+`graduation_strategy`, `collaborators`, `audio`):
+1. **First comment posted with the Reel** (the second `-c`): the clip's `first_comment` (the two-option vote). The owner pins it.
+2. **Every Reel also as a Story** (owner 2026-10-07: "do stories ... when uploading"): a second Postiz post with
+   `post_type: story` and the same master, right after the Reel is published; same AI disclosure. It does not count toward the
+   2-posts-a-day cap (not a feed post). A failed Story never fails the Reel.
+3. **Hashtags (3-5):** the trend's exact tag, the niche, the format, `#oddeyes` and the character's own series tag
+   (`characters/<slug>/refs.json` `style.series_tag`: Franz `#sausagecomingthrough`, Reginald `#asyouwere`, Lenny
+   `#yourewelcome`); never #fyp/#foryou/#viral/#explore.
+4. **Collab posts:** a clip may name our other characters' accounts as `collaborators` (a crossover, or the "who did it best"
+   family post): the Reel shows on both profiles. Off unless the clip's features carry `collab`.
+5. **Trial Reels (switch, off by default):** `is_trial_reel` + `graduation_strategy: SS_PERFORMANCE` shows a Reel to
+   non-followers first and shares it with followers if it performs. Per account in `config/scan.json` `reach.trial_reels`;
+   proposed to the owner for new accounts with few followers, not switched on by the build.
+6. **Still open (not Postiz):** Instagram's per-post AI flag (`is_ai_generated`) and a chosen cover frame need the Instagram
+   API directly (follow-up). The caption's AI line and the profile's AI label stay on every post.
+
