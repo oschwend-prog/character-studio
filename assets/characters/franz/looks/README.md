@@ -10,3 +10,11 @@ Owner's pick: (open)
 Option 2's pose + Biscuit's face (refs: `800a4c4c` + Biscuit's biped master `e07675a2`), 2.75 credits each:
 - `biscuit-face-1-unimpressed.jpg` posh, mouth closed — job `be2c77b1-e464-4626-a88c-8d5ea3c15cbf`
 - `biscuit-face-2-smiling.jpg` friendly, tongue out — job `4d3f3051-6e38-4f08-a88d-f71921fd17c3`
+
+## Owner 2026-10-07: option B, the tall Franz (human height, the sausage build), cap + casual-luxury streetwear
+gpt_image_2_5 high 2K 9:16, reference = the smiling master `4d3f3051` (crown removed in the prompt); 2.75 credits each.
+- `tall-b1.jpg` hand on hip, wave — job `b0d13ebc-5a4c-491d-b330-6e5d72a53123`
+- `tall-b2.jpg` mid-strut, wave (shorter-reading legs) — job `ea5dc4a3-f827-4b30-aad7-1831dcc11495`
+Both: odd eyes right (ice-blue on the viewer's left), plain cream cap, cream hoodie, sage overshirt, charcoal joggers, white
+sneakers, no logos. Height does not read on a plain background: the test swap into a human clip shows it.
+Owner's pick: (open)
