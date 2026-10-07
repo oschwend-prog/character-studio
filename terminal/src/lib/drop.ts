@@ -302,6 +302,9 @@ export interface CharacterMenu {
   recommendation: { slug: string; name: string; reason: string } | null;
   /** Who chose the character shown: the owner (never overridden) or the studio (Recommend). */
   by: 'owner' | 'studio';
+  /** The owner recorded this character (character_by 'owner'). Absent does NOT count, as for the Pick a character chip
+   * (clipChip): a drop from before migration 0013 still waits for his tap, which `by` (the wording of the line) does not say. */
+  confirmed: boolean;
 }
 
 /** The row's character menu: the live roster (★ on the recommended one), the row's character, who chose it. */
@@ -328,7 +331,20 @@ export function characterMenu(
     locked,
     recommendation: rec ? { slug: rec.slug, name: named(rec.slug), reason: rec.reason } : null,
     by,
+    confirmed: d?.character_by === 'owner',
   };
+}
+
+/**
+ * What choosing `slug` in a row's menu does: nothing (the "Recommend" placeholder, or the character he already recorded); change
+ * the character and check again in his voice ('change'); or record the shown character as his own choice ('confirm':
+ * set_drop_character with the same one only records it, migration 0013, and clears the Pick a character chip). A native menu
+ * never fires for the value it shows, so the confirmation is also a button (clipstatus.characterConfirm) calling the same thing.
+ */
+export function characterChoice(menu: Pick<CharacterMenu, 'confirmed'>, current: string | null, slug: string): 'none' | 'confirm' | 'change' {
+  if (slug === RECOMMEND) return 'none';
+  if (slug !== current) return 'change';
+  return menu.confirmed ? 'none' : 'confirm';
 }
 
 /**

@@ -1,7 +1,8 @@
 // Terminal v2, Clips page (owner 2026-10-07): one plain chip per dropped clip instead of the 8-step stepper, and the filters over
 // them. Pure functions over v_tracker rows (drop_card, migrations 0012-0013); no browser.
-import { dropActions, dropCredits, type DropAction } from './drop';
+import { canChooseCharacter, dropActions, dropCredits, type DropAction } from './drop';
 import { FINISHED_STATES } from './finished';
+import type { RosterEntry } from './roster';
 import { IN_PRODUCTION_STATES } from './rules';
 import type { DropState, TrackerRow } from './types';
 
@@ -50,6 +51,18 @@ export function clipChip(row: TrackerRow): ClipChip {
     default:
       return 'checking'; // checking, waiting, or a row with no card
   }
+}
+
+/**
+ * The free one-tap confirmation of a Pick a character clip: "Use <him>" records the character the row shows as the owner's own
+ * (set_drop_character with the same one), which turns the chip to Ready without a new check or a credit. Offered exactly when the
+ * chip is Pick a character, the character can still be chosen and is still on offer (a paused one is refused: the menu does the
+ * choosing then); null otherwise. The native menu cannot do it: it shows this character already, so choosing it fires nothing.
+ */
+export function characterConfirm(row: TrackerRow, roster: ReadonlyArray<RosterEntry>): { slug: string; name: string } | null {
+  if (clipChip(row) !== 'pick' || !canChooseCharacter(row)) return null;
+  const live = roster.find((c) => c.slug === row.character_slug);
+  return live ? { slug: live.slug, name: live.name } : null;
 }
 
 export type ClipFilter = 'all' | 'pick' | 'ready' | 'making' | 'done' | 'problems';

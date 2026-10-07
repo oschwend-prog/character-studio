@@ -7,9 +7,9 @@
 // moments with text on screen, own footage. Nothing is paid before Make it. The Clips page passes the rows its filter keeps.
 import { AlertTriangle, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
-import { CHIP_CLASS, CHIP_LABEL, clipActions, clipChip, makeTotal } from '../lib/clipstatus';
+import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipActions, clipChip, makeTotal } from '../lib/clipstatus';
 import {
-  PART_LABEL, RECOMMEND, avoidLabel, characterMenu, dropCredits, dropLine, dropTitle, effectiveDrop,
+  PART_LABEL, RECOMMEND, avoidLabel, characterChoice, characterMenu, dropCredits, dropLine, dropTitle, effectiveDrop,
   isDropCard, recommendationLine, retryAdjust, sectionLabel, type CharacterMenu,
 } from '../lib/drop';
 import { formatCredits } from '../lib/format';
@@ -144,7 +144,7 @@ function DropRow({
   const recheck = () => run(key, () => backend.requestJob(row.pick_id, 'process'), 'Checking it again');
   const remove = () => run(key, () => backend.decidePick(row.pick_id, 'skip', 'removed by the owner from Clips', null), 'Removed');
   const choose = (slug: string) => {
-    if (slug === RECOMMEND || (slug === row.character_slug && menu.by === 'owner')) return;
+    if (characterChoice(menu, row.character_slug, slug) === 'none') return;
     const name = roster.find((c) => c.slug === slug)?.name ?? slug;
     void run(
       charKey, () => backend.setDropCharacter(row.pick_id, slug),
@@ -176,7 +176,7 @@ function DropRow({
         </div>
       </th>
       <td className="dt-char">
-        <CharacterCell row={row} menu={menu} working={working || changing} onChoose={choose} />
+        <CharacterCell row={row} menu={menu} confirm={characterConfirm(row, roster)} working={working || changing} onChoose={choose} />
       </td>
       <td className="dt-price">
         {priced ? (
@@ -241,8 +241,8 @@ function DropRow({
 }
 
 function CharacterCell({
-  row, menu, working, onChoose,
-}: { row: TrackerRow; menu: CharacterMenu; working: boolean; onChoose(slug: string): void }) {
+  row, menu, confirm, working, onChoose,
+}: { row: TrackerRow; menu: CharacterMenu; confirm: { slug: string; name: string } | null; working: boolean; onChoose(slug: string): void }) {
   const line = recommendationLine(menu, row.character_slug);
   const id = `dt-char-${row.pick_id}`;
   return (
@@ -259,6 +259,11 @@ function CharacterCell({
           </option>
         ))}
       </select>
+      {confirm && (
+        <button type="button" className="btn line" disabled={working} onClick={() => onChoose(confirm.slug)}>
+          Use {confirm.name}
+        </button>
+      )}
       {line && (
         <span className="hint" id={`${id}-why`}>
           {line}

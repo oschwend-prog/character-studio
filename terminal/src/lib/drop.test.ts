@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ADJUST_KEYS, DROP_STATE_LABEL, RECOMMEND, STALE_UPLOAD_MINUTES, adjustChanges, avoidHit, avoidLabel, canChooseCharacter, characterMenu,
+  ADJUST_KEYS, DROP_STATE_LABEL, RECOMMEND, STALE_UPLOAD_MINUTES, adjustChanges, avoidHit, avoidLabel, canChooseCharacter, characterChoice, characterMenu,
   dropActions, dropCredits, dropLine, dropLink, dropRows, dropTitle, effectiveDrop, isDropCard, isLandscape, maxSectionSeconds, readyTotal,
   recommendationLine, retryAdjust, sectionLabel, validateAdjust,
 } from './drop';
@@ -433,5 +433,29 @@ describe('a pause character’s section, and Try again after a failed Make it (f
     const card = rows.find((r) => r.pick_id === ids.reginald)!.drop_card!;
     await expect(demo.requestJob(ids.reginald, 'make', { start_s: 0, length_s: 15.8 })).rejects.toThrow(/6-15\.6 s/);
     expect(card.state).toBe('ready'); // refused before anything is spent
+  });
+});
+
+describe('the character menu knows what is only a confirmation (final review)', () => {
+  const ROSTER = [{ slug: 'franz', name: 'Franz' }, { slug: 'reginald', name: 'Reginald' }, { slug: 'lenny', name: 'Lenny Gold' }];
+
+  it('counts a character as confirmed only when the owner recorded it: absent is not, like the Pick a character chip', () => {
+    expect(characterMenu(row({ ...READY, character_by: 'owner' }), ROSTER).confirmed).toBe(true);
+    expect(characterMenu(row({ ...READY, character_by: 'studio' }), ROSTER).confirmed).toBe(false);
+    expect(characterMenu(row(READY), ROSTER).confirmed).toBe(false); // a drop from before migration 0013
+    expect(characterMenu(row(READY), ROSTER).by).toBe('owner'); // the wording of the line under the menu does not change
+  });
+
+  it('chooses: the placeholder does nothing, another character changes it, the same one confirms it unless he already did', () => {
+    const owner = characterMenu(row({ ...READY, character_by: 'owner' }), ROSTER);
+    const studio = characterMenu(row({ ...READY, character_by: 'studio' }), ROSTER);
+    const legacy = characterMenu(row(READY), ROSTER);
+    for (const menu of [owner, studio, legacy]) {
+      expect(characterChoice(menu, 'reginald', RECOMMEND)).toBe('none');
+      expect(characterChoice(menu, 'reginald', 'lenny')).toBe('change');
+    }
+    expect(characterChoice(owner, 'reginald', 'reginald')).toBe('none'); // already his choice: nothing to record
+    expect(characterChoice(studio, 'reginald', 'reginald')).toBe('confirm'); // set_drop_character with the same one records it
+    expect(characterChoice(legacy, 'reginald', 'reginald')).toBe('confirm'); // the old early return made this unclearable
   });
 });

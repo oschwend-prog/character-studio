@@ -2,8 +2,8 @@
 // the filters over them. Pure functions over v_tracker rows; no browser.
 import { describe, expect, it } from 'vitest';
 import {
-  CHIP_CLASS, CHIP_LABEL, CLIP_FILTERS, CLIP_FILTER_EMPTY, clipActions, clipChip, clipFilterQuery, filterClips, makeTotal, newestFirst,
-  parseClipFilter,
+  CHIP_CLASS, CHIP_LABEL, CLIP_FILTERS, CLIP_FILTER_EMPTY, characterConfirm, clipActions, clipChip, clipFilterQuery, filterClips, makeTotal,
+  newestFirst, parseClipFilter,
   type ClipChip, type ClipFilter,
 } from './clipstatus';
 import type { ClipState, DropCard, DropState, TrackerRow } from './types';
@@ -298,5 +298,55 @@ describe('makeTotal: the header line adds up what the owner can Make now', () =>
       withClip(priced('ready', OWNER), 'generating'), row(card('checking')), row(priced('failed')),
     ];
     expect(makeTotal(rows, NOW).count).toBe(filterClips(rows, 'ready').length + filterClips(rows, 'pick').length);
+  });
+});
+
+describe('"Pick a character" can be cleared with one free tap (final review)', () => {
+  const ROSTER = [{ slug: 'franz', name: 'Franz' }, { slug: 'reginald', name: 'Reginald' }, { slug: 'lenny', name: 'Lenny Gold' }];
+
+  it('offers "Use <him>" while the studio chose the character (or nobody recorded it) on a ready clip', () => {
+    expect(characterConfirm(row(card('ready', { character_by: 'studio' })), ROSTER)).toEqual({ slug: 'reginald', name: 'Reginald' });
+    // a drop from before migration 0013 has no character_by: the chip says Pick a character, so the tap must be there too
+    const legacy = row(card('ready'), { character_slug: 'lenny' });
+    expect(clipChip(legacy)).toBe('pick');
+    expect(characterConfirm(legacy, ROSTER)).toEqual({ slug: 'lenny', name: 'Lenny Gold' });
+  });
+
+  it('offers it exactly when the chip is Pick a character: never for his own choice, nor while checking, making, blocked, failed or done', () => {
+    expect(characterConfirm(row(card('ready', { character_by: 'owner' })), ROSTER)).toBeNull();
+    for (const state of ['uploading', 'checking', 'waiting', 'blocked', 'failed', 'making', 'made'] as DropState[]) {
+      expect([state, characterConfirm(row(card(state, { character_by: 'studio' })), ROSTER)]).toEqual([state, null]);
+    }
+    const lagging = row(card('ready', { character_by: 'studio' }), { make_requested_at: ago(1) }); // Make it was tapped: Making
+    expect(clipChip(lagging)).toBe('making');
+    expect(characterConfirm(lagging, ROSTER)).toBeNull();
+    expect(characterConfirm(withClip(card('ready', { character_by: 'studio' }), 'generating', { status: 'queued' }), ROSTER)).toBeNull();
+    expect(characterConfirm(row(null), ROSTER)).toBeNull(); // a scan pick
+  });
+
+  it('is not offered for a character who is no longer offered (paused: set_drop_character refuses him), the menu does the choosing then', () => {
+    const paused = row(card('ready'), { character_slug: 'biscuit' });
+    expect(clipChip(paused)).toBe('pick');
+    expect(characterConfirm(paused, ROSTER)).toBeNull();
+    expect(characterConfirm(row(card('ready'), { character_slug: null }), ROSTER)).toBeNull();
+  });
+
+  it('the demo: one tap on a seeded Pick a character clip makes it Ready and records it as his choice', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    const demo = new DemoBackend(() => NOW);
+    const snap = await demo.load();
+    const waiting = snap.tracker.filter((r) => clipChip(r) === 'pick' && characterConfirm(r, ROSTER));
+    expect(waiting.length).toBeGreaterThanOrEqual(2); // a studio-chosen one and a legacy one (no character_by)
+    expect(waiting.some((r) => r.drop_card?.character_by === 'studio') && waiting.some((r) => r.drop_card?.character_by === undefined)).toBe(true);
+    for (const r of waiting) {
+      const confirm = characterConfirm(r, ROSTER)!;
+      expect(await demo.setDropCharacter(r.pick_id, confirm.slug)).toEqual({ dispatched: false }); // only records it: nothing is checked again
+      const after = (await demo.load()).tracker.find((x) => x.pick_id === r.pick_id)!;
+      expect(after.character_slug).toBe(confirm.slug); // the same character stays
+      expect(after.drop_card).toMatchObject({ state: 'ready', character_by: 'owner' });
+      expect(clipChip(after)).toBe('ready');
+      expect(characterConfirm(after, ROSTER)).toBeNull();
+      expect(after.drop_card?.credits).toBe(r.drop_card?.credits); // the price stays: no new check
+    }
   });
 });
