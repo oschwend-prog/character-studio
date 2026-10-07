@@ -8,8 +8,11 @@ taken. This module is pure: the CLI command and the LaunchAgent that call it are
 **Only the top level of the folder is read** (``Added/`` and every other sub-folder are never looked at; hidden files such as
 ``.DS_Store`` are not clips). What is not taken, and why (``skipped``, one ``{"file", "reason"}`` each):
 
-* ``"in iCloud, downloading"``: a placeholder (``.<name>.icloud``, the file is not on this Mac yet). iCloud is asked to fetch the
-  real file (``fetch``, ``brctl download``) and a later run takes it. A placeholder is never uploaded.
+* ``"in iCloud, downloading"``: the file is not on this Mac yet, so it is never hashed or uploaded (reading it would block while
+  macOS downloads it inside the unattended agent). iCloud is asked to fetch it (``fetch``, ``brctl download``) and a later run
+  takes it. Two shapes: a legacy placeholder (``.<name>.icloud``) and, on macOS 14+, an **evicted ("dataless") file**, which keeps
+  its real name, size and mtime but has the ``SF_DATALESS`` flag in ``st_flags`` (``stat`` does not download it). Only a video
+  (by extension, and under the size limit for a dataless file, whose size is the real one) is fetched, never ``notes.txt``.
 * ``"still copying"``: written within the last ``SETTLE_SECONDS`` (a copy or an iCloud download still in progress).
 * ``"not a video"`` / ``"over 200 MB"``: the extension and the size limit of ``drop`` (read at call time), checked BEFORE
   ``add_drop`` so a bad file never leaves an orphan ``uploading`` pick.
@@ -53,7 +56,8 @@ DEFAULT_FOLDER = Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/ODD
 ADDED_DIR = "Added"
 DEFAULT_LEDGER = Path.home() / ".local/state/odd-eyes/clips-ledger.json"
 SETTLE_SECONDS = 30  # a file written more recently than this is still being copied
-ICLOUD_SUFFIX = ".icloud"  # a placeholder: ``.<name>.icloud`` stands for ``<name>`` that is not downloaded yet
+ICLOUD_SUFFIX = ".icloud"  # a legacy placeholder: ``.<name>.icloud`` stands for ``<name>`` that is not downloaded yet
+SF_DATALESS = 0x40000000  # st_flags of an evicted iCloud file (macOS 14+): the content is not on disk
 BRCTL_TIMEOUT_S = 60
 _CHUNK = 1024 * 1024
 
@@ -80,9 +84,18 @@ def file_hash(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _is_dataless(st: os.stat_result) -> bool:
+    """An evicted iCloud file: real name, size and mtime, but no content on disk (macOS 14+). ``st_flags`` is macOS/BSD only."""
+    return bool(getattr(st, "st_flags", 0) & SF_DATALESS)
+
+
+def _is_video_name(name: str) -> bool:
+    return Path(name).suffix.lower().lstrip(".") in drop.CLIP_EXTENSIONS
+
+
 def _problem(path: Path, size: int) -> str | None:
     """Why this file can never be a drop (type, then size, as ``attach_file`` judges them), or None."""
-    if path.suffix.lower().lstrip(".") not in drop.CLIP_EXTENSIONS:
+    if not _is_video_name(path.name):
         return "not a video"
     if size > drop.CLIP_MAX_BYTES:
         return f"over {drop.CLIP_MAX_BYTES // (1024 * 1024)} MB"
@@ -91,7 +104,8 @@ def _problem(path: Path, size: int) -> str | None:
 
 def scan_folder(folder: Path, now: float, fetch: Callable[[Path], None]) -> tuple[list[Path], list[dict[str, str]]]:
     """The files of ``folder`` (top level only) ready to be taken, by name, and the skipped ones ``{"file", "reason"}``.
-    ``now`` is epoch seconds; ``fetch(<folder>/<name>)`` is called for each iCloud placeholder."""
+    ``now`` is epoch seconds; ``fetch(<folder>/<name>)`` is called for each video iCloud has not downloaded yet (a legacy
+    ``.<name>.icloud`` placeholder or an evicted "dataless" file)."""
     ready: list[Path] = []
     skipped: list[dict[str, str]] = []
     for path in sorted(folder.iterdir()):
@@ -100,8 +114,11 @@ def scan_folder(folder: Path, now: float, fetch: Callable[[Path], None]) -> tupl
         name = path.name
         if name.startswith(".") and name.endswith(ICLOUD_SUFFIX) and len(name) > len(ICLOUD_SUFFIX) + 1:
             real = name[1 : -len(ICLOUD_SUFFIX)]
-            fetch(folder / real)
-            skipped.append({"file": real, "reason": "in iCloud, downloading"})
+            if _is_video_name(real):
+                fetch(folder / real)
+                skipped.append({"file": real, "reason": "in iCloud, downloading"})
+            else:  # no point fetching notes.txt
+                skipped.append({"file": real, "reason": "not a video"})
             continue
         if name.startswith("."):  # .DS_Store and the like are not clips
             continue
@@ -111,8 +128,11 @@ def scan_folder(folder: Path, now: float, fetch: Callable[[Path], None]) -> tupl
             continue
         if now - stat.st_mtime < SETTLE_SECONDS:
             skipped.append({"file": name, "reason": "still copying"})
-        elif (why := _problem(path, stat.st_size)) is not None:
+        elif (why := _problem(path, stat.st_size)) is not None:  # before any fetch: no download of what we would not take
             skipped.append({"file": name, "reason": why})
+        elif _is_dataless(stat):  # evicted: asking for it is free, reading it would block on a download
+            fetch(path)
+            skipped.append({"file": name, "reason": "in iCloud, downloading"})
         else:
             ready.append(path)
     return ready, skipped

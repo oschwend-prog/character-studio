@@ -13,6 +13,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,7 @@ from studio.store import MemoryStore
 NOW = now_london()
 CLOCK = 1_760_000_000.0  # the fixed "time.time()" of every run
 MP4 = b"\x00\x00\x00\x18ftypmp42 a saved clip"
+EVICTED = b"evicted: the content is not on this Mac"  # what the fake dataless flag below recognises by its size
 
 
 def make_store() -> MemoryStore:
@@ -165,6 +167,69 @@ def test_a_file_exactly_at_the_limit_is_taken(folder, monkeypatch):
     put(folder, "over.mp4", b"x" * (1024 * 1024 + 1))
     ready, skipped = scan_folder(folder, CLOCK, lambda p: None)
     assert [p.name for p in ready] == ["edge.mp4"] and skipped == [{"file": "over.mp4", "reason": "over 1 MB"}]
+
+
+# ---- evicted ("dataless") iCloud files, macOS 14+: the real name stays, the content is not on disk ----------------------------
+
+
+@pytest.fixture
+def evicted(monkeypatch):
+    """Files whose content is ``EVICTED`` count as dataless (a real flag cannot be set on a temp file)."""
+    monkeypatch.setattr(clipfolder, "_is_dataless", lambda st: st.st_size == len(EVICTED))
+
+
+def test_dataless_is_the_macos_flag_in_st_flags(tmp_path):
+    assert clipfolder.SF_DATALESS == 0x40000000
+    assert clipfolder._is_dataless(SimpleNamespace(st_flags=0x40000000))
+    assert clipfolder._is_dataless(SimpleNamespace(st_flags=0x40000000 | 0x20))  # with other flags
+    assert not clipfolder._is_dataless(SimpleNamespace(st_flags=0x20))
+    assert not clipfolder._is_dataless(SimpleNamespace(st_flags=0))
+    assert not clipfolder._is_dataless(SimpleNamespace())  # no st_flags (Linux): never dataless
+    real = tmp_path / "x.mp4"
+    real.write_bytes(MP4)
+    assert not clipfolder._is_dataless(real.stat())  # a file on disk
+
+
+def test_an_evicted_video_is_fetched_and_skipped_not_hashed_or_uploaded(world, folder, ledger, evicted, monkeypatch):
+    store, _ = world
+    clip = put(folder, "evicted.mp4", EVICTED)
+    hashed: list[str] = []
+    real_hash = clipfolder.file_hash
+    monkeypatch.setattr(clipfolder, "file_hash", lambda path: hashed.append(path.name) or real_hash(path))
+    calls: list[Path] = []
+    out = run(world, folder, ledger, fetch=calls.append)
+    assert calls == [clip]  # asked iCloud to download it
+    assert out == {"added": [], "skipped": [{"file": "evicted.mp4", "reason": "in iCloud, downloading"}], "failed": []}
+    assert hashed == [] and drops(store) == [] and clip.exists() and not ledger.exists()  # never read, never uploaded
+    # iCloud has downloaded it by the next run (no dataless flag any more): now it is taken
+    monkeypatch.setattr(clipfolder, "_is_dataless", lambda st: False)
+    out = run(world, folder, ledger, fetch=calls.append)
+    assert [a["file"] for a in out["added"]] == ["evicted.mp4"] and calls == [clip] and len(drops(store)) == 1
+
+
+def test_an_evicted_non_video_is_neither_fetched_nor_uploaded(world, folder, ledger, evicted):
+    store, _ = world
+    put(folder, "notes.txt", EVICTED)
+    calls: list[Path] = []
+    out = run(world, folder, ledger, fetch=calls.append)
+    assert calls == [] and drops(store) == []
+    assert out == {"added": [], "skipped": [{"file": "notes.txt", "reason": "not a video"}], "failed": []}
+
+
+def test_an_evicted_video_over_the_limit_is_not_fetched(world, folder, ledger, evicted, monkeypatch):
+    monkeypatch.setattr(drop, "CLIP_MAX_BYTES", len(EVICTED) - 1)  # its size is the real one: too big to ever take
+    put(folder, "huge.mov", EVICTED)
+    calls: list[Path] = []
+    out = run(world, folder, ledger, fetch=calls.append)
+    assert calls == [] and out["added"] == [] and [s["reason"] for s in out["skipped"]] == ["over 0 MB"]
+
+
+def test_a_legacy_placeholder_of_a_non_video_is_not_fetched(world, folder, ledger):
+    put(folder, ".notes.txt.icloud", b"bplist00")
+    put(folder, "..icloud", b"bplist00")  # no name at all: a hidden file, not a placeholder
+    calls: list[Path] = []
+    out = run(world, folder, ledger, fetch=calls.append)
+    assert calls == [] and out == {"added": [], "skipped": [{"file": "notes.txt", "reason": "not a video"}], "failed": []}
 
 
 # ---- the same clip twice -----------------------------------------------------------------------------------------------------
