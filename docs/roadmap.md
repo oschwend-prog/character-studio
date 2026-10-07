@@ -111,3 +111,8 @@ Credits: one character posting Mon-Fri at 91 credits a video is about 2,000 cred
     footage, never a swap into someone else's clip); craft over "AI slop" (negative sentiment about AI content is high).
   - Working line: "The 10-second placement: premium product placement in the most-watched format, which nobody else
     sells."
+  - Pricing estimate (2026-10-07, from 2026 rate benchmarks: sponsored Reel CPM about $12-58; nano median about $250 a Reel,
+    micro $100-500 in lifestyle up to $1,500 in richer niches, mid-tier $500-5,000, macro $5-10K): per placement about
+    $200-400 at 10K followers, $600-1,500 at 50K, $2.5-5K at 250K, $8-15K at 1M; at most 1 post in 4-5 sponsored.
+    Usage rights and Partnership Ads (the brand boosts our post) are sold on top. Revenue follows the one or two
+    characters that break out, so more characters = more chances, not linear income.
