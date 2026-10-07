@@ -7,7 +7,7 @@
     "biped"
   ],
   "masters": {
-    "biped": "cc6a9f4c-2ff0-484f-a540-b48b0f30b796",
+    "biped": "9613f97a-6358-4b7f-b4fe-38c07dc2c370",
     "quadruped": null
   },
   "closeup": "a411c915-1532-4fc9-b719-e68450e6f619",
@@ -18,7 +18,7 @@
     "biped": "88ac10b9-399c-4ea7-8c7a-f2dcf5737d1d"
   },
   "reference_urls": {
-    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_081912_cc6a9f4c-2ff0-484f-a540-b48b0f30b796.png",
+    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_183419_9613f97a-6358-4b7f-b4fe-38c07dc2c370.png",
     "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082732_88ac10b9-399c-4ea7-8c7a-f2dcf5737d1d.png",
     "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082743_a411c915-1532-4fc9-b719-e68450e6f619.png"
   },

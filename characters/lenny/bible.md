@@ -1,6 +1,8 @@
 # Lenny Gold — character bible
 
 **Status:** designing. Strand B (claude.ai / Higgsfield sessions), now in the studio roster (owner 2026-10-06). The voice and template are locked, and the first full clip is done. Owner 2026-10-06: **the exaggerated look is canon** ("always go for exaggerated 2"): the navy chalk-stripe suit, a deeper tan and a bigger jaw. Owner 2026-10-06 ("yes, do all"): **GPT Image 2.5 is the model for every character image**. Owner 2026-10-06: **ODD EYES for every character** (the studio signature). Canon master `cc6a9f4c` (the odd-eyes edit of `c6864413`), final sheets `88ac10b9` (turnaround) and `37b754d4` (expressions), close-up `a411c915`.
+
+> **Owner 2026-10-07: NEW CANON LOOK — the black slim suit** ("lenny 2", after "still looks outdated"): a sharp black slim-fit single-breasted suit, crisp white shirt, black skinny tie (the Tie Snap stays), black leather Chelsea boots; same face, tan, pompadour, gold watch, signet ring, phone and ODD EYES. Canon master `9613f97a-6358-4b7f-b4fe-38c07dc2c370` → `hf_20261007_183419_9613f97a-6358-4b7f-b4fe-38c07dc2c370.png` (refs.json `masters.biped`, `reference_urls.master_biped`; options in `assets/characters/lenny/looks/`). The chalk-stripe wardrobe below is SUPERSEDED; the turnaround `88ac10b9` and close-up `a411c915` still show it until they are remade in the black suit. Paste-ready line: "wearing a sharp black slim-fit single-breasted suit with notch lapels, a crisp white shirt, a black skinny tie, slim trousers and black leather Chelsea boots; a yellow-gold watch on a gold bracelet and a gold signet ring; no logos, no brand names".
 **Concept:** the manic Hollywood super-agent. "Explode in, collapse out."
 
 ## Identity and personality (never changes)
