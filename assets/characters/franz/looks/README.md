@@ -18,3 +18,11 @@ gpt_image_2_5 high 2K 9:16, reference = the smiling master `4d3f3051` (crown rem
 Both: odd eyes right (ice-blue on the viewer's left), plain cream cap, cream hoodie, sage overshirt, charcoal joggers, white
 sneakers, no logos. Height does not read on a plain background: the test swap into a human clip shows it.
 Owner's pick: (open)
+
+## Canon from 2026-10-07 (owner: "yes make the sheet and close-up"): the tall Franz, option B2
+- master (biped): `tall-b2.jpg` — job `ea5dc4a3-f827-4b30-aad7-1831dcc11495`
+- sheet: `tall-sheet.jpg` (front, 3/4, side, back; big smile, proud smirk, laughing, surprised) — job `5daecb6b-480a-4b34-bac5-b6abb4078bdc`
+- close-up: `tall-closeup.jpg` (odd eyes right: ice-blue on the viewer's left) — job `f6444b2e-32c5-400c-8fc2-2d58ef6fb421`
+- First video with this look: clip `e99aaea9` (the 55-credit test swap, tracksuit street dance, 6 s master).
+- To do: refs.json masters/sheets/closeup/reference_urls point at these (after the Task 1 build commit); the four-legged
+  master `87280b84` (dog clips) still shows the older look.
