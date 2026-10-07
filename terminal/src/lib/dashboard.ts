@@ -42,14 +42,22 @@ export interface LastPost {
   clipId: string;
   hook: string | null;
   postedAt: string | null;
-  views: number;
-  likes: number;
-  shares: number;
+  /** Summed over the clip's posts; null while no post has that number yet ("no numbers yet" is not 0). */
+  views: number | null;
+  likes: number | null;
+  shares: number | null;
 }
 
-const sum = (xs: ReadonlyArray<number | null>) => xs.reduce<number>((total, x) => total + (x ?? 0), 0);
+/** The sum of the numbers read so far, or null when no post has one yet. */
+const sum = (xs: ReadonlyArray<number | null>): number | null => {
+  const read = xs.filter((x): x is number => x != null);
+  return read.length ? read.reduce((total, x) => total + x, 0) : null;
+};
 
-/** A character's last `n` posted clips, newest first, with views, likes and shares summed over the clip's posts (a metric not read yet counts 0). */
+/**
+ * A character's last `n` posted clips, newest first, with views, likes and shares summed over the clip's posts. A number no post
+ * has yet (no metrics snapshot) is null, so a just-posted clip reads "no numbers yet" instead of 0.
+ */
 export function lastPosts(library: ReadonlyArray<LibraryClip>, slug: string, n = 3): LastPost[] {
   const at = (c: LibraryClip) => Date.parse(c.posted_at ?? c.created_at) || 0;
   return library

@@ -107,10 +107,24 @@ describe('lastPosts', () => {
 
   it('lists the posted clips of that character, newest first, with the sums over their posts', () => {
     expect(lastPosts(library, 'reginald')).toEqual([
-      { clipId: 'fresh', hook: 'fresh one', postedAt: ago(0.5), views: 0, likes: 0, shares: 0 },
+      { clipId: 'fresh', hook: 'fresh one', postedAt: ago(0.5), views: null, likes: null, shares: null },
       { clipId: 'new', hook: 'new one', postedAt: ago(2), views: 1_500, likes: 100, shares: 10 },
-      { clipId: 'mid', hook: null, postedAt: ago(24), views: 300, likes: 0, shares: 2 },
+      { clipId: 'mid', hook: null, postedAt: ago(24), views: 300, likes: null, shares: 2 },
     ]);
+  });
+
+  it('says "no numbers yet" (null), never 0, for a clip no post of which has metrics; a real 0 stays 0', () => {
+    const lib = [
+      clip('posted', { id: 'none', posted_at: ago(1), posts: [post(), post({ platform: 'instagram' })] }),
+      clip('posted', { id: 'no-posts', posted_at: ago(2), posts: [] }),
+      clip('posted', { id: 'zero', posted_at: ago(3), posts: [post({ views: 0, likes: 0, shares: 0, captured_at: ago(1) })] }),
+      clip('posted', { id: 'one-read', posted_at: ago(4), posts: [post(), post({ platform: 'instagram', views: 40, likes: 4, shares: 1, captured_at: ago(1) })] }),
+    ];
+    const byId = Object.fromEntries(lastPosts(lib, 'reginald', 10).map((p) => [p.clipId, p]));
+    expect(byId.none).toMatchObject({ views: null, likes: null, shares: null });
+    expect(byId['no-posts']).toMatchObject({ views: null, likes: null, shares: null });
+    expect(byId.zero).toMatchObject({ views: 0, likes: 0, shares: 0 });
+    expect(byId['one-read']).toMatchObject({ views: 40, likes: 4, shares: 1 });
   });
 
   it('takes the n newest (3 by default) and never other characters, scheduled or unposted clips', () => {

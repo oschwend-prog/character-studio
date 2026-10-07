@@ -76,6 +76,17 @@ describe('videoGroups: making', () => {
     expect(new Set(clipIds).size).toBe(clipIds.length);
   });
 
+  it('does not list the half-made clip of a failed drop: its row shows it Failed on the Clips page', () => {
+    const failed = row(card('failed'), { clip_id: 'c1', clip_state: 'gen_failed', clip_failure: 'Higgsfield refused the job' });
+    const blocked = row(card('blocked'), { clip_id: 'c2', clip_state: 'qa_failed' });
+    const done = row(card('made'), { clip_id: 'c3', clip_state: 'rejected', status: 'made' });
+    const g = videoGroups(snapshot({
+      tracker: [failed, blocked, done],
+      library: [clip('c1', 'gen_failed'), clip('c2', 'qa_failed'), clip('c3', 'rejected'), clip('c9', 'gen_failed')],
+    }));
+    expect(g.making.map((x) => (isTrackerRow(x) ? x.pick_id : x.id))).toEqual(['c9']); // only a clip no row owns
+  });
+
   it('is empty when nothing is being made', () => {
     expect(videoGroups(snapshot())).toEqual({ making: [], scheduled: [] });
   });

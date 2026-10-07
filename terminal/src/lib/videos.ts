@@ -17,12 +17,14 @@ function slotOf(c: LibraryClip): number {
 
 /**
  * The Videos page's two groups. Making: the tracker rows whose chip is Making, then the library clips in production that no
- * row already shows (a clip is listed once, by its row), the newest clip first. Scheduled: the approved and scheduled library
+ * row already owns (a clip is listed once, by its row, whatever the row's chip: a failed drop's half-made clip is not listed here),
+ * the newest clip first. Scheduled: the approved and scheduled library
  * clips, the soonest slot first, a clip without a slot last.
  */
 export function videoGroups(data: Snapshot): { making: (TrackerRow | LibraryClip)[]; scheduled: LibraryClip[] } {
   const rows = data.tracker.filter((r) => clipChip(r) === 'making');
-  const listed = new Set(rows.map((r) => r.clip_id).filter((id): id is string => id != null));
+  // every row owns its clip, whatever its chip: a failed drop with a half-made clip stays on the Clips page, not here as a bare clip
+  const listed = new Set(data.tracker.map((r) => r.clip_id).filter((id): id is string => id != null));
   const clips = data.library
     .filter((c) => IN_PRODUCTION_STATES.includes(c.state) && !listed.has(c.id))
     .sort((a, b) => (Date.parse(b.created_at) || 0) - (Date.parse(a.created_at) || 0) || a.id.localeCompare(b.id));

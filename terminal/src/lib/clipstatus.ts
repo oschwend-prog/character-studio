@@ -28,9 +28,11 @@ const IN_PRODUCTION = (s: TrackerRow['clip_state']): boolean => s != null && IN_
  * 2. Blocked and Failed come from the drop state, even when a half-made clip exists (its Try again is on the card).
  * 3. Making: the drop is making, or Make it was tapped and no clip exists yet, or the clip is between planned and mastered
  *    (the drop card can lag behind its clip).
- * 4. Adding (uploading), Checking (checking, waiting), then Ready: the owner chose the character, or Pick a character: the
- *    studio did (character_by 'studio', the Drop box's Recommend). A drop from before migration 0013 has no character_by: the
- *    owner's, as in characterMenu.
+ * 4. Adding (uploading), Checking (checking, waiting), then Ready only when the owner chose the character (character_by
+ *    'owner'); anything else is Pick a character: the studio chose it (character_by 'studio', the Drop box's Recommend) or no
+ *    one recorded it. A drop from before migration 0013 has no character_by and counts as not yet chosen here, even though
+ *    characterMenu reads absent as the owner's for its menu: those drops had their character set by the studio, and a Ready chip
+ *    could lead to a paid Make it for a character he never chose; at worst he confirms it with one tap.
  * A row with no drop card (a scan pick) follows its clip alone and is otherwise still being checked.
  */
 export function clipChip(row: TrackerRow): ClipChip {
@@ -43,7 +45,7 @@ export function clipChip(row: TrackerRow): ClipChip {
     case 'uploading':
       return 'adding';
     case 'ready':
-      return d.character_by === 'studio' ? 'pick' : 'ready';
+      return d.character_by === 'owner' ? 'ready' : 'pick';
     default:
       return 'checking'; // checking, waiting, or a row with no card
   }

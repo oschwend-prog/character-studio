@@ -40,8 +40,8 @@ describe('clipChip: one chip per rule', () => {
   it('ready with a character the studio chose is Pick a character; the owner’s own choice is Ready', () => {
     expect(clipChip(row(card('ready', { character_by: 'studio' })))).toBe('pick');
     expect(clipChip(row(card('ready', { character_by: 'owner' })))).toBe('ready');
-    // a drop from before migration 0013 has no character_by: the character was the owner's (the same reading as characterMenu)
-    expect(clipChip(row(card('ready')))).toBe('ready');
+    // a drop from before migration 0013 has no character_by: the studio set its character, so it is not chosen yet (a paid Make it needs his tap)
+    expect(clipChip(row(card('ready')))).toBe('pick');
   });
 
   it('making: the drop is making, or Make it was tapped and no clip exists yet, or its clip is between planned and mastered', () => {
