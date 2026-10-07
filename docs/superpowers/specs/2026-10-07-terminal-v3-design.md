@@ -148,6 +148,11 @@ free. A clip that has versions shows them ("Also: Lenny, ready"). The **All clip
 - **Getting a hit into the clips:** "Use this clip" files it as the character's drop; the cloud job fetches that one post with
   yt-dlp, and when Instagram or TikTok blocks the cloud, with ScrapeCreators' single-post `download_media` (1-2 credits). One
   tap per clip, never a batch, never a third-party downloader site (owner asked about snapinsta.to, 2026-10-07).
+- **Auto-filing (owner 2026-10-07: "set our system up with tons of clips as we will need them"):** after each pull the
+  job files the best new hits as drops on its own, at most `hits.auto_file_per_character` (default 3) a day per live character,
+  best score first, skipping a URL already filed; each goes through `add_drop(link)` for that character (`character_by` studio, so
+  the check may move it) and is fetched one at a time by the cloud drop job; the hit becomes `dropped`. About 65 new clips a
+  month for three characters (the need is about 15 per character a month, so this fills a buffer).
 - **Owner steps:** a ScrapeCreators account (100 free credits; the $47 pack = 25,000 credits, which never expire, lasts
   about 3 years at 25 a day), then `gh secret set SCRAPECREATORS_API_KEY` (he pastes the key; it is never written to a file).
 - **Tests:** the API client against recorded fixture responses (no network), the parsing and skip rules, the score, the cap,
