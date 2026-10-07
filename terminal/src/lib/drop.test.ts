@@ -4,7 +4,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ADJUST_KEYS, DROP_STATE_LABEL, RECOMMEND, STALE_UPLOAD_MINUTES, adjustChanges, avoidHit, avoidLabel, canChooseCharacter, characterChoice, characterMenu,
+  ADJUST_KEYS, DROP_STATE_LABEL, RECOMMEND, STALE_UPLOAD_MINUTES, adjustChanges, isStaleUpload, avoidHit, avoidLabel, canChooseCharacter, characterChoice, characterMenu,
   dropActions, dropCredits, dropLine, dropLink, dropRows, dropTitle, effectiveDrop, isDropCard, isLandscape, maxSectionSeconds, readyTotal,
   recommendationLine, retryAdjust, sectionLabel, validateAdjust,
 } from './drop';
@@ -457,5 +457,49 @@ describe('the character menu knows what is only a confirmation (final review)', 
     expect(characterChoice(owner, 'reginald', 'reginald')).toBe('none'); // already his choice: nothing to record
     expect(characterChoice(studio, 'reginald', 'reginald')).toBe('confirm'); // set_drop_character with the same one records it
     expect(characterChoice(legacy, 'reginald', 'reginald')).toBe('confirm'); // the old early return made this unclearable
+  });
+});
+
+describe('a clip that is attached but still Uploading is waiting for its check, never a lost upload (final review)', () => {
+  // the owner's clips folder attaches the file and (before the cloud sweep) leaves the drop at uploading: the file IS in Storage
+  const STUCK: DropCard = { state: 'uploading', kind: 'file', at: ago(STALE_UPLOAD_MINUTES + 60) };
+
+  it('is stale only without a file: with one attached, 30 minutes mean waiting for the check', () => {
+    expect(isStaleUpload(STUCK, NOW)).toBe(true); // nothing attached: the upload did not finish
+    expect(isStaleUpload(STUCK, NOW, true)).toBe(false);
+    expect(dropLine(STUCK, NOW)).toMatch(/did not finish/);
+    expect(dropLine(STUCK, NOW, true)).toBe('The clip is saved: waiting for the check');
+    expect(dropLine({ ...STUCK, at: ago(1) }, NOW, true)).toBe('The clip is saved: waiting for the check');
+  });
+
+  it('offers Try again (the check is requested) and Remove, from the first minute: request_job accepts an uploading drop with its file', () => {
+    expect(dropActions(STUCK, NOW, true)).toEqual(['retry-check', 'remove']);
+    expect(dropActions({ ...STUCK, at: ago(1) }, NOW, true)).toEqual(['retry-check', 'remove']);
+    expect(dropActions(STUCK, NOW)).toEqual(['remove']); // without a file: as before
+    const sql = readFileSync(new URL('../../../supabase/migrations/0012_drop_a_video.sql', import.meta.url), 'utf8');
+    expect(sql).toContain("if state_ = 'uploading' and coalesce(f.proposal ->> 'owner_clip_path', '') = '' then"); // refused only without the file
+  });
+
+  it('the tracker keeps it on step 1 as moving, not waiting', () => {
+    const attached = row(STUCK, { owner_clip_path: 'owner/p1/1759700000000.mp4' });
+    expect(trackerStep(attached, NOW)).toMatchObject({ step: 1, state: 'ok', note: 'The clip is saved: waiting for the check' });
+    expect(trackerStep(row(STUCK), NOW)).toMatchObject({ step: 1, state: 'waiting', reason: expect.stringMatching(/did not finish/) });
+  });
+
+  it('the demo: a file attached and never checked shows Checking with Try again, which requests the check', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    const { clipActions, clipChip } = await import('./clipstatus');
+    let now = NOW;
+    const demo = new DemoBackend(() => now);
+    const { pickId } = await demo.addDrop(null, null);
+    expect(clipChip((await demo.load()).tracker.find((r) => r.pick_id === pickId)!)).toBe('adding'); // no file yet: Adding
+    await demo.attachClip(pickId, { name: 'folder.mp4', size: 1000, type: 'video/mp4' });
+    now += (STALE_UPLOAD_MINUTES + 15) * MIN;
+    const stuck = (await demo.load()).tracker.find((r) => r.pick_id === pickId)!;
+    expect(stuck.drop_card?.state).toBe('uploading');
+    expect(clipChip(stuck)).toBe('checking');
+    expect(clipActions(stuck, now)).toEqual(['retry-check', 'remove']);
+    await demo.requestJob(pickId, 'process'); // what Try again sends
+    expect((await demo.load()).tracker.find((r) => r.pick_id === pickId)!.drop_card?.state).toBe('checking');
   });
 });

@@ -293,6 +293,7 @@ function StatusCell({ row, now }: { row: TrackerRow; now: number }) {
       </span>
     );
   }
+  const attached = Boolean(row.owner_clip_path); // the file is saved (the clips folder): waiting for the check, not a lost upload
   const flagged = d.state === 'blocked' || d.state === 'failed' || d.state === 'waiting';
   const moving = d.state === 'uploading' || d.state === 'checking' || d.state === 'making';
   return (
@@ -301,11 +302,11 @@ function StatusCell({ row, now }: { row: TrackerRow; now: number }) {
       {flagged ? (
         <span className={`small ${d.state === 'waiting' ? 'muted' : 'error-text'}`} role={d.state === 'failed' ? 'alert' : undefined}>
           {d.state !== 'waiting' && <AlertTriangle size={13} aria-hidden="true" style={{ verticalAlign: '-2px', marginRight: 4 }} />}
-          {dropLine(d, now)}
+          {dropLine(d, now, attached)}
         </span>
       ) : moving || d.reason ? (
         <span className="small muted">
-          {moving && <Spinner />} {dropLine(d, now)}
+          {moving && <Spinner />} {dropLine(d, now, attached)}
         </span>
       ) : null}
     </span>

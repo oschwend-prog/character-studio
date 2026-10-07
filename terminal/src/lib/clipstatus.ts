@@ -30,7 +30,8 @@ const IN_PRODUCTION = (s: TrackerRow['clip_state']): boolean => s != null && IN_
  * 2. Blocked and Failed come from the drop state, even when a half-made clip exists (its Try again is on the card).
  * 3. Making: the drop is making, or Make it was tapped and no clip exists yet, or the clip is between planned and mastered
  *    (the drop card can lag behind its clip).
- * 4. Adding (uploading), Checking (checking, waiting), then Ready only when the owner chose the character (character_by
+ * 4. Adding (uploading, the file not saved yet), Checking (checking, waiting, and an upload whose file is saved: the owner's clips
+ *    folder attaches it before the check is requested), then Ready only when the owner chose the character (character_by
  *    'owner'); anything else is Pick a character: the studio chose it (character_by 'studio', the Drop box's Recommend) or no
  *    one recorded it. A drop from before migration 0013 has no character_by and counts as not yet chosen here, even though
  *    characterMenu reads absent as the owner's for its menu: those drops had their character set by the studio, and a Ready chip
@@ -45,7 +46,7 @@ export function clipChip(row: TrackerRow): ClipChip {
   if (d?.state === 'making' || (row.make_requested_at && !row.clip_id) || IN_PRODUCTION(row.clip_state)) return 'making';
   switch (d?.state) {
     case 'uploading':
-      return 'adding';
+      return row.owner_clip_path ? 'checking' : 'adding'; // the file is saved (the clips folder): only its check is still to come
     case 'ready':
       return d.character_by === 'owner' ? 'ready' : 'pick';
     default:
@@ -134,7 +135,7 @@ const PAID_ACTIONS: ReadonlyArray<DropAction> = ['make', 'adjust', 'retry-make']
 export function clipActions(row: TrackerRow, now: number): DropAction[] {
   const d = row.drop_card;
   if (!d) return [];
-  const actions = dropActions(d, now);
+  const actions = dropActions(d, now, Boolean(row.owner_clip_path));
   const chip = clipChip(row);
   return chip === 'making' || chip === 'done' ? actions.filter((a) => !PAID_ACTIONS.includes(a)) : actions;
 }

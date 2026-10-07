@@ -170,8 +170,12 @@ export function dropSummary(d: DropCard): string {
 
 export type DropAction = 'make' | 'adjust' | 'retry-check' | 'retry-make' | 'remove';
 
-/** The buttons a drop card offers: Make it and Adjust when ready; Try again after a failure; Remove when it cannot go on. */
-export function dropActions(d: DropCard, now: number): DropAction[] {
+/**
+ * The buttons a drop card offers: Make it and Adjust when ready; Try again after a failure; Remove when it cannot go on.
+ * `attached`: the clip's file is already saved (the row's owner_clip_path: the owner's clips folder attaches it before the check
+ * is requested), so an upload at Uploading is waiting for its check, not lost: Try again requests it (request_job accepts it).
+ */
+export function dropActions(d: DropCard, now: number, attached = false): DropAction[] {
   switch (d.state) {
     case 'ready':
       return ['make', 'adjust'];
@@ -184,6 +188,7 @@ export function dropActions(d: DropCard, now: number): DropAction[] {
     case 'waiting':
       return ['retry-check', 'remove'];
     case 'uploading':
+      if (attached) return ['retry-check', 'remove'];
       return isStaleUpload(d, now) ? ['remove'] : [];
     default:
       return [];
@@ -198,18 +203,19 @@ export function retryAdjust(d: DropCard): DropAdjust | null {
   return d.adjust && Object.keys(d.adjust).length ? d.adjust : null;
 }
 
-/** An upload still at Uploading after 30 minutes did not finish: the card says so and offers Remove. */
-export function isStaleUpload(d: Pick<DropCard, 'state' | 'at'>, now: number): boolean {
-  if (d.state !== 'uploading' || !d.at) return false;
+/** An upload still at Uploading after 30 minutes did not finish: the card says so and offers Remove (never with its file saved). */
+export function isStaleUpload(d: Pick<DropCard, 'state' | 'at'>, now: number, attached = false): boolean {
+  if (attached || d.state !== 'uploading' || !d.at) return false;
   const at = Date.parse(d.at);
   return Number.isFinite(at) && now - at > STALE_UPLOAD_MINUTES * MINUTE;
 }
 
 /** The one line under a card's title, by state (the database's own reason wins when it gave one). */
-export function dropLine(d: DropCard, now: number): string {
+export function dropLine(d: DropCard, now: number, attached = false): string {
   if (d.reason) return d.reason;
   switch (d.state) {
     case 'uploading':
+      if (attached) return 'The clip is saved: waiting for the check';
       return isStaleUpload(d, now) ? 'The upload did not finish: remove it and drop the video again' : 'Uploading to your storage';
     case 'checking':
       return 'Looking at the clip: who is in it, the best section, the price';

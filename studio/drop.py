@@ -124,6 +124,7 @@ from studio.store import Store
 S = ClipState
 DROP_STATES = ("uploading", "checking", "waiting", "ready", "blocked", "making", "made", "failed")
 PROCESS_FROM = frozenset({"uploading", "checking", "waiting"})
+CHECK_REQUEST_FROM = PROCESS_FROM | {"failed"}  # request_job(pick, 'process') (migration 0012) takes these states
 PARTS = ("cameo", "featured", "star")
 ADJUST_KEYS = ("star", "part", "gadgets", "hook", "start_s", "length_s", "crop_x")
 WINDOW_CLASSIC = (12.0, 15.0)  # owner 2026-10-05: a classic keeps its whole recognisable section
@@ -643,6 +644,26 @@ def attach_file(store: Store, storage: Storage, pick_id: str, file: Path, now: d
     storage.upload("sources", path, file)
     store.update_favorite(pick.id, proposal={**pick.proposal, "owner_clip_path": path}, source_id=None)
     return path
+
+
+def request_check(store: Store, pick_id: str, now: datetime | None = None) -> Favorite:
+    """Ask for the free check, exactly what the terminal's ``studio.request_job(pick, 'process')`` writes (migration 0012) once its
+    file is attached: the drop goes to ``checking`` (``reason`` cleared, ``at`` and ``requested.process`` stamped), so ``pending()``
+    and the cloud sweep take it and the terminal shows a drop waiting for its check, not an upload that never finished. The same
+    refusals: ``DropError`` for a pick already made, a state other than uploading, checking, waiting or failed, or an uploading
+    drop whose file is not attached yet. (The GitHub dispatch is the database's own; the cloud sweep and ``nudge_cloud`` do it here.)"""
+    now = now or now_london()
+    pick = _load(store, pick_id)
+    if pick.status == "made":
+        raise DropError(f"pick {pick.id} is already made")
+    d = drop_of(pick)
+    state = d.get("state")
+    if state not in CHECK_REQUEST_FROM:
+        raise DropError(f"a check runs on an uploading, checking, waiting or failed drop; pick {pick.id} is {state}")
+    if state == "uploading" and not pick.proposal.get("owner_clip_path"):
+        raise DropError("the upload has not finished: attach the video first")
+    requested = {**(d.get("requested") or {}), "process": now.isoformat()}
+    return _update(store, pick, now, state="checking", reason=None, at=now.isoformat(), requested=requested)
 
 
 def set_own_footage(store: Store, pick_id: str, own_footage: bool) -> Favorite:
@@ -1462,7 +1483,7 @@ def add_command(
         bool, typer.Option("--own-footage", help="The owner's own recording or footage used with permission (default: a downloaded clip).")
     ] = False,
     file: Annotated[
-        Path | None, typer.Option("--file", help="A saved video on this Mac: uploaded and attached as the terminal does (else a link or an empty file drop).")
+        Path | None, typer.Option("--file", help="A saved video on this Mac: uploaded, attached and asked for its check as the terminal does (else a link or an empty file drop).")
     ] = None,
 ) -> None:
     """File a drop like the terminal does (a link, a saved video with --file, or a file drop waiting for its upload); without
@@ -1472,7 +1493,10 @@ def add_command(
     store = open_store()
     try:
         pick, duplicate = add_drop(store, character_slug, link, own_footage=own_footage)
-        path = attach_file(store, open_storage(), pick.id, file) if file is not None else None
+        path = None
+        if file is not None:
+            path = attach_file(store, open_storage(), pick.id, file)
+            pick = request_check(store, pick.id)  # the terminal's last step too: the drop leaves Uploading and waits for its check
     except (ValueError, DropError) as e:
         fail(str(e))
     emit({

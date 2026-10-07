@@ -90,10 +90,11 @@ export function trackerStep(r: TrackerRow, now: number): TrackerStep {
   if (d && r.clip_state == null) {
     // a dropped video before its clip exists: its own states map onto the first three steps (Works shows its own card for them)
     const since = d.at ?? r.approved_at;
-    const line = dropLine(d, now);
+    const attached = Boolean(r.owner_clip_path); // saved by the clips folder: waiting for its check, not a lost upload
+    const line = dropLine(d, now, attached);
     switch (d.state) {
       case 'uploading':
-        return isStaleUpload(d, now) ? at(1, 'waiting', { since, reason: line }) : at(1, 'ok', { since, note: line });
+        return isStaleUpload(d, now, attached) ? at(1, 'waiting', { since, reason: line }) : at(1, 'ok', { since, note: line });
       case 'checking':
         return at(1, 'ok', { since, note: line });
       case 'waiting':

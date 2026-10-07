@@ -91,7 +91,11 @@ def test_a_new_clip_is_dropped_and_moved_to_added(world, folder, ledger):
     pick = picks[0]
     assert out == {"added": [{"file": "a.mp4", "pick_id": pick.id}], "skipped": [], "failed": []}
     d = pick.proposal["drop"]
-    assert d["kind"] == "file" and d["state"] == "uploading" and d["character_by"] == "studio"  # no character: the studio recommends
+    # no character: the studio recommends; and the drop is asked for its check at once (what the terminal's request_job does after its
+    # attach), so the terminal shows Checking, pending() and the cloud sweep take it, and the nudge has something to wake
+    assert d["kind"] == "file" and d["state"] == "checking" and d["character_by"] == "studio" and d["reason"] is None
+    assert d["requested"] == {"process": NOW.isoformat()} and d["at"] == NOW.isoformat()
+    assert [p["pick_id"] for p in drop.pending(store)] == [pick.id] and drop.pending(store)[0]["job"] == "process"
     path = pick.proposal["owner_clip_path"]
     assert path.startswith(f"owner/{pick.id}/") and path.endswith(".mp4")
     assert storage.download("sources", path, folder.parent / "back.mp4").read_bytes() == MP4
@@ -393,6 +397,26 @@ def test_a_run_killed_between_add_drop_and_the_upload_is_taken_up_by_the_next_ru
     assert list(json.loads(ledger.read_text())) == [file_hash(folder / ADDED_DIR / "a.mp4")]
 
 
+def test_a_run_killed_between_the_attach_and_the_check_request_finishes_the_drop_on_the_next_run(world, folder, ledger, tmp_path, monkeypatch):
+    store, _ = world
+    clip = put(folder, "a.mp4")
+    storage = CountingStorage(tmp_path / "storage3")
+
+    def killed(*a, **kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(drop, "request_check", killed, raising=False)
+    with pytest.raises(KeyboardInterrupt):
+        run(world, folder, ledger, storage=storage)
+    (stuck,) = drops(store)  # uploaded and attached, still uploading: what the terminal used to call a lost upload
+    assert stuck.proposal["owner_clip_path"] and stuck.proposal["drop"]["state"] == "uploading" and clip.exists() and not ledger.exists()
+    monkeypatch.undo()
+    again = run(world, folder, ledger, storage=storage)  # the next run asks for the check, uploads nothing again, and writes the ledger
+    assert again == {"added": [{"file": "a.mp4", "pick_id": stuck.id}], "skipped": [], "failed": []}
+    (pick,) = drops(store)
+    assert pick.id == stuck.id and pick.proposal["drop"]["state"] == "checking" and len(storage.uploads) == 1 and names(folder) == [ADDED_DIR]
+
+
 @pytest.mark.parametrize("state", ["uploading", "checking"])  # checking: the cloud check already took the pick on
 def test_a_run_killed_after_the_upload_before_the_ledger_makes_no_second_drop(world, folder, ledger, tmp_path, monkeypatch, state):
     store, _ = world
@@ -406,15 +430,16 @@ def test_a_run_killed_after_the_upload_before_the_ledger_makes_no_second_drop(wo
     monkeypatch.setattr(clipfolder, "_write_ledger", killed)
     with pytest.raises(KeyboardInterrupt):
         run(world, folder, ledger, storage=storage)
-    (attached,) = drops(store)  # uploaded and attached, but the ledger never heard of it and the file was not moved
+    (attached,) = drops(store)  # uploaded, attached and asked for its check, but the ledger never heard of it and the file was not moved
     assert attached.proposal["owner_clip_path"] and clip.exists() and not ledger.exists() and len(storage.uploads) == 1
-    if state != "uploading":
+    assert attached.proposal["drop"]["state"] == "checking"
+    if state == "uploading":  # a kill just before the check request: the run then asks for it
         store.update_favorite(attached.id, proposal={**attached.proposal, "drop": {**attached.proposal["drop"], "state": state}})
     monkeypatch.setattr(clipfolder, "_write_ledger", real_write)
     again = run(world, folder, ledger, storage=storage)  # the next run only writes the ledger and moves the file
     assert again == {"added": [{"file": "a.mp4", "pick_id": attached.id}], "skipped": [], "failed": []}
     assert [f.id for f in drops(store)] == [attached.id] and len(storage.uploads) == 1  # one drop, one upload
-    assert drops(store)[0].proposal["drop"]["state"] == state and names(folder) == [ADDED_DIR]
+    assert drops(store)[0].proposal["drop"]["state"] == "checking" and names(folder) == [ADDED_DIR]  # never left at uploading
     assert json.loads(ledger.read_text())[attached.proposal["drop"]["folder_hash"]]["pick_id"] == attached.id
     assert run(world, folder, ledger, storage=storage) == {"added": [], "skipped": [], "failed": []}  # and then it is quiet
 

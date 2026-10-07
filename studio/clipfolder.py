@@ -2,9 +2,10 @@
 
 The owner saves clips from the iPhone (Files, Safari downloads, Photos "Save to Files") or the Mac into one folder. ``sync_folder``
 turns each new video in it into a **file drop**, exactly what ``studio drop add --file`` does (no character: the studio recommends
-one after the check; ``drop.add_drop`` then ``drop.attach_file``), and moves the file into ``Added/`` so the owner sees what was
-taken. ``sync_folder`` is given its store, storage, clock and iCloud fetch; the CLI command (``studio drop sync-folder``) and the
-LaunchAgent that call it are elsewhere (tasks A2 and A3).
+one after the check; ``drop.add_drop``, ``drop.attach_file``, then ``drop.request_check``: the drop is ``checking``, as after the
+terminal's own upload), and moves the file into ``Added/`` so the owner sees what was taken. ``sync_folder`` is given its store,
+storage, clock and iCloud fetch; the CLI command (``studio drop sync-folder``) and the LaunchAgent that call it are elsewhere
+(tasks A2 and A3).
 
 **Only the top level of the folder is read** (``Added/`` and every other sub-folder are never looked at; hidden files such as
 ``.DS_Store`` are not clips). What is not taken, and why (``skipped``, one ``{"file", "reason"}`` each):
@@ -211,16 +212,21 @@ def _earlier_pick(store: Store, digest: str) -> Favorite | None:
 
 
 def _add(store: Store, storage: Storage, path: Path, digest: str, now: datetime) -> str:
-    """File the drop for this clip (no character: the studio recommends) and attach the file; the pick's id. The new pick is
-    tagged with the file's hash BEFORE the upload (not only when it fails): a run killed from outside runs no handler, and without
-    the tag its pick would stay an orphan ``uploading`` and the retry would make another. A reused pick that already has its clip
-    is not attached again."""
+    """File the drop for this clip (no character: the studio recommends), attach the file and ask for its check (what the terminal
+    does after its upload: ``drop.request_check``, so the drop is ``checking`` for the cloud sweep and the terminal, never an
+    ``uploading`` one that looks lost); the pick's id. The new pick is tagged with the file's hash BEFORE the upload (not only when
+    it fails): a run killed from outside runs no handler, and without the tag its pick would stay an orphan ``uploading`` and the
+    retry would make another. A reused pick that already has its clip is not attached again, and is asked for its check only if it
+    is still ``uploading`` (a kill between the attach and the request; a cloud check that took it on is left alone)."""
     pick = _earlier_pick(store, digest)
     if pick is None:
         pick, _ = drop.add_drop(store, None, None, now)
         pick = store.update_favorite(pick.id, proposal={**pick.proposal, "drop": {**pick.proposal["drop"], "folder_hash": digest}})
     if not pick.proposal.get("owner_clip_path"):
         drop.attach_file(store, storage, pick.id, path, now)
+    fresh = store.get_favorite(pick.id)
+    if fresh is not None and fresh.proposal["drop"].get("state") == "uploading":
+        drop.request_check(store, pick.id, now)
     return pick.id
 
 

@@ -389,6 +389,56 @@ def test_a_saved_file_is_dropped_from_the_mac_exactly_as_the_terminal_does(world
         attach_file(store, storage, link.id, clip, NOW)
 
 
+def test_request_check_is_what_request_job_process_writes_once_the_file_is_attached(world, tmp_path):
+    """The terminal's last step after its upload (``studio.request_job(pick, 'process')``, migration 0012); the clips folder takes it
+    after ``attach_file`` too, so the drop leaves Uploading and the cloud sweep and the terminal see a drop waiting for its check."""
+    store, storage = world
+    clip = tmp_path / "a.mp4"
+    clip.write_bytes(b"\x00\x00\x00\x18ftypmp42 a saved clip")
+    pick, _ = add_drop(store, None, None, NOW)
+    with pytest.raises(DropError, match="upload has not finished"):  # request_job's own refusal: no file attached yet
+        drop.request_check(store, pick.id, NOW)
+    attach_file(store, storage, pick.id, clip, NOW)
+    assert store.get_favorite(pick.id).proposal["drop"]["state"] == "uploading"  # attaching alone does not ask for the check
+    later = NOW + timedelta(minutes=3)
+    out = drop.request_check(store, pick.id, later)
+    d = out.proposal["drop"]
+    assert d["state"] == "checking" and d["reason"] is None and d["at"] == later.isoformat() and d["requested"] == {"process": later.isoformat()}
+    assert d["kind"] == "file" and d["character_by"] == "studio" and out.proposal["owner_clip_path"]  # nothing else is touched
+    assert store.get_favorite(pick.id).proposal["drop"] == d
+    again = drop.request_check(store, pick.id, later + timedelta(minutes=1))  # asking again is fine (the Try again button): the time moves
+    assert again.proposal["drop"]["state"] == "checking" and again.proposal["drop"]["requested"]["process"] == (later + timedelta(minutes=1)).isoformat()
+    # request_job's states: uploading, checking, waiting or failed; never a ready, blocked, making or made drop
+    for state in ("ready", "blocked", "making", "made"):
+        f = store.get_favorite(pick.id)
+        store.update_favorite(pick.id, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": state}})
+        with pytest.raises(DropError, match=f"is {state}"):
+            drop.request_check(store, pick.id, NOW)
+    for state in ("waiting", "failed"):
+        f = store.get_favorite(pick.id)
+        store.update_favorite(pick.id, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": state}})
+        assert drop.request_check(store, pick.id, NOW).proposal["drop"]["state"] == "checking"
+    store.update_favorite(pick.id, status="made")
+    with pytest.raises(DropError, match="already made"):
+        drop.request_check(store, pick.id, NOW)
+    with pytest.raises(KeyError):
+        drop.request_check(store, "nope", NOW)
+
+
+def test_cli_drop_add_with_a_file_asks_for_the_check_like_the_terminal(monkeypatch, tmp_path):
+    store = make_store()
+    storage = LocalStorage(tmp_path / "storage")
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: storage)
+    clip = tmp_path / "saved.mp4"
+    clip.write_bytes(b"\x00\x00\x00\x18ftypmp42 a saved clip")
+    r = CliRunner().invoke(app, ["drop", "add", "--file", str(clip)])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["owner_clip_path"] and out["drop"]["state"] == "checking" and out["drop"]["requested"]["process"]
+    assert store.get_favorite(out["pick_id"]).proposal["drop"]["state"] == "checking"
+
+
 # ---- the window --------------------------------------------------------------------------------------------------------------
 
 
