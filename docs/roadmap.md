@@ -68,3 +68,9 @@ Order: get Biscuit + Reginald running on Instagram first, then expand.
     Stories publishing path (Postiz/Instagram Stories), location-true settings without real-person likeness or brands.
   - **Guardrails stay:** AI label on everything, no real person's likeness, the never-scrape rule (the scan files picks;
     a fetch takes one approved pick), at most 2 posts per account per day, the credit cap.
+
+## Next: every post also goes to Stories (owner, 2026-10-07)
+- Owner: "also do stories or reels from the posted stories when uploading in the future".
+- Plan: when a Reel is published, also publish it (or a 15 s cut of it) as an Instagram Story on the same account, with the
+  caption pill and the AI label; Postiz supports an Instagram `post_type: story` (verify with `postiz integrations:settings`).
+  Counts toward nothing in the 2-posts-a-day cap (Stories are not feed posts) but stays approval-gated like the Reel.
