@@ -26,7 +26,14 @@
       "Edit(renders/**)",
       "Edit(characters/*/playbook.md)",
       "Skill(humanizer:humanizer)",
-      "Skill(last30days)"
+      "Skill(last30days)",
+      "Skill(viral-hook-creator)",
+      "Skill(online-reputation-management)",
+      "Skill(social-media-monitor)",
+      "mcp__4fb9070d-c339-4043-877a-de8bacc88090__keyword_posts",
+      "mcp__4fb9070d-c339-4043-877a-de8bacc88090__topic_posts",
+      "mcp__4fb9070d-c339-4043-877a-de8bacc88090__keyword_time_series",
+      "mcp__4fb9070d-c339-4043-877a-de8bacc88090__post"
     ],
     "deny": [
       "mcp__53354c6e-fbc1-47dd-ac53-ad2126ec66bd__tiktok_prepare_publish",
