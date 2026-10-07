@@ -58,7 +58,7 @@ export function Works() {
           <div>
             <h2 className="h2">Other picks in the works</h2>
             <p className="small muted" style={{ margin: '6px 0 0' }}>
-              Approved in <a href={href('picks', undefined, { view: 'list' })}>Scan (Long list)</a>, on their 8 steps.
+              Approved in <a href={href('more', 'scan', { view: 'list' })}>Scan (Long list)</a>, on their 8 steps.
             </p>
           </div>
           {groups.map((g) => (
@@ -129,7 +129,7 @@ function WorkCard({ row, now }: { row: TrackerRow; now: number }) {
         {(s.action === 'queue' || (s.step === 8 && (row.post_url || row.latest_views != null))) && (
           <div className="work-links">
             {s.action === 'queue' && row.clip_id && (
-              <a className="btn primary" href={href('queue', row.clip_id)}>
+              <a className="btn primary" href={href('videos', row.clip_id)}>
                 Review in Queue
               </a>
             )}

@@ -73,7 +73,7 @@ export function Today() {
                 </span>
               </div>
               <div className="go">
-                <a className="review" href={href('queue')}>
+                <a className="review" href={href('videos')}>
                   Review
                 </a>
                 <button
@@ -122,7 +122,7 @@ function Board({ rows }: { rows: BoardRow[] }) {
         <span className="label" role="columnheader">Status</span>
       </div>
       {rows.map((r) => {
-        const target = r.status === 'NEEDS YOU' && r.clipId ? href('queue', r.clipId) : r.clipId ? href('library', r.clipId) : null;
+        const target = r.status === 'NEEDS YOU' && r.clipId ? href('videos', r.clipId) : r.clipId ? href('characters', 'all', { clip: r.clipId }) : null;
         const cells = (
           <>
             <span role="cell">
@@ -174,8 +174,8 @@ function PicksLine() {
   if (!data) return null;
   const best = data.picks[0];
   return (
-    <Section id="picks-line" title="Viral Picks" aside={<a href={href('picks')}>Open <ArrowRight size={14} aria-hidden="true" /></a>}>
-      <a className="board-row tappable" href={href('picks')} style={{ gridTemplateColumns: 'auto 1fr', minHeight: 64 }}>
+    <Section id="picks-line" title="Viral Picks" aside={<a href={href('more', 'scan')}>Open <ArrowRight size={14} aria-hidden="true" /></a>}>
+      <a className="board-row tappable" href={href('more', 'scan')} style={{ gridTemplateColumns: 'auto 1fr', minHeight: 64 }}>
         <Flap text={String(data.picks.length).padStart(2, '0')} size="mid" tone={data.picks.length ? 'action' : 'muted'} label={`${data.picks.length} new picks`} />
         <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
           <span>{data.picks.length === 1 ? 'new pick to decide' : 'new picks to decide'}</span>
@@ -204,7 +204,7 @@ function SpendLine() {
     <Section
       id="spend-line"
       title="Spend"
-      aside={<a href={href('budget')}>{b.kill_switch ? 'Kill switch on' : 'Budget'} <ArrowRight size={14} aria-hidden="true" /></a>}
+      aside={<a href={href('more', 'budget')}>{b.kill_switch ? 'Kill switch on' : 'Budget'} <ArrowRight size={14} aria-hidden="true" /></a>}
     >
       <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
         <span className="h1 num">{formatCredits(b.committed)}</span>

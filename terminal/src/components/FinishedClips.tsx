@@ -62,7 +62,7 @@ function Finished({ clip: c, demo }: { clip: LibraryClip; demo: boolean }) {
       {(state === 'awaiting_approval' || post) && (
         <div className="work-links">
           {state === 'awaiting_approval' && (
-            <a className="btn primary" href={href('queue', c.id)}>
+            <a className="btn primary" href={href('videos', c.id)}>
               Review in Queue
             </a>
           )}

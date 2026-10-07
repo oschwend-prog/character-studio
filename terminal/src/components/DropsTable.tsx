@@ -199,7 +199,7 @@ function DropRow({
             </button>
           )}
           {row.clip_state === 'awaiting_approval' && row.clip_id && (
-            <a className="btn primary" href={href('queue', row.clip_id)}>
+            <a className="btn primary" href={href('videos', row.clip_id)}>
               Review in Queue
             </a>
           )}

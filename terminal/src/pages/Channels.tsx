@@ -210,7 +210,7 @@ function ProposedList({ pipe, slug, name, onMake }: { pipe: Pipeline; slug: stri
   const { items, total } = pipe.proposed;
   return (
     <>
-      <a className="small stage-more stage-all" href={href('picks', undefined, { c: slug })}>
+      <a className="small stage-more stage-all" href={href('more', 'scan', { c: slug })}>
         All {total} of {name}’s proposed videos in Picks →
       </a>
       <ul className="pipe-list">
@@ -251,7 +251,7 @@ function ProposedList({ pipe, slug, name, onMake }: { pipe: Pipeline; slug: stri
         ))}
       </ul>
       {total > items.length && (
-        <a className="small stage-more" href={href('picks', undefined, { c: slug })}>
+        <a className="small stage-more" href={href('more', 'scan', { c: slug })}>
           Showing {items.length} of {total} · all picks
         </a>
       )}
@@ -307,7 +307,7 @@ function WaitingList({ pipe }: { pipe: Pipeline }) {
               </div>
               {i.blocked && <p className="pipe-note small error-text">Can’t be approved yet: {i.blocked}</p>}
             </div>
-            <a className="btn line" href={i.kind === 'awaiting_approval' ? href('queue', i.id) : href('library', i.id)}>
+            <a className="btn line" href={i.kind === 'awaiting_approval' ? href('videos', i.id) : href('characters', 'all', { clip: i.id })}>
               {i.kind === 'awaiting_approval' ? 'Review' : 'Open'}
             </a>
           </li>
@@ -333,7 +333,7 @@ function PostedList({ pipe }: { pipe: Pipeline }) {
               <OutlierBadge x={i.outlierX} />
             </div>
           </div>
-          <a className="btn line" href={href('library', i.id)} aria-label={`Open ${i.hook ?? 'this clip'} in the library`}>
+          <a className="btn line" href={href('characters', 'all', { clip: i.id })} aria-label={`Open ${i.hook ?? 'this clip'} in the library`}>
             Library
           </a>
         </li>

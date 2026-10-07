@@ -485,22 +485,22 @@ describe('the character switcher', () => {
 });
 
 describe('hash routes with a query', () => {
-  it('reads #/picks?c=biscuit as the picks page with its query, and keeps #/queue/<id> as it was', () => {
-    expect(parseHash('#/picks?c=biscuit')).toEqual({ route: 'picks', param: null, query: 'c=biscuit' });
-    expect(parseHash('#/queue/abc-123')).toEqual({ route: 'queue', param: 'abc-123', query: '' });
-    expect(parseHash('#/queue/abc-123?c=reginald')).toEqual({ route: 'queue', param: 'abc-123', query: 'c=reginald' });
-    // owner 2026-10-06: the app opens on "In the works" (the drops); Today has its own address
-    expect(parseHash('')).toEqual({ route: 'works', param: null, query: '' });
-    expect(parseHash('#/nonsense?c=x').route).toBe('works');
+  it('reads #/more/scan?c=biscuit as the scan page with its query, and #/videos/<id> with its clip', () => {
+    expect(parseHash('#/more/scan?c=biscuit')).toEqual({ route: 'more', param: 'scan', query: 'c=biscuit' });
+    expect(parseHash('#/videos/abc-123')).toEqual({ route: 'videos', param: 'abc-123', query: '' });
+    expect(parseHash('#/videos/abc-123?c=reginald')).toEqual({ route: 'videos', param: 'abc-123', query: 'c=reginald' });
+    // terminal v2 (owner 2026-10-07): the app opens on Today; an unknown address falls back to it
+    expect(parseHash('')).toEqual({ route: 'today', param: null, query: '' });
+    expect(parseHash('#/nonsense?c=x').route).toBe('today');
     expect(parseHash('#/today')).toEqual({ route: 'today', param: null, query: '' });
   });
 
   it('builds the link the Characters page uses for “all picks of this character”', () => {
-    expect(href('picks', undefined, { c: 'biscuit' })).toBe('#/picks?c=biscuit');
-    expect(href('picks')).toBe('#/picks');
-    expect(href('queue', 'abc')).toBe('#/queue/abc');
-    expect(href('works')).toBe('#/');
-    expect(href('today')).toBe('#/today');
+    expect(href('more', 'scan', { c: 'biscuit' })).toBe('#/more/scan?c=biscuit');
+    expect(href('more', 'scan')).toBe('#/more/scan');
+    expect(href('videos', 'abc')).toBe('#/videos/abc');
+    expect(href('today')).toBe('#/');
+    expect(href('clips')).toBe('#/clips');
   });
 });
 
@@ -600,16 +600,16 @@ describe('the demo data', () => {
   });
 });
 
-describe('the tab bar (owner 2026-10-06: the drops first, the viral scan later)', () => {
-  it('opens on In the works, ends with Scan marked later, and keeps every page', async () => {
+describe('the tab bar (terminal v2, owner 2026-10-07: five sections in the order of the work)', () => {
+  it('opens on Today, ends with More, and keeps every page', async () => {
     const { TABS } = await import('./tabs');
     const { ROUTES, HOME } = await import('./hooks');
-    expect(HOME).toBe('works');
-    expect(TABS[0]).toEqual({ route: 'works', label: 'In the works' });
-    expect(TABS[TABS.length - 1]).toEqual({ route: 'picks', label: 'Scan', later: true });
-    expect(TABS.filter((t) => t.later).map((t) => t.route)).toEqual(['picks']);
-    // nothing removed: the Long list and every page stay; the artist page (#/artist/<slug>) is the one route without a tab
+    expect(HOME).toBe('today');
+    expect(TABS[0]).toEqual({ route: 'today', label: 'Today' });
+    expect(TABS[TABS.length - 1]).toEqual({ route: 'more', label: 'More' });
+    expect(TABS.filter((t) => 'later' in t)).toEqual([]); // the viral scan's "later" mark moved into More
+    // nothing removed: the Scan page (Long list), Budget and every page stay; the artist page (#/artist/<slug>) is the one route without a tab
     expect(new Set(TABS.map((t) => t.route))).toEqual(new Set(ROUTES.filter((r) => r !== 'artist')));
-    expect(TABS.map((t) => t.label)).toEqual(['In the works', 'Today', 'Queue', 'Characters', 'Library', 'Budget', 'Scan']);
+    expect(TABS.map((t) => t.label)).toEqual(['Today', 'Clips', 'Videos', 'Characters', 'More']);
   });
 });

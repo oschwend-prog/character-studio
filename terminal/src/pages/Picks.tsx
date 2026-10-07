@@ -506,7 +506,7 @@ function History() {
               <span>score {h.total_score ?? '—'}</span>
               <span>{h.origin === 'owner' ? 'your link' : `by ${h.decision?.by ?? 'rule'}`}</span>
               {h.clip_id ? (
-                <a href={h.clip_state === 'awaiting_approval' ? href('queue', h.clip_id) : href('library', h.clip_id)}>
+                <a href={h.clip_state === 'awaiting_approval' ? href('videos', h.clip_id) : href('characters', 'all', { clip: h.clip_id })}>
                   clip {h.clip_state?.replace('_', ' ')}
                 </a>
               ) : (

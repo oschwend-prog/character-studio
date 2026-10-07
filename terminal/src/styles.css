@@ -128,7 +128,7 @@ a { color: var(--ice); text-underline-offset: 3px; text-decoration-thickness: 1p
 /* ---- tab bar (bottom on phones, rail on desktop) ----------------------------------------- */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-  display: grid; grid-template-columns: repeat(7, 1fr);
+  display: grid; grid-template-columns: repeat(5, 1fr);
   height: calc(var(--tabbar-h) + var(--safe-b)); padding-bottom: var(--safe-b);
   background: var(--panel); border-top: 1px solid var(--rule);
 }
@@ -740,7 +740,7 @@ code { font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 0.92em
   *, *::before, *::after { animation-duration: 1ms !important; animation-iteration-count: 1 !important; transition-duration: 1ms !important; }
 }
 
-/* ---- seven tabs on a phone: "In the works" joined the bar ---------------------------------- */
+/* ---- five tabs on a phone (were seven): the compact labels stay, so CHARACTERS fits the narrowest screens ------- */
 @media (max-width: 480px) {
   .tab { font-size: 9.5px; letter-spacing: 0.02em; text-align: center; line-height: 1.1; padding: 0 1px; min-width: 0; }
   .tab .badge { left: calc(50% + 4px); }

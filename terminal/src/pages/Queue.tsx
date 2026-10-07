@@ -44,7 +44,7 @@ export function Queue({ focus }: { focus: string | null }) {
     const next = queue[i];
     if (!next) return;
     setCurrentId(next.id);
-    window.history.replaceState(null, '', href('queue', next.id)); // a reload reopens this clip
+    window.history.replaceState(null, '', href('videos', next.id)); // a reload reopens this clip
   };
 
   if (!data) {

@@ -96,7 +96,7 @@ export function ScannerLine() {
   if (!status) return null;
   const added = status.last?.scan.picks_added;
   return (
-    <a className="scanner-line" href={href('picks')}>
+    <a className="scanner-line" href={href('more', 'scan')}>
       <Radar size={16} aria-hidden="true" className={status.state === 'scanning' ? 'pulse' : undefined} />
       <span className="grow">
         <span className={status.tone === 'alert' ? 'alert-text' : undefined}>{status.headline}</span>

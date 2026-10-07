@@ -100,7 +100,7 @@ export async function approveAll(
 
 /**
  * Which clip the queue pager shows: the one decision, so no two effects race.
- * 1. A deep link (#/queue/<id>) not applied yet wins once its clip is in the queue (it stays pending
+ * 1. A deep link (#/videos/<id>) not applied yet wins once its clip is in the queue (it stays pending
  *    while the queue loads).
  * 2. Otherwise the clip being viewed stays, whatever reloads happen (Realtime, focus, the minute poll).
  * 3. Otherwise, when the clip being viewed left the queue (approved, rejected, regenerated, or gone in a

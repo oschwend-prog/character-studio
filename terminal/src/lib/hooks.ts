@@ -11,23 +11,80 @@ export function useNow(ms = 15_000): number {
   return now;
 }
 
-export type Route = 'today' | 'picks' | 'works' | 'queue' | 'channels' | 'library' | 'budget' | 'artist';
-/** The routes with a tab; `artist` (`#/artist/<slug>`, a character's page) is reached from the Characters page and his name. */
+/**
+ * The five sections of terminal v2 (owner 2026-10-07), in the order of the work: Today, Clips, Videos, Characters, More.
+ * `artist` (`#/artist/<slug>`, a character's page) has no tab: it is reached from the Characters page and his name.
+ */
+export type Route = 'today' | 'clips' | 'videos' | 'characters' | 'more' | 'artist';
+/** The routes with a tab. */
 export type TabRoute = Exclude<Route, 'artist'>;
-export const ROUTES: Route[] = ['works', 'today', 'queue', 'channels', 'library', 'budget', 'picks', 'artist'];
-/** Where the app opens (owner 2026-10-06: the channels start from the owner's own drops; the scan takes over later). */
-export const HOME: Route = 'works';
+export const ROUTES: Route[] = ['today', 'clips', 'videos', 'characters', 'more', 'artist'];
+/** Where the app opens: Today, the daily dashboard. */
+export const HOME: Route = 'today';
 
-/** `#/queue/<clip id>`, `#/artist/franz` and `#/picks?c=franz`: the route, its one path parameter and the query of the hash. */
+/** `#/videos/<clip id>`, `#/artist/franz` and `#/more/scan?c=franz`: the route, its one path parameter and the query of the hash. */
 export function parseHash(hash: string): { route: Route; param: string | null; query: string } {
   const [pathPart, ...rest] = hash.replace(/^#\/?/, '').split('?');
   const [path, param] = pathPart.split('/');
   return { route: (ROUTES as string[]).includes(path) ? (path as Route) : HOME, param: param || null, query: rest.join('?') };
 }
 
-const parse = () => parseHash(window.location.hash);
+const withQuery = (hash: string, query: string) => (query ? `${hash}?${query}` : hash);
+const safeDecode = (v: string) => {
+  try {
+    return decodeURIComponent(v);
+  } catch {
+    return v; // a stray % in a hand-typed address: keep it as typed
+  }
+};
 
-/** Hash routing (#/queue/<clip id>): works offline in the installed app and needs no server rewrites. */
+/**
+ * The new address for an old bookmark (an address of the seven-tab terminal), else null: `#/works` -> `#/clips`,
+ * `#/queue[/<id>]` -> `#/videos[/<id>]`, `#/library` -> `#/characters/all` and `#/library/<id>` -> `#/characters/all?clip=<id>`,
+ * `#/channels` -> `#/characters`, `#/picks?<q>` -> `#/more/scan?<q>`, `#/budget` -> `#/more/budget`, `#/today` -> `#/`.
+ * A query the old address carried (`?c=franz`, `?view=list`) is kept. The new addresses, the artist page and the unknown
+ * ones return null (they are not rewritten).
+ */
+export function upgradeHash(hash: string): string | null {
+  const [pathPart, ...rest] = hash.replace(/^#\/?/, '').split('?');
+  const query = rest.join('?');
+  const [path, param] = pathPart.split('/');
+  switch (path) {
+    case 'works':
+      return withQuery('#/clips', query);
+    case 'queue':
+      return withQuery(param ? `#/videos/${param}` : '#/videos', query);
+    case 'library': {
+      if (!param) return withQuery('#/characters/all', query);
+      // the clip to open goes in the query (the Characters "all" view reads `clip`); whatever else the link carried stays
+      const q = new URLSearchParams({ clip: safeDecode(param) });
+      for (const [k, v] of new URLSearchParams(query)) if (k !== 'clip') q.append(k, v);
+      return `#/characters/all?${q.toString()}`;
+    }
+    case 'channels':
+      return withQuery('#/characters', query);
+    case 'picks':
+      return withQuery('#/more/scan', query);
+    case 'budget':
+      return withQuery('#/more/budget', query);
+    case 'today':
+      return withQuery('#/', query);
+    default:
+      return null;
+  }
+}
+
+/** Rewrites an old address in place (replaceState: no history entry, no hashchange) and reads the route of the address now. */
+function parse() {
+  const next = upgradeHash(window.location.hash);
+  if (next != null) window.history.replaceState(null, '', next);
+  return parseHash(window.location.hash);
+}
+
+/**
+ * Hash routing (#/videos/<clip id>): works offline in the installed app and needs no server rewrites. An old bookmark is
+ * upgraded before it is parsed, at startup and on every hashchange (so a link pasted into the address bar works too).
+ */
 export function useRoute() {
   const [r, setR] = useState(parse);
   useEffect(() => {

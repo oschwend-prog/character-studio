@@ -1,11 +1,11 @@
 // The shell: demo or live backend, owner sign-in, top bar (mark + London clock), the page, the tab bar.
 import type { Session } from '@supabase/supabase-js';
-import { Clapperboard, Clock3, Flame, Gauge, Library as LibraryIcon, ListChecks, Users } from 'lucide-react';
+import { Clapperboard, Clock3, Ellipsis, FolderOpen, Users } from 'lucide-react';
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Mark } from './components/ui';
 import { londonDate, londonTime } from './lib/format';
 import { TABS as TAB_SPECS } from './lib/tabs';
-import { href, useNow, useRoute, type Route, type TabRoute } from './lib/hooks';
+import { href, useNow, useRoute, type TabRoute } from './lib/hooks';
 import { StudioProvider, useStudio } from './lib/store';
 import type { Backend } from './lib/types';
 import { LiveBackend, hasLiveConfig, isSchemaNotExposed, supabase } from './lib/supabase';
@@ -99,19 +99,21 @@ function LiveGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// The order, the labels and the "later" mark live in lib/tabs.ts (owner 2026-10-06: In the works first, the viral scan last).
+// The order and the labels live in lib/tabs.ts (terminal v2, owner 2026-10-07: Today, Clips, Videos, Characters, More).
 const ICONS: Record<TabRoute, ComponentType<{ 'aria-hidden'?: boolean }>> = {
-  works: Clapperboard, today: Clock3, queue: ListChecks, channels: Users, library: LibraryIcon, budget: Gauge, picks: Flame,
+  today: Clock3, clips: FolderOpen, videos: Clapperboard, characters: Users, more: Ellipsis,
 };
 const TABS = TAB_SPECS.map((t) => ({ ...t, Icon: ICONS[t.route] }));
 
 function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.ReactNode }) {
   const { data, live, error, toasts, refresh } = useStudio();
-  const { route, param } = useRoute();
+  const { route, param, query } = useRoute();
   const now = useNow(10_000);
-  const badge: Partial<Record<Route, { n: number; quiet?: boolean }>> = {
-    queue: data?.queue.length ? { n: data.queue.length } : undefined,
-    today: data?.health.length ? { n: data.health.length, quiet: true } : undefined,
+  const clipsNeedingYou = 0; // the drops that need the owner: comes from todayCounts (Today's dashboard) once that exists
+  const badge: Partial<Record<TabRoute, { n: number; label: string; quiet?: boolean }>> = {
+    today: data?.health.length ? { n: data.health.length, label: 'alerts', quiet: true } : undefined,
+    clips: clipsNeedingYou ? { n: clipsNeedingYou, label: 'need you', quiet: true } : undefined,
+    videos: data?.queue.length ? { n: data.queue.length, label: 'waiting' } : undefined,
   };
 
   return (
@@ -140,26 +142,19 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
       )}
       <main id="main">
         {route === 'today' && <Today />}
-        {route === 'picks' && <Picks />}
-        {route === 'works' && <Works />}
-        {route === 'queue' && <Queue focus={param} />}
-        {route === 'channels' && <Channels />}
-        {route === 'library' && <Library focus={param} />}
-        {route === 'budget' && <Budget account={account} />}
+        {route === 'clips' && <Works />}
+        {route === 'videos' && <Queue focus={param} />}
+        {route === 'characters' && (param === 'all' ? <Library focus={new URLSearchParams(query).get('clip')} /> : <Channels />)}
+        {route === 'more' && (param === 'budget' ? <Budget account={account} /> : <Picks />)}
         {route === 'artist' && <Artist slug={param} />}
       </main>
       <nav className="tabbar" aria-label="Sections">
-        {TABS.map(({ route: r, label, Icon, later }) => (
-          <a key={r} className="tab" href={href(r)} aria-current={route === r || (route === 'artist' && r === 'channels') ? 'page' : undefined}>
+        {TABS.map(({ route: r, label, Icon }) => (
+          <a key={r} className="tab" href={href(r)} aria-current={route === r || (route === 'artist' && r === 'characters') ? 'page' : undefined}>
             <Icon aria-hidden />
             {label}
-            {later && (
-              <span className="badge later" aria-label="for later">
-                later
-              </span>
-            )}
-            {!later && badge[r] && (
-              <span className={`badge${badge[r]!.quiet ? ' quiet' : ''}`} aria-label={`${badge[r]!.n} ${r === 'queue' ? 'waiting' : 'alerts'}`}>
+            {badge[r] && (
+              <span className={`badge${badge[r]!.quiet ? ' quiet' : ''}`} aria-label={`${badge[r]!.n} ${badge[r]!.label}`}>
                 {badge[r]!.n}
               </span>
             )}

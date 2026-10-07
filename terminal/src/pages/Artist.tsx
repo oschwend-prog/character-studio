@@ -75,7 +75,7 @@ export function Artist({ slug }: { slug: string | null }) {
   const { data } = useStudio();
   const now = useNow(60_000);
   const back = (
-    <a className="link" href={href('channels')}>
+    <a className="link" href={href('characters')}>
       <ChevronLeft size={16} aria-hidden="true" /> Characters
     </a>
   );
@@ -298,7 +298,8 @@ function Voice({ card }: { card: ArtistCard | null }) {
 }
 
 function VideoRow({ v }: { v: ArtistVideo }) {
-  const to = v.route === 'works' ? href('works') : href(v.route, v.id);
+  // where each kind of his videos opens now: the drop in Clips, the clip waiting for your OK in Videos, a posted one in the Characters list
+  const to = v.route === 'works' ? href('clips') : v.route === 'queue' ? href('videos', v.id) : href('characters', 'all', { clip: v.id });
   return (
     <li className="pipe-row">
       <div className="pipe-main">
@@ -326,7 +327,7 @@ function Videos({ videos, name }: { videos: ReturnType<typeof artistVideos>; nam
   const s = videos.stats;
   const rows = [...videos.queue, ...videos.works, ...videos.posted.slice(0, POSTED_SHOWN)];
   return (
-    <Section title="His videos" id="artist-videos" aside={<a href={href('works')}>In the works →</a>}>
+    <Section title="His videos" id="artist-videos" aside={<a href={href('clips')}>In the works →</a>}>
       <div className="panel">
         <div className="kv" style={{ borderTop: 0, borderBottom: 0 }}>
           <div>
@@ -359,7 +360,7 @@ function Videos({ videos, name }: { videos: ReturnType<typeof artistVideos>; nam
       </div>
       {rows.length === 0 ? (
         <p className="small muted" style={{ margin: 0 }}>
-          No video of {name} yet: drop one in <a href={href('works')}>In the works</a>.
+          No video of {name} yet: drop one in <a href={href('clips')}>In the works</a>.
         </p>
       ) : (
         <ul className="pipe-list" aria-label={`${name}’s videos`}>
@@ -369,7 +370,7 @@ function Videos({ videos, name }: { videos: ReturnType<typeof artistVideos>; nam
         </ul>
       )}
       {videos.posted.length > POSTED_SHOWN && (
-        <a className="small stage-more" href={href('library')}>
+        <a className="small stage-more" href={href('characters', 'all')}>
           Showing {POSTED_SHOWN} of {videos.posted.length} posted · the Library
         </a>
       )}
