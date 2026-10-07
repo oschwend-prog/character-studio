@@ -1,6 +1,6 @@
 // Terminal v2, Clips page (owner 2026-10-07): one plain chip per dropped clip instead of the 8-step stepper, and the filters over
 // them. Pure functions over v_tracker rows (drop_card, migrations 0012-0013); no browser.
-import { dropActions, type DropAction } from './drop';
+import { dropActions, dropCredits, type DropAction } from './drop';
 import { FINISHED_STATES } from './finished';
 import { IN_PRODUCTION_STATES } from './rules';
 import type { DropState, TrackerRow } from './types';
@@ -124,4 +124,34 @@ export function clipActions(row: TrackerRow, now: number): DropAction[] {
   const actions = dropActions(d, now);
   const chip = clipChip(row);
   return chip === 'making' || chip === 'done' ? actions.filter((a) => !PAID_ACTIONS.includes(a)) : actions;
+}
+
+/** When a clip was dropped: the card's own time, else when the pick was approved; null when neither is a valid time. */
+function droppedAt(r: Pick<TrackerRow, 'drop_card' | 'approved_at'>): number | null {
+  for (const iso of [r.drop_card?.at, r.approved_at]) {
+    const t = iso ? Date.parse(iso) : NaN;
+    if (Number.isFinite(t)) return t;
+  }
+  return null;
+}
+
+/**
+ * The Clips page's order (spec B.2): the newest drop first, whatever its state (the filters carry the grouping). A clip with no
+ * valid time comes last; equal times fall back to the pick id, so the order never jumps between renders. Returns a new list.
+ */
+export function newestFirst<R extends Pick<TrackerRow, 'pick_id' | 'drop_card' | 'approved_at'>>(rows: ReadonlyArray<R>): R[] {
+  const at = (r: R) => droppedAt(r) ?? Number.NEGATIVE_INFINITY;
+  return [...rows].sort((a, b) => {
+    const [x, y] = [at(a), at(b)];
+    return (x === y ? 0 : y > x ? 1 : -1) || a.pick_id.localeCompare(b.pick_id);
+  });
+}
+
+/**
+ * The header line's numbers: the clips the owner can Make now (their row offers Make it, so a Ready and a Pick a character clip,
+ * never one that is Making or Done) and what making them all costs, each at the price its row shows (its own Adjust included).
+ */
+export function makeTotal(rows: ReadonlyArray<TrackerRow>, now: number): { count: number; credits: number } {
+  const makeable = rows.filter((r) => clipActions(r, now).includes('make'));
+  return { count: makeable.length, credits: makeable.reduce((sum, r) => sum + dropCredits(r.drop_card!, r.drop_card!.adjust ?? {}), 0) };
 }

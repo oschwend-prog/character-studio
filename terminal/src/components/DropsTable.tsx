@@ -7,10 +7,10 @@
 // moments with text on screen, own footage. Nothing is paid before Make it. The Clips page passes the rows its filter keeps.
 import { AlertTriangle, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
-import { CHIP_CLASS, CHIP_LABEL, clipActions, clipChip } from '../lib/clipstatus';
+import { CHIP_CLASS, CHIP_LABEL, clipActions, clipChip, makeTotal } from '../lib/clipstatus';
 import {
   PART_LABEL, RECOMMEND, avoidLabel, characterMenu, dropCredits, dropLine, dropTitle, effectiveDrop,
-  isDropCard, readyTotal, recommendationLine, sectionLabel, type CharacterMenu,
+  isDropCard, recommendationLine, sectionLabel, type CharacterMenu,
 } from '../lib/drop';
 import { formatCredits } from '../lib/format';
 import { href } from '../lib/hooks';
@@ -31,7 +31,7 @@ export function DropsTable({
   roster: ReadonlyArray<RosterEntry>;
   budget: Budget | null;
   now: number;
-  /** The rows the "N ready · about X credits" line adds up: every drop, when `rows` is a filtered view of them. */
+  /** The rows the "N to make · about X credits" line adds up: every drop, when `rows` is a filtered view of them. */
   summaryRows?: ReadonlyArray<TrackerRow>;
   /** Under the heading, above the table: the Clips page's filter chips. */
   toolbar?: ReactNode;
@@ -39,7 +39,7 @@ export function DropsTable({
   empty?: string;
 }) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  const total = readyTotal(summaryRows);
+  const total = makeTotal(summaryRows, now);
   const left = budget ? Math.max(0, budget.cap - budget.committed) : null;
   const toggle = (id: string) =>
     setOpen((s) => {
@@ -55,8 +55,8 @@ export function DropsTable({
         <h2 className="h2" id="drops-title">Your drops</h2>
         <p className="small muted num" style={{ margin: '6px 0 0' }}>
           {total.count === 0
-            ? 'Nothing ready to make yet.'
-            : `${total.count} ready · about ${formatCredits(total.credits)} to make them all`}
+            ? 'Nothing to make yet.'
+            : `${total.count} to make · about ${formatCredits(total.credits)}`}
           {left != null && ` · ${formatCredits(left)} left of this month’s ${formatCredits(budget!.cap)} cap`}
         </p>
       </div>
@@ -75,7 +75,7 @@ export function DropsTable({
       ) : (
         <div className="panel ll-scroll" role="region" aria-label={`Your drops, ${rows.length}`} tabIndex={0}>
           <table className="ll-table drops-table">
-            <caption className="sr-only">Every video you dropped: Ready first, then what needs you, then what is moving.</caption>
+            <caption className="sr-only">Every video you dropped, the newest first.</caption>
             <thead>
               <tr>
                 <th scope="col" className="ll-pic"><span className="sr-only">Picture</span></th>

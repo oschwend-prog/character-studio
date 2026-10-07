@@ -2,7 +2,8 @@
 // the filters over them. Pure functions over v_tracker rows; no browser.
 import { describe, expect, it } from 'vitest';
 import {
-  CHIP_CLASS, CHIP_LABEL, CLIP_FILTERS, CLIP_FILTER_EMPTY, clipActions, clipChip, clipFilterQuery, filterClips, parseClipFilter,
+  CHIP_CLASS, CHIP_LABEL, CLIP_FILTERS, CLIP_FILTER_EMPTY, clipActions, clipChip, clipFilterQuery, filterClips, makeTotal, newestFirst,
+  parseClipFilter,
   type ClipChip, type ClipFilter,
 } from './clipstatus';
 import type { ClipState, DropCard, DropState, TrackerRow } from './types';
@@ -210,5 +211,92 @@ describe('the status cell’s look and the buttons of a row', () => {
     expect(clipActions(row(card('uploading', { at: ago(45) })), NOW)).toEqual(['remove']);
     expect(clipActions(row(card('uploading')), NOW)).toEqual([]);
     expect(clipActions(row(null), NOW)).toEqual([]);
+  });
+});
+
+describe('newestFirst: the Clips page lists the newest drop first, whatever its state', () => {
+  const at = (m: number, state: DropState = 'ready', over: Partial<TrackerRow> = {}) => row(card(state, { at: ago(m) }), over);
+  const ids = (rows: TrackerRow[]) => newestFirst(rows).map((r) => r.pick_id);
+
+  it('sorts by the card’s time, newest first, and does not group by state', () => {
+    const readyOld = at(300, 'ready');
+    const madeNew = at(5, 'made');
+    const failedMid = at(60, 'failed');
+    const blockedNewer = at(20, 'blocked');
+    expect(ids([readyOld, madeNew, failedMid, blockedNewer])).toEqual([madeNew, blockedNewer, failedMid, readyOld].map((r) => r.pick_id));
+  });
+
+  it('falls back to when the pick was approved when the card has no valid time', () => {
+    const noAt = row({ state: 'ready', kind: 'file' } as DropCard, { approved_at: ago(30) });
+    const badAt = row(card('ready', { at: 'not a time' }), { approved_at: ago(10) });
+    const dated = at(20);
+    // approved 10 min ago (bad card time), 20 min ago (card), 30 min ago (no card time)
+    expect(ids([noAt, dated, badAt])).toEqual([badAt, dated, noAt].map((r) => r.pick_id));
+  });
+
+  it('puts a clip with neither time last, and breaks ties by pick id so the order is stable', () => {
+    const none = row({ state: 'ready', kind: 'file' } as DropCard, { approved_at: 'never' });
+    const empty = row(card('ready', { at: '' }), { approved_at: '' });
+    const newer = at(1);
+    const [a, b] = [at(10, 'ready', { pick_id: 'pick-a' }), at(10, 'checking', { pick_id: 'pick-b' })];
+    b.drop_card = { ...b.drop_card!, at: a.drop_card!.at }; // exactly the same time
+    expect(ids([none, b, empty, a, newer])).toEqual([newer.pick_id, 'pick-a', 'pick-b', ...[none, empty].map((r) => r.pick_id).sort()]);
+    expect(ids([a, b, newer, none, empty])).toEqual(ids([none, empty, newer, b, a]));
+  });
+
+  it('returns a new list and leaves the input alone', () => {
+    const rows = [at(50), at(10)];
+    const before = rows.map((r) => r.pick_id);
+    const sorted = newestFirst(rows);
+    expect(sorted).not.toBe(rows);
+    expect(rows.map((r) => r.pick_id)).toEqual(before);
+    expect(newestFirst([])).toEqual([]);
+  });
+});
+
+describe('makeTotal: the header line adds up what the owner can Make now', () => {
+  const priced = (state: DropState, over: Partial<DropCard> = {}) =>
+    card(state, { window: { start_s: 0, length_s: 9 }, credits: 102, seconds: 9, ...over });
+  const OWNER = { character_by: 'owner' as const };
+  const STUDIO = { character_by: 'studio' as const };
+
+  it('counts the Ready and the Pick a character clips, each at its own price (102 credits for 9 s)', () => {
+    expect(makeTotal([row(priced('ready', OWNER)), row(priced('ready', STUDIO))], NOW)).toEqual({ count: 2, credits: 204 });
+  });
+
+  it('uses the owner’s Adjust for the price, like the table', () => {
+    const adjusted = row(priced('ready', { ...OWNER, adjust: { length_s: 6 } })); // 6 s: ceil(6 x 11) + 3 = 69
+    expect(makeTotal([adjusted, row(priced('ready', OWNER))], NOW)).toEqual({ count: 2, credits: 69 + 102 });
+  });
+
+  it('leaves out what is Making or Done, even when its card still says ready', () => {
+    const lagging = priced('ready', OWNER);
+    const rows = [
+      row(priced('making')),
+      row(priced('made')),
+      row(lagging, { make_requested_at: ago(1) }), // Make it was tapped, no clip yet
+      withClip(lagging, 'generating'),
+      withClip(lagging, 'awaiting_approval', { status: 'made' }),
+    ];
+    expect(makeTotal(rows, NOW)).toEqual({ count: 0, credits: 0 });
+    // …and counts the one clip next to them that can still be made
+    expect(makeTotal([...rows, row(priced('ready', OWNER))], NOW)).toEqual({ count: 1, credits: 102 });
+  });
+
+  it('leaves out clips that are checking, blocked or failed (Try again is not Make it), and rows without a card', () => {
+    const rows = [
+      row(card('uploading')), row(card('checking')), row(card('waiting')), row(card('blocked')),
+      row(priced('failed')), row(priced('failed', { credits: undefined })), row(null),
+    ];
+    expect(makeTotal(rows, NOW)).toEqual({ count: 0, credits: 0 });
+    expect(makeTotal([], NOW)).toEqual({ count: 0, credits: 0 });
+  });
+
+  it('agrees with the Ready filter plus the Pick a character filter, so the line and the chips tell one story', () => {
+    const rows = [
+      row(priced('ready', OWNER)), row(priced('ready', STUDIO)), row(priced('ready')), row(priced('making')), row(priced('made')),
+      withClip(priced('ready', OWNER), 'generating'), row(card('checking')), row(priced('failed')),
+    ];
+    expect(makeTotal(rows, NOW).count).toBe(filterClips(rows, 'ready').length + filterClips(rows, 'pick').length);
   });
 });

@@ -1,14 +1,15 @@
 // Clips (terminal v2, owner 2026-10-07: "the terminal should be structured around the clips I download and put into a folder"; this
 // replaces "In the works"). At the top the Add clips box (DropBox), then the long list: one row per clip he dropped, with its
 // one-word status, the studio's ★ suggestion and the character menu, the price and Make it (DropsTable). The chips filter the list
-// (All, Pick a character, Ready, Making, Done, Blocked or failed); the filter lives in the address (`#/clips?f=ready`), so
+// (All, Pick a character, Ready, Making, Done, Blocked or failed) over the list, newest drop first; the filter lives in the address (`#/clips?f=ready`), so
 // Today's tiles and warnings link straight to it. A clip that is made moves on to Videos; the picks on their 8 steps are there too.
 import { useCallback, useEffect, useState } from 'react';
 import { DropBox } from '../components/DropBox';
 import { DropsTable } from '../components/DropsTable';
 import { Skeleton } from '../components/ui';
-import { CLIP_FILTERS, CLIP_FILTER_EMPTY, clipFilterQuery, filterClips, parseClipFilter, type ClipFilter } from '../lib/clipstatus';
-import { dropRows } from '../lib/drop';
+import {
+  CLIP_FILTERS, CLIP_FILTER_EMPTY, clipFilterQuery, filterClips, newestFirst, parseClipFilter, type ClipFilter,
+} from '../lib/clipstatus';
 import { href, parseHash, useNow } from '../lib/hooks';
 import { activeRoster } from '../lib/roster';
 import { useStudio } from '../lib/store';
@@ -53,7 +54,7 @@ export function Clips() {
       </div>
     );
   }
-  const all = dropRows(data.tracker.filter((r) => inTracker(r, now)));
+  const all = newestFirst(data.tracker.filter((r) => inTracker(r, now) && r.drop_card)); // newest first (spec B.2); the filters carry the grouping
   const rows = filterClips(all, filter);
   return (
     <div className="page stack">
