@@ -2,7 +2,7 @@
   "_doc": "Identity-lock references and account links for Reginald. `bin/studio seed` upserts the character and its accounts from this file. status: designing | live | paused (the daily run skips anything but live; flip to live at go-live). closeup is the head-and-shoulders identity reference (gpt_image_2_5, 2026-10-06, the odd eyes clearly visible), never an end beat: masters end on the dance (owner 2026-10-05), so closeup_center and blue_eye_xy (pixels of the old eye zoom) stay null. An account with a null handle is not seeded yet (planned_handle is the first choice of docs/launch/social-pages.md, shown on the terminal until the real handle replaces it); an account with no postiz_integration_id is skipped by planning. dropin_share is the first-insert value (1.00: Drop-in is the default for every video, owner decision 2026-10-05): the Instagram guard and the terminal change it later and a re-seed leaves it alone. traits is the character's trait card (see studio/seed.py): the terminal shows it, its props are the Make-it chips and the daily run scores fit against it. reference_urls are the public Higgsfield CDN URLs of the masters, sheets and close-up (the image_urls of the cloud Object swap, Drop a video); swap is the like-for-like rule (noun: what the prompt calls him; stars: the kinds of star he replaces).",
   "slug": "reginald",
   "name": "Reginald",
-  "status": "designing",
+  "status": "live",
   "bodies": ["biped"],
   "masters": {
     "biped": "4fb61254-cc90-4393-b71d-e2f9886400ad",

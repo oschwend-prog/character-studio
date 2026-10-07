@@ -369,7 +369,7 @@ def test_the_shipped_refs_files_load_and_match_the_brief():
     assert (r["closeup_center"], r["blue_eye_xy"]) == (None, None)
     assert b["status"] == "paused"  # retired 2026-10-06 (C5: Franz is the one dachshund)
     for c in (b, r):
-        assert c["status"] in ("designing", "paused")  # Reginald flips to live at go-live (Task 16)
+        assert c["status"] in ("designing", "paused", "live")  # Reginald went live on 2026-10-07 (owner: first posts)
         # owner decision 2026-10-05: Drop-in is the default for every video, so every account starts at 1.00
         assert {a["platform"]: a["dropin_share"] for a in c["accounts"]} == {"tiktok": 1.0, "instagram": 1.0}
         # an account the owner has created carries its real handle (and, once connected, its Postiz id); the rest stay null
