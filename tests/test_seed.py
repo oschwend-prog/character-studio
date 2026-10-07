@@ -343,10 +343,10 @@ def test_bad_refs_are_refused_before_anything_is_written(tmp_path, over, message
     assert store.characters() == []  # reginald was fine, but the run is all or nothing
 
 
-FRANZ_KIT = {
-    "pill": {"fill": "#F4EBDD", "fill_alpha": 255, "text": "#1F2A44", "font": "PlayfairDisplay-Italic-Variable.ttf", "weight": "Medium", "radius": 34},
-    "entrance": "fade_rise",
-    "hook_edit": "push_in",
+FRANZ_KIT = {  # owner 2026-10-07: the happy show-off's "cream card, bold and bouncy"
+    "pill": {"fill": "#F4EBDD", "fill_alpha": 255, "text": "#1F2A44", "font": "Figtree-Variable.ttf", "weight": "ExtraBold", "radius": 34},
+    "entrance": "slam",
+    "hook_edit": "punch_in",
     "tone": "warm",
 }
 
@@ -396,7 +396,7 @@ def test_the_roster_kits_load():
     assert "dj" not in loaded, "no refs.json: the seed ignores the DJ's folder"
     assert "style" not in loaded["biscuit"], "retired Biscuit keeps today's pill"
     f, r, ln = (loaded[s]["style"] for s in ("franz", "reginald", "lenny"))
-    assert f == FRANZ_KIT  # cream card, navy italic serif, round corners; fades and rises; slow push-in; warm
+    assert f == FRANZ_KIT  # cream card, navy ExtraBold sans, round corners; slams in; quick punch-in; warm
     assert r == {
         "pill": {"fill": "#0E0F12", "text": "#F2F0EA", "border": ["#E8E6E1", 2], "font": "CormorantSC-Medium.ttf", "weight": None,
                  "case": "smallcaps", "tracking": 3, "radius": 6},

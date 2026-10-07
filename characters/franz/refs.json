@@ -39,12 +39,12 @@
       "fill": "#F4EBDD",
       "fill_alpha": 255,
       "text": "#1F2A44",
-      "font": "PlayfairDisplay-Italic-Variable.ttf",
-      "weight": "Medium",
+      "font": "Figtree-Variable.ttf",
+      "weight": "ExtraBold",
       "radius": 34
     },
-    "entrance": "fade_rise",
-    "hook_edit": "push_in",
+    "entrance": "slam",
+    "hook_edit": "punch_in",
     "tone": "warm"
   },
   "traits": {
@@ -67,7 +67,7 @@
     "moves": [
       "proud strut, tail up",
       "paw raised high, paw on the hip",
-      "the Wiggle: full-body sausage wiggle on the drop (proposed)",
+      "the Wiggle: full-body sausage wiggle on the drop",
       "happy hop-spin",
       "tongue-out victory pose"
     ],

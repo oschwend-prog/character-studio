@@ -40,8 +40,8 @@
   round odd-eye glasses of the Big Lad still. Open: the person ("slightly younger, different looking") and the name.
 
 **Character decisions (owner, 2026-10-06):**
-- Signature moves locked: Franz the Chin Lift, Reginald the Glove Tug, Lenny the Tie Snap.
-- Catchphrases locked: Franz "That is what people are for.", Reginald "As you were.", Lenny "You're welcome."
+- Signature moves locked: Franz the Wiggle (owner 2026-10-07, replaces the Chin Lift), Reginald the Glove Tug, Lenny the Tie Snap.
+- Catchphrases locked: Franz "Sausage coming through!" (owner 2026-10-07), Reginald "As you were.", Lenny "You're welcome."
 - Reginald is mid-40s (not 74). Franz's voice is Alistair (approved).
 - Instagram `biscuit.moves` is renamed to Franz (`franz.dachshund`, owner step); Biscuit's Single Ladies video stays unposted.
 - Lenny's first full clip (charcoal suit) is remade in the chalk-stripe (price first).

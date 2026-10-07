@@ -267,7 +267,7 @@ def test_styled_pill_uses_the_kit_colours(tmp_path):
     cy = (top + bottom) // 2
     px = img.getpixel((right - 14, cy))  # the padding after the text: the fill
     assert near(px, (0xF4, 0xEB, 0xDD), 2) and px[3] == overlays.pill_style(kit("franz")["pill"]).fill_alpha
-    assert has_opaque(img, FRANZ_NAVY, 2), "the italic serif text is navy #1F2A44"
+    assert has_opaque(img, FRANZ_NAVY, 2), "the ExtraBold sans text is navy #1F2A44"
     reginald = pill_for("reginald", ["Kindly do not inform the Duchess."], tmp_path / "reg.png")
     assert has_opaque(reginald, (0xF2, 0xF0, 0xEA), 2), "the off-white small caps"
     assert has_opaque(reginald, (0xE8, 0xE6, 0xE1), 6), "and the thin rule #E8E6E1 round the card (a little soft at 3x -> 1x)"
@@ -350,10 +350,11 @@ def test_case_tracking_and_weight_follow_the_style(tmp_path):
         style = overlays.pill_style(kit(slug)["pill"])
         raw = ImageFont.truetype(str(overlays.FONT_DIR / style.font), 40)
         assert overlays._apply_weight(raw, style.weight), slug
-    medium = overlays.pill_style(kit("franz")["pill"])
-    assert width(Image.open(overlays.pill_png(["Kindly do not inform"], tmp_path / "m.png", style=medium))) != width(
-        Image.open(overlays.pill_png(["Kindly do not inform"], tmp_path / "r.png", style=dataclasses.replace(medium, weight=None)))
-    ), "Medium Italic is wider than the font's default weight"
+    extra_bold = overlays.pill_style(kit("franz")["pill"])
+    assert extra_bold.weight == "ExtraBold"
+    assert width(Image.open(overlays.pill_png(["Kindly do not inform"], tmp_path / "m.png", style=extra_bold))) != width(
+        Image.open(overlays.pill_png(["Kindly do not inform"], tmp_path / "r.png", style=dataclasses.replace(extra_bold, weight=None)))
+    ), "ExtraBold is wider than the font's default weight"
     ghost = overlays.PillStyle(font="Nope-Regular.ttf")
     assert overlays.pill_png(["a font that is gone falls back"], tmp_path / "g.png", style=ghost).is_file()
 
@@ -1477,7 +1478,9 @@ def entrance_pill(tmp_path: Path, slug: str, lines: list[str]) -> tuple[Path, ov
 
 
 def test_entrance_fade_rise_frames(tmp_path):
-    png, _ = entrance_pill(tmp_path, "franz", ["Absolutely not."])
+    """fade_rise is a kit option no roster kit uses today (Franz used it until 2026-10-07): an explicit solid cream card tests it."""
+    cream = overlays.PillStyle(fill="#F4EBDD", fill_alpha=255, text="#1F2A44", radius=34)
+    png = overlays.pill_png(["Absolutely not."], tmp_path / "cream_hook.png", style=cream)
     left, top, right, bottom = Image.open(png).getchannel("A").getbbox()
     frames = master.entrance_frames(png, "fade_rise", 0.0, 3.0, tmp_path)
     assert len(frames) == 5
@@ -1519,19 +1522,73 @@ def test_word_pop_follows_the_beats(tmp_path):
     assert [(f.start, f.end) for f in short] == [(0.2, 0.5), (0.5, 1.0)]
 
 
+def cream_bbox(img: Image.Image, box: tuple[int, int, int, int], tol: int = 12) -> tuple[int, int, int, int]:
+    """The bounding box (in ``img``'s own pixels) of the cream-card pixels inside ``box``."""
+    mask = None
+    for band, want in zip(img.crop(box).split(), CREAM, strict=True):
+        hit = band.point(lambda v, want=want: 255 if abs(v - want) <= tol else 0)
+        mask = hit if mask is None else ImageChops.multiply(mask, hit)
+    left, top, right, bottom = mask.getbbox()
+    return left + box[0], top + box[1], right + box[0], bottom + box[1]
+
+
 def test_a_character_masters_in_its_kit(tmp_path):
-    """Franz: the cream pill fades in over 0.4 s, the picture is warmer, the clip keeps its length."""
+    """Franz (owner 2026-10-07, "cream card, bold and bouncy"): the cream pill slams in (1.15x -> 1.00x over 0.15 s, so it is on
+    screen and oversized from the very first frame), the picture is warmer, the clip keeps its length."""
     dance = flat_video(tmp_path / "dance.mp4", 2)
     plain = build_master(spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[],
                                   hook2=["Absolutely not."], hook2_until_s=1.8, out=tmp_path / "plain.mp4"))  # fmt: skip
     out = build_master(spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[],
                                 hook2=["Absolutely not."], hook2_until_s=1.8, character="franz"))  # fmt: skip
     assert probe(out, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
-    assert count_near(frame_at(out, 0.0, tmp_path), PILL_BOX, CREAM) == 0, "20% at the start"
+    wide = (0, 1200, 1080, 1700)  # the pill's band with room for the 1.15x slam
+    assert count_near(frame_at(out, 0.0, tmp_path), wide, CREAM) > 5000, "slam: opaque from the first frame (no fade-in)"
+    slammed, settled = (cream_bbox(frame_at(out, t, tmp_path), wide) for t in (0.0, 1.0))
+    ratio = (slammed[2] - slammed[0]) / (settled[2] - settled[0])
+    assert 1.10 <= ratio <= 1.20, f"1.15x at the start, 1.00x once settled (got {ratio:.3f})"
+    assert abs((slammed[0] + slammed[2]) - (settled[0] + settled[2])) <= 4, "slams about the pill's centre"
+    assert abs((slammed[1] + slammed[3]) - (settled[1] + settled[3])) <= 4
+    assert cream_bbox(frame_at(out, 0.3, tmp_path), wide) == pytest.approx(settled, abs=2), "settled well before 0.3 s"
     assert count_near(frame_at(out, 1.0, tmp_path), PILL_BOX, CREAM) > 5000, "the cream card, full"
     assert count_near(frame_at(plain, 1.0, tmp_path), PILL_BOX, CREAM) < 100  # the dark pill without the kit (a few edge pixels)
     warm, cold = (ImageStat.Stat(frame_at(v, 1.0, tmp_path).crop((0, 400, 1080, 1000))).mean for v in (out, plain))
-    assert warm[2] < cold[2] - 2 and warm[0] - warm[2] > cold[0] - cold[2] + 3, "warmer: less blue, more red against it"
+    # on this dark flat clip the warm tone alone moves the means by whole levels (R +1, B -2: 33/46/61 against 32/47/63); the old
+    # push-in's bicubic rescale added about 2 more of rounding, which the thresholds of before leaned on
+    assert warm[2] <= cold[2] - 2 and warm[0] >= cold[0] + 1 and (warm[0] - warm[2]) - (cold[0] - cold[2]) >= 3, (
+        "warmer: less blue, more red against it"
+    )
+
+
+def test_franzs_kit_punches_in_then_settles(tmp_path, synth_video):
+    """The same build with only the hook edit switched off is the reference: Franz's quick punch-in is 1.15x at 0 and the
+    plain picture from 0.5 s on (the tone is the same in both, so only the zoom shows)."""
+    src = synth_video(dur=2)  # testsrc2: detail all over the frame
+    audio = tone(tmp_path / "beat.wav", 3)
+    franz = kit("franz")
+    assert franz["hook_edit"] == "punch_in"
+    punched = build_master(spec_for(tmp_path, src, audio, closeup=None, hook1=[], hook2=[], character="franz", out=tmp_path / "punched.mp4"))
+    still = build_master(spec_for(tmp_path, src, audio, closeup=None, hook1=[], hook2=[], style={**franz, "hook_edit": "none"},
+                                  out=tmp_path / "still.mp4"))  # fmt: skip
+
+    def diff(t: float) -> float:
+        a, b = frame_at(punched, t, tmp_path), frame_at(still, t, tmp_path)
+        return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3
+
+    assert diff(0.0) > 8, "punched in at the start"
+    assert diff(0.8) < 3 and diff(1.5) < 3, "settled on the plain picture from 0.5 s"
+    assert probe(punched, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
+
+
+def test_a_kit_can_fade_and_rise_in_and_push_in(tmp_path):
+    """fade_rise + push_in stay valid kit options (Franz used them until 2026-10-07): the caption starts at 20% opacity, so no
+    full cream card shows at 0 s, and the full one does later."""
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    fade_kit = {**kit("franz"), "entrance": "fade_rise", "hook_edit": "push_in"}
+    out = build_master(spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[],
+                                hook2=["Absolutely not."], hook2_until_s=1.8, style=fade_kit))  # fmt: skip
+    assert probe(out, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
+    assert count_near(frame_at(out, 0.0, tmp_path), PILL_BOX, CREAM) == 0, "20% at the start"
+    assert count_near(frame_at(out, 1.0, tmp_path), PILL_BOX, CREAM) > 5000, "the cream card, full"
 
 
 def test_the_djs_kit_pops_word_by_word_and_flashes_on_the_drop(tmp_path):

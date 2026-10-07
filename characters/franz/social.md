@@ -1,5 +1,7 @@
 # Franz — artist account kit
 
+> **Owner 2026-10-07:** Franz is now the happy show-off (see `bible.md`). The display name and bio below are updated; the highlights, first posts and avatar crop still describe the posh version and wait for the owner's next pass.
+
 The owner creates or renames the accounts (Claude never creates accounts). The account rules of `docs/launch/social-pages.md` apply: a **Creator** account, not Business; the same handle on TikTok and Instagram; the AI label on (TikTok "AI-generated content", Instagram "AI info"); 2-factor on; connect to Postiz.
 
 ## Instagram: `biscuit.moves` became `franz.unimpressed` (done 2026-10-06; `franz.dachshund` was taken)
@@ -15,13 +17,15 @@ Biscuit is retired (C5) and `biscuit.moves` is a live, Postiz-connected Instagra
 
 ## Display name (with a search keyword)
 **Franz · Posh Sausage 👑** (owner 2026-10-06: "funnier"; live on Instagram). The name field is searchable, so "dachshund" now rides in the captions' search titles ("· dachshund edition") instead.
+**Owner 2026-10-07: Franz is the happy show-off, not posh, so "Posh" no longer fits.** Instagram allows only two name changes per 14 days and both were used on 6 Oct, so the name cannot change until about 20 Oct. Then suggest **Franz · Party Sausage 👑**.
 
 ## Bio
-- **Instagram (106 of 150 characters):**
-  Old money. Short legs. Permanently unimpressed. 👑
-  One does not walk. One arrives.
+- **Instagram, suggestion for the happy show-off (owner 2026-10-07; the owner still chooses the bio) (113 of 150 characters):**
+  The happiest sausage on the dance floor 👑
+  Short legs, big moves. Sausage coming through!
   AI-generated character 🤖
-- **TikTok (52 of 80):** Old money. Short legs. Unimpressed. 👑 · AI character
+- **TikTok, suggestion (52 of 80):** Happiest sausage on the dance floor 👑 · AI character
+- *Before 2026-10-07 (posh Franz, superseded):* "Old money. Short legs. Permanently unimpressed. 👑 One does not walk. One arrives. AI-generated character 🤖"
 
 ## Profile picture
 `assets/characters/franz/avatar.png` (640×640): the haughty chin-lift panel of the canon expression sheet `8a9a109e` (ODD EYES, 2026-10-06; his ice-blue right eye is the one in view), crop box (990, 40, 1500, 550) of the 2688×1520 sheet. The crown and the raised nose read in the circle. (Before the odd eyes: the same panel of `7c13a0d0`, box (1050, 40, 1560, 550).) If the circle clips the crown, re-crop 30 px lower.
