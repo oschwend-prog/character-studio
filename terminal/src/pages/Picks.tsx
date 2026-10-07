@@ -62,7 +62,10 @@ function usePicksView(): [PicksView, (v: PicksView) => void] {
   return [view, choose];
 }
 
-export function Picks() {
+/**
+ * The viral scan's picks. `embedded`: inside More, under its Scan switch, which names it (no page frame, no title of its own).
+ */
+export function Picks({ embedded = false }: { embedded?: boolean }) {
   const { data } = useStudio();
   const now = useNow(60_000);
   const [character, setCharacter, roster] = useCharacterChoice();
@@ -70,9 +73,10 @@ export function Picks() {
   const [view, setView] = usePicksView();
   const [openId, setOpenId] = useState<string | null>(null);
   const [making, setMaking] = useState<Pick | null>(null);
+  const root = embedded ? 'stack' : 'page stack';
   if (!data) {
     return (
-      <div className="page stack" aria-busy="true">
+      <div className={root} aria-busy="true">
         <Skeleton h={120} />
         <Skeleton h={300} />
       </div>
@@ -88,7 +92,7 @@ export function Picks() {
   const header = (
     <>
       <div>
-        <h1 className="h1">Viral Picks</h1>
+        {!embedded && <h1 className="h1">Viral Picks</h1>}
         <p className="small muted" style={{ margin: '6px 0 0' }}>
           Best first, real viral clips before the Genjutsu gallery. The standing rule already approved anything 80+ with feasibility 7+; these wait for a call.
         </p>
@@ -104,7 +108,7 @@ export function Picks() {
   );
   if (view === 'list') {
     return (
-      <div className="page stack">
+      <div className={root}>
         {header}
         <LongList picks={data.picks} roster={roster} character={character} onCharacter={setCharacter} now={now} onOpen={(p) => setOpenId(p.id)} />
         {openPick && (
@@ -128,7 +132,7 @@ export function Picks() {
     );
   }
   return (
-    <div className="page stack">
+    <div className={root}>
       {header}
       <ScannerCard />
       <HowWeScan />

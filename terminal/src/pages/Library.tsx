@@ -14,7 +14,7 @@ const STATES: { id: string; label: string; match: (s: string) => boolean }[] = [
   { id: 'posted', label: 'Posted', match: (s) => s === 'posted' },
   { id: 'scheduled', label: 'Scheduled', match: (s) => s === 'scheduled' || s === 'approved' },
   { id: 'waiting', label: 'Waiting', match: (s) => s === 'awaiting_approval' },
-  { id: 'making', label: 'In the works', match: (s) => ['planned', 'generating', 'generated', 'qa_passed', 'mastered'].includes(s) },
+  { id: 'making', label: 'Making', match: (s) => ['planned', 'generating', 'generated', 'qa_passed', 'mastered'].includes(s) },
   { id: 'out', label: 'Rejected / dropped', match: (s) => ['rejected', 'dropped', 'gen_failed', 'qa_failed'].includes(s) },
 ];
 const STATE_TONE: Record<string, string> = {
@@ -33,7 +33,10 @@ function Chips<T extends string>({ value, options, onChange, label }: { value: T
   );
 }
 
-export function Library({ focus }: { focus: string | null }) {
+/**
+ * Every clip ever made. `embedded`: inside Characters, under its "All videos" switch, which names it (no page frame, no title of its own).
+ */
+export function Library({ focus, embedded = false }: { focus: string | null; embedded?: boolean }) {
   const { data } = useStudio();
   const [character, setCharacter, roster] = useCharacterChoice();
   const [platform, setPlatform] = useState<'all' | 'tiktok' | 'instagram'>('all');
@@ -53,7 +56,7 @@ export function Library({ focus }: { focus: string | null }) {
 
   if (!data) {
     return (
-      <div className="page stack" aria-busy="true">
+      <div className={embedded ? 'stack' : 'page stack'} aria-busy="true">
         <Skeleton h={300} />
       </div>
     );
@@ -61,9 +64,9 @@ export function Library({ focus }: { focus: string | null }) {
   const spent = rows.reduce((s, c) => s + (c.cost_credits ?? 0), 0);
 
   return (
-    <div className="page stack">
+    <div className={embedded ? 'stack' : 'page stack'}>
       <div>
-        <h1 className="h1">Library</h1>
+        {!embedded && <h1 className="h1">Library</h1>}
         <p className="small muted num" style={{ margin: '6px 0 0' }}>
           {rows.length} of {data.library.length} clips · {formatCredits(spent)} spent on these
         </p>

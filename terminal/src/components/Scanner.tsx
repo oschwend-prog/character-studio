@@ -1,7 +1,7 @@
 // The Scanner: what the daily run's scan of social media for viral videos is doing and did last (studio.runs).
-import { ArrowRight, Radar } from 'lucide-react';
+import { Radar } from 'lucide-react';
 import { useMemo } from 'react';
-import { href, useNow } from '../lib/hooks';
+import { useNow } from '../lib/hooks';
 import { nextScanLabel, scannerStatus } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import { Section } from './ui';
@@ -16,7 +16,7 @@ function useScanner() {
 
 const TONE_TAG: Record<string, string> = { live: 'live', alert: 'alert', neutral: '', muted: '' };
 
-/** The full card at the top of Picks: state, next scan, the last scan's numbers and the vidIQ credits. */
+/** The Scanner card (More > Scan, and Health): state, next scan, the last scan's numbers and the vidIQ credits. */
 export function ScannerCard() {
   const { status, next } = useScanner();
   if (!status) return null;
@@ -87,22 +87,5 @@ export function ScannerCard() {
         )}
       </div>
     </Section>
-  );
-}
-
-/** One line for Today: the state and what the last scan added. */
-export function ScannerLine() {
-  const { status } = useScanner();
-  if (!status) return null;
-  const added = status.last?.scan.picks_added;
-  return (
-    <a className="scanner-line" href={href('more', 'scan')}>
-      <Radar size={16} aria-hidden="true" className={status.state === 'scanning' ? 'pulse' : undefined} />
-      <span className="grow">
-        <span className={status.tone === 'alert' ? 'alert-text' : undefined}>{status.headline}</span>
-        {status.state !== 'none' && added != null && <span className="muted"> · {added} {added === 1 ? 'pick' : 'picks'} added</span>}
-      </span>
-      <ArrowRight size={14} aria-hidden="true" />
-    </a>
   );
 }

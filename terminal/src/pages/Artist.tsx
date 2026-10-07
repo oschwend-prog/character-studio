@@ -1,18 +1,22 @@
 // A character's own page (`#/artist/<slug>`, owner 2026-10-06), reached from the Characters page and from his name: who he is
 // (his sheets, look and wardrobe, motion and signature move, catchphrase, voice, gadgets with their viral job, the swap rule; from
-// his bible through src/generated/artists.json) and how he is doing (his accounts and his videos, from what the terminal already
-// loads). The established classes only: the Characters page's head, Section, the stage cards, the kv grid, the pipeline rows,
-// the trait chips and the checklist rows.
+// his bible through src/generated/artists.json) and how he is doing: all his videos grouped Live (posted, with views), Scheduled
+// and In the making, then at the bottom his accounts' results and autopilot (a panel per channel), his traits and the go-live
+// checklist (terminal v2, owner 2026-10-07). From what the terminal already loads. The established classes only: the Characters
+// card's head, Section, the stage cards, the kv grid, the pipeline rows, the trait chips and the checklist rows.
 import { Check, ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import generated from '../generated/artists.json';
+import { ChannelPanel, Checklist } from '../components/ChannelPanel';
+import { TraitsCard } from '../components/TraitsCard';
 import { Avatar, Livery, OutlierBadge, PlatformCode, Section, Skeleton } from '../components/ui';
 import {
-  artistAccounts, artistVideos, findArtist, inlineParts, swapLine, type Artist as ArtistCard, type ArtistItem, type ArtistVideo,
+  artistAccounts, artistGroups, artistVideos, findArtist, inlineParts, swapLine, type Artist as ArtistCard, type ArtistItem, type ArtistVideo,
 } from '../lib/artist';
-import { formatCredits, formatViews, londonDate, platformName } from '../lib/format';
+import { formatCredits, formatViews, londonDate, londonStamp, platformName } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
 import { nameOf } from '../lib/roster';
+import { channelSlots } from '../lib/rules';
 import { useStudio } from '../lib/store';
 
 const ARTISTS = (generated as unknown as { artists: ArtistCard[] }).artists;
@@ -106,6 +110,8 @@ export function Artist({ slug }: { slug: string | null }) {
   const status = character?.status ?? card?.status ?? 'designing';
   const videos = artistVideos(slug, data, now);
   const accounts = artistAccounts(card, character);
+  const channels = character ? channelSlots(character, data.channels).flatMap((c) => (c.channel ? [c.channel] : [])) : [];
+  const allConnectedAuto = channels.filter((c) => c.connected).every((c) => c.mode === 'auto');
   const titleId = `artist-${slug}`;
 
   return (
@@ -133,7 +139,7 @@ export function Artist({ slug }: { slug: string | null }) {
       </section>
 
       <Sheets card={card} name={name} />
-      <Videos videos={videos} name={name} />
+      <ArtistVideosBlock videos={videos} name={name} slug={slug} />
 
       <Section title="Catchphrase" id={`${titleId}-catch`}>
         {card?.catchphrase.line ? (
@@ -230,6 +236,25 @@ export function Artist({ slug }: { slug: string | null }) {
           ))}
         </ul>
       </Section>
+
+      {character && (
+        <>
+          {channels.length > 0 && (
+            <Section title="Channels" id={`${titleId}-channels`} aside="results and autopilot">
+              <p className="small muted" style={{ margin: 0 }}>
+                A hit is outlier 3× or more (views at 7 days against the channel’s own median). Autopilot unlocks after 6 approved posts.
+              </p>
+              <div className="channels-grid stack" style={{ gap: 12 }}>
+                {channels.map((c) => (
+                  <ChannelPanel key={c.account_id} channel={c} allConnectedAuto={allConnectedAuto} />
+                ))}
+              </div>
+            </Section>
+          )}
+          <TraitsCard character={character} />
+          <Checklist character={character} />
+        </>
+      )}
     </div>
   );
 }
@@ -298,14 +323,22 @@ function Voice({ card }: { card: ArtistCard | null }) {
 }
 
 function VideoRow({ v }: { v: ArtistVideo }) {
-  // where each kind of his videos opens now: the drop in Clips, the clip waiting for your OK in Videos, a posted one in the Characters list
-  const to = v.route === 'works' ? href('clips') : v.route === 'queue' ? href('videos', v.id) : href('characters', 'all', { clip: v.id });
+  // where each kind of his videos opens: a drop before Make it in Clips, a clip being made or waiting for your OK in Videos,
+  // a scheduled or posted one in the Characters list (All videos)
+  const to =
+    v.route === 'works' ? href('clips') : v.route === 'making' ? href('videos') : v.route === 'queue' ? href('videos', v.id) : href('characters', 'all', { clip: v.id });
   return (
     <li className="pipe-row">
       <div className="pipe-main">
         <b className="pipe-hook">{v.title}</b>
         <div className="pipe-meta">
-          {v.route === 'library' ? (
+          {v.at !== undefined ? (
+            <>
+              <span className={`tag${v.where === 'Scheduled' ? ' live' : ''}`}>{v.where}</span>
+              <span className="num">{v.at ? londonStamp(v.at) : 'no slot yet'}</span>
+              {v.platforms && v.platforms.length > 0 && <span>{v.platforms.map(platformName).join(' + ')}</span>}
+            </>
+          ) : v.route === 'library' ? (
             <>
               <span>{londonDate(v.where)}</span>
               <span className="num">{formatViews(v.views)} views</span>
@@ -323,20 +356,45 @@ function VideoRow({ v }: { v: ArtistVideo }) {
   );
 }
 
-function Videos({ videos, name }: { videos: ReturnType<typeof artistVideos>; name: string }) {
-  const s = videos.stats;
-  const rows = [...videos.queue, ...videos.works, ...videos.posted.slice(0, POSTED_SHOWN)];
+function VideoGroup({ id, title, rows, total, empty, name }: { id: string; title: string; rows: ReadonlyArray<ArtistVideo>; total: number; empty: ReactNode; name: string }) {
   return (
-    <Section title="His videos" id="artist-videos" aside={<a href={href('clips')}>In the works →</a>}>
+    <div className="pipeline" role="group" aria-labelledby={id}>
+      <div className="char-meta">
+        <h3 className="label" id={id}>
+          {title}
+        </h3>
+        <span className={`stage-count num${total ? ' on' : ''}`} aria-label={`${total} ${total === 1 ? 'video' : 'videos'}`}>
+          {total}
+        </span>
+      </div>
+      {rows.length === 0 ? (
+        <p className="small muted" style={{ margin: 0 }}>{empty}</p>
+      ) : (
+        <ul className="pipe-list" aria-label={`${name}’s ${title.toLowerCase()} videos`}>
+          {rows.map((v) => (
+            <VideoRow key={`${v.route}-${v.id}`} v={v} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function ArtistVideosBlock({ videos, name, slug }: { videos: ReturnType<typeof artistVideos>; name: string; slug: string }) {
+  const s = videos.stats;
+  const g = artistGroups(videos);
+  const all = href('characters', 'all', { c: slug });
+  return (
+    <Section title="Videos" id="artist-videos" aside={<a href={all}>All his videos →</a>}>
       <div className="panel">
         <div className="kv" style={{ borderTop: 0, borderBottom: 0 }}>
           <div>
-            <span className="label">In the works</span>
-            <span className="v">{s.inTheWorks}</span>
+            <span className="label">In the making</span>
+            <span className="v">{g.making.length}</span>
           </div>
           <div>
-            <span className="label">Your OK</span>
-            <span className="v">{s.waiting}</span>
+            <span className="label">Scheduled</span>
+            <span className="v">{s.scheduled}</span>
           </div>
           <div>
             <span className="label">Posted</span>
@@ -358,20 +416,19 @@ function Videos({ videos, name }: { videos: ReturnType<typeof artistVideos>; nam
           </div>
         </div>
       </div>
-      {rows.length === 0 ? (
-        <p className="small muted" style={{ margin: 0 }}>
-          No video of {name} yet: drop one in <a href={href('clips')}>In the works</a>.
-        </p>
-      ) : (
-        <ul className="pipe-list" aria-label={`${name}’s videos`}>
-          {rows.map((v) => (
-            <VideoRow key={`${v.route}-${v.id}`} v={v} />
-          ))}
-        </ul>
-      )}
-      {videos.posted.length > POSTED_SHOWN && (
-        <a className="small stage-more" href={href('characters', 'all')}>
-          Showing {POSTED_SHOWN} of {videos.posted.length} posted · the Library
+      <VideoGroup id="artist-videos-live" title="Live" rows={g.live.slice(0, POSTED_SHOWN)} total={g.live.length} name={name} empty={`${name} has nothing posted yet.`} />
+      <VideoGroup id="artist-videos-scheduled" title="Scheduled" rows={g.scheduled} total={g.scheduled.length} name={name} empty="Nothing is booked to go out." />
+      <VideoGroup
+        id="artist-videos-making"
+        title="In the making"
+        rows={g.making}
+        total={g.making.length}
+        name={name}
+        empty={<>Nothing is being made: drop a clip in <a href={href('clips')}>Clips</a>.</>}
+      />
+      {g.live.length > POSTED_SHOWN && (
+        <a className="small stage-more" href={all}>
+          Showing {POSTED_SHOWN} of {g.live.length} posted · all his videos
         </a>
       )}
     </Section>

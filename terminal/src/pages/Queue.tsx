@@ -16,7 +16,11 @@ import type { QueueClip } from '../lib/types';
 
 const REJECT_REASONS = ['Eyes swapped', 'Outfit or identity off', 'Hands or paws melt', 'Source leaked through', 'Hook is weak'];
 
-export function Queue({ focus }: { focus: string | null }) {
+/**
+ * The clips waiting for the owner's OK. `embedded`: inside Videos, under its "To approve" section, which names it (no page frame,
+ * no title of its own).
+ */
+export function Queue({ focus, embedded = false }: { focus: string | null; embedded?: boolean }) {
   const { data, backend, busy } = useStudio();
   const approveAll = useApproveAll();
   const [character, setCharacter, roster] = useCharacterChoice();
@@ -49,7 +53,7 @@ export function Queue({ focus }: { focus: string | null }) {
 
   if (!data) {
     return (
-      <div className="page stack" aria-busy="true">
+      <div className={embedded ? 'stack' : 'page stack'} aria-busy="true">
         <Skeleton h={420} />
       </div>
     );
@@ -59,9 +63,9 @@ export function Queue({ focus }: { focus: string | null }) {
   const approvable = selectApprovable(queue, inFlight);
 
   return (
-    <div className="page stack">
+    <div className={embedded ? 'stack' : 'page stack'}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <h1 className="h1">Queue</h1>
+        {!embedded && <h1 className="h1">Queue</h1>}
         <Flap text={String(queue.length).padStart(2, '0')} tone={queue.length ? 'action' : 'muted'} label={`${queue.length} waiting`} />
         <span className="grow" style={{ flex: 1 }} />
         {queue.length > 1 && (

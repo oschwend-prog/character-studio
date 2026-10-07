@@ -5,20 +5,18 @@ import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Mark } from './components/ui';
 import { todayCounts } from './lib/dashboard';
 import { londonDate, londonTime } from './lib/format';
-import { TABS as TAB_SPECS } from './lib/tabs';
+import { TABS as TAB_SPECS, charactersView, moreView } from './lib/tabs';
 import { href, useNow, useRoute, type TabRoute } from './lib/hooks';
 import { StudioProvider, useStudio } from './lib/store';
 import type { Backend } from './lib/types';
 import { LiveBackend, hasLiveConfig, isSchemaNotExposed, supabase } from './lib/supabase';
 import { Login, SetupNeeded } from './Login';
 import { Artist } from './pages/Artist';
-import { Budget } from './pages/Budget';
-import { Channels } from './pages/Channels';
+import { Characters } from './pages/Characters';
 import { Clips } from './pages/Clips';
-import { Library } from './pages/Library';
-import { Picks } from './pages/Picks';
-import { Queue } from './pages/Queue';
+import { More } from './pages/More';
 import { Today } from './pages/Today';
+import { Videos } from './pages/Videos';
 
 export const isDemo = () =>
   new URLSearchParams(window.location.search).get('demo') === '1' || import.meta.env.VITE_DEMO === '1';
@@ -145,9 +143,9 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
       <main id="main">
         {route === 'today' && <Today />}
         {route === 'clips' && <Clips />}
-        {route === 'videos' && <Queue focus={param} />}
-        {route === 'characters' && (param === 'all' ? <Library focus={new URLSearchParams(query).get('clip')} /> : <Channels />)}
-        {route === 'more' && (param === 'budget' ? <Budget account={account} /> : <Picks />)}
+        {route === 'videos' && <Videos focus={param} />}
+        {route === 'characters' && <Characters view={charactersView(param)} focus={new URLSearchParams(query).get('clip')} />}
+        {route === 'more' && <More view={moreView(param)} account={account} />}
         {route === 'artist' && <Artist slug={param} />}
       </main>
       <nav className="tabbar" aria-label="Sections">

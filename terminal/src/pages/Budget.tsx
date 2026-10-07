@@ -11,7 +11,8 @@ const SERIES: Record<string, string> = {
   franz: 'var(--series-franz)', reginald: 'var(--series-reginald)', lenny: 'var(--series-lenny)', biscuit: 'var(--series-biscuit)',
 };
 
-export function Budget({ account }: { account?: ReactNode }) {
+/** The month's credits and the kill switch. `embedded`: inside More, under its Budget switch, which names it (no page frame, no title of its own). */
+export function Budget({ account, embedded = false }: { account?: ReactNode; embedded?: boolean }) {
   const { data, backend, run, busy } = useStudio();
   const b = data?.budget ?? null;
   const [cap, setCap] = useState('');
@@ -27,14 +28,14 @@ export function Budget({ account }: { account?: ReactNode }) {
 
   if (!data) {
     return (
-      <div className="page stack" aria-busy="true">
+      <div className={embedded ? 'stack' : 'page stack'} aria-busy="true">
         <Skeleton h={220} />
       </div>
     );
   }
   if (!b) {
     return (
-      <div className="page">
+      <div className={embedded ? undefined : 'page'}>
         <div className="panel empty">
           <b>No budget row</b>
           <span className="small muted">The settings row of migration 0001 is missing, or this account cannot read it.</span>
@@ -63,9 +64,9 @@ export function Budget({ account }: { account?: ReactNode }) {
   const total = b.by_character.reduce((t, c) => t + c.committed, 0);
 
   return (
-    <div className="page stack">
+    <div className={embedded ? 'stack' : 'page stack'}>
       <div>
-        <h1 className="h1">Budget</h1>
+        {!embedded && <h1 className="h1">Budget</h1>}
         <p className="small muted num" style={{ margin: '6px 0 0' }}>
           {b.month} · day {b.day_of_month} of {b.days_in_month} · Higgsfield credits, London month
         </p>
