@@ -3,6 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { Clapperboard, Clock3, Ellipsis, FolderOpen, Users } from 'lucide-react';
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Mark } from './components/ui';
+import { todayCounts } from './lib/dashboard';
 import { londonDate, londonTime } from './lib/format';
 import { TABS as TAB_SPECS } from './lib/tabs';
 import { href, useNow, useRoute, type TabRoute } from './lib/hooks';
@@ -109,7 +110,8 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
   const { data, live, error, toasts, refresh } = useStudio();
   const { route, param, query } = useRoute();
   const now = useNow(10_000);
-  const clipsNeedingYou = 0; // the drops that need the owner: comes from todayCounts (Today's dashboard) once that exists
+  const counts = data ? todayCounts(data) : null;
+  const clipsNeedingYou = counts ? counts.needCharacter + counts.ready : 0; // the clips that wait for the owner: a character to pick, or Make it
   const badge: Partial<Record<TabRoute, { n: number; label: string; quiet?: boolean }>> = {
     today: data?.health.length ? { n: data.health.length, label: 'alerts', quiet: true } : undefined,
     clips: clipsNeedingYou ? { n: clipsNeedingYou, label: 'need you', quiet: true } : undefined,

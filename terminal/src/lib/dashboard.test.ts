@@ -1,8 +1,8 @@
 // Terminal v2, Today page: the counts of "what needs you" and a character's last posts. Pure functions over the snapshot.
 import { describe, expect, it } from 'vitest';
-import { lastPosts, todayCounts } from './dashboard';
+import { creditsLeft, lastPosts, liveLastPosts, postNumbers, todayCounts } from './dashboard';
 import { dropCredits } from './drop';
-import type { ClipState, DropAdjust, DropCard, DropState, LibraryClip, LibraryPost, QueueClip, Snapshot, TrackerRow } from './types';
+import type { Character, ClipState, DropAdjust, DropCard, DropState, LibraryClip, LibraryPost, QueueClip, Snapshot, TrackerRow } from './types';
 
 const NOW = Date.parse('2026-10-07T12:00:00Z');
 const HOUR = 3_600_000;
@@ -141,5 +141,62 @@ describe('lastPosts', () => {
       clip('posted', { id: 'b', created_at: ago(5), posted_at: null }),
     ];
     expect(lastPosts(lib, 'reginald').map((p) => p.clipId)).toEqual(['b', 'a']);
+  });
+});
+
+describe('postNumbers', () => {
+  it('writes views, likes and shares on one line, in short form', () => {
+    expect(postNumbers({ views: 1_500, likes: 100, shares: 10 })).toBe('1.5K views · 100 likes · 10 shares');
+  });
+
+  it('shows a dash for a number nobody has read yet and keeps a real 0', () => {
+    expect(postNumbers({ views: 300, likes: null, shares: 2 })).toBe('300 views · — likes · 2 shares');
+    expect(postNumbers({ views: 0, likes: 0, shares: 0 })).toBe('0 views · 0 likes · 0 shares');
+  });
+
+  it('says "no numbers yet" when none of the three has been read, never 0', () => {
+    expect(postNumbers({ views: null, likes: null, shares: null })).toBe('no numbers yet');
+  });
+});
+
+describe('liveLastPosts', () => {
+  const character = (slug: string, name: string, status: string): Character => ({ slug, name, status, bodies: [], setup: {}, accounts: [] }) as unknown as Character;
+  const characters = [
+    character('lenny', 'Lenny Gold', 'live'),
+    character('biscuit', 'Biscuit', 'paused'),
+    character('franz', 'Franz', 'designing'),
+    character('reginald', 'Reginald', 'live'),
+  ];
+  const library = [
+    clip('posted', { id: 'r1', posted_at: ago(2), posts: [post({ views: 10 })] }),
+    clip('posted', { id: 'f1', character_slug: 'franz', posted_at: ago(1) }),
+    clip('posted', { id: 'b1', character_slug: 'biscuit', posted_at: ago(1) }),
+  ];
+
+  it('has one entry per live character in the owner’s order, with his last posts; characters not live are left out', () => {
+    const out = liveLastPosts({ characters, library });
+    expect(out.map((c) => [c.slug, c.name, c.posts.map((p) => p.clipId)])).toEqual([
+      ['reginald', 'Reginald', ['r1']],
+      ['lenny', 'Lenny Gold', []],
+    ]);
+  });
+
+  it('is empty while no character is live or loaded, and passes n on', () => {
+    expect(liveLastPosts({ characters: [], library })).toEqual([]);
+    const many = [1, 2, 3, 4].map((i) => clip('posted', { id: `m${i}`, posted_at: ago(i) }));
+    expect(liveLastPosts({ characters: [character('reginald', 'Reginald', 'live')], library: many }, 2)[0].posts).toHaveLength(2);
+  });
+});
+
+describe('creditsLeft', () => {
+  it('is the cap minus what is committed, never below 0', () => {
+    expect(creditsLeft({ cap: 6_000, committed: 1_250 })).toBe(4_750);
+    expect(creditsLeft({ cap: 6_000, committed: 6_000 })).toBe(0);
+    expect(creditsLeft({ cap: 6_000, committed: 6_400 })).toBe(0);
+  });
+
+  it('is null while the budget has not loaded', () => {
+    expect(creditsLeft(null)).toBeNull();
+    expect(creditsLeft(undefined)).toBeNull();
   });
 });

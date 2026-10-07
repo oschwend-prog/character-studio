@@ -2,7 +2,9 @@
 // over the snapshot; no browser.
 import { clipChip } from './clipstatus';
 import { dropCredits } from './drop';
-import type { LibraryClip, Snapshot } from './types';
+import { formatViews } from './format';
+import { orderRoster } from './roster';
+import type { Budget, LibraryClip, Snapshot } from './types';
 
 export interface TodayCounts {
   /** Ready clips whose character the studio chose: the owner confirms or changes it. */
@@ -72,4 +74,30 @@ export function lastPosts(library: ReadonlyArray<LibraryClip>, slug: string, n =
       likes: sum(c.posts.map((p) => p.likes)),
       shares: sum(c.posts.map((p) => p.shares)),
     }));
+}
+
+/** The numbers of one last post on one line; a number no post has yet is a dash, and none at all reads "no numbers yet" (never 0). */
+export function postNumbers(p: Pick<LastPost, 'views' | 'likes' | 'shares'>): string {
+  if (p.views == null && p.likes == null && p.shares == null) return 'no numbers yet';
+  return `${formatViews(p.views)} views · ${formatViews(p.likes)} likes · ${formatViews(p.shares)} shares`;
+}
+
+export interface CharacterPosts {
+  slug: string;
+  name: string;
+  posts: LastPost[];
+}
+
+/** Every live character in the owner's order with his last `n` posts (none yet is an empty list); a character not live is left out. */
+export function liveLastPosts(data: Pick<Snapshot, 'characters' | 'library'>, n = 3): CharacterPosts[] {
+  return orderRoster(data.characters.filter((c) => c.status === 'live')).map((c) => ({
+    slug: c.slug,
+    name: c.name,
+    posts: lastPosts(data.library, c.slug, n),
+  }));
+}
+
+/** What is left of this month's cap (never below 0); null while the budget has not loaded. */
+export function creditsLeft(b: Pick<Budget, 'cap' | 'committed'> | null | undefined): number | null {
+  return b ? Math.max(0, b.cap - b.committed) : null;
 }
