@@ -10,17 +10,17 @@
     "biped": "9613f97a-6358-4b7f-b4fe-38c07dc2c370",
     "quadruped": null
   },
-  "closeup": "a411c915-1532-4fc9-b719-e68450e6f619",
+  "closeup": "d77e7c73-3a42-4758-81c4-493daaab4bb3",
   "closeup_center": null,
   "blue_eye_xy": null,
   "avatar": "assets/characters/lenny/avatar.png",
   "sheets": {
-    "biped": "88ac10b9-399c-4ea7-8c7a-f2dcf5737d1d"
+    "biped": "61c020f6-8cd6-4bca-aa6f-be7aaa138242"
   },
   "reference_urls": {
     "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_183419_9613f97a-6358-4b7f-b4fe-38c07dc2c370.png",
-    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082732_88ac10b9-399c-4ea7-8c7a-f2dcf5737d1d.png",
-    "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082743_a411c915-1532-4fc9-b719-e68450e6f619.png"
+    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_191708_61c020f6-8cd6-4bca-aa6f-be7aaa138242.png",
+    "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_191710_d77e7c73-3a42-4758-81c4-493daaab4bb3.png"
   },
   "soul_id": "cdc73565-fa87-47f6-bca4-bb1e7884e483",
   "voice_id": "3c7d32be-0182-5c5e-aa6a-663409bfbb26",
