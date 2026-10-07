@@ -331,29 +331,38 @@ def slowmo_filter(src: str, dst: str, spans: Sequence[Slowmo], total_s: float) -
     return ";".join([split, *cuts, join])
 
 
-def _zoom_filter(src: str, dst: str, z: str, *, floored: bool = True) -> str:
-    """Scale ``[src]`` by the expression ``z`` (of ``t``, per frame) and crop the centre back to 1080x1920.
+def _zoom_filter(src: str, dst: str, z: str, *, legacy: bool = False) -> str:
+    """Scale ``[src]`` by the expression ``z`` (of ``t``, per frame) and crop the centre of every frame back to 1080x1920.
 
-    ``floored``: the scaled frame is never smaller than 1080x1920, whatever ``z`` gives. It must not be: ffmpeg's crop of a
-    smaller frame clamps its window to start BEFORE the frame (x = y = -2 for 1078x1918) and to run past its end, and every
-    filter after it reads, and an in-place one (``colorbalance``, i.e. the warm, cool and golden tones) writes, outside the
-    frame's buffer: heap corruption, so ffmpeg dies at random (SIGSEGV / SIGABRT; C4a). ``z`` hits that by rounding alone:
-    the punch-in's ``1.15-0.15*min(t,0.5)/0.5`` is 0.9999999999999999 in floating point, so 1078x1918 for every frame
-    after the first half second. Only the zoom-hit enhancement goes without the floor (``floored=False``): its
-    ``1+k*sin(PI*clip(..,0,1))`` is never below 1 (sin of [0, pi] in doubles is >= 0), and a master without a kit keeps
-    its graph of before the kits, byte for byte.
+    Two things make that hold, and a kit's zoom has both (C4a):
+
+    * **Floored**: the scaled frame is never smaller than 1080x1920, whatever ``z`` gives. ffmpeg's crop of a smaller frame
+      clamps its window to start BEFORE the frame (x = y = -2 for 1078x1918) and to run past its end, and every filter after
+      it reads, and an in-place one (``colorbalance``, i.e. the warm, cool and golden tones) writes, outside the frame's
+      buffer: heap corruption, so ffmpeg dies at random (SIGSEGV / SIGABRT). ``z`` hits that by rounding alone: the
+      punch-in's ``1.15-0.15*min(t,0.5)/0.5`` is 0.9999999999999999 in floating point (1078x1918 after the first 0.5 s).
+    * **Centred**: crop's x and y are computed per frame from the same scaled size. crop's own ``iw`` / ``ih`` (and so its
+      default ``(iw-ow)/2``) are those of the frame it was configured with (ffmpeg 6.1 and 8.1 alike), so the default crop
+      zoomed about the top-left corner (a zoom from 1) or drifted to the bottom-right (the punch-in). For yuv420p crop
+      rounds x and y down to even, so the window is at most 1 px off the centre.
+
+    ``legacy``: the graph of before the kits (neither), kept only for the zoom-hit enhancement, so a master without a kit
+    keeps its graph byte for byte. It is safe (``1+k*sin(PI*clip(..,0,1))`` is never below 1: sin of [0, pi] in doubles is
+    >= 0, and a hit's scale is > 1) but it zooms about the top-left corner: centring it is the owner's call.
     """
     w, h = f"trunc({WIDTH}*({z})/2)*2", f"trunc({HEIGHT}*({z})/2)*2"
-    if floored:
-        w, h = f"max({WIDTH},{w})", f"max({HEIGHT},{h})"
-    return f"[{src}]scale=w='{w}':h='{h}':eval=frame:flags=bicubic,crop={WIDTH}:{HEIGHT}[{dst}]"
+    if legacy:
+        return f"[{src}]scale=w='{w}':h='{h}':eval=frame:flags=bicubic,crop={WIDTH}:{HEIGHT}[{dst}]"
+    w, h = f"max({WIDTH},{w})", f"max({HEIGHT},{h})"
+    centre = f"x='({w}-{WIDTH})/2':y='({h}-{HEIGHT})/2'"
+    return f"[{src}]scale=w='{w}':h='{h}':eval=frame:flags=bicubic,crop={WIDTH}:{HEIGHT}:{centre}[{dst}]"
 
 
-def zoom_hit_filter(src: str, dst: str, hit: ZoomHit, *, floored: bool = False) -> str:
-    """A 0.25 s punch-in: scale 1 -> ``hit.scale`` -> 1 along a half sine, cropped back to frame (``floored``: see
-    ``_zoom_filter``; the drop flash's pulses are, the enhancement is not)."""
+def zoom_hit_filter(src: str, dst: str, hit: ZoomHit, *, legacy: bool = True) -> str:
+    """A 0.25 s punch-in: scale 1 -> ``hit.scale`` -> 1 along a half sine, cropped back to frame. ``legacy`` (the
+    enhancement) keeps the graph of before the kits; the drop flash's pulses pass ``legacy=False`` (see ``_zoom_filter``)."""
     z = f"1+{hit.scale - 1:g}*sin(PI*clip((t-{hit.at_s:g})/{ZOOM_HIT_SECONDS:g},0,1))"
-    return _zoom_filter(src, dst, z, floored=floored)
+    return _zoom_filter(src, dst, z, legacy=legacy)
 
 
 def hook_edit_filter(src: str, dst: str, kind: str, *, drop_s: float | None) -> str | None:
@@ -378,8 +387,8 @@ def hook_edit_filter(src: str, dst: str, kind: str, *, drop_s: float | None) -> 
             f":eval=frame[{dst}a]"
         )
         pulses = [
-            zoom_hit_filter(f"{dst}a", f"{dst}b", ZoomHit(d), floored=True),
-            zoom_hit_filter(f"{dst}b", dst, ZoomHit(d + DROP_PULSE_GAP_S), floored=True),
+            zoom_hit_filter(f"{dst}a", f"{dst}b", ZoomHit(d), legacy=False),
+            zoom_hit_filter(f"{dst}b", dst, ZoomHit(d + DROP_PULSE_GAP_S), legacy=False),
         ]
         return ";".join([flash, *pulses])
     raise ValueError(f"unknown hook_edit {kind!r} (one of {', '.join(seed.STYLE_HOOK_EDITS)})")

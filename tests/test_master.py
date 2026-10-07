@@ -1302,9 +1302,11 @@ def test_tone_filters_exact():
 
 
 ZOOM = "scale=w='trunc(1080*({z})/2)*2':h='trunc(1920*({z})/2)*2':eval=frame:flags=bicubic,crop=1080:1920"
-# A kit's zoom never scales below the frame (C4a): ffmpeg's crop of a smaller frame starts before it and runs past its end.
+# A kit's zoom never scales below the frame (C4a: ffmpeg's crop of a smaller frame starts before it and runs past its end)
+# and crops the centre of every frame (crop's own iw/ih are those of its first frame, so x/y come from the same size).
+_KIT_W, _KIT_H = "max(1080,trunc(1080*({z})/2)*2)", "max(1920,trunc(1920*({z})/2)*2)"
 KIT_ZOOM = (
-    "scale=w='max(1080,trunc(1080*({z})/2)*2)':h='max(1920,trunc(1920*({z})/2)*2)':eval=frame:flags=bicubic,crop=1080:1920"
+    f"scale=w='{_KIT_W}':h='{_KIT_H}':eval=frame:flags=bicubic,crop=1080:1920:x='({_KIT_W}-1080)/2':y='({_KIT_H}-1920)/2'"
 )
 
 
@@ -1319,9 +1321,9 @@ def test_hook_edit_filter_exact():
         "[ha]" + KIT_ZOOM.format(z="1+0.06*sin(PI*clip((t-2)/0.25,0,1))") + "[hb];"
         "[hb]" + KIT_ZOOM.format(z="1+0.06*sin(PI*clip((t-2.5)/0.25,0,1))") + "[h]"
     )
-    # the two pulses are the existing zoom hits at the drop and half a second after it, floored like every kit zoom
-    assert flash.endswith(master.zoom_hit_filter("hb", "h", master.ZoomHit(2.5), floored=True))
-    # the zoom-hit enhancement keeps the graph of before the kits (its zoom is never below 1: see master._zoom_filter)
+    # the two pulses are the existing zoom hits at the drop and half a second after it, floored and centred like every kit zoom
+    assert flash.endswith(master.zoom_hit_filter("hb", "h", master.ZoomHit(2.5), legacy=False))
+    # the zoom-hit enhancement keeps the graph of before the kits (see master._zoom_filter)
     assert master.zoom_hit_filter("v", "h", master.ZoomHit(2.5)) == "[v]" + ZOOM.format(
         z="1+0.06*sin(PI*clip((t-2.5)/0.25,0,1))"
     ) + "[h]"
@@ -1371,6 +1373,34 @@ def test_punch_in_ends_on_the_very_frame(tmp_path):
 
     assert worst(0.0) > 100, "1.15 at the start"
     assert worst(0.6) <= 4 and worst(1.4) <= 4, "1.00 from 0.5 s on: the whole frame, not shrunk to 1078x1918 and shifted"
+
+
+def marker_clip(path: Path, dur: float) -> Path:
+    """A dark 1080x1920 clip (lossless) with a 40x40 white square around the centre (540, 960): a centred zoom keeps it there."""
+    png = path.with_suffix(".png")
+    img = Image.new("RGB", (1080, 1920), (20, 20, 20))
+    img.paste((255, 255, 255), (520, 940, 560, 980))
+    img.save(png)
+    ffmpeg("-loop", "1", "-i", str(png), "-t", f"{dur:g}", "-r", "30", "-c:v", "libx264", "-qp", "0", "-preset", "ultrafast",
+           "-pix_fmt", "yuv420p", str(path))  # fmt: skip
+    return path
+
+
+@pytest.mark.parametrize(
+    ("kind", "drop_s", "times"),
+    [("push_in", None, (0.75, 1.5)), ("punch_in", None, (0.0, 0.25)), ("drop_flash", 0.5, (0.65,))],
+)
+def test_kit_zooms_stay_centred(tmp_path, kind, drop_s, times):
+    """Every kit zoom crops the centre of every frame (C4a ruling). crop's own iw/ih are those of its first frame, so the
+    old default crop zoomed about the top-left corner (push-in, pulses) or drifted (punch-in: 40 px off at 0.25 s)."""
+    src, out = marker_clip(tmp_path / "marker.mp4", 2), tmp_path / "zoomed.mp4"
+    frag = master.hook_edit_filter("0:v", "z", kind, drop_s=drop_s)
+    ffmpeg("-i", str(src), "-filter_complex", frag, "-map", "[z]", "-c:v", "libx264", "-qp", "0", "-preset", "ultrafast",
+           "-pix_fmt", "yuv420p", str(out))  # fmt: skip
+    for t in times:
+        left, top, right, bottom = frame_at(out, t, tmp_path).convert("L").point(lambda v: 255 if v >= 128 else 0).getbbox()
+        assert right - left > 40, f"{kind} at {t:g} s: the marker is zoomed in"
+        assert abs((left + right) / 2 - 540) <= 2 and abs((top + bottom) / 2 - 960) <= 2, (kind, t, (left, top, right, bottom))
 
 
 def test_lennys_kit_builds_every_time(tmp_path, synth_video):
