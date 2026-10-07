@@ -600,7 +600,9 @@ a.today-tile[data-zero='true'] .h1 { color: var(--ink-3); }
 
 
 /* ---- the pick card (tier, theme, picture), grouped by character -------------------------------- */
-.char-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.char-switch button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; white-space: nowrap; }
+/* five buttons (Biscuit included) are wider than a phone: they wrap onto a second line instead of widening the page; one row on a desktop */
+.char-switch { flex-wrap: wrap; max-width: 100%; }
 .char-switch .avatar { width: 24px; height: 24px; }
 .char-switch .count, .tier-chips .count { font-size: 11.5px; font-weight: 600; opacity: 0.75; letter-spacing: 0; }
 .char-switch button.all[aria-pressed='true'] { background: var(--ink); color: var(--board); box-shadow: none; }
@@ -925,4 +927,12 @@ a.ll-title:hover { text-decoration: underline; }
 .finished-grid .pick { padding: 10px; gap: 8px; }
 @media (min-width: 720px) {
   .finished-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+}
+
+/* ---- the narrowest phones (320 px): what still does not fit a row wraps, so no page grows wider than the screen ------------------ */
+@media (max-width: 359px) {
+  .actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .actions .btn:last-child { grid-column: 1 / -1; }
+  .pick-sec-head { flex-wrap: wrap; }
+  .finished-grid { grid-template-columns: minmax(0, 1fr); }
 }
