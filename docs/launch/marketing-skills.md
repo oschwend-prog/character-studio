@@ -8,7 +8,7 @@ Which of the installed skills the studio uses, where, and when. The automation r
 |---|---|---|
 | `viral-hook-creator` | daily run, step 9.4 and the drops by hand | 3 hook candidates per video; reads `FOUNDER_CONTEXT.md` (42-character pill, the voices, the hit patterns) |
 | `humanizer` | daily run, captions | keeps the caption natural |
-| `last30days` | weekly review, step 4 | what is rising and fading per niche |
+| `last30days` | weekly review, step 4, only with a ScrapeCreators key and its cookie-free setup | what people say per niche (owner 2026-10-07: cloud scraping is fine, never the Mac's browser or cookies) |
 | social-data tools (`keyword_posts`, `topic_posts`, `keyword_time_series`, `post`) | weekly review, step 4 | the week's top TikTok and Instagram posts per niche ("clips to save" for the owner) and mentions of our characters. Replaces vidIQ for finding hits (owner 2026-10-07) |
 | `social-media-monitor` (method) | weekly review, step 4 | sentiment, recurring questions, offence flags |
 | `online-reputation-management` | weekly review, step 4, only on a flag | a reply plan for the owner; we never reply ourselves |
