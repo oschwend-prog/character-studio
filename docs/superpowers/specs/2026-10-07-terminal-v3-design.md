@@ -145,6 +145,9 @@ free. A clip that has versions shows them ("Also: Lenny, ready"). The **All clip
 - **Terminal:** Clips › By character gets **Worth saving** per character: his top 5 new hits (thumbnail, views, reach,
   posted, why), **Open** (the post, to watch it) and **Use this clip** (files it as his drop through `add_drop(link)`: the
   existing one-pick fetch takes it; the hit becomes `dropped`) and **Not for us** (`dismissed`).
+- **Getting a hit into the clips:** "Use this clip" files it as the character's drop; the cloud job fetches that one post with
+  yt-dlp, and when Instagram or TikTok blocks the cloud, with ScrapeCreators' single-post `download_media` (1-2 credits). One
+  tap per clip, never a batch, never a third-party downloader site (owner asked about snapinsta.to, 2026-10-07).
 - **Owner steps:** a ScrapeCreators account (100 free credits; the $47 pack = 25,000 credits, which never expire, lasts
   about 3 years at 25 a day), then `gh secret set SCRAPECREATORS_API_KEY` (he pastes the key; it is never written to a file).
 - **Tests:** the API client against recorded fixture responses (no network), the parsing and skip rules, the score, the cap,
