@@ -2,7 +2,7 @@
   "_doc": "Identity-lock references for Lenny Gold (strand B, in the roster since 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/lenny/bible.md. soul_id is his Higgsfield Soul (model soul_2); voice_id is the Emmett preset (seed_audio, speech_rate 2, locked). ODD EYES (owner 2026-10-06, the studio signature): his RIGHT eye ice-blue, his LEFT eye amber, in the master, the sheets and the close-up. masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"; odd-eyes versions 2026-10-06): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). closeup is the head-and-shoulders identity reference only (masters end on the dance), so closeup_center / blue_eye_xy stay null. accounts stays empty until the owner creates the accounts (social.md).",
   "slug": "lenny",
   "name": "Lenny Gold",
-  "status": "designing",
+  "status": "live",
   "bodies": [
     "biped"
   ],
@@ -99,5 +99,8 @@
       "brand names or logos on screen"
     ]
   },
-  "accounts": []
+  "accounts": [
+    {"platform": "tiktok", "handle": null, "planned_handle": "@lennygold.agent", "postiz_integration_id": null, "dropin_share": 1.0},
+    {"platform": "instagram", "handle": "lennygold.agent", "planned_handle": "lennygold.agent", "postiz_integration_id": "cmuylluo207qylc0yx4bkv4tl", "dropin_share": 1.0}
+  ]
 }
