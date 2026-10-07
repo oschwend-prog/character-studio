@@ -126,3 +126,26 @@ free. A clip that has versions shows them ("Also: Lenny, ready"). The **All clip
 - SQL: `copy_drop` and `free_slot` in the integration tests (`tests/integration`), `v_views_daily` on a fixture.
 - Terminal: pure helpers (ranking, top 3, runway, overview totals, views per day by period, reuse targets, selection total)
   with Vitest; demo data for every new block; build green; checked at 375 px and desktop.
+
+## 10. The cloud hits job (owner 2026-10-07: "set up the scrapecreators cloud job")
+- **What:** a GitHub workflow `studio-hits.yml`, daily at 06:30 London (and `workflow_dispatch`), runs `studio hits pull`. No Mac,
+  no browser, no download: ScrapeCreators' API returns metadata only (owner amendment, section 8).
+- **Searches:** per live character, the keywords of his `config/scan.json` profile (at most 3), on TikTok
+  (`GET /v1/tiktok/search/keyword`, `date_posted=this-week`, `sort_by=most-liked`, `trim=true`) and Instagram
+  (`GET /v2/instagram/reels/search`, `date_posted=last-week`), plus Instagram's trending reels (`GET /v1/instagram/reels/trending`)
+  once a day. Header `x-api-key` from the secret `SCRAPECREATORS_API_KEY`. A daily credit cap (`config/scan.json`
+  `hits.daily_credit_cap`, default 25; each call costs `credits_charged`, usually 1) stops the run when reached.
+- **Kept per hit:** platform, URL (unique), creator handle, followers when given, views, likes, comments, shares, saves,
+  posted_at, caption (first 300 characters), sound name, duration, thumbnail URL (stored, never fetched), the keyword and the
+  character it was searched for; `reach` = views ÷ followers (null without followers); `score` 0-100 from views, reach and
+  freshness (the hit-patterns rules 2-3: reach over raw views, fresh over old). A hit already stored is updated (last_seen,
+  numbers). Skipped: photo carousels, videos over 60 s, posts older than 14 days, a creator already kept 3 times in 30 days.
+- **Table** `studio.hits` (migration 0016, schema studio, RLS like `favorites`, read by the owner's role) with `status`
+  new / dropped / dismissed; view `studio.v_hits` (new hits, best first).
+- **Terminal:** Clips › By character gets **Worth saving** per character: his top 5 new hits (thumbnail, views, reach,
+  posted, why), **Open** (the post, to watch it) and **Use this clip** (files it as his drop through `add_drop(link)`: the
+  existing one-pick fetch takes it; the hit becomes `dropped`) and **Not for us** (`dismissed`).
+- **Owner steps:** a ScrapeCreators account (100 free credits; the $47 pack = 25,000 credits, which never expire, lasts
+  about 3 years at 25 a day), then `gh secret set SCRAPECREATORS_API_KEY` (he pastes the key; it is never written to a file).
+- **Tests:** the API client against recorded fixture responses (no network), the parsing and skip rules, the score, the cap,
+  the upsert, the migration pins, the terminal helper for Worth saving.
