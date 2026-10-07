@@ -4,7 +4,7 @@
 // the CLI checks it again before anything is spent).
 import { useId, useMemo, useState, type FormEvent } from 'react';
 import {
-  DROP_MAX_SECONDS, DROP_MIN_SECONDS, PART_LABEL, adjustChanges, avoidLabel, dropCredits, effectiveDrop, isLandscape, sectionLabel, validateAdjust,
+  DROP_MIN_SECONDS, PART_LABEL, adjustChanges, avoidLabel, dropCredits, effectiveDrop, isLandscape, maxSectionSeconds, sectionLabel, validateAdjust,
 } from '../lib/drop';
 import { PROPS_MAX, PROP_MAX_CHARS, traitProps } from '../lib/rules';
 import { useStudio } from '../lib/store';
@@ -121,7 +121,7 @@ export function AdjustSheet({
             </label>
             <label>
               <span className="small muted">Lasts (s)</span>
-              <input className="input num" type="number" inputMode="decimal" min={DROP_MIN_SECONDS} max={DROP_MAX_SECONDS} step={0.5} value={length}
+              <input className="input num" type="number" inputMode="decimal" min={DROP_MIN_SECONDS} max={maxSectionSeconds(d)} step={0.5} value={length}
                 onChange={(e) => { setLength(e.target.value); setError(null); }} />
             </label>
           </div>

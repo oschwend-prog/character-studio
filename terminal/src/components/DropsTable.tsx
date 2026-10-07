@@ -10,7 +10,7 @@ import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { CHIP_CLASS, CHIP_LABEL, clipActions, clipChip, makeTotal } from '../lib/clipstatus';
 import {
   PART_LABEL, RECOMMEND, avoidLabel, characterMenu, dropCredits, dropLine, dropTitle, effectiveDrop,
-  isDropCard, recommendationLine, sectionLabel, type CharacterMenu,
+  isDropCard, recommendationLine, retryAdjust, sectionLabel, type CharacterMenu,
 } from '../lib/drop';
 import { formatCredits } from '../lib/format';
 import { href } from '../lib/hooks';
@@ -198,14 +198,14 @@ function DropRow({
               {working && <Spinner />} Make it
             </button>
           )}
+          {actions.includes('retry-make') && (
+            <button type="button" className="btn primary" disabled={working || changing} aria-busy={working} onClick={() => void make(retryAdjust(d))}>
+              {working && <Spinner />} Try again · <span className="num">about {dropCredits(d, d.adjust ?? {})}</span>
+            </button>
+          )}
           {actions.includes('adjust') && (
             <button type="button" className="btn ghost" disabled={working || changing} onClick={() => setAdjusting(true)}>
               <SlidersHorizontal aria-hidden="true" /> Adjust
-            </button>
-          )}
-          {actions.includes('retry-make') && (
-            <button type="button" className="btn primary" disabled={working || changing} aria-busy={working} onClick={() => void make(null)}>
-              {working && <Spinner />} Try again · <span className="num">about {dropCredits(d, d.adjust ?? {})}</span>
             </button>
           )}
           {actions.includes('retry-check') && (

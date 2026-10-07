@@ -105,6 +105,8 @@ const DEMO_REASONS: Record<string, string> = {
   reginald: 'a deadpan solo: Reginald’s straight face and silver tray',
   lenny: 'a loud solo: Lenny’s mid-deal phone energy',
 };
+/** What a character's kit adds before the dance (master.style_lead_s: Reginald's pause); the check writes 16 s less it as max_length_s. */
+const PAUSE_LEAD_S: Record<string, number> = { reginald: 0.4 };
 /** set_drop_character's states (migration 0013): before Make it. */
 const CHOOSABLE = ['uploading', 'checking', 'waiting', 'ready', 'blocked', 'failed'];
 /** What set_drop_character clears: the old character's results. */
@@ -538,6 +540,7 @@ export class DemoBackend implements Backend {
       window: { start_s: o.start, length_s: o.seconds }, crop_x: o.landscape ? o.star?.x_center ?? 0.5 : null, star: o.star, classic: o.seconds >= 12,
       part: o.part ?? 'featured', gadgets: o.gadgets, hooks: o.hooks, hook: o.hooks[0], music: 'original', seconds: o.seconds,
       credits: estimateCredits('dropin', o.seconds, 'original'), preview_path: `owner/${id}/preview.jpg`,
+      max_length_s: Number((16 - (PAUSE_LEAD_S[o.slug] ?? 0)).toFixed(3)),
     });
     const person = (description: string, x = 0.5): DropCard['star'] => ({ kind: 'person', body: 'biped', description, x_center: x, full_body: true });
     const dog = (description: string, body: 'biped' | 'quadruped' = 'quadruped'): DropCard['star'] => ({ kind: 'dog', body, description, x_center: 0.5, full_body: true });
@@ -742,6 +745,7 @@ export class DemoBackend implements Backend {
             ...d, state: 'ready', reason: null, at: new Date(now).toISOString(), source_id: (d.source_id as string) ?? uid('sd'), duration_s: 14, width: 1080, height: 1920,
             window: { start_s: 1, length_s: seconds }, crop_x: null, star, classic: false, part: 'featured', gadgets: [], hooks, hook: hooks[0],
             music: 'original', seconds, credits: estimateCredits('dropin', seconds, 'original'), preview_path: `owner/${f.id}/preview.jpg`, recommended,
+            max_length_s: Number((16 - (PAUSE_LEAD_S[slug] ?? 0)).toFixed(3)),
           },
         };
       }

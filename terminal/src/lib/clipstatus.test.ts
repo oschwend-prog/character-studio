@@ -187,11 +187,11 @@ describe('the status cell’s look and the buttons of a row', () => {
     expect(Object.keys(CHIP_CLASS).sort()).toEqual(Object.keys(CHIP_LABEL).sort());
   });
 
-  it('a ready clip offers Make it and Adjust; a blocked one Remove; a failed one Try again and Remove', () => {
+  it('a ready clip offers Make it and Adjust; a blocked one Remove; a failed one Try again, Adjust and Remove', () => {
     expect(clipActions(row(card('ready', { character_by: 'owner' })), NOW)).toEqual(['make', 'adjust']);
     expect(clipActions(row(card('ready', { character_by: 'studio' })), NOW)).toEqual(['make', 'adjust']); // Pick a character: Make it confirms it
     expect(clipActions(row(card('blocked')), NOW)).toEqual(['remove']);
-    expect(clipActions(row(card('failed', { credits: 91 })), NOW)).toEqual(['retry-make', 'remove']);
+    expect(clipActions(row(card('failed', { credits: 91 })), NOW)).toEqual(['retry-make', 'adjust', 'remove']); // priced: Adjust it again too
     expect(clipActions(row(card('failed')), NOW)).toEqual(['retry-check', 'remove']);
     expect(clipActions(row(card('waiting')), NOW)).toEqual(['retry-check', 'remove']);
     expect(clipActions(row(card('checking')), NOW)).toEqual([]);

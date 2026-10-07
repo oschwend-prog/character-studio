@@ -31,6 +31,8 @@ asks for the check again; a check that finds its character changed under it star
 **Only the section we use is judged** (owner 2026-10-06). The deconstruct says when text or a watermark is on screen
 (``burned_in_text_spans``, ``watermark_spans``); the section (``drop_window``) keeps ``SPAN_PAD_S`` clear of them
 (``drop['avoid']``, which the owner's Adjust may not overlap either), and only a clip with no clean section of 6 s is blocked.
+The check also writes ``drop['max_length_s']`` (16 s less what his kit adds before the dance: 15.6 s for Reginald's pause) so the
+terminal's Adjust refuses a longer section before Make it, as ``validate_adjust`` would at Make it.
 
 **Process** (``process_drop``, free): the clip (``source ingest-owner`` for a file, ``source fetch`` with no Recreate fallback
 for a link), a probe, the free local analysis (``source analyze``: cuts, beat, the best window), the Gemini **deconstruct**
@@ -903,6 +905,8 @@ def _process(
             "part": look["suggested_part"], "gadgets": look["gadgets"], "hooks": look["hooks"], "hook": hook,
             "deconstruct": look, "music": MUSIC, "seconds": window["length_s"], "credits": credits, "preview_path": preview,
             "recommended": recommended, "avoid": avoid,
+            # the longest section Make it takes for him (validate_adjust's cap): the terminal's Adjust checks it before Make it
+            "max_length_s": round(MASTER_MAX_S - style_lead_s(ref.get("style")), 3),
         },
     }
     proposal["drop"] = {k: v for k, v in proposal["drop"].items() if v is not None or k in ("reason", "crop_x")}

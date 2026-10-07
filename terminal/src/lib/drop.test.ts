@@ -5,8 +5,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   ADJUST_KEYS, DROP_STATE_LABEL, RECOMMEND, STALE_UPLOAD_MINUTES, adjustChanges, avoidHit, avoidLabel, canChooseCharacter, characterMenu,
-  dropActions, dropCredits, dropLine, dropLink, dropRows, dropTitle, effectiveDrop, isDropCard, isLandscape, readyTotal, recommendationLine,
-  sectionLabel, validateAdjust,
+  dropActions, dropCredits, dropLine, dropLink, dropRows, dropTitle, effectiveDrop, isDropCard, isLandscape, maxSectionSeconds, readyTotal,
+  recommendationLine, retryAdjust, sectionLabel, validateAdjust,
 } from './drop';
 import { estimateCredits } from './rules';
 import { trackerStep } from './tracker';
@@ -50,7 +50,7 @@ describe('the card of a dropped video', () => {
   it('has the right buttons: Make it and Adjust when ready, Try again after a failure, Remove when it cannot go on', () => {
     expect(dropActions(READY, NOW)).toEqual(['make', 'adjust']);
     expect(dropActions({ ...READY, state: 'blocked' }, NOW)).toEqual(['remove']);
-    expect(dropActions({ ...READY, state: 'failed' }, NOW)).toEqual(['retry-make', 'remove']); // priced: Make it again
+    expect(dropActions({ ...READY, state: 'failed' }, NOW)).toEqual(['retry-make', 'adjust', 'remove']); // priced: Make it again, or Adjust it
     expect(dropActions({ state: 'failed' }, NOW)).toEqual(['retry-check', 'remove']); // the check itself failed
     expect(dropActions({ state: 'waiting' }, NOW)).toEqual(['retry-check', 'remove']);
     expect(dropActions({ state: 'checking' }, NOW)).toEqual([]);
@@ -175,7 +175,7 @@ describe('the demo', () => {
     snap = await demo.load();
     const card = snap.tracker.find((r) => r.pick_id === ids[0])!.drop_card!;
     expect(card.state).toBe('ready');
-    await expect(demo.requestJob(ids[0], 'make', { length_s: 40 })).rejects.toThrow(/6-16 s|runs past/);
+    await expect(demo.requestJob(ids[0], 'make', { length_s: 40 })).rejects.toThrow(/6-15\.6 s|runs past/); // Reginald: his pause leaves 15.6 s
     await demo.requestJob(ids[0], 'make', { part: 'star', length_s: 8 });
     snap = await demo.load();
     const making = snap.tracker.find((r) => r.pick_id === ids[0])!;
@@ -367,5 +367,71 @@ describe('the demo: Recommend and the character menu', () => {
     expect(drops.some((r) => (r.drop_card?.avoid ?? []).length > 0 && r.drop_card?.state === 'ready')).toBe(true);
     for (const r of drops.filter((x) => x.drop_card?.recommended)) expect(r.drop_card!.recommended!.reason.length).toBeLessThanOrEqual(80);
     expect(readyTotal(drops).count).toBeGreaterThan(3);
+  });
+});
+
+describe('a pause character’s section, and Try again after a failed Make it (final review)', () => {
+  const PAUSE: DropCard = { ...READY, duration_s: 30, max_length_s: 15.6 }; // Reginald: the check wrote what his kit leaves of the 16 s
+
+  it('caps the section at what the check wrote for this character, 16 s when it wrote nothing', () => {
+    expect(maxSectionSeconds(PAUSE)).toBe(15.6);
+    expect(maxSectionSeconds(READY)).toBe(16); // a drop checked before the check wrote it, or a character without a pause
+    expect(maxSectionSeconds({ max_length_s: 99 })).toBe(16); // never more than the master allows
+    expect(maxSectionSeconds({ max_length_s: Number.NaN })).toBe(16);
+    expect(validateAdjust({ start_s: 0, length_s: 15.6 }, PAUSE)).toEqual({ ok: true }); // the longest that fits
+    for (const length_s of [15.7, 16]) {
+      const r = validateAdjust({ start_s: 0, length_s }, PAUSE);
+      expect([length_s, r.ok]).toEqual([length_s, false]);
+      if (!r.ok) expect(r.reason).toMatch(/6-15\.6 s.*pause.*0\.4 s/); // the CLI refuses it at Make it: the sheet refuses it first
+    }
+    expect(validateAdjust({ start_s: 0, length_s: 16 }, { ...READY, duration_s: 30 })).toEqual({ ok: true }); // no pause: today's 16 s
+    expect(validateAdjust({ start_s: 1 }, { ...PAUSE, window: { start_s: 1.5, length_s: 15.8 } })).toMatchObject({ ok: false }); // the length the Adjust leaves alone
+  });
+
+  it('writes the same cap as studio.drop does for the kit, and passes it through the tracker view', () => {
+    const py = readFileSync(new URL('../../../studio/drop.py', import.meta.url), 'utf8');
+    expect(py).toMatch(/"max_length_s": round\(MASTER_MAX_S - style_lead_s\(/);
+    const sql = readFileSync(new URL('../../../supabase/migrations/0012_drop_a_video.sql', import.meta.url), 'utf8');
+    expect(sql).toContain("(f.proposal -> 'drop') - 'deconstruct' - 'make' - 'job'"); // drop_card keeps every other key, max_length_s included
+  });
+
+  it('offers Adjust again on a failed drop that has a price, and Try again only with an Adjust that still fits', () => {
+    expect(dropActions({ ...READY, state: 'failed' }, NOW)).toEqual(['retry-make', 'adjust', 'remove']);
+    expect(dropActions({ state: 'failed' }, NOW)).toEqual(['retry-check', 'remove']); // the check itself failed: no section to adjust
+    const tooLong: DropCard = { ...PAUSE, state: 'failed', adjust: { start_s: 0, length_s: 15.8 }, reason: 'the Adjust is not valid: adjust.length_s must be 6-15.6 s' };
+    expect(dropActions(tooLong, NOW)).toEqual(['adjust', 'remove']); // the same Try again would fail the same way: Adjust is the way on
+    expect(dropActions({ ...tooLong, adjust: { start_s: 0, length_s: 15.6 } }, NOW)).toEqual(['retry-make', 'adjust', 'remove']);
+  });
+
+  it('retries with the Adjust the owner stored, so Try again makes what its price says', () => {
+    expect(retryAdjust({ ...READY, state: 'failed' })).toBeNull(); // nothing stored: the check's own choices
+    expect(retryAdjust({ ...READY, state: 'failed', adjust: {} })).toBeNull();
+    const stored = { part: 'star' as const, start_s: 2, length_s: 12 };
+    const failed: DropCard = { ...READY, state: 'failed', adjust: stored };
+    expect(retryAdjust(failed)).toEqual(stored);
+    expect(dropCredits(failed, retryAdjust(failed) ?? {})).toBe(estimateCredits('dropin', 12, 'original')); // the button's price = what is sent
+    // why it must be sent: Make it replaces the stored Adjust with the one it is given (none given = none kept)
+    const sql = readFileSync(new URL('../../../supabase/migrations/0012_drop_a_video.sql', import.meta.url), 'utf8');
+    expect(sql).toContain("d := (d - 'adjust') || jsonb_build_object('state', 'making'");
+  });
+
+  it('runs in the demo: a Reginald card carries his cap, a retry keeps the Adjust, and the cap is enforced like the CLI', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    let now = NOW;
+    const demo = new DemoBackend(() => now);
+    const ids: Record<string, string> = {};
+    for (const slug of ['reginald', 'franz']) {
+      const { pickId } = await demo.addDrop(slug, null);
+      await demo.attachClip(pickId, { name: `${slug}.mp4`, size: 1000, type: 'video/mp4' });
+      await demo.requestJob(pickId, 'process');
+      ids[slug] = pickId;
+    }
+    now += 2_500;
+    const rows = (await demo.load()).tracker;
+    expect(rows.find((r) => r.pick_id === ids.reginald)!.drop_card).toMatchObject({ state: 'ready', max_length_s: 15.6 });
+    expect(rows.find((r) => r.pick_id === ids.franz)!.drop_card).toMatchObject({ state: 'ready', max_length_s: 16 });
+    const card = rows.find((r) => r.pick_id === ids.reginald)!.drop_card!;
+    await expect(demo.requestJob(ids.reginald, 'make', { start_s: 0, length_s: 15.8 })).rejects.toThrow(/6-15\.6 s/);
+    expect(card.state).toBe('ready'); // refused before anything is spent
   });
 });

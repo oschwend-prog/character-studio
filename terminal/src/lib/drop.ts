@@ -69,6 +69,16 @@ export function isLandscape(d: Pick<DropCard, 'width' | 'height'>): boolean {
   return Boolean(d.width && d.height && d.width > (d.height * 9) / 16 + 1);
 }
 
+/**
+ * The longest section Make it can take for this drop: 16 s, less what the character's kit adds before the dance. The check
+ * writes it (`drop.max_length_s`: Reginald's pause leaves 15.6 s) and the CLI refuses a longer one at Make it, after the owner
+ * tapped it, so the Adjust checks it first. 16 s when the card has none (a drop checked before it was written).
+ */
+export function maxSectionSeconds(d: Pick<DropCard, 'max_length_s'>): number {
+  const m = d.max_length_s;
+  return typeof m === 'number' && Number.isFinite(m) && m >= DROP_MIN_SECONDS && m <= DROP_MAX_SECONDS ? m : DROP_MAX_SECONDS;
+}
+
 /** What Make it will use: the check's choices with the owner's Adjust on top (like studio.drop.effective). */
 export function effectiveDrop(d: DropCard, adjust: DropAdjust = {}) {
   return {
@@ -89,7 +99,8 @@ export function dropCredits(d: DropCard, adjust: DropAdjust = {}): number {
 
 /**
  * The owner's Adjust, checked like studio.drop.validate_adjust and request_job (migration 0012): who is replaced and the hook
- * 1-80 characters on one line, his part, at most 3 gadgets of 1-40 characters, a section of 6-16 s inside the clip and clear of
+ * 1-80 characters on one line, his part, at most 3 gadgets of 1-40 characters, a section of 6-16 s (less his kit's pause:
+ * drop_card.max_length_s) inside the clip and clear of
  * the text and watermark moments (drop_card.avoid: refused here and by the CLI before anything is spent), a crop from 0 to 1
  * only for a landscape clip.
  */
@@ -114,8 +125,10 @@ export function validateAdjust(adjust: DropAdjust, d: DropCard): { ok: true } | 
     const e = effectiveDrop(d, adjust);
     if (!Number.isFinite(e.start_s) || !Number.isFinite(e.length_s)) return bad('The section needs numbers');
     if (e.start_s < 0) return bad('The section starts at 0 s or later');
-    if (e.length_s < DROP_MIN_SECONDS || e.length_s > DROP_MAX_SECONDS) {
-      return bad(`The section lasts ${DROP_MIN_SECONDS}-${DROP_MAX_SECONDS} s`);
+    const longest = maxSectionSeconds(d);
+    if (e.length_s < DROP_MIN_SECONDS || e.length_s > longest + 1e-9) {
+      const pause = longest < DROP_MAX_SECONDS ? ` (his opening pause adds ${n(DROP_MAX_SECONDS - longest)} s: the master stays within ${DROP_MAX_SECONDS} s)` : '';
+      return bad(`The section lasts ${DROP_MIN_SECONDS}-${n(longest)} s${pause}`);
     }
     if (d.duration_s && e.start_s + e.length_s > d.duration_s + SLACK_S) {
       return bad(`The section runs past the end of the ${Number(d.duration_s.toFixed(1))} s video`);
@@ -165,7 +178,9 @@ export function dropActions(d: DropCard, now: number): DropAction[] {
     case 'blocked':
       return ['remove'];
     case 'failed':
-      return d.credits != null ? ['retry-make', 'remove'] : ['retry-check', 'remove'];
+      if (d.credits == null) return ['retry-check', 'remove'];
+      // priced: Make it again with the stored Adjust, or Adjust it; an Adjust that no longer fits (the reason of the failure) has no retry
+      return validateAdjust(d.adjust ?? {}, d).ok ? ['retry-make', 'adjust', 'remove'] : ['adjust', 'remove'];
     case 'waiting':
       return ['retry-check', 'remove'];
     case 'uploading':
@@ -173,6 +188,14 @@ export function dropActions(d: DropCard, now: number): DropAction[] {
     default:
       return [];
   }
+}
+
+/**
+ * What Try again sends after a failed Make it: the Adjust the owner stored (request_job replaces it with what it is given, so
+ * sending nothing would discard it and make something other than the price on the button), null when there is none.
+ */
+export function retryAdjust(d: DropCard): DropAdjust | null {
+  return d.adjust && Object.keys(d.adjust).length ? d.adjust : null;
 }
 
 /** An upload still at Uploading after 30 minutes did not finish: the card says so and offers Remove. */

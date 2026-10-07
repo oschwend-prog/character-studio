@@ -437,6 +437,9 @@ export interface DropCard {
   recommended?: DropRecommendation | null;
   /** When text or a watermark is on screen (the check's spans, padded): the section keeps clear of them, and so must the Adjust. */
   avoid?: DropAvoid[];
+  /** The longest section Make it takes for this character: 16 s less what his kit adds before the dance (Reginald's pause: 15.6 s).
+   * Written by the check; absent on a drop checked before that (16 s). */
+  max_length_s?: number;
 }
 
 export interface DropRecommendation {

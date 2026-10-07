@@ -442,10 +442,13 @@ def test_the_check_gives_the_pause_its_room_by_the_characters_kit(world, portrai
         return real(*args, **kw)
 
     monkeypatch.setattr(drop, "drop_window", spy)
-    ready_drop(store, storage, portrait)  # Reginald: hook_edit pause
+    reginald = ready_drop(store, storage, portrait)  # Reginald: hook_edit pause
     dog = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True, "child": False}
-    ready_drop(store, storage, portrait, slug="biscuit", star=dog)  # Biscuit: no kit
+    biscuit = ready_drop(store, storage, portrait, slug="biscuit", star=dog)  # Biscuit: no kit
     assert asked == [0.4, 0.0]
+    # the card carries the longest section Make it will take for him, so the terminal's Adjust refuses the rest before Make it
+    assert store.get_favorite(reginald).proposal["drop"]["max_length_s"] == 15.6
+    assert store.get_favorite(biscuit).proposal["drop"]["max_length_s"] == 16.0
 
 
 # ---- the owner's Adjust --------------------------------------------------------------------------------------------------------
