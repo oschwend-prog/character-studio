@@ -34,3 +34,7 @@ Three look tests on gpt_image_2_5 (high, 2K, about 2.75 credits each, about 8 in
   TikTok and would cost reach and brand deals): 1 mild `882de1ad-f549-4ba0-be8a-90a00de219bf`, 2 medium
   `56988b00-1bfd-468f-a5b7-731809bd071d`, 3 strong `cb86c382-2610-486b-ae0d-3d00fc8645d2`. Local copies in
   `assets/characters/dj/`.
+- Third round (owner: "I need more options"; behind the decks, waist-up, the view of real DJ clips): A DJ Grandad
+  `c102c160-0d8b-4df7-b710-f76877857b4f`, B Tiny DJ `14ca9fa6-b22f-4bd0-a665-b8cb4b245e31` (came out as a man with dwarfism:
+  not to be used, the joke would be his condition), C Techno Monk `3817b068-ec95-4d88-a476-a5780d087b31`, D Big-Face Party
+  Boy `d6768aed-b3c6-461a-8841-a095d63b78d8`. 11 credits; 27.5 in total for the DJ so far.
