@@ -38,3 +38,8 @@ Three look tests on gpt_image_2_5 (high, 2K, about 2.75 credits each, about 8 in
   `c102c160-0d8b-4df7-b710-f76877857b4f`, B Tiny DJ `14ca9fa6-b22f-4bd0-a665-b8cb4b245e31` (came out as a man with dwarfism:
   not to be used, the joke would be his condition), C Techno Monk `3817b068-ec95-4d88-a476-a5780d087b31`, D Big-Face Party
   Boy `d6768aed-b3c6-461a-8841-a095d63b78d8`. 11 credits; 27.5 in total for the DJ so far.
+- Fourth round (owner 2026-10-07: "focus on the oversize trend as funny, mixed with him being a bit ugly and weirdly
+  behaving, with his signature odd DJ booth moves for drops"; the owner preferred round 2 over round 3): gangly, pale, patchy
+  goatee, sunburnt nose, greasy 90s curtains, cap or bucket hat two sizes too big, shin-length tee, odd-eye shades.
+  1 The Pigeon `d41a1f41-8c99-433f-9db6-00426baac2a6`, 2 The Knob Kiss `93597234-10c5-4b96-9cac-856e380450ac`, 3 The Phone
+  Call `a135af98-fad2-4221-876b-41cf84231d4b`. 8.25 credits; 35.75 in total for the DJ.
