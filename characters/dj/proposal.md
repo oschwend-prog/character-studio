@@ -24,3 +24,13 @@ Sources: ghostnotesupply.com "What do DJs wear? A 2026 style guide"; thefashioni
 
 ## Next step (owner to approve the spend)
 Three look tests on gpt_image_2_5 (high, 2K, about 2.75 credits each, about 8 in total), then the owner picks, then sheets.
+
+## Look tests (2026-10-07, gpt_image_2_5 high 2K, 2.75 credits each, 16.5 in total)
+- First round (style directions): A club/bucket hat `e85192ba-35d7-4acc-a83f-cc25e117fb8f`, B festival/orange hoodie
+  `50c90393-bb1c-495c-871d-6d61234d8f46`, C techno/all black `1315132d-d7b7-4033-ac1b-e3c6fdbd1098`. Owner: too normal; the
+  viral AI characters push a feature past real (big face, chin, elephant trousers).
+- Second round, the owner's exaggeration mix (elephant trousers, dinner-plate headphones, heroic chin, tiny odd-eye shades,
+  bleached flat-top, gold rave whistle; the owner's coke-spoon idea declined: drug paraphernalia is restricted on Instagram and
+  TikTok and would cost reach and brand deals): 1 mild `882de1ad-f549-4ba0-be8a-90a00de219bf`, 2 medium
+  `56988b00-1bfd-468f-a5b7-731809bd071d`, 3 strong `cb86c382-2610-486b-ae0d-3d00fc8645d2`. Local copies in
+  `assets/characters/dj/`.
