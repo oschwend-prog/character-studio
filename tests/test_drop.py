@@ -467,6 +467,22 @@ def test_the_adjust_is_checked_again_and_fails_closed():
         validate_adjust({"crop_x": 0.5}, {**d, "width": 1080, "height": 1920})
 
 
+def test_a_pause_characters_section_is_capped_so_the_master_stays_within_16_s():
+    """Reginald's pause adds 0.4 s: the owner's section is at most 16 - 0.4 s for him, and still 16 s for a character without one."""
+    d = {"duration_s": 30.0, "window": {"start_s": 2.0, "length_s": 9.0}}
+    lead = drop.style_lead_s({"hook_edit": "pause"})
+    assert lead == 0.4
+    assert validate_adjust({"start_s": 0, "length_s": 15.6}, d, lead_s=lead) == {"start_s": 0.0, "length_s": 15.6}
+    with pytest.raises(ValueError, match=r"6-15\.6 s.*0\.4 s.*within 16 s"):
+        validate_adjust({"start_s": 0, "length_s": 15.7}, d, lead_s=lead)
+    with pytest.raises(ValueError, match=r"6-15\.6 s"):
+        validate_adjust({"start_s": 0, "length_s": 16}, d, lead_s=lead)
+    assert validate_adjust({"start_s": 0, "length_s": 16}, d) == {"start_s": 0.0, "length_s": 16.0}  # no pause: today's 16 s
+    assert drop.effective({**d, "adjust": {"length_s": 15.6}}, lead_s=lead)["length_s"] == 15.6
+    with pytest.raises(ValueError, match=r"6-15\.6 s"):  # the same rule for the length the Adjust leaves alone
+        validate_adjust({"start_s": 1}, {**d, "window": {"start_s": 2.0, "length_s": 15.8}}, lead_s=lead)
+
+
 # ---- make: only after the owner's Make it --------------------------------------------------------------------------------------
 
 
@@ -540,6 +556,47 @@ def test_the_next_drop_of_the_character_rotates_the_engagement_line(world, portr
         assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
         clip = store.get_clip(store.get_favorite(pid).clip_id)
         assert clip.caption.splitlines()[2] == expected
+
+
+def test_a_made_drop_masters_in_its_characters_style(world, portrait, gen_out, fast_master):
+    """The master is built with the character's kit (pill, entrance, hook edit, tone): the spec names him and carries his style."""
+    store, storage = world
+    refs = {r["slug"]: r for r in drop.seed.load_refs()}
+    pid = ready_drop(store, storage, portrait)  # Reginald
+    tap_make(store, pid)
+    assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
+    (spec,) = fast_master
+    assert spec.character == "reginald" and spec.style == refs["reginald"]["style"] and spec.style["hook_edit"] == "pause"
+
+
+def test_a_character_without_a_kit_is_mastered_as_before(world, portrait, gen_out, fast_master):
+    store, storage = world
+    dog = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True, "child": False}
+    pid = ready_drop(store, storage, portrait, slug="biscuit", star=dog)
+    tap_make(store, pid)
+    assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
+    (spec,) = fast_master
+    assert spec.character == "biscuit" and spec.style is None  # no style block: the build finds no kit and masters as today
+
+
+def test_a_reginald_make_it_cannot_pass_16_s_once_the_pause_is_added(world, synth_video):
+    """The terminal accepts a 6-16 s section; for a pause character the CLI refuses more than 15.6 s before anything is spent."""
+    store, storage = world
+    store.add_character(Character(slug="franz", name="Franz", bodies=[Body.quadruped]))
+    long_clip = synth_video(w=540, h=960, dur=18)
+    dog = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True, "child": False}
+    pid = ready_drop(store, storage, long_clip)  # Reginald: hook_edit pause
+    tap_make(store, pid, adjust={"start_s": 0.0, "length_s": 15.8})
+    out = make_drop(store, storage, pid, hf=None, gemini_client=None, now=NOW, job="t")
+    assert out.state == "failed" and not out.ok and "the Adjust is not valid" in out.reason and "15.6 s" in out.reason
+    assert store.list_clips() == [] and store.ledger_month(NOW.strftime("%Y-%m")) == []
+    tap_make(store, pid, adjust={"start_s": 0.0, "length_s": 15.6})  # the longest that fits: accepted (waits for the key)
+    out = make_drop(store, storage, pid, hf=None, gemini_client=None, now=NOW, job="t")
+    assert out.state == "making" and "Higgsfield key" in out.reason
+    franz = ready_drop(store, storage, long_clip, slug="franz", star=dog)  # Franz: no pause, so 16 s stays allowed
+    tap_make(store, franz, adjust={"start_s": 0.0, "length_s": 16.0})
+    out = make_drop(store, storage, franz, hf=None, gemini_client=None, now=NOW, job="t")
+    assert out.state == "making" and "Higgsfield key" in out.reason
 
 
 def test_the_owners_adjust_is_what_is_made(world, synth_video, gen_out, fast_master):

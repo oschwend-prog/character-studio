@@ -425,12 +425,16 @@ def crop_for(width: int, height: int, x_center: float | None) -> float | None:
 # ---- the owner's Adjust ----------------------------------------------------------------------------------------------------------
 
 
-def validate_adjust(adjust: Any, drop: Mapping[str, Any]) -> dict[str, Any]:
+def validate_adjust(adjust: Any, drop: Mapping[str, Any], *, lead_s: float = 0.0) -> dict[str, Any]:
     """The owner's Adjust of a ready drop (``drop['adjust']``, written by request_job), checked again here (fail closed).
 
     Every key optional: ``star`` (1-80 characters: who is replaced), ``part`` (cameo, featured or star), ``gadgets`` (at most 3
     of 1-40 characters), ``hook`` (1-80 characters), ``start_s`` (0 or more) and ``length_s`` (6-16 s, inside the video, clear
-    of the text and watermark moments of ``drop['avoid']``), ``crop_x`` (0-1 or null). ``ValueError`` names the first problem."""
+    of the text and watermark moments of ``drop['avoid']``), ``crop_x`` (0-1 or null). ``ValueError`` names the first problem.
+
+    ``lead_s`` is what the character's kit adds before the dance (``master.style_lead_s``: Reginald's pause): the section is at
+    most ``MASTER_MAX_S - lead_s`` s, so the master (the lead plus the section) can never pass 16 s once Genjutsu has been paid.
+    The terminal and ``request_job`` only know 6-16 s: this check is the binding one."""
     if adjust is None:
         return {}
     if not isinstance(adjust, Mapping):
@@ -472,8 +476,10 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any]) -> dict[str, Any]:
     if "start_s" in adjust or "length_s" in adjust:
         if start < 0:
             raise ValueError("adjust.start_s must be 0 or more")
-        if not MASTER_MIN_S <= length <= MASTER_MAX_S:
-            raise ValueError(f"adjust.length_s must be {MASTER_MIN_S:g}-{MASTER_MAX_S:g} s")
+        longest = MASTER_MAX_S - lead_s
+        if not MASTER_MIN_S <= length <= longest + 1e-9:
+            why = f": the master starts {lead_s:g} s later (the character's pause), so it stays within {MASTER_MAX_S:g} s" if lead_s else ""
+            raise ValueError(f"adjust.length_s must be {MASTER_MIN_S:g}-{longest:g} s{why}")
         if duration and start + length > duration + SLACK_S:
             raise ValueError(f"the section {start:g}-{start + length:g} s runs past the end of the {duration:g} s video")
         for span in drop.get("avoid") or []:  # only the section is judged: it may not show text or a watermark
@@ -498,9 +504,9 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
-def effective(drop: Mapping[str, Any]) -> dict[str, Any]:
-    """What the make job uses: the process job's choices with the owner's Adjust on top."""
-    adjust = validate_adjust(drop.get("adjust"), drop)
+def effective(drop: Mapping[str, Any], *, lead_s: float = 0.0) -> dict[str, Any]:
+    """What the make job uses: the process job's choices with the owner's Adjust on top (``lead_s``: see ``validate_adjust``)."""
+    adjust = validate_adjust(drop.get("adjust"), drop, lead_s=lead_s)
     window = drop.get("window") or {}
     star = drop.get("star") or {}
     return {
@@ -989,8 +995,9 @@ def make_drop(
     for key in ("source_id", "window", "star", "credits"):
         if not drop.get(key):
             raise DropError(f"pick {pick_id}: the check never finished ({key} missing): process it first")
+    ref, _ = character(pick.character_slug, characters_dir)  # his kit may add a lead (Reginald's pause): the section shrinks by it
     try:
-        effective(drop)
+        effective(drop, lead_s=style_lead_s(ref.get("style")))
     except ValueError as e:
         return _give_up(store, pick, None, now, f"the Adjust is not valid: {e}")
     if not claim(store, pick_id, "make", job, now):
@@ -1355,6 +1362,7 @@ def _master(store: Store, storage: Storage, pick: Favorite, clip: Clip, ref: Map
         blue_eye_xy=tuple(ref.get("blue_eye_xy") or (0, 0)), hook1=[], hook2=hook_lines(hook),
         hook2_until_s=max(1.0, min(HOOK_ON_SCREEN_S, duration - 1.0)), audio=gen, audio_offset_s=0.0,
         out=work / "master.mp4", preset=preset, clip_id=clip.id, music=MUSIC,
+        character=pick.character_slug, style=ref.get("style"),  # his kit: pill, entrance, hook edit, tone (refs.json is the authority)
     )
     source = _source(store, clip.source_id) if clip.source_id else None
     if (problem := audio_problem(gen, gen, clip, source, pick.proposal.get("owner_music"))) is not None:
