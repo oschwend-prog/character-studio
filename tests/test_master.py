@@ -1221,8 +1221,9 @@ def test_cli_master_upload_exit_codes(upload_rig, synth_video):
 # ---- the style kits on the video (C2): entrances, hook edits, tones and Reginald's pause ------------------------------
 
 # The filter graphs of the picture and of the sound mix that ``build_master`` gave ffmpeg BEFORE the kits existed (captured
-# from the code at 339daea with the text-pop and title fonts pinned to the committed Figtree, so they are the same on the Mac
-# and in CI). A spec with no style must still produce exactly these (Review Focus 5: no regression for existing clips).
+# from the code at 339daea with the text-pop and title fonts pinned to the committed Figtree and Pillow's basic text layout
+# (``pin_text_metrics``), so they are the same on the Mac and in CI). A spec with no style must still produce exactly these
+# (Review Focus 5: no regression for existing clips).
 NO_STYLE_GRAPHS = {
     "closeup": [
         "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v0];[v0][3:v]overlay=x=208:y=1300:enable='between(t,0,0.8)'[o0];"
@@ -1259,6 +1260,28 @@ CREAM = (0xF4, 0xEB, 0xDD)  # Franz's pill
 NEON = (0xE6, 0xFF, 0x00)  # the DJ's pill
 
 
+def pin_text_metrics(monkeypatch) -> None:
+    """Make every overlay's text measure the same on any machine, so a pinned graph (the pills' ``x=``) can be compared byte for byte.
+
+    Two things move a text's width between machines, and both are pinned here to what the graphs were captured with:
+    * the system fonts of the text pop and the title card: the committed Figtree instead;
+    * Pillow's layout engine. With ``libfribidi`` installed Pillow switches to Raqm (HarfBuzz: fractional advances and the font's
+      GPOS kerning, "my eyes don't match." is 523.5 px wide); without it (the Mac) it uses the basic layout (whole-pixel advances,
+      528 px). CI has it (ffmpeg depends on libass, libass on libfribidi), so a pill came out 4 px narrower and 2 px further right
+      (``x=210`` instead of ``208``). Production code is not touched: it keeps whichever engine its machine has.
+    """
+    monkeypatch.setattr(overlays, "font_path", lambda: overlays.PILL_FONT)
+    monkeypatch.setattr(overlays, "serif_font_path", lambda: overlays.PILL_FONT)
+    real = ImageFont.truetype
+
+    def basic_layout(*args, **kw):
+        kw.setdefault("layout_engine", ImageFont.Layout.BASIC)
+        return real(*args, **kw)
+
+    monkeypatch.setattr(ImageFont, "truetype", basic_layout)
+    assert overlays._pill_font(overlays.PILL_SIZE).layout_engine == ImageFont.Layout.BASIC, "the layout pin did not take"
+
+
 def graphs_of(spec: MasterSpec, monkeypatch) -> list[str]:
     """Build ``spec`` for real; the filter graphs ffmpeg was given for the picture (``...[vout]``) and the sound mix (``...[a]``)."""
     seen: list[str] = []
@@ -1283,8 +1306,7 @@ def count_near(img: Image.Image, box: tuple[int, int, int, int], rgb, tol: int =
 @pytest.mark.parametrize("who", [{}, {"character": "biscuit"}, {"style": {}}], ids=["no-character", "no-kit", "empty-kit"])
 def test_no_style_graph_is_unchanged(tmp_path, monkeypatch, who):
     """No kit (no character, a character without one, or an empty one): the very graphs of before, byte for byte."""
-    monkeypatch.setattr(overlays, "font_path", lambda: overlays.PILL_FONT)
-    monkeypatch.setattr(overlays, "serif_font_path", lambda: overlays.PILL_FONT)
+    pin_text_metrics(monkeypatch)
     dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 6)
     assert graphs_of(spec_for(tmp_path, dance, beat, **who), monkeypatch) == NO_STYLE_GRAPHS["closeup"]
     enhanced = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2_until_s=1.5, enhancements=ENHANCED, **who)
