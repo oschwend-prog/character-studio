@@ -1,0 +1,231 @@
+"""The owner's clips folder: videos saved into an iCloud Drive folder become drops (Terminal v2, spec section A).
+
+The owner saves clips from the iPhone (Files, Safari downloads, Photos "Save to Files") or the Mac into one folder. ``sync_folder``
+turns each new video in it into a **file drop**, exactly what ``studio drop add --file`` does (no character: the studio recommends
+one after the check; ``drop.add_drop`` then ``drop.attach_file``), and moves the file into ``Added/`` so the owner sees what was
+taken. This module is pure: the CLI command and the LaunchAgent that call it are separate (tasks A2 and A3).
+
+**Only the top level of the folder is read** (``Added/`` and every other sub-folder are never looked at; hidden files such as
+``.DS_Store`` are not clips). What is not taken, and why (``skipped``, one ``{"file", "reason"}`` each):
+
+* ``"in iCloud, downloading"``: a placeholder (``.<name>.icloud``, the file is not on this Mac yet). iCloud is asked to fetch the
+  real file (``fetch``, ``brctl download``) and a later run takes it. A placeholder is never uploaded.
+* ``"still copying"``: written within the last ``SETTLE_SECONDS`` (a copy or an iCloud download still in progress).
+* ``"not a video"`` / ``"over 200 MB"``: the extension and the size limit of ``drop`` (read at call time), checked BEFORE
+  ``add_drop`` so a bad file never leaves an orphan ``uploading`` pick.
+* ``"already added"``: its content hash (sha256) is in the ledger (the same clip copied again, or a move that failed last time):
+  it only goes to ``Added/``.
+
+**The ledger** (``clips-ledger.json`` under ``~/.local/state``, never in the repo) maps ``hash -> {"pick_id", "name", "at"}``,
+written atomically (temp file + rename) after every file taken. A ledger that cannot be read stops the sync (``ValueError``)
+rather than be forgotten: forgetting it would add the same clips twice.
+
+**One file's trouble never stops the others.** A ``ValueError`` (``DropError`` included), ``StorageError`` or ``OSError`` on a file
+goes to ``failed`` and the file stays where it is for the next run. The pick ``add_drop`` made for it is not left to pile up: it
+is tagged with the file's hash (``drop['folder_hash']``) and the retry takes that pick up again instead of making another. A move
+into ``Added/`` that fails after the upload is reported in ``failed`` too, but the ledger already knows the clip: the next run
+only moves it. A missing or unreadable folder raises (``OSError``): the caller reports it (iCloud signed out, macOS privacy).
+
+``studio.drop`` is imported as a module and read at call time (``drop.CLIP_MAX_BYTES``, ``drop.add_drop``) so a test can patch it
+and ``studio.drop`` may itself import this module for its CLI command.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import subprocess
+import tempfile
+import time
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from studio import drop
+from studio.favorites import DROP_PLATFORM
+from studio.models import Favorite
+from studio.storage import Storage, StorageError
+from studio.store import Store
+
+DEFAULT_FOLDER = Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/ODD EYES clips"
+ADDED_DIR = "Added"
+DEFAULT_LEDGER = Path.home() / ".local/state/odd-eyes/clips-ledger.json"
+SETTLE_SECONDS = 30  # a file written more recently than this is still being copied
+ICLOUD_SUFFIX = ".icloud"  # a placeholder: ``.<name>.icloud`` stands for ``<name>`` that is not downloaded yet
+BRCTL_TIMEOUT_S = 60
+_CHUNK = 1024 * 1024
+
+Ledger = dict[str, dict[str, Any]]
+
+
+def brctl_download(path: Path) -> None:
+    """Ask iCloud to download ``path`` (``brctl download``). Fire and forget: errors (no ``brctl``, too slow) are ignored, the
+    placeholder is simply still there on the next run."""
+    try:
+        subprocess.run(
+            ["brctl", "download", str(path)], capture_output=True, stdin=subprocess.DEVNULL, timeout=BRCTL_TIMEOUT_S, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def file_hash(path: Path) -> str:
+    """The sha256 of the file's content, streamed (a clip may be 200 MB)."""
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        while chunk := f.read(_CHUNK):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _problem(path: Path, size: int) -> str | None:
+    """Why this file can never be a drop (type, then size, as ``attach_file`` judges them), or None."""
+    if path.suffix.lower().lstrip(".") not in drop.CLIP_EXTENSIONS:
+        return "not a video"
+    if size > drop.CLIP_MAX_BYTES:
+        return f"over {drop.CLIP_MAX_BYTES // (1024 * 1024)} MB"
+    return None
+
+
+def scan_folder(folder: Path, now: float, fetch: Callable[[Path], None]) -> tuple[list[Path], list[dict[str, str]]]:
+    """The files of ``folder`` (top level only) ready to be taken, by name, and the skipped ones ``{"file", "reason"}``.
+    ``now`` is epoch seconds; ``fetch(<folder>/<name>)`` is called for each iCloud placeholder."""
+    ready: list[Path] = []
+    skipped: list[dict[str, str]] = []
+    for path in sorted(folder.iterdir()):
+        if not path.is_file():  # Added/, any other folder, a broken link
+            continue
+        name = path.name
+        if name.startswith(".") and name.endswith(ICLOUD_SUFFIX) and len(name) > len(ICLOUD_SUFFIX) + 1:
+            real = name[1 : -len(ICLOUD_SUFFIX)]
+            fetch(folder / real)
+            skipped.append({"file": real, "reason": "in iCloud, downloading"})
+            continue
+        if name.startswith("."):  # .DS_Store and the like are not clips
+            continue
+        try:
+            stat = path.stat()
+        except FileNotFoundError:  # taken away since the listing
+            continue
+        if now - stat.st_mtime < SETTLE_SECONDS:
+            skipped.append({"file": name, "reason": "still copying"})
+        elif (why := _problem(path, stat.st_size)) is not None:
+            skipped.append({"file": name, "reason": why})
+        else:
+            ready.append(path)
+    return ready, skipped
+
+
+def _load_ledger(path: Path) -> Ledger:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    try:
+        ledger = json.loads(raw)
+    except ValueError as e:
+        raise ValueError(f"the clips ledger {path} is not valid JSON ({e}): fix or remove it") from e
+    if not isinstance(ledger, dict):
+        raise ValueError(f"the clips ledger {path} is not a JSON object: fix or remove it")
+    return ledger
+
+
+def _write_ledger(path: Path, ledger: Ledger) -> None:
+    """Atomically: a temp file next to the ledger, then rename (its folders are created)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(ledger, f, indent=2, sort_keys=True)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _move_to_added(path: Path) -> Path:
+    """Move the file into ``Added/`` beside it; a name clash gets `` (2)``, `` (3)`` ... before the extension."""
+    added = path.parent / ADDED_DIR
+    added.mkdir(exist_ok=True)
+    target = added / path.name
+    n = 2
+    while target.exists():
+        target = added / f"{path.stem} ({n}){path.suffix}"
+        n += 1
+    path.rename(target)
+    return target
+
+
+def _waiting_pick(store: Store, digest: str) -> Favorite | None:
+    """The pick an earlier failed upload of this very file left waiting for its clip, if any (see ``_add``)."""
+    for f in store.list_favorites(platform=DROP_PLATFORM, origin="owner"):
+        d = f.proposal.get("drop")
+        if (
+            isinstance(d, dict) and d.get("kind") == "file" and d.get("state") == "uploading"
+            and d.get("folder_hash") == digest and not f.proposal.get("owner_clip_path")
+        ):  # fmt: skip
+            return f
+    return None
+
+
+def _add(store: Store, storage: Storage, path: Path, digest: str, now: datetime) -> str:
+    """File the drop for this clip (no character: the studio recommends) and attach the file; the pick's id. When the upload
+    fails the pick is tagged with the file's hash so the retry reuses it instead of leaving one more behind."""
+    pick = _waiting_pick(store, digest)
+    if pick is None:
+        pick, _ = drop.add_drop(store, None, None, now)
+    try:
+        drop.attach_file(store, storage, pick.id, path, now)
+    except (ValueError, StorageError, OSError):
+        waiting = store.get_favorite(pick.id)
+        if waiting is not None:
+            store.update_favorite(
+                waiting.id, proposal={**waiting.proposal, "drop": {**waiting.proposal["drop"], "folder_hash": digest}}
+            )
+        raise
+    return pick.id
+
+
+def sync_folder(
+    store: Store, storage: Storage, folder: Path, ledger_path: Path, now: datetime, *,
+    fetch: Callable[[Path], None] = brctl_download, clock: Callable[[], float] = time.time,
+) -> dict[str, list[dict[str, str]]]:  # fmt: skip
+    """Take every new video of ``folder`` as a file drop. Returns ``{"added": [{"file", "pick_id"}], "skipped": [{"file",
+    "reason"}], "failed": [{"file", "error"}]}``; see the module docstring for the rules. ``now`` (aware) stamps the drops and
+    the ledger; ``clock`` (epoch seconds) is what "still copying" is measured against."""
+    ledger = _load_ledger(ledger_path)
+    ready, skipped = scan_folder(folder, clock(), fetch)
+    added: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    for path in ready:
+        name = path.name
+        pick_id = None
+        try:
+            digest = file_hash(path)
+            if digest not in ledger:
+                if (why := _problem(path, path.stat().st_size)) is not None:  # again, and BEFORE add_drop: the file may have changed
+                    skipped.append({"file": name, "reason": why})
+                    continue
+                pick_id = _add(store, storage, path, digest, now)
+        except (ValueError, StorageError, OSError) as e:
+            failed.append({"file": name, "error": str(e)})
+            continue
+        if pick_id is None:
+            skipped.append({"file": name, "reason": "already added"})
+        else:
+            ledger[digest] = {"pick_id": pick_id, "name": name, "at": now.isoformat()}
+            added.append({"file": name, "pick_id": pick_id})
+            try:
+                _write_ledger(ledger_path, ledger)
+            except OSError as e:  # the file is moved all the same, so it is not added twice
+                failed.append({"file": name, "error": f"added as pick {pick_id}, but the ledger was not written: {e}"})
+        try:
+            _move_to_added(path)
+        except OSError as e:  # the ledger knows the clip: the next run only moves it
+            failed.append({"file": name, "error": f"taken, but not moved to {ADDED_DIR}/: {e}"})
+    return {"added": added, "skipped": skipped, "failed": failed}
