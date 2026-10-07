@@ -1,0 +1,123 @@
+#!/usr/bin/env bash
+# Owner helper: install (or remove) the LaunchAgent that takes the clips in the iCloud folder "ODD EYES clips"
+# as drops, every 5 minutes (`bin/studio drop sync-folder`). Nothing secret is written: the agent runs bin/studio,
+# which reads the Keychain itself.
+#   bin/install-clip-sync              create the folder, write the agent, load it, show the log
+#   bin/install-clip-sync --uninstall  stop and remove the agent (the folder and the ledger stay)
+set -euo pipefail
+
+label="com.oddeyes.clip-sync"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+icloud="$HOME/Library/Mobile Documents/com~apple~CloudDocs"
+folder="$icloud/ODD EYES clips"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+log="$HOME/Library/Logs/odd-eyes-clip-sync.log"
+domain="gui/$(id -u)"
+
+usage() { echo "Usage: bin/install-clip-sync [--uninstall]"; }
+xml() { printf %s "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+bootout() { launchctl bootout "$domain/$label" 2>/dev/null || true; }
+
+uninstall=0
+case "${1:-}" in
+  "") ;;
+  --uninstall) uninstall=1 ;;
+  -h|--help) usage; exit 0 ;;
+  *) usage >&2; exit 2 ;;
+esac
+
+if [ "$uninstall" = 1 ]; then
+  bootout
+  rm -f "$plist"
+  echo "Removed the clips sync agent ($label). The folder and the ledger are untouched:"
+  echo "  $folder"
+  exit 0
+fi
+
+# iCloud Drive must be on: the folder lives in it.
+if [ ! -d "$icloud" ]; then
+  echo "iCloud Drive is off on this Mac ($icloud is missing)."
+  echo "Turn it on in System Settings > Apple Account > iCloud > Drive, then run bin/install-clip-sync again."
+  exit 1
+fi
+
+# Where uv and gh are: launchd's own PATH has neither /opt/homebrew/bin nor necessarily /usr/local/bin.
+agent_path="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+for tool in uv gh; do
+  found="$(command -v "$tool" || true)"
+  if [ -z "$found" ]; then
+    if [ "$tool" = uv ]; then echo "uv is not installed (command -v uv finds nothing): install it first."; exit 1; fi
+    echo "Note: gh is not installed, so the cloud check is not woken after a clip is added (the daily run still checks it)."
+    continue
+  fi
+  dir="$(dirname "$found")"
+  case ":$agent_path:" in *":$dir:"*) ;; *) agent_path="$agent_path:$dir" ;; esac
+done
+uv_real="$(realpath "$(command -v uv)")"
+
+mkdir -p "$folder/Added" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+
+# Write the agent next to its final place, check it, then move it over the old one.
+tmp="$(mktemp "$plist.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+cat > "$tmp" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>$label</string>
+  <key>ProgramArguments</key><array>
+    <string>$(xml "$root/bin/studio")</string>
+    <string>drop</string>
+    <string>sync-folder</string>
+  </array>
+  <key>StartInterval</key><integer>300</integer>
+  <key>RunAtLoad</key><true/>
+  <key>EnvironmentVariables</key><dict>
+    <key>PATH</key><string>$(xml "$agent_path")</string>
+  </dict>
+  <key>StandardOutPath</key><string>$(xml "$log")</string>
+  <key>StandardErrorPath</key><string>$(xml "$log")</string>
+</dict></plist>
+EOF
+plutil -lint "$tmp" >/dev/null
+chmod 644 "$tmp"
+mv "$tmp" "$plist"
+trap - EXIT
+
+# Load it (bootout first: a reinstall replaces the running one), then run it now and look at the log.
+before=0
+[ -f "$log" ] && before="$(wc -l < "$log")"
+bootout
+launchctl enable "$domain/$label"
+launchctl bootstrap "$domain" "$plist"
+launchctl kickstart -k "$domain/$label"
+echo "Loaded $label (every 5 minutes). Waiting 10 s for the first run..."
+sleep 10
+
+new="$(tail -n +"$((before + 1))" "$log" 2>/dev/null || true)"
+running=0
+launchctl list | awk -v l="$label" '$3 == l && $1 != "-" { found = 1 } END { exit !found }' && running=1
+echo "--- $log (this run) ---"
+if [ -n "$new" ]; then printf '%s\n' "$new" | tail -n 20; else echo "(nothing written yet)"; fi
+echo "-----"
+
+if printf '%s\n' "$new" | grep -q "Operation not permitted"; then
+  echo "macOS is refusing the background job access to iCloud Drive. Allow it once:"
+  echo "  System Settings > Privacy & Security > Full Disk Access > + : add the uv binary"
+  echo "  ($uv_real) and /bin/bash"
+  echo "  (in the file picker press Cmd+Shift+G to type a path; hidden folders such as ~/.local need it)."
+  echo "Then run bin/install-clip-sync again. Meanwhile the daily run still syncs the folder."
+  exit 1
+fi
+if [ -z "$new" ] && [ "$running" = 1 ]; then
+  # A first run that is still going after 10 s with an empty log is a slow start or macOS waiting for an answer.
+  echo "The first run is still going and has written nothing yet. Either it is a slow start, or macOS is waiting for"
+  echo "your answer to a permission dialog about iCloud Drive (it may name uv or python): click Allow. Then check the log:"
+  echo "  tail \"$log\""
+  echo "If it says Operation not permitted, the answer was no: grant Full Disk Access to $uv_real"
+  echo "(System Settings > Privacy & Security), then run bin/install-clip-sync again. Meanwhile the daily run still syncs the folder."
+  exit 0
+fi
+echo "Folder: $folder"
+echo "Log:    tail -f \"$log\""
+echo "Remove: bin/install-clip-sync --uninstall"
