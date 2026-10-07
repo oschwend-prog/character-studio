@@ -24,7 +24,7 @@ The owner: "We start the channels by me uploading the clips I want generated wit
 
 ## 1. Orient and recover
 First, before anything else: `bin/studio run log --kind daily --status ok --open` marks the run as started (the terminal's Scanner card shows "Scanning now" while it is open) and prints `started_at`: keep that value, step 10 passes it back. Also write `{}` to `renders/tmp/details.json` now, so a file left by an earlier day is never logged.
-Then `bin/studio drop sync-folder` (the owner's iCloud clips folder; a missing folder or a failure is a note in the run log, never a stop).
+Then `bin/studio drop sync-folder` (the owner's iCloud clips folder) and `bin/studio drop sync-folder --folder inbox/drops` (his clips folder in the repo; owner 2026-10-07: every new clip there is taken); a missing folder or a failure is a note in the run log, never a stop.
 1. `bin/studio seed status`: note each character's `live`, its `traits` card (energy, comedy, best_formats, settings, moves, props, never) and `sheets` (the character sheets) through the run. None live → no scan, no plan: step 10 (`ok`, "no live characters").
 2. Crashed runs, money first. `bin/studio budget open` lists every clip still holding credits, whatever state it is in. For each entry with `age_hours` over 2 (a younger one may belong to a run still going):
    1. Find what was charged: Higgsfield `transactions` and `show_generations` since the entry's `clip_created_at`; the clip's still, driver, beat and Genjutsu jobs, matched by time, model and prompt. The credits really charged add up to `S`.

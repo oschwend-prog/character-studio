@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Owner helper: install (or remove) the LaunchAgent that takes the clips in the iCloud folder "ODD EYES clips"
-# as drops, every 5 minutes (`bin/studio drop sync-folder`). Nothing secret is written: the agent runs bin/studio,
+# Owner helper: install (or remove) the LaunchAgent that takes the clips in the iCloud folder "ODD EYES clips" and in the
+# repo's inbox/drops as drops, every 5 minutes (`bin/studio drop sync-folder`, once per folder). Nothing secret is written: the agent runs bin/studio,
 # which reads the Keychain itself.
 #   bin/install-clip-sync              create the folder, write the agent, load it, show the log
 #   bin/install-clip-sync --uninstall  stop and remove the agent (the folder and the ledger stay)
@@ -10,6 +10,7 @@ label="com.oddeyes.clip-sync"
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 icloud="$HOME/Library/Mobile Documents/com~apple~CloudDocs"
 folder="$icloud/ODD EYES clips"
+inbox="$root/inbox/drops"   # the owner's second clips folder, on this Mac only (git-ignored); the same ledger, so a clip in both is one drop
 plist="$HOME/Library/LaunchAgents/$label.plist"
 log="$HOME/Library/Logs/odd-eyes-clip-sync.log"
 domain="gui/$(id -u)"
@@ -100,7 +101,7 @@ for tool in uv gh; do
 done
 uv_real="$(realpath "$(command -v uv)")"
 
-mkdir -p "$folder/Added" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
+mkdir -p "$folder/Added" "$inbox/Added" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 
 wait_for_run
 
@@ -113,9 +114,11 @@ cat > "$tmp" <<EOF
 <plist version="1.0"><dict>
   <key>Label</key><string>$label</string>
   <key>ProgramArguments</key><array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>"\$0" drop sync-folder; "\$0" drop sync-folder --folder "\$1"</string>
     <string>$(xml "$root/bin/studio")</string>
-    <string>drop</string>
-    <string>sync-folder</string>
+    <string>$(xml "$inbox")</string>
   </array>
   <key>StartInterval</key><integer>300</integer>
   <key>RunAtLoad</key><true/>
