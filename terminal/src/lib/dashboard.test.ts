@@ -1,6 +1,8 @@
 // Terminal v2, Today page: the counts of "what needs you" and a character's last posts. Pure functions over the snapshot.
 import { describe, expect, it } from 'vitest';
-import { creditsLeft, hasWarnings, lastPosts, liveChannels, liveLastPosts, postNumbers, problemClips, problemClipsLine, todayCounts } from './dashboard';
+import {
+  creditsLeft, hasWarnings, lastPosts, liveChannels, liveLastPosts, postNumbers, problemClips, problemClipsLine, todayCounts, warningCount,
+} from './dashboard';
 import { dropCredits } from './drop';
 import type { Character, ClipState, HealthRow, DropAdjust, DropCard, DropState, LibraryClip, LibraryPost, QueueClip, Snapshot, TrackerRow } from './types';
 
@@ -241,5 +243,13 @@ describe('problemClips, problemClipsLine and hasWarnings', () => {
     expect(hasWarnings(snapshot({ tracker: [blocked] }))).toBe(true);
     expect(hasWarnings(snapshot({ tracker: [failed] }))).toBe(true);
     expect(hasWarnings(snapshot({ health: [warn], tracker: [failed] }))).toBe(true);
+  });
+
+  it('counts the Today tab’s badge like the warnings Today shows: the v_health rows and the blocked or failed clips', () => {
+    expect(warningCount(snapshot({ tracker: fine }))).toBe(0);
+    expect(warningCount(snapshot({ health: [warn], tracker: fine }))).toBe(1);
+    expect(warningCount(snapshot({ tracker: [blocked, failed, ...fine] }))).toBe(2);
+    expect(warningCount(snapshot({ health: [warn, warn], tracker: [blocked, failed, ...fine] }))).toBe(4);
+    expect((warningCount(snapshot({ health: [warn], tracker: [failed] })) > 0)).toBe(hasWarnings(snapshot({ health: [warn], tracker: [failed] })));
   });
 });

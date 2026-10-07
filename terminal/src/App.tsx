@@ -3,7 +3,7 @@ import type { Session } from '@supabase/supabase-js';
 import { Clapperboard, Clock3, Ellipsis, FolderOpen, Users } from 'lucide-react';
 import { useEffect, useMemo, useState, type ComponentType } from 'react';
 import { Mark } from './components/ui';
-import { todayCounts } from './lib/dashboard';
+import { todayCounts, warningCount } from './lib/dashboard';
 import { londonDate, londonTime } from './lib/format';
 import { TABS as TAB_SPECS, charactersView, moreView } from './lib/tabs';
 import { href, useNow, useRoute, type TabRoute } from './lib/hooks';
@@ -110,8 +110,9 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
   const now = useNow(10_000);
   const counts = data ? todayCounts(data) : null;
   const clipsNeedingYou = counts ? counts.needCharacter + counts.ready : 0; // the clips that wait for the owner: a character to pick, or Make it
+  const alerts = data ? warningCount(data) : 0; // what Today's warnings list: v_health and the blocked or failed clips
   const badge: Partial<Record<TabRoute, { n: number; label: string; quiet?: boolean }>> = {
-    today: data?.health.length ? { n: data.health.length, label: 'alerts', quiet: true } : undefined,
+    today: alerts ? { n: alerts, label: 'alerts', quiet: true } : undefined,
     clips: clipsNeedingYou ? { n: clipsNeedingYou, label: 'need you', quiet: true } : undefined,
     videos: data?.queue.length ? { n: data.queue.length, label: 'waiting' } : undefined,
   };

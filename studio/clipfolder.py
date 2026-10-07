@@ -332,7 +332,8 @@ def nudge_cloud() -> str | None:
     is disabled, too slow). Never raises: a missed nudge only costs the wait for the sweep."""
     try:
         done = subprocess.run(
-            NUDGE_COMMAND, cwd=REPO_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=NUDGE_TIMEOUT_S, check=False
+            NUDGE_COMMAND, cwd=REPO_ROOT, capture_output=True, text=True, errors="replace",  # gh's output is only read, never trusted to be UTF-8
+            stdin=subprocess.DEVNULL, timeout=NUDGE_TIMEOUT_S, check=False,
         )
     except FileNotFoundError:
         return "gh not found"

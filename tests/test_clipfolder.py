@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -840,3 +841,11 @@ def test_nudge_cloud_reports_what_gh_said_when_it_fails(monkeypatch):
 
     monkeypatch.setattr(clipfolder.subprocess, "run", silent)
     assert "4" in clipfolder.nudge_cloud()  # at least the exit status
+
+
+def test_nudge_cloud_never_raises_on_output_that_is_not_utf8(monkeypatch):
+    """gh can print any bytes (a locale, an error page): decoding them must not raise out of a run that already added its clips."""
+    script = "import sys; sys.stderr.buffer.write(b'HTTP 404: caf\\xe9 workflow \\xff not found'); sys.exit(1)"
+    monkeypatch.setattr(clipfolder, "NUDGE_COMMAND", [sys.executable, "-c", script])
+    why = clipfolder.nudge_cloud()  # a real process: the bytes are really not UTF-8
+    assert why is not None and "HTTP 404" in why and "workflow" in why and "\n" not in why

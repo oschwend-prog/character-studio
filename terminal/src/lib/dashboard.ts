@@ -113,5 +113,8 @@ export const problemClips = (data: Pick<Snapshot, 'tracker'>): number => filterC
 /** The warning row for those clips; it links to the Clips page's Blocked or failed filter. */
 export const problemClipsLine = (n: number): string => (n === 1 ? '1 clip is blocked or failed' : `${n} clips are blocked or failed`);
 
+/** The Today tab's badge: every warning Today lists, the v_health rows plus the blocked or failed clips (so it matches the page). */
+export const warningCount = (data: Pick<Snapshot, 'health' | 'tracker'>): number => data.health.length + problemClips(data);
+
 /** Whether Today shows its warnings: something in v_health (a failed post, the daily run, low credits) or a blocked or failed drop. */
-export const hasWarnings = (data: Pick<Snapshot, 'health' | 'tracker'>): boolean => data.health.length > 0 || problemClips(data) > 0;
+export const hasWarnings = (data: Pick<Snapshot, 'health' | 'tracker'>): boolean => warningCount(data) > 0;
