@@ -26,9 +26,12 @@ rather than be forgotten: forgetting it would add the same clips twice.
 
 **One file's trouble never stops the others.** A ``ValueError`` (``DropError`` included), ``StorageError`` or ``OSError`` on a file
 goes to ``failed`` and the file stays where it is for the next run. The pick ``add_drop`` made for it is not left to pile up: it
-is tagged with the file's hash (``drop['folder_hash']``) and the retry takes that pick up again instead of making another. A move
-into ``Added/`` that fails after the upload is reported in ``failed`` too, but the ledger already knows the clip: the next run
-only moves it. A missing or unreadable folder raises (``OSError``): the caller reports it (iCloud signed out, macOS privacy).
+is tagged with the file's hash (``drop['folder_hash']``) right after ``add_drop`` and BEFORE the upload, so even a run that is
+killed from outside (``launchctl bootout``, a crash: no handler runs) leaves a pick the next run finds. The retry takes that pick up
+again instead of making another; a pick that already has its clip attached (killed after the upload, before the ledger was written)
+is not attached twice: the run only writes the ledger and moves the file. A move into ``Added/`` that fails after the upload is
+reported in ``failed`` too, but the ledger already knows the clip: the next run only moves it. A missing or unreadable folder
+raises (``OSError``): the caller reports it (iCloud signed out, macOS privacy).
 
 ``studio.drop`` is imported as a module and read at call time (``drop.CLIP_MAX_BYTES``, ``drop.add_drop``) so a test can patch it
 and ``studio.drop`` may itself import this module for its CLI command.
@@ -192,33 +195,32 @@ def _move_to_added(path: Path) -> Path:
     return target
 
 
-def _waiting_pick(store: Store, digest: str) -> Favorite | None:
-    """The pick an earlier failed upload of this very file left waiting for its clip, if any (see ``_add``)."""
+def _earlier_pick(store: Store, digest: str) -> Favorite | None:
+    """The pick an earlier run of this very file left behind (see ``_add``): one that already has its clip attached (nothing
+    left to do but the ledger) before one still ``uploading`` without a clip (to be attached now), or None."""
+    waiting = None
     for f in store.list_favorites(platform=DROP_PLATFORM, origin="owner"):
         d = f.proposal.get("drop")
-        if (
-            isinstance(d, dict) and d.get("kind") == "file" and d.get("state") == "uploading"
-            and d.get("folder_hash") == digest and not f.proposal.get("owner_clip_path")
-        ):  # fmt: skip
+        if not (isinstance(d, dict) and d.get("kind") == "file" and d.get("folder_hash") == digest):
+            continue
+        if f.proposal.get("owner_clip_path"):
             return f
-    return None
+        if d.get("state") == "uploading" and waiting is None:
+            waiting = f
+    return waiting
 
 
 def _add(store: Store, storage: Storage, path: Path, digest: str, now: datetime) -> str:
-    """File the drop for this clip (no character: the studio recommends) and attach the file; the pick's id. When the upload
-    fails the pick is tagged with the file's hash so the retry reuses it instead of leaving one more behind."""
-    pick = _waiting_pick(store, digest)
+    """File the drop for this clip (no character: the studio recommends) and attach the file; the pick's id. The new pick is
+    tagged with the file's hash BEFORE the upload (not only when it fails): a run killed from outside runs no handler, and without
+    the tag its pick would stay an orphan ``uploading`` and the retry would make another. A reused pick that already has its clip
+    is not attached again."""
+    pick = _earlier_pick(store, digest)
     if pick is None:
         pick, _ = drop.add_drop(store, None, None, now)
-    try:
+        pick = store.update_favorite(pick.id, proposal={**pick.proposal, "drop": {**pick.proposal["drop"], "folder_hash": digest}})
+    if not pick.proposal.get("owner_clip_path"):
         drop.attach_file(store, storage, pick.id, path, now)
-    except (ValueError, StorageError, OSError):
-        waiting = store.get_favorite(pick.id)
-        if waiting is not None:
-            store.update_favorite(
-                waiting.id, proposal={**waiting.proposal, "drop": {**waiting.proposal["drop"], "folder_hash": digest}}
-            )
-        raise
     return pick.id
 
 

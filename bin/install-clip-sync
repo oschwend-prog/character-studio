@@ -14,9 +14,53 @@ plist="$HOME/Library/LaunchAgents/$label.plist"
 log="$HOME/Library/Logs/odd-eyes-clip-sync.log"
 domain="gui/$(id -u)"
 
+run_wait="${CLIP_SYNC_WAIT:-60}"   # seconds a run in progress may take to finish before the agent is stopped
+
 usage() { echo "Usage: bin/install-clip-sync [--uninstall]"; }
 xml() { printf %s "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
-bootout() { launchctl bootout "$domain/$label" 2>/dev/null || true; }
+loaded() { launchctl print "$domain/$label" >/dev/null 2>&1; }
+job_pid() { { launchctl list "$label" 2>/dev/null || true; } | sed -n 's/^[[:space:]]*"PID" = \([0-9][0-9]*\);$/\1/p'; }
+
+# Let a sync that is running finish before the agent is stopped: bootout kills it, and a run killed in the middle of an
+# upload would leave half a drop behind (the next run mends that, but waiting is cheaper). Bounded: a run blocked on a
+# macOS dialog never ends, so after $run_wait seconds the agent is stopped anyway and the script says so.
+wait_for_run() {
+  local pid waited=0
+  pid="$(job_pid)"
+  [ -n "$pid" ] || return 0
+  echo "A sync is running (pid $pid): waiting up to ${run_wait} s for it to finish before stopping the agent..."
+  while [ "$waited" -lt "$run_wait" ]; do
+    sleep 1
+    waited=$((waited + 1))
+    if [ -z "$(job_pid)" ]; then echo "It finished after ${waited} s."; return 0; fi
+  done
+  echo "It is still running after ${run_wait} s (a run waiting for an answer to a macOS dialog never ends): stopping it anyway."
+  echo "If it was in the middle of a clip, the next run finishes it (the drop is already tagged with the clip's hash)."
+}
+
+# bootout, then wait (up to 10 s) until launchd really has let go of the job: bootstrap straight after bootout can fail.
+bootout() {
+  local i
+  launchctl bootout "$domain/$label" 2>/dev/null || true
+  for i in $(seq 1 20); do
+    loaded || return 0
+    sleep 0.5
+  done
+  echo "Note: launchd still lists $label 10 s after bootout; going on."
+}
+
+# bootstrap, up to 3 tries 2 s apart (after a bootout it sometimes answers "5: Input/output error" for a moment).
+bootstrap() {
+  local try err=""
+  for try in 1 2 3; do
+    if err="$(launchctl bootstrap "$domain" "$plist" 2>&1)"; then return 0; fi
+    [ "$try" = 3 ] || { bootout; sleep 2; }
+  done
+  echo "launchctl could not load the agent after 3 tries: ${err:-no message}" >&2
+  echo "The agent file is written ($plist) but nothing is loaded. Run bin/install-clip-sync again," >&2
+  echo "or: launchctl bootstrap $domain \"$plist\"" >&2
+  exit 1
+}
 
 uninstall=0
 case "${1:-}" in
@@ -27,6 +71,7 @@ case "${1:-}" in
 esac
 
 if [ "$uninstall" = 1 ]; then
+  wait_for_run
   bootout
   rm -f "$plist"
   echo "Removed the clips sync agent ($label). The folder and the ledger are untouched:"
@@ -57,6 +102,8 @@ uv_real="$(realpath "$(command -v uv)")"
 
 mkdir -p "$folder/Added" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 
+wait_for_run
+
 # Write the agent next to its final place, check it, then move it over the old one.
 tmp="$(mktemp "$plist.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
@@ -84,13 +131,14 @@ chmod 644 "$tmp"
 mv "$tmp" "$plist"
 trap - EXIT
 
-# Load it (bootout first: a reinstall replaces the running one), then run it now and look at the log.
+# Load it (bootout first: a reinstall replaces the running one). RunAtLoad starts the first run by itself; the plain kickstart
+# (no -k: it never kills a run) only makes sure one is started. Then look at the log.
 before=0
 [ -f "$log" ] && before="$(wc -l < "$log")"
 bootout
-launchctl enable "$domain/$label"
-launchctl bootstrap "$domain" "$plist"
-launchctl kickstart -k "$domain/$label"
+launchctl enable "$domain/$label" 2>/dev/null || true
+bootstrap
+launchctl kickstart "$domain/$label" 2>/dev/null || true
 echo "Loaded $label (every 5 minutes). Waiting 10 s for the first run..."
 sleep 10
 

@@ -360,6 +360,65 @@ def test_a_failed_upload_that_keeps_failing_does_not_pile_up_picks(world, folder
     assert down.calls == 3 and len(drops(store)) == 1  # one pick waiting for its file, however many tries
 
 
+class CountingStorage(LocalStorage):
+    """Storage that records every upload, and can be told to be killed (a ``BaseException`` no handler of the code catches) at one."""
+
+    def __init__(self, root, die_on_upload=False):
+        super().__init__(root)
+        self.uploads = []
+        self.die_on_upload = die_on_upload
+
+    def upload(self, bucket, path, file):
+        if self.die_on_upload:
+            raise KeyboardInterrupt  # the process is killed from outside (launchctl bootout): no except clause of ours runs
+        self.uploads.append(path)
+        return super().upload(bucket, path, file)
+
+
+def test_a_run_killed_between_add_drop_and_the_upload_is_taken_up_by_the_next_run(world, folder, ledger, tmp_path):
+    store, _ = world
+    clip = put(folder, "a.mp4")
+    with pytest.raises(KeyboardInterrupt):
+        run(world, folder, ledger, storage=CountingStorage(tmp_path / "killed", die_on_upload=True))
+    (orphan,) = drops(store)  # the killed run left its pick, tagged with the clip's hash BEFORE the upload (no handler ran)
+    assert orphan.proposal["drop"]["folder_hash"] == hashlib.sha256(MP4).hexdigest()
+    assert orphan.proposal["drop"]["state"] == "uploading" and not orphan.proposal.get("owner_clip_path")
+    assert clip.exists() and not ledger.exists()
+    storage = CountingStorage(tmp_path / "back")
+    again = run(world, folder, ledger, storage=storage)  # the next run finds that pick and finishes it: one drop in total
+    assert again == {"added": [{"file": "a.mp4", "pick_id": orphan.id}], "skipped": [], "failed": []}
+    (pick,) = drops(store)
+    assert pick.id == orphan.id and pick.proposal["owner_clip_path"].startswith(f"owner/{orphan.id}/")
+    assert len(storage.uploads) == 1 and names(folder) == [ADDED_DIR]
+    assert list(json.loads(ledger.read_text())) == [file_hash(folder / ADDED_DIR / "a.mp4")]
+
+
+@pytest.mark.parametrize("state", ["uploading", "checking"])  # checking: the cloud check already took the pick on
+def test_a_run_killed_after_the_upload_before_the_ledger_makes_no_second_drop(world, folder, ledger, tmp_path, monkeypatch, state):
+    store, _ = world
+    clip = put(folder, "a.mp4")
+    storage = CountingStorage(tmp_path / "storage2")
+    real_write = clipfolder._write_ledger
+
+    def killed(path, data):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(clipfolder, "_write_ledger", killed)
+    with pytest.raises(KeyboardInterrupt):
+        run(world, folder, ledger, storage=storage)
+    (attached,) = drops(store)  # uploaded and attached, but the ledger never heard of it and the file was not moved
+    assert attached.proposal["owner_clip_path"] and clip.exists() and not ledger.exists() and len(storage.uploads) == 1
+    if state != "uploading":
+        store.update_favorite(attached.id, proposal={**attached.proposal, "drop": {**attached.proposal["drop"], "state": state}})
+    monkeypatch.setattr(clipfolder, "_write_ledger", real_write)
+    again = run(world, folder, ledger, storage=storage)  # the next run only writes the ledger and moves the file
+    assert again == {"added": [{"file": "a.mp4", "pick_id": attached.id}], "skipped": [], "failed": []}
+    assert [f.id for f in drops(store)] == [attached.id] and len(storage.uploads) == 1  # one drop, one upload
+    assert drops(store)[0].proposal["drop"]["state"] == state and names(folder) == [ADDED_DIR]
+    assert json.loads(ledger.read_text())[attached.proposal["drop"]["folder_hash"]]["pick_id"] == attached.id
+    assert run(world, folder, ledger, storage=storage) == {"added": [], "skipped": [], "failed": []}  # and then it is quiet
+
+
 def test_one_failing_file_does_not_stop_the_others(world, folder, ledger, tmp_path):
     store, _ = world
     put(folder, "a.mp4", MP4 + b"a")
