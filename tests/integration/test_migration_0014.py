@@ -2,8 +2,10 @@
 
 Skipped unless ``DATABASE_URL_TEST`` is set; see ``test_pgstore.py`` for what the database needs. The schema is built from every
 migration, renamed ``studio_test``, and dropped afterwards (``conftest.py`` removes the renamed cron job). No dispatch leaves the
-database: the tests that need a "successful" dispatch replace ``dispatch_publish()`` of the TEST schema by a stub, and the real
-one is only called where the test Vault holds no ``github_dispatch_token`` (it answers ``dispatched: false`` and never sends).
+database: EVERY test that ticks replaces ``dispatch_publish()`` of the TEST schema by a stub (the "sent" one or the "no token" one), so the
+real function, which reads the Vault's ``github_dispatch_token`` and posts it to GitHub, never runs here even when the test
+database is the live shared project whose Vault holds the token. ``_rename`` changes the schema name only: the GitHub URL
+(``.../character-studio/dispatches``) is left alone.
 NOT run when this file was written (no Postgres on the machine): ``tests/test_schema.py`` pins the text, this file pins the
 behaviour once a database is at hand.
 """
@@ -28,9 +30,16 @@ create or replace function {SCHEMA}.dispatch_publish() returns jsonb language sq
 $$ select jsonb_build_object('dispatched', true, 'request_id', 42) $$
 """
 
+NO_TOKEN_STUB = f"""
+create or replace function {SCHEMA}.dispatch_publish() returns jsonb language sql as
+$$ select jsonb_build_object('dispatched', false, 'reason', 'no_token') $$
+"""
+
 
 def _rename(text: str) -> str:
-    return re.sub(r"\bstudio\b", SCHEMA, text)
+    # the schema name only: not the "studio" of "character-studio" in the GitHub URL (a "-" right before it); the cron job's name
+    # ("studio-publish-tick") IS renamed on purpose (conftest.py unschedules ``studio_test-publish-tick``)
+    return re.sub(r"(?<!-)\bstudio\b", SCHEMA, text)
 
 
 def _ddl() -> str:
@@ -77,7 +86,7 @@ def test_nothing_is_dispatched_when_no_post_is_due(db):
     assert tick(db)["reason"] == "nothing_due" and last_at(db) is None
 
 
-def test_a_due_post_dispatches_once_and_then_waits_ten_minutes(db):
+def test_a_due_post_dispatches_once_and_then_waits_nine_minutes(db):
     db.execute(STUB)
     add_post(db)
     first = tick(db)
@@ -100,12 +109,12 @@ def test_the_kill_switch_stops_the_timer_because_the_publisher_would_claim_nothi
     assert last_at(db) is None
 
 
-def test_a_dispatch_that_was_not_queued_does_not_start_the_ten_minute_window(db):
-    add_post(db)  # the real dispatch_publish(): no Vault token on a test database, or no pg_net/vault at all
+def test_a_dispatch_that_was_not_queued_does_not_start_the_nine_minute_window(db):
+    db.execute(NO_TOKEN_STUB)  # never the real dispatch_publish(): the test database may be the live project, whose Vault HAS the token
+    add_post(db)
     out = tick(db)
-    assert out["dispatched"] is False and out["due"] == 1 and out["reason"] in ("no_vault_or_pg_net", "no_token", "dispatch_failed")
+    assert out == {"dispatched": False, "due": 1, "reason": "no_token"}
     assert last_at(db) is None  # the next tick tries again
-    assert "token" not in str(out).lower().replace("no_token", "")
 
 
 def test_nobody_but_the_owner_of_the_functions_may_call_them_or_read_the_timer(db):

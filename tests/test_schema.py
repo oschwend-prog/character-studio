@@ -174,7 +174,7 @@ def test_migrations_are_additive_and_stay_inside_schema_studio():
     assert outside == {"auth.jwt", "storage.buckets", "storage.objects"}
     # every created / altered table, index and policy is in studio
     for stmt in re.findall(
-        r"^(?:create table|alter table|create index \w+ on)\s+(\S+)", ALL_SQL, re.M
+        r"^(?:create table|alter table|create index \w+ on)\s+(?:if (?:not )?exists\s+)?(\S+)", ALL_SQL, re.M
     ):
         assert stmt.startswith("studio."), stmt
     assert re.findall(r"create schema (?:if not exists )?(\w+)", ALL_SQL) == ["studio"]
@@ -1201,7 +1201,7 @@ def test_0014_is_the_timer_table_two_functions_their_grants_and_the_cron_job_onl
     code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
     statements = [" ".join(s.split()) for s in code.split(";") if s.strip()]
     assert statements == [
-        "create table studio.timer_state ( name text primary key, last_at timestamptz )",
+        "create table if not exists studio.timer_state ( name text primary key, last_at timestamptz )",
         "alter table studio.timer_state enable row level security",
         "revoke all on function studio.dispatch_publish() from public",
         "revoke all on function studio.publish_tick() from public",
@@ -1260,14 +1260,14 @@ def test_0014_dispatch_publish_mirrors_request_jobs_dispatch_and_never_exposes_t
     ]  # fmt: skip
 
 
-def test_0014_publish_tick_dispatches_only_when_a_post_is_due_and_not_twice_in_ten_minutes():
+def test_0014_publish_tick_dispatches_only_when_a_post_is_due_and_not_twice_in_nine_minutes():
     body = _function(TIMER_SQL, "publish_tick")
     due = "select count(*) into due_n from studio.posts p where p.status = 'scheduled' and p.scheduled_for <= now();"
     assert due in body  # the publisher's own claim predicate (PostgresStore.claim_due_posts)
     nothing = "return jsonb_build_object('dispatched', false, 'due', 0, 'reason', 'nothing_due');"
     kill = "select st.kill_switch into paused from studio.settings st where st.id = 1;"
     lock = "select t.last_at into last_ from studio.timer_state t where t.name = 'publish_dispatch' for update;"
-    recent = "if last_ is not null and last_ > now() - interval '10 minutes' then"
+    recent = "if last_ is not null and last_ > now() - interval '9 minutes' then"
     call = "sent := studio.dispatch_publish();"
     marker = "update studio.timer_state t set last_at = now() where t.name = 'publish_dispatch';"
     assert body.index(due) < body.index(nothing) < body.index(kill) < body.index(lock) < body.index(recent) < body.index(call) < body.index(marker)
@@ -1286,7 +1286,7 @@ def test_0014_publish_tick_dispatches_only_when_a_post_is_due_and_not_twice_in_t
 
 
 def test_0014_the_last_dispatch_time_lives_in_a_tiny_table_of_its_own_that_no_api_role_can_touch():
-    assert "create table studio.timer_state (\n  name    text primary key,\n  last_at timestamptz\n);" in TIMER_CODE
+    assert "create table if not exists studio.timer_state (\n  name    text primary key,\n  last_at timestamptz\n);" in TIMER_CODE
     assert "alter table studio.timer_state enable row level security;" in TIMER_CODE
     assert "create policy" not in TIMER_CODE.lower() and not re.search(r"\bgrant\b", TIMER_CODE)
     # studio.settings is typed columns plus a cadence keyed by character slug: there is no free-form place for a timer
@@ -1311,13 +1311,14 @@ def test_0014_the_cron_job_runs_every_five_minutes_by_name_and_is_never_duplicat
     ext = [b for b in _do_blocks(TIMER_CODE) if "create extension" in b]
     assert len(ext) == 1 and "pg_available_extensions where name = 'pg_cron'" in ext[0] and "create extension if not exists pg_cron;" in ext[0]
     # the extension and the table exist before the job is scheduled; the grants come before the job too
-    assert TIMER_CODE.index("create extension") < TIMER_CODE.index("create table studio.timer_state") < TIMER_CODE.index("cron.schedule(")
+    assert TIMER_CODE.index("create extension") < TIMER_CODE.index("create table if not exists studio.timer_state") < TIMER_CODE.index("cron.schedule(")
     assert TIMER_CODE.index("revoke all on function studio.publish_tick() from public") < TIMER_CODE.index("cron.schedule(")
     # the file says how to switch it off
     assert "select cron.unschedule('studio-publish-tick');" in TIMER_SQL
-    # a post is picked up within one tick, and the 10 minute guard spans two ticks (the tick is not the bottleneck)
-    minutes = 5
-    assert "'*/5 * * * *'" in schedule and 10 // minutes == 2
+    # a post is picked up within one tick; the guard is 9 minutes, not 10: now() is the transaction start, so a tick 10 minutes
+    # later can begin a few ms early and would otherwise wait for the one after (15 minutes); 9 gives a deterministic ~10 minute gap
+    minutes, guard = 5, 9
+    assert "'*/5 * * * *'" in schedule and minutes < guard < 2 * minutes
 
 
 def test_0014_the_dispatch_event_is_the_one_publish_yml_listens_for():

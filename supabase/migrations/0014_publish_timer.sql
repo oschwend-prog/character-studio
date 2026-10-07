@@ -14,7 +14,8 @@
 --
 -- 1. pg_cron is enabled when the database has it (Supabase does; a plain Postgres test database does not, and then nothing
 --    happens: no extension, no job).
--- 2. studio.timer_state(name, last_at): the one place the last dispatch time lives. studio.settings is a typed single row (the
+-- 2. studio.timer_state(name, last_at), created `if not exists` so the whole file is safe to re-run: the one place the last
+--    dispatch time lives. studio.settings is a typed single row (the
 --    cap, the kill switch, `cadence` keyed by character slug: the code reads `cadence -> slug` and loops over its keys), so a
 --    key for a timer would pollute it; a tiny table of its own is the smallest footprint that does not touch anything
 --    existing. RLS is on and there is no policy and no grant: no API role can read or write it, only the definer functions
@@ -27,8 +28,10 @@
 --    lands in net._http_response under that id, 204 = GitHub accepted the dispatch).
 -- 4. studio.publish_tick(): dispatches ONLY when there is work: a post with status 'scheduled' and scheduled_for <= now() (the
 --    publisher's own claim predicate), the kill switch is off (the publisher claims nothing while it is on, so a dispatch
---    would only burn Actions minutes), and no dispatch was made in the last 10 minutes (timer_state 'publish_dispatch', the row
---    locked so two ticks cannot both dispatch). last_at is stored only when the dispatch was really queued. Returns what it did:
+--    would only burn Actions minutes), and no dispatch was made in the last 9 minutes (timer_state 'publish_dispatch', the row
+--    locked so two ticks cannot both dispatch; 9, not 10: pg_cron ticks every 5 minutes and now() is the transaction's start, so a
+--    tick exactly 10 minutes later can start a few ms early and would wait for the next one, 15 minutes; 9 gives a steady ~10).
+--    last_at is stored only when the dispatch was really queued. Returns what it did:
 --    {"dispatched": bool, "due": n, "reason": ...} (reason: nothing_due, kill_switch, recent_dispatch, or the dispatch's own).
 -- 5. The cron job `studio-publish-tick`, every 5 minutes, runs `select studio.publish_tick()`. Re-running this migration
 --    unschedules the job by name first, so there is never a duplicate. A 19:30 post is therefore started at 19:30-19:35 (the
@@ -53,7 +56,7 @@ $$;
 
 -- ---- 2. timer_state --------------------------------------------------------------------------------------------------------
 
-create table studio.timer_state (
+create table if not exists studio.timer_state (
   name    text primary key,
   last_at timestamptz
 );
@@ -126,7 +129,7 @@ begin
   end if;
   insert into studio.timer_state (name) values ('publish_dispatch') on conflict (name) do nothing;
   select t.last_at into last_ from studio.timer_state t where t.name = 'publish_dispatch' for update;
-  if last_ is not null and last_ > now() - interval '10 minutes' then
+  if last_ is not null and last_ > now() - interval '9 minutes' then
     return jsonb_build_object('dispatched', false, 'due', due_n, 'reason', 'recent_dispatch', 'last_at', last_);
   end if;
   sent := studio.dispatch_publish();
