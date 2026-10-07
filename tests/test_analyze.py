@@ -332,3 +332,33 @@ def test_cli_exit_codes(cli_store, cli_storage, tmp_path, silent_dance):
     gone = cli_store.add_source(Source(kind=SourceKind.owner_inbox, url="owner_inbox/gone.mp4", storage_path="owner_inbox/gone.mp4", body=Body.biped, bodies=1, duration_s=8.0))
     assert run(gone.id).exit_code == 2  # the object is not in Storage
     assert run(str(silent_dance), "--out", str(tmp_path / "x.gif")).exit_code == 2
+
+
+# ---- the drop (the DJ's flash) ---------------------------------------------------------------------------------------
+
+
+def step_tone(path: Path, quiet_s: float, loud_s: float, quiet: float = 0.05, loud: float = 0.6, rate: int = 44100) -> Path:
+    """A 440 Hz tone at ``quiet`` for ``quiet_s`` seconds, then at ``loud`` for ``loud_s``: the drop at ``quiet_s``."""
+    n_quiet, n = int(quiet_s * rate), int((quiet_s + loud_s) * rate)
+    samples = [int(32767 * (quiet if i < n_quiet else loud) * math.sin(2 * math.pi * 440 * i / rate)) for i in range(n)]
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(struct.pack(f"<{n}h", *samples))
+    return path
+
+
+def test_drop_time_finds_the_energy_jump(tmp):
+    wav = step_tone(tmp / "drop.wav", 2.5, 2.5)
+    beats = [i * 0.5 for i in range(1, 10)]  # 0.5 .. 4.5
+    assert analyze.drop_time_s(wav, beats, 5.0) == 2.5
+
+
+def test_drop_time_falls_back_to_a_third_of_the_clip_at_most_a_second(tmp):
+    wav = step_tone(tmp / "drop2.wav", 2.5, 2.5)
+    assert analyze.drop_time_s(wav, [], 5.0) == 1.0  # no beat
+    assert analyze.drop_time_s(wav, [], 2.4) == 0.8
+    assert analyze.drop_time_s(wav, [4.0, 4.5], 5.0) == 1.0  # only beats past the first 70% of the clip
+    flat = step_tone(tmp / "flat.wav", 2.5, 2.5, quiet=0.3, loud=0.3)
+    assert analyze.drop_time_s(flat, [i * 0.5 for i in range(1, 10)], 5.0) == 1.0  # the energy never rises

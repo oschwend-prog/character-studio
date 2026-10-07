@@ -474,6 +474,26 @@ def pill_png(lines: list[str], out: str | Path, y: int = PILL_Y, style: PillStyl
     return _save(layer, out)
 
 
+def entrance_png(png: str | Path, out: str | Path, *, alpha: float = 1.0, dy: int = 0, scale: float = 1.0) -> Path:
+    """One frame of a caption's entrance: the overlay ``png`` (full frame) with what it shows scaled by ``scale`` about its own
+    centre, its opacity times ``alpha`` (a pixel that shows stays at least 1, so the frame covers the same box) and moved
+    ``dy`` px down. Written to ``out`` (full frame); what falls outside the frame is cut.
+    """
+    with Image.open(png) as img:
+        img = img.convert("RGBA")
+        box = img.getchannel("A").getbbox() or (0, 0, 1, 1)
+        shown = img.crop(box)
+    if scale != 1.0:
+        shown = shown.resize((max(1, round(shown.width * scale)), max(1, round(shown.height * scale))), Image.LANCZOS)
+    if alpha < 1.0:
+        shown.putalpha(shown.getchannel("A").point(lambda a: 0 if a == 0 else max(1, round(a * alpha))))
+    x0 = round((box[0] + box[2]) / 2 - shown.width / 2)
+    y0 = round((box[1] + box[3]) / 2 - shown.height / 2) + dy
+    layer = Image.new("RGBA", FRAME, (0, 0, 0, 0))
+    layer.paste(shown, (x0, y0))  # a straight copy (alpha too) onto the empty frame; paste clips at the edges
+    return _save(layer, out)
+
+
 def title_png(text: str, out: str | Path, y: int = 1400, size: int = 96, font: str | Path | None = None) -> Path:
     """A title card: ``text`` in small caps (upper case), ivory brand serif, on a dark band.
 

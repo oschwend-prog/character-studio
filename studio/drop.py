@@ -112,7 +112,7 @@ from studio.higgsfield_api import (
 )
 from studio.media import clipwork
 from studio.media.analyze import AnalysisError, analyze_clip
-from studio.media.master import MasterSpec, audio_problem, build_master, upload_master
+from studio.media.master import MasterSpec, audio_problem, build_master, style_lead_s, upload_master
 from studio.media.qa import QAError, check_master, contact_sheet, frame_sheet, probe
 from studio.models import Body, Clip, ClipState, Favorite, Mode, Source
 from studio.planning import estimate_credits
@@ -342,7 +342,7 @@ def overlaps(start: float, length: float, span: Mapping[str, Any]) -> bool:
 
 
 def drop_window(
-    analysis: Mapping[str, Any], *, classic: bool, duration: float, avoid: list[Mapping[str, Any]] | tuple = ()
+    analysis: Mapping[str, Any], *, classic: bool, duration: float, avoid: list[Mapping[str, Any]] | tuple = (), lead_s: float = 0.0
 ) -> dict[str, float]:
     """The section Genjutsu gets: ``{start_s, length_s}`` (pure).
 
@@ -353,7 +353,10 @@ def drop_window(
     clip shorter than 6 s is refused (``ValueError``).
 
     ``avoid`` (``avoid_spans``: text or a watermark on screen): no window may overlap one. When none of the target length is
-    clear, a shorter one (never under 6 s) is taken; when none of 6 s is clear, ``NoCleanSection``."""
+    clear, a shorter one (never under 6 s) is taken; when none of 6 s is clear, ``NoCleanSection``.
+
+    ``lead_s`` is what the character's kit adds before the dance (Reginald's pause, ``master.style_lead_s``): the window is at
+    most ``MASTER_MAX_S - lead_s``, so the master stays within 16 s."""
     if duration < MASTER_MIN_S - SLACK_S:
         raise ValueError(f"the video is {duration:.1f} s: a video needs at least {MASTER_MIN_S:g} s")
     lo, hi = WINDOW_CLASSIC if classic else WINDOW_OTHER
@@ -389,7 +392,7 @@ def drop_window(
             length += WINDOW_STEP_S
         return best
 
-    hi = min(hi, MASTER_MAX_S, total)
+    hi = min(hi, MASTER_MAX_S - lead_s, total)
     lo = min(lo, hi)
     longest_shot = max((b - a for a, b in _shots(cuts, total)), default=total)
     if longest_shot < lo:  # no shot is long enough: shorten to the longest shot (never under 6 s)
@@ -871,7 +874,9 @@ def _process(
         blocked = _blocked_reason(look, ref, who.name)
         if blocked is None:
             try:
-                window = drop_window(free, classic=look["classic"], duration=report.duration_s, avoid=avoid)
+                window = drop_window(
+                    free, classic=look["classic"], duration=report.duration_s, avoid=avoid, lead_s=style_lead_s(ref.get("style")),
+                )
             except NoCleanSection:
                 blocked = _unclean_reason(avoid, pick.platform != DROP_PLATFORM)
         if blocked is not None:

@@ -419,6 +419,35 @@ def test_the_window_snaps_to_the_beat_when_it_stays_in_range():
     assert any(abs(w["start_s"] - b) < 1e-6 for b in beats) and 8.0 <= w["length_s"] <= 10.0
 
 
+def test_drop_window_leaves_room_for_the_pause(monkeypatch):
+    """Reginald's pause adds 0.4 s before the dance: his section is at most 16 - 0.4 s, so the master stays within 16 s."""
+    flat = analysis([2.0] * 80)  # 40 s, one shot
+    for classic in (True, False):
+        assert drop_window(flat, classic=classic, duration=40.0, lead_s=0.4)["length_s"] + 0.4 <= drop.MASTER_MAX_S
+    monkeypatch.setattr(drop, "WINDOW_CLASSIC", (14.0, 16.0))  # a longer classic target: then the cap is what holds
+    assert drop_window(flat, classic=True, duration=40.0)["length_s"] == 16.0
+    assert drop_window(flat, classic=True, duration=40.0, lead_s=0.4)["length_s"] == 15.5
+    beats = [i * 0.5 + 0.1 for i in range(80)]
+    snapped = drop_window(analysis([2.0] * 80, beats=beats), classic=True, duration=40.0, lead_s=0.4)
+    assert snapped["length_s"] <= 15.6 + 1e-9  # snapping to the beat never takes the room back
+
+
+def test_the_check_gives_the_pause_its_room_by_the_characters_kit(world, portrait, monkeypatch):
+    store, storage = world
+    asked = []
+    real = drop.drop_window
+
+    def spy(*args, **kw):
+        asked.append(kw.get("lead_s", 0.0))
+        return real(*args, **kw)
+
+    monkeypatch.setattr(drop, "drop_window", spy)
+    ready_drop(store, storage, portrait)  # Reginald: hook_edit pause
+    dog = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True, "child": False}
+    ready_drop(store, storage, portrait, slug="biscuit", star=dog)  # Biscuit: no kit
+    assert asked == [0.4, 0.0]
+
+
 # ---- the owner's Adjust --------------------------------------------------------------------------------------------------------
 
 

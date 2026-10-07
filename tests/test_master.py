@@ -1216,3 +1216,275 @@ def test_cli_master_upload_exit_codes(upload_rig, synth_video):
     assert any(p.startswith("resolution") for p in json.loads(r.stdout)["problems"])
     assert runner.invoke(app, ["master", "upload", "nope", str(synth_video())]).exit_code == 2
     assert runner.invoke(app, ["master", "upload", clip.id, "/no/such/file.mp4"]).exit_code == 2
+
+
+# ---- the style kits on the video (C2): entrances, hook edits, tones and Reginald's pause ------------------------------
+
+# The filter graphs of the picture and of the sound mix that ``build_master`` gave ffmpeg BEFORE the kits existed (captured
+# from the code at 339daea with the text-pop and title fonts pinned to the committed Figtree, so they are the same on the Mac
+# and in CI). A spec with no style must still produce exactly these (Review Focus 5: no regression for existing clips).
+NO_STYLE_GRAPHS = {
+    "closeup": [
+        "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v0];[v0][3:v]overlay=x=208:y=1300:enable='between(t,0,0.8)'[o0];"
+        "[o0][4:v]overlay=x=163:y=1300:enable='between(t,0.8,1.8)'[o1];[o1][5:v]overlay=x=936:y=252[o2];"
+        "[o2]format=yuv420p[vout]",
+        "[0:a]atrim=start=0.2,asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+        "afade=t=out:st=2.45:d=0.4,apad=whole_dur=3.500,atrim=0:3.500[b];"
+        "[1:a]aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,adelay=2850|2850,volume=0.9[s];"
+        "[b][s]amix=inputs=2:normalize=0:duration=longest,atrim=0:3.500,aresample=48000[a]",
+    ],
+    "enhanced": [
+        "[0:v]null[v0];[v0]scale=w='trunc(1080*(1+0.06*sin(PI*clip((t-0.5)/0.25,0,1)))/2)*2':"
+        "h='trunc(1920*(1+0.06*sin(PI*clip((t-0.5)/0.25,0,1)))/2)*2':eval=frame:flags=bicubic,crop=1080:1920[z0];"
+        "[z0]split=3[sm0][sm1][sm2];[sm0]trim=start=0:end=1.2,setpts=PTS-STARTPTS[sw0];"
+        "[sm1]trim=start=1.2:end=1.6,setpts=(PTS-STARTPTS)/0.5[sw1];[sm2]trim=start=1.6,setpts=PTS-STARTPTS[sw2];"
+        "[sw0][sw1][sw2]concat=n=3:v=1:a=0,fps=30[vs];[vs][1:v]overlay=x=0:y=1002:enable='between(t,0,0.6)'[o0];"
+        "[o0][2:v]overlay=x=163:y=1300:enable='between(t,0,1.5)'[o1];"
+        "[o1][3:v]overlay=x=214:y=1095:enable='between(t,0.9,1.6)'[o2];[o2][4:v]overlay=x=936:y=252[o3];"
+        "[o3]format=yuv420p[vout]",
+        "[0:a]atrim=start=0.2,asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,"
+        "apad=whole_dur=2.400,atrim=0:2.400[b];[1:a]adelay=900|900,volume=-6dB[imp0];"
+        "[b][imp0]amix=inputs=2:normalize=0:duration=longest,atrim=0:2.400,aresample=48000[a]",
+    ],
+}
+ENHANCED = [
+    {"type": "title_card", "text": "Biscuit"},
+    {"type": "text_pop", "at_s": 0.9, "dur_s": 0.5, "text": "WAIT FOR IT"},
+    {"type": "zoom_hit", "at_s": 0.5},
+    {"type": "impact_sfx", "at_s": 0.9},
+    {"type": "slowmo", "at_s": 1.2, "dur_s": 0.4, "factor": 0.5},
+]
+PILL_BOX = (0, 1290, 1080, 1570)  # the studio pill's band (top at y 1300)
+CREAM = (0xF4, 0xEB, 0xDD)  # Franz's pill
+NEON = (0xE6, 0xFF, 0x00)  # the DJ's pill
+
+
+def graphs_of(spec: MasterSpec, monkeypatch) -> list[str]:
+    """Build ``spec`` for real; the filter graphs ffmpeg was given for the picture (``...[vout]``) and the sound mix (``...[a]``)."""
+    seen: list[str] = []
+    real = master._ffmpeg
+
+    def spy(*args, **kw):
+        a = [str(x) for x in args]
+        if "-filter_complex" in a:
+            seen.append(a[a.index("-filter_complex") + 1])
+        return real(*args, **kw)
+
+    monkeypatch.setattr(master, "_ffmpeg", spy)
+    build_master(spec)
+    return [g for g in seen if g.endswith(("[vout]", "[a]"))]
+
+
+def count_near(img: Image.Image, box: tuple[int, int, int, int], rgb, tol: int = 12) -> int:
+    colours = img.crop(box).getcolors(maxcolors=1 << 24)
+    return sum(n for n, px in colours if near(px, rgb, tol))
+
+
+@pytest.mark.parametrize("who", [{}, {"character": "biscuit"}, {"style": {}}], ids=["no-character", "no-kit", "empty-kit"])
+def test_no_style_graph_is_unchanged(tmp_path, monkeypatch, who):
+    """No kit (no character, a character without one, or an empty one): the very graphs of before, byte for byte."""
+    monkeypatch.setattr(overlays, "font_path", lambda: overlays.PILL_FONT)
+    monkeypatch.setattr(overlays, "serif_font_path", lambda: overlays.PILL_FONT)
+    dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 6)
+    assert graphs_of(spec_for(tmp_path, dance, beat, **who), monkeypatch) == NO_STYLE_GRAPHS["closeup"]
+    enhanced = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2_until_s=1.5, enhancements=ENHANCED, **who)
+    assert graphs_of(enhanced, monkeypatch) == NO_STYLE_GRAPHS["enhanced"]
+
+
+def test_tone_filters_exact():
+    assert master.tone_filter("v", "t", "warm") == "[v]colorbalance=rs=0.04:gs=0.01:bs=-0.04[t]"
+    assert master.tone_filter("v", "t", "cool") == "[v]colorbalance=rs=-0.03:bs=0.04,eq=saturation=0.9[t]"
+    assert master.tone_filter("v", "t", "golden") == "[v]colorbalance=rs=0.05:gs=0.03:bs=-0.05,eq=saturation=1.05[t]"
+    assert master.tone_filter("v", "t", "punchy") == "[v]eq=contrast=1.08:saturation=1.25[t]"
+    assert master.tone_filter("v", "t", "none") is None
+    with pytest.raises(ValueError, match="tone"):
+        master.tone_filter("v", "t", "sepia")
+
+
+ZOOM = "scale=w='trunc(1080*({z})/2)*2':h='trunc(1920*({z})/2)*2':eval=frame:flags=bicubic,crop=1080:1920"
+
+
+def test_hook_edit_filter_exact():
+    push = master.hook_edit_filter("v", "h", "push_in", drop_s=None)
+    assert push == "[v]" + ZOOM.format(z="1+0.06*min(t,1.5)/1.5") + "[h]"
+    punch = master.hook_edit_filter("v", "h", "punch_in", drop_s=None)
+    assert punch == "[v]" + ZOOM.format(z="1.15-0.15*min(t,0.5)/0.5") + "[h]"
+    flash = master.hook_edit_filter("v", "h", "drop_flash", drop_s=2.0)
+    assert flash == (
+        "[v]eq=brightness='if(between(t,2,2.12),0.6*(1-(t-2)/0.12),0)':eval=frame[ha];"
+        "[ha]" + ZOOM.format(z="1+0.06*sin(PI*clip((t-2)/0.25,0,1))") + "[hb];"
+        "[hb]" + ZOOM.format(z="1+0.06*sin(PI*clip((t-2.5)/0.25,0,1))") + "[h]"
+    )
+    # the two pulses are the existing zoom hits at the drop and half a second after it
+    assert flash.endswith(master.zoom_hit_filter("hb", "h", master.ZoomHit(2.5)))
+    assert master.hook_edit_filter("v", "h", "none", drop_s=None) is None
+    assert master.hook_edit_filter("v", "h", "pause", drop_s=None) is None  # the pause is a tpad, after the tone
+    assert master.pause_filter("o", "p", master.PAUSE_S) == "[o]tpad=start_mode=clone:start_duration=0.4[p]"
+    with pytest.raises(ValueError, match="drop"):
+        master.hook_edit_filter("v", "h", "drop_flash", drop_s=None)
+    with pytest.raises(ValueError, match="hook_edit"):
+        master.hook_edit_filter("v", "h", "wobble", drop_s=None)
+
+
+def test_a_half_open_window_never_shares_a_frame_with_the_next():
+    ov = master.Overlay(Path("x.png"), start=0.1, end=0.2, x=4, y=9, half_open=True)
+    assert master.overlay_filter("v", 2, "o", ov) == "[v][2:v]overlay=x=4:y=9:enable='gte(t,0.1)*lt(t,0.2)'[o]"
+
+
+def test_push_in_zooms_by_the_end(tmp_path, synth_video):
+    src = synth_video(dur=2)  # testsrc2: detail all over the frame
+    spec = spec_for(tmp_path, src, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[],
+                    style={"hook_edit": "push_in"})  # fmt: skip
+    out = build_master(spec)
+
+    def diff(t: float) -> float:
+        a, b = frame_at(src, t, tmp_path), frame_at(out, t, tmp_path)
+        return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3
+
+    assert diff(0.0) < 3, "1.00 at the start"
+    assert diff(1.5) > 8 and diff(1.9) > 8, "1.06 by 1.5 s, and held"
+    assert probe(out, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
+
+
+def test_pause_adds_four_tenths_and_shifts_everything(tmp_path):
+    """Reginald's kit: the first frame held 0.4 s in silence, then the clip in sync; a pop at 2.0 s of the clip lands at 2.4 s."""
+    dance = flat_video(tmp_path / "dance.mp4", 6)
+    spec = spec_for(
+        tmp_path, dance, tone(tmp_path / "beat.wav", 7), closeup=None, hook1=[], hook2=["Kindly do not inform the Duchess."],
+        hook2_until_s=3.0, character="reginald",
+        enhancements=[{"type": "text_pop", "at_s": 2.0, "dur_s": 0.3, "text": "WAIT"}],
+    )  # fmt: skip
+    out = build_master(spec)
+    report = probe(out)
+    assert report.duration_s == pytest.approx(6.4, abs=0.05)
+    assert [p for p in check_master(report) if not p.startswith("bitrate")] == [], report  # a flat clip is all but free to encode
+    assert bright_pixels(frame_at(out, 2.05, tmp_path), POP_BOX) == 0, "not where the clip had it"
+    assert bright_pixels(frame_at(out, 2.5, tmp_path), POP_BOX) > 300, "0.4 s later"
+    assert bright_pixels(frame_at(out, 0.1, tmp_path), PILL_BOX, floor=215) > 200, "the hook pill shows from 0"
+    samples, _, rate = read_wav(s16_of(out, tmp_path))
+    assert rms(samples, rate, 0.0, 0.33) < 0.002, "the pause is silent"
+    assert rms(samples, rate, 0.5, 2.0) > 0.05, "then the beat, in sync with the picture"
+
+
+def test_mix_prepends_the_lead_in_silence_and_keeps_the_sting_and_impacts_where_they_are_asked(tmp_path):
+    """The beat, 0.4 s later and cut only at the end: a 6 s tone after the lead fills a 4.4 s master to its last moment."""
+    beat = tone(tmp_path / "beat.wav", 6.0)
+    out = master.mix_audio(beat, 0.2, total_s=4.4, sting_at_s=None, impacts_at_s=[], out=tmp_path / "mix.wav",
+                           work=tmp_path, lead_s=0.4)  # fmt: skip
+    samples, _, rate = read_wav(s16(out))
+    assert len(samples) / rate == pytest.approx(4.4, abs=0.01)
+    assert rms(samples, rate, 0.0, 0.39) < 0.001 and rms(samples, rate, 0.42, 1.0) > 0.2
+    assert rms(samples, rate, 4.0, 4.39) > 0.2, "the beat runs to the end: nothing of it was cut"
+    quiet = master.mix_audio(silence(tmp_path / "quiet.wav", 6.0), 0.2, total_s=4.4, sting_at_s=3.5, impacts_at_s=[2.0],
+                             out=tmp_path / "quiet_mix.wav", work=tmp_path, lead_s=0.4)  # fmt: skip
+    samples, _, rate = read_wav(s16(quiet))
+    assert rms(samples, rate, 2.0, 2.3) > 0.05 and rms(samples, rate, 1.5, 1.95) < 0.001, "a thump where it is asked"
+    assert rms(samples, rate, 3.5, 3.9) > 0.05 and rms(samples, rate, 2.6, 3.45) < 0.001, "the sting too"
+
+
+def entrance_pill(tmp_path: Path, slug: str, lines: list[str]) -> tuple[Path, overlays.PillStyle]:
+    style = overlays.pill_style(kit(slug)["pill"])
+    return overlays.pill_png(lines, tmp_path / f"{slug}_hook.png", style=style), style
+
+
+def test_entrance_fade_rise_frames(tmp_path):
+    png, _ = entrance_pill(tmp_path, "franz", ["Absolutely not."])
+    left, top, right, bottom = Image.open(png).getchannel("A").getbbox()
+    frames = master.entrance_frames(png, "fade_rise", 0.0, 3.0, tmp_path)
+    assert len(frames) == 5
+    assert [f.start for f in frames] == pytest.approx([0.0, 0.1, 0.2, 0.3, 0.4])
+    assert all(a.end == b.start for a, b in zip(frames, frames[1:])), "contiguous"
+    assert frames[-1].end == 3.0 and not frames[-1].half_open and all(f.half_open for f in frames[:-1])
+    peaks = [Image.open(f.png).getchannel("A").getextrema()[1] for f in frames]
+    assert peaks == [51, 102, 153, 204, 255], "20% -> 100%"
+    assert [f.y - top for f in frames] == [24, 18, 12, 6, 0] and all(f.x == left for f in frames), "rises 24 px"
+    assert Image.open(frames[-1].png).size == (right - left, bottom - top)  # the last frame is the pill itself
+    assert master.entrance_frames(png, "none", 0.0, 3.0, tmp_path) == [master._boxed(png, 0.0, 3.0)]
+
+
+def test_entrance_slam_frames(tmp_path):
+    png, _ = entrance_pill(tmp_path, "lenny", ["You're welcome."])
+    left, top, right, bottom = Image.open(png).getchannel("A").getbbox()
+    frames = master.entrance_frames(png, "slam", 1.0, 3.0, tmp_path)
+    assert [f.start for f in frames] == pytest.approx([1.0, 1.05, 1.1, 1.15]) and frames[-1].end == 3.0
+    widths = [Image.open(f.png).width for f in frames]
+    assert [w / (right - left) for w in widths] == pytest.approx([1.15, 1.10, 1.05, 1.0], abs=0.01), "1.15 -> 1.00"
+    for f in frames:  # centred on the pill
+        w, h = Image.open(f.png).size
+        assert abs(f.x + w / 2 - (left + right) / 2) <= 1 and abs(f.y + h / 2 - (top + bottom) / 2) <= 1
+
+
+def test_word_pop_follows_the_beats(tmp_path):
+    hook = ["Wait for the drop."]
+    png, dj = entrance_pill(tmp_path, "dj", hook)
+    frames = master.entrance_frames(png, "word_pop", 0.0, 4.0, tmp_path, beats=[0.2, 0.7, 1.2, 1.7, 2.2], lines=hook, style=dj)
+    assert [f.start for f in frames] == [0.2, 0.7, 1.2, 1.7] and [f.end for f in frames] == [0.7, 1.2, 1.7, 4.0]
+    widths = [Image.open(f.png).width for f in frames]
+    assert widths == sorted(widths) and len(set(widths)) == 4, "one more word on each beat"
+    assert frames[-1] == master._boxed(png, 1.7, 4.0), "the whole hook from the last word to the end"
+    # a beat before the pill is not used; the words with no beat left follow every 0.25 s
+    late = master.entrance_frames(png, "word_pop", 1.0, 4.0, tmp_path, beats=[0.5, 1.5], lines=hook, style=dj)
+    assert [f.start for f in late] == [1.5, 1.75, 2.0, 2.25]
+    # never past the pill's end: the whole hook holds its last 0.5 s at least
+    short = master.entrance_frames(png, "word_pop", 0.0, 1.0, tmp_path, beats=[0.2, 0.7, 1.2, 1.7], lines=hook, style=dj)
+    assert [(f.start, f.end) for f in short] == [(0.2, 0.5), (0.5, 1.0)]
+
+
+def test_a_character_masters_in_its_kit(tmp_path):
+    """Franz: the cream pill fades in over 0.4 s, the picture is warmer, the clip keeps its length."""
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    plain = build_master(spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[],
+                                  hook2=["Absolutely not."], hook2_until_s=1.8, out=tmp_path / "plain.mp4"))  # fmt: skip
+    out = build_master(spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[],
+                                hook2=["Absolutely not."], hook2_until_s=1.8, character="franz"))  # fmt: skip
+    assert probe(out, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
+    assert count_near(frame_at(out, 0.0, tmp_path), PILL_BOX, CREAM) == 0, "20% at the start"
+    assert count_near(frame_at(out, 1.0, tmp_path), PILL_BOX, CREAM) > 5000, "the cream card, full"
+    assert count_near(frame_at(plain, 1.0, tmp_path), PILL_BOX, CREAM) < 100  # the dark pill without the kit (a few edge pixels)
+    warm, cold = (ImageStat.Stat(frame_at(v, 1.0, tmp_path).crop((0, 400, 1080, 1000))).mean for v in (out, plain))
+    assert warm[2] < cold[2] - 2 and warm[0] - warm[2] > cold[0] - cold[2] + 3, "warmer: less blue, more red against it"
+
+
+def test_the_djs_kit_pops_word_by_word_and_flashes_on_the_drop(tmp_path):
+    """No beat in a plain tone: the words pop every 0.25 s and the drop falls back to a third of the clip (0.667 s)."""
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=["Wait for the drop."],
+                    hook2_until_s=1.8, character="dj")  # fmt: skip
+    out = build_master(spec)
+    assert probe(out, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
+    words = [count_near(frame_at(out, t, tmp_path), PILL_BOX, NEON, tol=20) for t in (0.1, 0.3, 0.6, 1.5)]  # 1, 2, 3, 4 words
+    assert 0 < words[0] < words[1] < words[2] < words[3], words
+    bright = lambda t: ImageStat.Stat(frame_at(out, t, tmp_path).convert("L").crop((0, 400, 1080, 1000))).mean[0]  # noqa: E731
+    assert bright(0.7) > bright(1.5) + 60, "the white flash on the drop"
+    assert bright(0.6) < bright(1.5) + 5, "not before it"
+
+
+def test_spec_from_json_takes_the_character_and_a_style():
+    base = {"dance": "d.mp4", "audio": "a.wav", "out": "o.mp4", "closeup": None}
+    spec = master.spec_from_json({**base, "character": "reginald"})
+    assert spec.character == "reginald" and spec.style is None
+    assert master.spec_from_json({**base, "style": {"tone": "warm"}}).style == {"tone": "warm"}
+    assert master.spec_from_json(base).character is None
+    for bad, match in (
+        ({"character": ""}, "character"), ({"character": "../franz"}, "character"), ({"character": 5}, "character"),
+        ({"style": "warm"}, "style"), ({"style": {"tone": "sepia"}}, "tone"), ({"style": {"wobble": 1}}, "wobble"),
+    ):
+        with pytest.raises(ValueError, match=match):
+            master.spec_from_json({**base, **bad})
+
+
+def test_load_style_reads_the_kit_of_the_character():
+    assert master.load_style("franz") == kit("franz") and master.load_style("reginald") == kit("reginald")
+    assert master.load_style("dj") == kit("dj")  # parked: his style.json, no refs.json
+    assert master.load_style("biscuit") is None  # no kit: today's dark pill
+    for bad in ("nobody", "../franz", ""):
+        with pytest.raises(ValueError):
+            master.load_style(bad)
+    assert master.style_lead_s(kit("reginald")) == master.PAUSE_S == 0.4
+    assert master.style_lead_s(kit("franz")) == 0.0 and master.style_lead_s(None) == 0.0
+
+
+def test_a_bad_kit_is_refused_before_anything_renders(tmp_path):
+    spec = spec_for(tmp_path, tmp_path / "missing.mp4", tmp_path / "missing.wav", style={"tone": "sepia"})
+    with pytest.raises(ValueError, match="tone"):
+        build_master(spec)

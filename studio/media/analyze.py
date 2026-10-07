@@ -16,6 +16,9 @@ Free (ffmpeg only, no credits, no network, no new dependency) and deterministic.
   6 s is its own window.
 * **Contact sheet**: nine evenly spaced frames, 3 x 3, in a PNG (``renders/<id>/analysis.png``, never in git): what the agent
   looks at to judge people, subject, camera, a watermark, burned-in text and children, which no program here can.
+* **The drop** (``drop_time_s``, the DJ's flash on the master): the beat in the first 70% of the clip after which the loudness
+  (RMS over 0.5 s) rises most against the 0.5 s before it. No beat there, or no real rise (under a tenth of the clip's own RMS):
+  a third of the clip, at most 1 s in.
 
 The numbers are measurements; ``who is in the clip`` stays a visual judgement, stored by ``fav mark --analysis-file``.
 """
@@ -51,6 +54,10 @@ BPM_SEARCH = (60.0, 180.0)
 BPM_FOLD = (80.0, 160.0)
 MIN_PULSE = 0.2  # the autocorrelation peak against its zero lag: below this there is no clear beat
 MIN_ONSET = 0.5  # a log-energy rise (decades of mean square) below this is silence, not an attack
+
+DROP_WINDOW_S = 0.5  # the loudness before and after a beat is measured over this long
+DROP_SEARCH_SHARE = 0.7  # the drop is looked for in the first 70% of the clip
+DROP_MIN_RISE = 0.1  # a rise under this share of the clip's own RMS is no drop
 
 MAX_ANALYSIS_SECONDS = 180.0
 MAX_BEATS_LISTED = 120
@@ -198,6 +205,28 @@ def _track_beats(env: list[float], period: float) -> list[float]:
     return beats
 
 
+def drop_time_s(path: Path, beats: list[float], duration: float) -> float:
+    """The drop of the audio at ``path`` (``duration`` s long, beat times ``beats`` in its own seconds): see the module doc.
+
+    Only beats at least ``DROP_WINDOW_S`` in (there must be a before) and in the first 70% count; the earliest wins a tie.
+    """
+    fallback = round(min(1.0, duration / 3), 3)
+    candidates = sorted(b for b in beats if DROP_WINDOW_S <= b <= DROP_SEARCH_SHARE * duration)
+    if not candidates:
+        return fallback
+    samples = _pcm(Path(path))
+    if not samples:
+        return fallback
+
+    def rms(start: float, end: float) -> float:
+        part = samples[max(0, int(start * AUDIO_HZ)) : int(end * AUDIO_HZ)]
+        return math.sqrt(sum(map(mul, part, part)) / len(part)) if part else 0.0
+
+    rise = {b: rms(b, b + DROP_WINDOW_S) - rms(b - DROP_WINDOW_S, b) for b in candidates}
+    best = max(candidates, key=lambda b: (rise[b], -b))
+    return round(best, 3) if rise[best] > DROP_MIN_RISE * rms(0.0, len(samples) / AUDIO_HZ) else fallback
+
+
 # ---- the best window -----------------------------------------------------------------------------------------------
 
 
@@ -296,4 +325,4 @@ def analyze_clip(path: str | Path, sheet: str | Path) -> dict[str, Any]:
     }
 
 
-__all__ = ["AnalysisError", "QAError", "analyze_clip", "best_window", "estimate_beat", "motion_profile"]
+__all__ = ["AnalysisError", "QAError", "analyze_clip", "best_window", "drop_time_s", "estimate_beat", "motion_profile"]

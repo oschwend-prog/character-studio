@@ -39,6 +39,25 @@ Every ``at_s`` is a moment of the *unstretched* timeline (the intro starts at 0)
 do not move the other enhancements off their beats; ``out_time`` maps it onto the finished
 master. The hook windows and the bug are already on the finished timeline.
 
+**Style kits** (``MasterSpec.character`` / ``style``, the owner's look per character, spec 2026-10-07 part C): a character's kit
+(``characters/<slug>/refs.json`` ``style``, ``load_style``) sets the caption pill (``overlays.PillStyle``) and three more things:
+
+``entrance``
+    How the first hook pill comes in, as windowed overlays of pre-rendered frames (``entrance_frames``): ``fade_rise`` (Franz),
+    ``slam`` (Lenny), ``word_pop`` on the beat (the DJ) or ``none``.
+``hook_edit``
+    A move on the picture in the first second or on the drop (``hook_edit_filter``): ``push_in`` (Franz), ``punch_in``
+    (Lenny), ``drop_flash`` (the DJ: a white flash and two zoom pulses on ``analyze.drop_time_s``), or ``pause`` (Reginald):
+    the first frame held ``PAUSE_S`` (0.4 s) in silence, then the clip in sync. The pause makes the master 0.4 s longer
+    (``drop.drop_window`` leaves the room) and moves every overlay window, enhancement and the sound by 0.4 s, except the first
+    hook pill's start (it shows from 0) and the bug (always on).
+``tone``
+    A subtle colour grade of the picture (``tone_filter``): ``warm``, ``cool``, ``golden``, ``punchy``.
+
+The picture's steps run concat -> zoom hits -> slowmo -> hook edit -> tone -> pause -> overlays, so the captions are never
+zoomed or graded. Without a kit (no character, a character without one, or an empty one) the graph is the one from before
+the kits, byte for byte.
+
 CLI: ``studio master build --spec <json> [--clip <id>]`` builds, runs the master QA and prints JSON; it
 exits 1 when the master has QA problems (the JSON says which) and 2 for anything the caller must fix.
 
@@ -80,7 +99,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
@@ -88,9 +107,10 @@ from typing import Annotated, Any
 import typer
 from PIL import Image
 
+from studio import seed
 from studio.cli_support import emit, fail, open_storage, open_store
 from studio.clips import set_fields
-from studio.media import clipwork, overlays
+from studio.media import analyze, clipwork, overlays
 from studio.media.qa import QAError, check_master, probe
 from studio.models import MUSIC_ARMS, Clip, Mode, Source, SourceKind
 from studio.storage import Storage, StorageError
@@ -114,6 +134,24 @@ LOUDNORM = "I=-14:TP=-1.5:LRA=11"
 INTERMEDIATE_CRF = 12
 _EPS = 1e-6
 
+# the style kits (see the module docstring)
+PAUSE_S = 0.4  # Reginald's pause: the first frame held this long, in silence
+FADE_RISE_S, FADE_RISE_FRAMES, FADE_RISE_FROM, FADE_RISE_PX = 0.4, 5, 0.2, 24  # over 0.4 s: 20% -> 100%, 24 px low -> in place
+SLAM_S, SLAM_FRAMES, SLAM_FROM = 0.15, 4, 1.15  # over 0.15 s: 1.15x -> 1.00x
+WORD_POP_STEP_S = 0.25  # words with no beat left pop this far apart
+WORD_POP_HOLD_S = 0.5  # the whole hook is on screen at least this long
+PUSH_IN_ZOOM, PUSH_IN_S = 1.06, 1.5  # 1.00 -> 1.06 over the first 1.5 s, then held
+PUNCH_IN_ZOOM, PUNCH_IN_S = 1.15, 0.5  # 1.15 -> 1.00 in the first 0.5 s
+FLASH_S, FLASH_GAIN = 0.12, 0.6  # the drop's white flash: +0.6 brightness, gone in 0.12 s
+DROP_PULSE_GAP_S = 0.5  # the second zoom pulse, after the one on the drop
+TONES = {
+    "warm": "colorbalance=rs=0.04:gs=0.01:bs=-0.04",
+    "cool": "colorbalance=rs=-0.03:bs=0.04,eq=saturation=0.9",
+    "golden": "colorbalance=rs=0.05:gs=0.03:bs=-0.05,eq=saturation=1.05",
+    "punchy": "eq=contrast=1.08:saturation=1.25",
+}
+_SLUG = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
 
 class MasterError(RuntimeError):
     """ffmpeg failed, or the audio could not be measured."""
@@ -133,7 +171,8 @@ class MasterSpec:
 
     ``closeup_center`` / ``blue_eye_xy`` are pixels of the 1080x1920 close-up (the centre of the
     push-in) and of the screen at the outro zoom (where the glint sits); unused without a close-up.
-    ``preset`` is the x264 preset (``slow`` for real masters; tests use ``veryfast``).
+    ``preset`` is the x264 preset (``slow`` for real masters; tests use ``veryfast``). ``character`` is the slug whose style kit
+    the master is built in (``load_style``); ``style`` gives a kit outright and wins over it. Neither: today's look.
     """
 
     dance: Path
@@ -154,6 +193,8 @@ class MasterSpec:
     preset: str = "slow"
     clip_id: str | None = None  # the clip this master is for: lets ``master build`` judge the audio source
     music: str = "ai_beat"  # ai_beat | in_app | original (see the module docstring)
+    character: str | None = None  # the character's slug: his style kit (refs.json ``style``) unless ``style`` is given
+    style: dict[str, Any] | None = None  # a style kit given outright (the refs.json ``style`` object)
 
 
 # ---- enhancements: parsing ---------------------------------------------------------------------
@@ -290,13 +331,57 @@ def slowmo_filter(src: str, dst: str, spans: Sequence[Slowmo], total_s: float) -
     return ";".join([split, *cuts, join])
 
 
-def zoom_hit_filter(src: str, dst: str, hit: ZoomHit) -> str:
-    """A 0.25 s punch-in: scale 1 -> ``hit.scale`` -> 1 along a half sine, cropped back to frame."""
-    z = f"1+{hit.scale - 1:g}*sin(PI*clip((t-{hit.at_s:g})/{ZOOM_HIT_SECONDS:g},0,1))"
+def _zoom_filter(src: str, dst: str, z: str) -> str:
+    """Scale ``[src]`` by the expression ``z`` (of ``t``, per frame) and crop the centre back to 1080x1920."""
     return (
         f"[{src}]scale=w='trunc({WIDTH}*({z})/2)*2':h='trunc({HEIGHT}*({z})/2)*2':eval=frame:flags=bicubic,"
         f"crop={WIDTH}:{HEIGHT}[{dst}]"
     )
+
+
+def zoom_hit_filter(src: str, dst: str, hit: ZoomHit) -> str:
+    """A 0.25 s punch-in: scale 1 -> ``hit.scale`` -> 1 along a half sine, cropped back to frame."""
+    return _zoom_filter(src, dst, f"1+{hit.scale - 1:g}*sin(PI*clip((t-{hit.at_s:g})/{ZOOM_HIT_SECONDS:g},0,1))")
+
+
+def hook_edit_filter(src: str, dst: str, kind: str, *, drop_s: float | None) -> str | None:
+    """The kit's ``hook_edit`` on the picture (``[src]`` -> ``[dst]``), or ``None`` for ``none`` and ``pause``.
+
+    ``push_in``: zoom 1.00 -> 1.06 over the first 1.5 s, then held. ``punch_in``: 1.15 -> 1.00 in the first 0.5 s.
+    ``drop_flash``: at ``drop_s`` a white flash (+0.6 brightness, gone in 0.12 s) and two zoom hits, on the drop and 0.5 s after.
+    The pause is not a move on the picture: it is ``pause_filter``, the last step before the overlays.
+    """
+    if kind in ("none", "pause"):
+        return None
+    if kind == "push_in":
+        return _zoom_filter(src, dst, f"1+{PUSH_IN_ZOOM - 1:g}*min(t,{PUSH_IN_S:g})/{PUSH_IN_S:g}")
+    if kind == "punch_in":
+        return _zoom_filter(src, dst, f"{PUNCH_IN_ZOOM:g}-{PUNCH_IN_ZOOM - 1:g}*min(t,{PUNCH_IN_S:g})/{PUNCH_IN_S:g}")
+    if kind == "drop_flash":
+        if drop_s is None:
+            raise ValueError("hook_edit drop_flash needs the time of the drop (drop_s)")
+        d = drop_s
+        flash = (
+            f"[{src}]eq=brightness='if(between(t,{d:g},{d + FLASH_S:g}),{FLASH_GAIN:g}*(1-(t-{d:g})/{FLASH_S:g}),0)'"
+            f":eval=frame[{dst}a]"
+        )
+        pulses = [zoom_hit_filter(f"{dst}a", f"{dst}b", ZoomHit(d)), zoom_hit_filter(f"{dst}b", dst, ZoomHit(d + DROP_PULSE_GAP_S))]
+        return ";".join([flash, *pulses])
+    raise ValueError(f"unknown hook_edit {kind!r} (one of {', '.join(seed.STYLE_HOOK_EDITS)})")
+
+
+def tone_filter(src: str, dst: str, tone: str) -> str | None:
+    """The kit's ``tone``, a subtle colour grade of the picture (``[src]`` -> ``[dst]``), or ``None`` for ``none``."""
+    if tone == "none":
+        return None
+    if tone not in TONES:
+        raise ValueError(f"unknown tone {tone!r} (one of {', '.join(seed.STYLE_TONES)})")
+    return f"[{src}]{TONES[tone]}[{dst}]"
+
+
+def pause_filter(src: str, dst: str, lead_s: float) -> str:
+    """Reginald's pause: the first frame of ``[src]`` held ``lead_s`` seconds before the clip plays."""
+    return f"[{src}]tpad=start_mode=clone:start_duration={lead_s:g}[{dst}]"
 
 
 def impact_filter(index: int, at_s: float, dst: str) -> str:
@@ -307,13 +392,18 @@ def impact_filter(index: int, at_s: float, dst: str) -> str:
 
 @dataclass(frozen=True)
 class Overlay:
-    """A PNG placed at (``x``, ``y``), shown from ``start`` to ``end`` (``None``: to the end)."""
+    """A PNG placed at (``x``, ``y``), shown from ``start`` to ``end`` (``None``: to the end).
+
+    The window includes both ends, unless ``half_open``: then it stops just before ``end``, so a step of an entrance and the
+    next one (``end`` == the next ``start``) never show on the same frame.
+    """
 
     png: Path
     start: float = 0.0
     end: float | None = None
     x: int = 0
     y: int = 0
+    half_open: bool = False
 
 
 def overlay_filter(src: str, index: int, dst: str, ov: Overlay) -> str:
@@ -321,7 +411,9 @@ def overlay_filter(src: str, index: int, dst: str, ov: Overlay) -> str:
     options = []
     if ov.x or ov.y:
         options += [f"x={ov.x}", f"y={ov.y}"]
-    if ov.end is not None:
+    if ov.end is not None and ov.half_open:
+        options.append(f"enable='gte(t,{ov.start:g})*lt(t,{ov.end:g})'")
+    elif ov.end is not None:
         options.append(f"enable='between(t,{ov.start:g},{ov.end:g})'")
     elif ov.start > 0:
         options.append(f"enable='gte(t,{ov.start:g})'")
@@ -425,14 +517,21 @@ def mix_audio(
     out: Path,
     work: Path,
     fade_out_at_s: float | None = None,
+    lead_s: float = 0.0,
 ) -> Path:
     """The beat from ``offset_s`` (padded with silence / cut to ``total_s``), optionally faded out
     at ``fade_out_at_s``, with the sting at ``sting_at_s`` and a thump at each of ``impacts_at_s``
     mixed in; 32-bit float stereo 48 kHz WAV, so the sum cannot clip before ``loudnorm``.
+
+    ``lead_s`` (Reginald's pause) puts that much silence before the beat (``adelay``: nothing is added, the beat starts later;
+    its timestamps are rebuilt from the samples, else the ``atrim`` that follows cuts the beat ``lead_s`` short); every other
+    time here (the fade, the sting, the thumps) is a moment of the finished master, the lead included.
     """
     inputs: list[Path] = [beat]
+    lead_ms = round(lead_s * 1000)
     parts = [
         f"[0:a]atrim=start={offset_s:g},asetpts=PTS-STARTPTS,{_STEREO_48K}"
+        + (f",adelay={lead_ms}|{lead_ms},asetpts=N/SR/TB" if lead_ms else "")  # new timestamps: atrim cuts by them
         + (f",afade=t=out:st={fade_out_at_s:g}:d={BEAT_FADE_SECONDS:g}" if fade_out_at_s is not None else "")
         + f",apad=whole_dur={total_s:.3f},atrim=0:{total_s:.3f}[b]"
     ]
@@ -490,6 +589,131 @@ def _boxed(png: Path, start: float = 0.0, end: float | None = None) -> Overlay:
     return Overlay(small, start, end, x=box[0], y=box[1])
 
 
+# ---- the style kits ----------------------------------------------------------------------------
+
+
+def load_style(slug: str, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR) -> dict[str, Any] | None:
+    """Character ``slug``'s style kit: its ``refs.json`` ``style`` (``None`` when it has none: today's look), or, for a parked
+    character with no refs.json (the DJ), its ``style.json``. Checked by ``seed.validate_style``; no database.
+
+    ``ValueError`` for a name that is not a slug, a character with neither file, or a bad kit (naming the file).
+    """
+    if not (isinstance(slug, str) and _SLUG.fullmatch(slug)):
+        raise ValueError(f"character must be a character's slug such as reginald, got {slug!r:.40}")
+    folder = Path(characters_dir) / slug
+    for name in ("refs.json", "style.json"):
+        path = folder / name
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            raise ValueError(f"{path}: cannot read it: {e}") from None
+        if not isinstance(data, dict):
+            raise ValueError(f"{path}: must be a JSON object")
+        style = data.get("style") if name == "refs.json" else data
+        return None if style is None else seed.validate_style(style, path)
+    raise ValueError(f"no character {slug!r}: there is no {folder}/refs.json (or style.json for a parked one)")
+
+
+def style_lead_s(style: Mapping[str, Any] | None) -> float:
+    """How long a kit holds the first frame before the clip plays: ``PAUSE_S`` for ``hook_edit: pause`` (Reginald), else 0."""
+    return PAUSE_S if (style or {}).get("hook_edit") == "pause" else 0.0
+
+
+def _kit(spec: MasterSpec) -> dict[str, Any]:
+    """The spec's style kit (``style``, else ``character``'s), ``{}`` for none; checked before anything renders."""
+    if spec.style is not None:
+        return seed.validate_style(spec.style, Path("the spec"))
+    if spec.character is not None:
+        return load_style(spec.character) or {}
+    return {}
+
+
+def _stepped(pngs: Sequence[Path], times: Sequence[float], end: float | None) -> list[Overlay]:
+    """``pngs[i]`` from ``times[i]`` to ``times[i + 1]`` (half-open), the last from ``times[-1]`` to ``end``; empty steps dropped."""
+    steps = [dataclasses.replace(_boxed(p, a, b), half_open=True) for p, a, b in zip(pngs, times, times[1:]) if b > a]
+    return [*steps, _boxed(pngs[-1], times[-1], end)]
+
+
+def _word_times(beats: Sequence[float], n: int, start: float, end: float | None) -> list[float]:
+    """When each of ``n`` words pops: the first ``n`` beats from ``start`` (before ``end``), then every ``WORD_POP_STEP_S``;
+    none later than ``WORD_POP_HOLD_S`` before ``end``, so the whole hook is read."""
+    times = sorted(b for b in beats if b >= start and (end is None or b < end))[:n]
+    while len(times) < n:
+        times.append(times[-1] + WORD_POP_STEP_S if times else start)
+    if end is not None:
+        last = max(start, end - WORD_POP_HOLD_S)
+        times = [min(t, last) for t in times]
+    return times
+
+
+def entrance_frames(
+    png: Path,
+    kind: str,
+    start: float,
+    end: float | None,
+    work: Path,
+    *,
+    beats: Sequence[float] = (),
+    lines: Sequence[str] | None = None,
+    style: overlays.PillStyle = overlays.DEFAULT_PILL,
+) -> list[Overlay]:
+    """How a caption comes in (a kit's ``entrance``), as windowed overlays of pre-rendered frames: ffmpeg here animates no
+    overlay, so each step of the motion is its own PNG on screen for its own slice of time. ``png`` is the caption (a full-frame
+    PNG, e.g. ``overlays.pill_png``), on screen from ``start`` to ``end``; the frames are written in ``work``.
+
+    * ``none``: the caption, one overlay (exactly what a master without a kit shows).
+    * ``fade_rise`` (Franz): 5 frames over 0.4 s, opacity 20% -> 100% while it rises from 24 px low into place.
+    * ``slam`` (Lenny): 4 frames over 0.15 s, 1.15x -> 1.00x about the caption's centre.
+    * ``word_pop`` (the DJ): the pill of the first word of ``lines`` (drawn in ``style``), then of the first two, ...: each from
+      its beat (``beats``, seconds of the finished master) to the next, the whole pill from the last word to ``end``.
+
+    The steps' windows are half-open, so every video frame shows exactly one step; the last frame is ``png`` itself. A motion
+    longer than half the caption's time on screen is squeezed into that half.
+    """
+    if kind == "none":
+        return [_boxed(png, start, end)]
+    if kind in ("fade_rise", "slam"):
+        n, span = (FADE_RISE_FRAMES, FADE_RISE_S) if kind == "fade_rise" else (SLAM_FRAMES, SLAM_S)
+        if end is not None:
+            span = min(span, (end - start) / 2)
+        frames = []
+        for i in range(n - 1):  # the last step (k = 1) is the caption itself
+            k = i / (n - 1)
+            look = (
+                {"alpha": FADE_RISE_FROM + (1 - FADE_RISE_FROM) * k, "dy": round(FADE_RISE_PX * (1 - k))}
+                if kind == "fade_rise"
+                else {"scale": SLAM_FROM - (SLAM_FROM - 1) * k}
+            )
+            frames.append(overlays.entrance_png(png, work / f"{png.stem}_{kind}{i}.png", **look))
+        return _stepped([*frames, png], [start + span * i / (n - 1) for i in range(n)], end)
+    if kind == "word_pop":
+        words = " ".join(lines or ()).split()
+        if not words:
+            return [_boxed(png, start, end)]
+        partial = [
+            overlays.pill_png([" ".join(words[:n])], work / f"{png.stem}_word{n}.png", style=style) for n in range(1, len(words))
+        ]
+        return _stepped([*partial, png], _word_times(beats, len(words), start, end), end)
+    raise ValueError(f"unknown entrance {kind!r} (one of {', '.join(seed.STYLE_ENTRANCES)})")
+
+
+def _beat_grid(spec: MasterSpec, content_s: float, work: Path) -> tuple[list[float], float]:
+    """``(beats, the drop)`` of the master's sound, in seconds of the picture before any pause: what the DJ's word pop and flash
+    follow. Measured on the beat from ``audio_offset_s`` (``analyze.estimate_beat`` / ``drop_time_s``); a silent master has no
+    beat, so its drop is a third of the clip (at most 1 s)."""
+    if spec.audio is None or spec.music == "in_app":
+        return [], round(min(1.0, content_s / 3), 3)
+    wav = work / "beat_probe.wav"
+    _ffmpeg(
+        "-i", spec.audio, "-vn", "-af", f"atrim=start={spec.audio_offset_s:g},asetpts=PTS-STARTPTS", "-t", f"{content_s:.3f}",
+        "-ac", "1", "-ar", analyze.AUDIO_HZ, "-c:a", "pcm_s16le", wav,
+    )  # fmt: skip
+    _, beats, _ = analyze.estimate_beat(analyze._pcm(wav))
+    return beats, analyze.drop_time_s(wav, beats, content_s)
+
+
 def _check_inputs(spec: MasterSpec) -> tuple[Path, Path | None]:
     if spec.music not in MUSIC_ARMS:
         raise ValueError(f"music must be one of {', '.join(MUSIC_ARMS)}, got {spec.music!r}")
@@ -518,9 +742,13 @@ def build_master(spec: MasterSpec) -> Path:
     ffmpeg fails. The finished file replaces ``out`` only when the whole build succeeded.
     """
     items = parse_enhancements(spec.enhancements)
+    kit = _kit(spec)
     dance, closeup = _check_inputs(spec)
     out = Path(spec.out)
     slow = [e for e in items if isinstance(e, Slowmo)]
+    pill = overlays.pill_style(kit.get("pill"))
+    entrance, hook_edit, tone = (kit.get(key, "none") for key in ("entrance", "hook_edit", "tone"))
+    lead = style_lead_s(kit)  # Reginald's pause: everything after it moves this much later
     intro_len = _frames(spec.intro_s) / FPS if closeup else 0.0
     outro_len = _frames(spec.outro_s) / FPS if closeup else 0.0
     if any(line.strip() for line in spec.hook2) and spec.hook2_until_s <= intro_len:
@@ -541,21 +769,34 @@ def build_master(spec: MasterSpec) -> Path:
         if closeup:
             clips.append(_outro(spec, closeup, overlays.sparkle_png(work / "sparkle.png"), work / "outro.mp4"))
         base_s = intro_len + _duration(dance_n) + outro_len
+        beats: list[float] = []
+        drop_s: float | None = None
+        if entrance == "word_pop" or hook_edit == "drop_flash":  # only the DJ's kit needs the beat
+            beats, drop_s = _beat_grid(spec, out_time(base_s, slow), work)
 
-        # Overlays: every window is on the finished timeline.
+        # Overlays: every window is on the finished timeline, ``lead`` (the pause) included; the first hook pill still shows
+        # from 0 and the bug is always on.
         shown: list[Overlay] = []
         for i, card in enumerate(e for e in items if isinstance(e, TitleCard)):
-            shown.append(_boxed(overlays.title_png(card.text, work / f"title{i}.png", y=TITLE_CARD_Y), 0.0, TITLE_CARD_SECONDS))
+            title = overlays.title_png(card.text, work / f"title{i}.png", y=TITLE_CARD_Y)
+            shown.append(_boxed(title, lead, lead + TITLE_CARD_SECONDS))
+        pills: list[tuple[list[str], str, float, float]] = []  # lines, file, start, end
         if closeup and any(line.strip() for line in spec.hook1):
-            shown.append(_boxed(overlays.pill_png(spec.hook1, work / "hook1.png"), 0.0, intro_len))
+            pills.append((spec.hook1, "hook1.png", 0.0, intro_len + lead))
         if any(line.strip() for line in spec.hook2):
-            shown.append(_boxed(overlays.pill_png(spec.hook2, work / "hook2.png"), intro_len, spec.hook2_until_s))
+            pills.append((spec.hook2, "hook2.png", intro_len + lead if intro_len else intro_len, spec.hook2_until_s + lead))
+        for j, (lines, name, start, end) in enumerate(pills):
+            png = overlays.pill_png(lines, work / name, style=pill)
+            if j == 0:  # the kit's entrance is how the first caption comes in
+                shown += entrance_frames(png, entrance, start, end, work, beats=[b + lead for b in beats], lines=lines, style=pill)
+            else:
+                shown.append(_boxed(png, start, end))
         for i, pop in enumerate(e for e in items if isinstance(e, TextPop)):
             png = overlays.hook_png([pop.text], work / f"pop{i}.png", y=TEXT_POP_Y, size=TEXT_POP_SIZE)
-            shown.append(_boxed(png, out_time(pop.at_s, slow), out_time(pop.at_s + pop.dur_s, slow)))
+            shown.append(_boxed(png, out_time(pop.at_s, slow) + lead, out_time(pop.at_s + pop.dur_s, slow) + lead))
         shown.append(_boxed(overlays.bug_png(work / "bug.png")))
 
-        # One graph: concat -> zoom hits -> slowmo -> overlays -> yuv420p.
+        # One graph: concat -> zoom hits -> slowmo -> hook edit -> tone -> pause -> overlays -> yuv420p.
         graph = [
             "".join(f"[{i}:v]" for i in range(len(clips))) + f"concat=n={len(clips)}:v=1:a=0[v0]"
             if len(clips) > 1
@@ -572,6 +813,12 @@ def build_master(spec: MasterSpec) -> Path:
             step(zoom_hit_filter(label, f"z{i}", hit))
         if slow:
             step(slowmo_filter(label, "vs", slow, base_s))
+        if (edit := hook_edit_filter(label, "he", hook_edit, drop_s=drop_s)) is not None:
+            step(edit)
+        if (graded := tone_filter(label, "tn", tone)) is not None:
+            step(graded)
+        if lead:
+            step(pause_filter(label, "pz", lead))
         for i, ov in enumerate(shown):
             step(overlay_filter(label, len(clips) + i, f"o{i}", ov))
         graph.append(f"[{label}]format=yuv420p[vout]")
@@ -605,10 +852,11 @@ def build_master(spec: MasterSpec) -> Path:
                 spec.audio_offset_s,
                 total_s=total_s,
                 sting_at_s=dance_end + STING_LAG_SECONDS if closeup else None,
-                impacts_at_s=[out_time(e.at_s, slow) for e in items if isinstance(e, ImpactSfx)],
+                impacts_at_s=[out_time(e.at_s, slow) + lead for e in items if isinstance(e, ImpactSfx)],
                 out=work / "mix.wav",
                 work=work,
                 fade_out_at_s=dance_end - FADE_LEAD_SECONDS if closeup else None,
+                lead_s=lead,
             )
             _ffmpeg(
                 "-i", video, "-i", mix, "-map", "0:v", "-map", "1:a", "-c:v", "copy",
@@ -623,7 +871,9 @@ def build_master(spec: MasterSpec) -> Path:
 # ---- CLI ---------------------------------------------------------------------------------------
 
 _REQUIRED = ("dance", "out", "closeup")
-_DEFAULTS: dict[str, Any] = {"hook1": [], "hook2": [], "hook2_until_s": 0.0, "audio_offset_s": 0.0, "music": "ai_beat"}
+_DEFAULTS: dict[str, Any] = {
+    "hook1": [], "hook2": [], "hook2_until_s": 0.0, "audio_offset_s": 0.0, "music": "ai_beat", "character": None, "style": None,
+}
 
 
 def spec_from_json(data: Any) -> MasterSpec:
@@ -633,7 +883,8 @@ def spec_from_json(data: Any) -> MasterSpec:
     ``in_app`` (a silent master); ``music`` defaults to ``ai_beat``. Hooks default
     to none, the offset to 0, and ``closeup_center`` / ``blue_eye_xy`` are required only with a
     close-up. ``hook1`` / ``hook2`` must be lists of strings (a bare string is refused). ``clip_id`` is
-    optional. Other keys are the ``MasterSpec`` fields.
+    optional. ``character`` (a slug) and ``style`` (a kit object, checked like refs.json's) are optional: the look of the
+    master. Other keys are the ``MasterSpec`` fields.
     """
     if not isinstance(data, dict):
         raise ValueError("the spec must be a JSON object")
@@ -664,6 +915,11 @@ def spec_from_json(data: Any) -> MasterSpec:
         if not (isinstance(xy, list | tuple) and len(xy) == 2 and all(isinstance(v, int | float) for v in xy)):
             raise ValueError(f"{key} must be [x, y]")
         merged[key] = (round(xy[0]), round(xy[1]))
+    character = merged["character"]
+    if character is not None and not (isinstance(character, str) and _SLUG.fullmatch(character)):
+        raise ValueError(f"character must be a character's slug such as reginald, or null, got {character!r:.40}")
+    if merged["style"] is not None:
+        merged["style"] = seed.validate_style(merged["style"], Path("the spec"))
     for key in ("dance", "out"):
         merged[key] = Path(merged[key])
     merged["audio"] = Path(merged["audio"]) if merged.get("audio") else None
