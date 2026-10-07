@@ -344,7 +344,7 @@ def test_bad_refs_are_refused_before_anything_is_written(tmp_path, over, message
 
 
 FRANZ_KIT = {
-    "pill": {"fill": "#F4EBDD", "text": "#1F2A44", "font": "PlayfairDisplay-Italic-Variable.ttf", "weight": "Medium", "radius": 34},
+    "pill": {"fill": "#F4EBDD", "fill_alpha": 255, "text": "#1F2A44", "font": "PlayfairDisplay-Italic-Variable.ttf", "weight": "Medium", "radius": 34},
     "entrance": "fade_rise",
     "hook_edit": "push_in",
     "tone": "warm",
@@ -403,13 +403,13 @@ def test_the_roster_kits_load():
         "entrance": "none", "hook_edit": "pause", "tone": "cool",
     }
     assert ln == {
-        "pill": {"fill": "#E8B931", "text": "#141414", "font": "Oswald-Variable.ttf", "weight": "Bold", "case": "upper", "radius": 16},
+        "pill": {"fill": "#E8B931", "fill_alpha": 255, "text": "#141414", "font": "Oswald-Variable.ttf", "weight": "Bold", "case": "upper", "radius": 16},
         "entrance": "slam", "hook_edit": "punch_in", "tone": "golden",
     }
     dj_path = seed.DEFAULT_CHARACTERS_DIR / "dj" / "style.json"
     dj = seed.validate_style(json.loads(dj_path.read_text()), dj_path)
     assert dj == {
-        "pill": {"fill": "#E6FF00", "text": "#111111", "font": "Anton-Regular.ttf", "weight": None, "case": "upper", "shear": 0.2,
+        "pill": {"fill": "#E6FF00", "fill_alpha": 255, "text": "#111111", "font": "Anton-Regular.ttf", "weight": None, "case": "upper", "shear": 0.2,
                  "tilt_deg": -4, "block": ["#FF7A00", 10, 10], "radius": 12},
         "entrance": "word_pop", "hook_edit": "drop_flash", "tone": "punchy",
     }

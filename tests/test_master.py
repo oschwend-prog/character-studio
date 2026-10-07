@@ -276,6 +276,15 @@ def test_styled_pill_uses_the_kit_colours(tmp_path):
     assert has_opaque(lenny, (0x14, 0x14, 0x14), 2) and near(lenny.getpixel((lright - 14, (ltop + lbottom) // 2)), (0xE8, 0xB9, 0x31), 2)
 
 
+def test_the_light_kits_are_opaque_like_the_mockup_and_reginald_keeps_the_default(tmp_path):
+    """Controller ruling 2026-10-07: franz, lenny and the DJ are solid cards; Reginald's black card stays at 215."""
+    alphas = {slug: overlays.pill_style(kit(slug)["pill"]).fill_alpha for slug in ROSTER}
+    assert alphas == {"franz": 255, "reginald": overlays.DEFAULT_PILL.fill_alpha, "lenny": 255, "dj": 255}
+    img = pill_for("franz", ["Kindly do not inform the Duchess."], tmp_path / "franz.png")
+    _, top, right, bottom = img.getchannel("A").getbbox()
+    assert img.getpixel((right - 14, (top + bottom) // 2)) == (0xF4, 0xEB, 0xDD, 255), "cream, not dimmed by the video behind"
+
+
 @pytest.mark.parametrize("slug", ROSTER)
 def test_dots_survive_every_kit(tmp_path, slug):
     img = pill_for(slug, ["Breakfast will be served at eight. As usual. Naturally."], tmp_path / f"{slug}.png")
@@ -320,7 +329,7 @@ def test_the_tilt_and_the_block_are_really_drawn(tmp_path):
     right_top = alpha.crop((db[2] - quarter, db[1], db[2], db[3])).getbbox()[1] + db[1]
     assert right_top < left_top - 10, "tilt_deg -4: counter-clockwise, the pill rises to the right"
     assert has_opaque(dj, (0xFF, 0x7A, 0x00), 3), "the orange block #FF7A00 behind the pill"
-    assert has_opaque(dj, (0xE6, 0xFF, 0x00), 3, alpha=215), "and the neon yellow fill #E6FF00 in front, not tinted by the block"
+    assert has_opaque(dj, (0xE6, 0xFF, 0x00), 3, alpha=255), "and the neon yellow fill #E6FF00 in front, not tinted by the block"
 
 
 def test_case_tracking_and_weight_follow_the_style(tmp_path):

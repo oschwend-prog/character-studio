@@ -31,7 +31,7 @@
     ]
   },
   "style": {
-    "pill": {"fill": "#E8B931", "text": "#141414", "font": "Oswald-Variable.ttf", "weight": "Bold", "case": "upper", "radius": 16},
+    "pill": {"fill": "#E8B931", "fill_alpha": 255, "text": "#141414", "font": "Oswald-Variable.ttf", "weight": "Bold", "case": "upper", "radius": 16},
     "entrance": "slam",
     "hook_edit": "punch_in",
     "tone": "golden"

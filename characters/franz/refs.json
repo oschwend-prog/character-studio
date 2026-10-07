@@ -31,7 +31,7 @@
     ]
   },
   "style": {
-    "pill": {"fill": "#F4EBDD", "text": "#1F2A44", "font": "PlayfairDisplay-Italic-Variable.ttf", "weight": "Medium", "radius": 34},
+    "pill": {"fill": "#F4EBDD", "fill_alpha": 255, "text": "#1F2A44", "font": "PlayfairDisplay-Italic-Variable.ttf", "weight": "Medium", "radius": 34},
     "entrance": "fade_rise",
     "hook_edit": "push_in",
     "tone": "warm"
