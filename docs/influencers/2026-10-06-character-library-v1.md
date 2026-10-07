@@ -158,3 +158,16 @@ The first five should be rendered to an extremely high level of consistency befo
 
 **Success criterion:** A viewer should recognize the character without needing a caption or explanation. The characters should
 feel less like AI influencers and more like living internet memes.
+
+---
+
+## Later idea (owner, 2026-10-07): historical characters
+Owner: "we could even have historical characters that are funny, like Adolf Hitler, Napoleon, etc." Parked with this library.
+Notes to raise when we come back (not decisions):
+- **Hitler (and any perpetrator of atrocities): not possible.** Meta's Dangerous Organisations and Individuals policy and
+  TikTok's hate rules remove content that features him, satire included, and strike the account; our accounts share one
+  Accounts Centre, so one strike can reach the whole roster. Brand deals would also be off the table.
+- **Napoleon-type: workable as an original archetype**, not the real man: e.g. a tiny, furious emperor in a bicorne hat
+  with an invented name (the studio's rule: original characters only, no real person's likeness). Same idea for other
+  costume archetypes with a strong silhouette: a Roman centurion, a pharaoh, a Viking, a Victorian inventor, a medieval
+  knight. They swap into viral clips like Reginald (adult human star) and read in one frame.
