@@ -43,3 +43,7 @@ Three look tests on gpt_image_2_5 (high, 2K, about 2.75 credits each, about 8 in
   goatee, sunburnt nose, greasy 90s curtains, cap or bucket hat two sizes too big, shin-length tee, odd-eye shades.
   1 The Pigeon `d41a1f41-8c99-433f-9db6-00426baac2a6`, 2 The Knob Kiss `93597234-10c5-4b96-9cac-856e380450ac`, 3 The Phone
   Call `a135af98-fad2-4221-876b-41cf84231d4b`. 8.25 credits; 35.75 in total for the DJ.
+- Fifth round (owner: funny hair, looks tired as he never sleeps, a pink nose; drug cues kept suggestive only: no powder,
+  sniffing or jaw clench, no drug jokes in captions): 1 bed-head mop `2b65da9f-402c-4643-adee-4738730c6ac3`, 2 frosted
+  mullet + rat-tail `77b43857-6c07-4b15-b5fa-cc04b89acf42`, 3 cockatoo crest with ice-blue/amber sides
+  `27e1ef0a-15b9-46bc-a70b-59077af3d50f`. 8.25 credits; 44 in total for the DJ.
