@@ -1,8 +1,8 @@
 // Terminal v2, Today page: the counts of "what needs you" and a character's last posts. Pure functions over the snapshot.
 import { describe, expect, it } from 'vitest';
-import { creditsLeft, lastPosts, liveLastPosts, postNumbers, todayCounts } from './dashboard';
+import { creditsLeft, hasWarnings, lastPosts, liveChannels, liveLastPosts, postNumbers, problemClips, problemClipsLine, todayCounts } from './dashboard';
 import { dropCredits } from './drop';
-import type { Character, ClipState, DropAdjust, DropCard, DropState, LibraryClip, LibraryPost, QueueClip, Snapshot, TrackerRow } from './types';
+import type { Character, ClipState, HealthRow, DropAdjust, DropCard, DropState, LibraryClip, LibraryPost, QueueClip, Snapshot, TrackerRow } from './types';
 
 const NOW = Date.parse('2026-10-07T12:00:00Z');
 const HOUR = 3_600_000;
@@ -198,5 +198,48 @@ describe('creditsLeft', () => {
   it('is null while the budget has not loaded', () => {
     expect(creditsLeft(null)).toBeNull();
     expect(creditsLeft(undefined)).toBeNull();
+  });
+});
+
+describe('liveChannels', () => {
+  const ch = (slug: string, character_status: string, platform: string) => ({ account_id: `${slug}-${platform}`, character_slug: slug, character_status, platform });
+
+  it('keeps only the channels of a live character (Tonight is per live character)', () => {
+    const channels = [
+      ch('reginald', 'live', 'tiktok'),
+      ch('reginald', 'live', 'instagram'),
+      ch('franz', 'designing', 'tiktok'),
+      ch('biscuit', 'paused', 'instagram'),
+      ch('lenny', 'retired', 'tiktok'),
+    ];
+    expect(liveChannels(channels).map((c) => c.account_id)).toEqual(['reginald-tiktok', 'reginald-instagram']);
+    expect(liveChannels([ch('franz', 'designing', 'tiktok')])).toEqual([]);
+    expect(liveChannels([])).toEqual([]);
+  });
+});
+
+describe('problemClips, problemClipsLine and hasWarnings', () => {
+  const blocked = row(card('blocked'));
+  const failed = row(card('failed'), { clip_id: 'c9', clip_state: 'gen_failed' });
+  const fine = [row(card('ready', { character_by: 'owner', window: { start_s: 0, length_s: 8 } })), row(card('making')), row(card('made'), { clip_id: 'c8', clip_state: 'posted' }), row(card('checking')), row(null)];
+  const warn: HealthRow = { kind: 'post', severity: 'warning', message: 'post on x failed', ref_id: 'p1', since: ago(1) };
+
+  it('counts the dropped clips that are blocked or failed, and nothing else', () => {
+    expect(problemClips(snapshot({ tracker: [blocked, failed, ...fine] }))).toBe(2);
+    expect(problemClips(snapshot({ tracker: fine }))).toBe(0);
+    expect(problemClips(snapshot())).toBe(0);
+  });
+
+  it('words the warning row in the singular and the plural', () => {
+    expect(problemClipsLine(1)).toBe('1 clip is blocked or failed');
+    expect(problemClipsLine(3)).toBe('3 clips are blocked or failed');
+  });
+
+  it('shows the warnings when v_health has a row or a drop is blocked or failed, and stays quiet otherwise', () => {
+    expect(hasWarnings(snapshot({ tracker: fine }))).toBe(false);
+    expect(hasWarnings(snapshot({ health: [warn], tracker: fine }))).toBe(true);
+    expect(hasWarnings(snapshot({ tracker: [blocked] }))).toBe(true);
+    expect(hasWarnings(snapshot({ tracker: [failed] }))).toBe(true);
+    expect(hasWarnings(snapshot({ health: [warn], tracker: [failed] }))).toBe(true);
   });
 });

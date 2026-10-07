@@ -4,7 +4,7 @@
 import { AlertTriangle, ArrowRight, CircleCheck, OctagonAlert } from 'lucide-react';
 import { useMemo } from 'react';
 import { Flap, Livery, PlatformCode, Section, Skeleton, Spinner, characterName } from '../components/ui';
-import { creditsLeft, liveLastPosts, postNumbers, todayCounts, type TodayCounts } from '../lib/dashboard';
+import { creditsLeft, hasWarnings, liveChannels, liveLastPosts, postNumbers, problemClips, problemClipsLine, todayCounts, type TodayCounts } from '../lib/dashboard';
 import { clipCode, formatCountdown, formatCredits, londonDate, platformName } from '../lib/format';
 import { href, useNow } from '../lib/hooks';
 import { useApproveAll } from '../lib/actions';
@@ -15,7 +15,8 @@ export function Today() {
   const { data, busy } = useStudio();
   const approveAllClips = useApproveAll();
   const now = useNow(15_000);
-  const rows = useMemo(() => (data ? boardRows(data.channels, data.queue, now) : []), [data, now]);
+  // Tonight is per live character: a designing, paused or retired character's channels stay off the board
+  const rows = useMemo(() => (data ? boardRows(liveChannels(data.channels), data.queue, now) : []), [data, now]);
 
   if (!data) {
     return (
@@ -73,7 +74,7 @@ export function Today() {
                 </div>
               </div>
             )}
-            <Board rows={rows} />
+            <Board rows={rows} anyChannel={data.channels.length > 0} />
           </Section>
 
           {data.queue.length > 0 && (
@@ -109,7 +110,7 @@ export function Today() {
         <div className="stack">
           <LastPosts />
           <CreditsLine />
-          {data.health.length > 0 && <Alerts />}
+          {hasWarnings(data) && <Alerts />}
         </div>
       </div>
     </div>
@@ -213,9 +214,14 @@ function CreditsLine() {
   );
 }
 
-function Board({ rows }: { rows: BoardRow[] }) {
+function Board({ rows, anyChannel }: { rows: BoardRow[]; anyChannel: boolean }) {
   if (!rows.length) {
-    return (
+    return anyChannel ? (
+      <div className="empty">
+        <b>No live character yet</b>
+        <span className="muted small">A character's channels appear here once his status is live.</span>
+      </div>
+    ) : (
       <div className="empty">
         <b>No channels yet</b>
         <span className="muted small">
@@ -282,14 +288,17 @@ function Board({ rows }: { rows: BoardRow[] }) {
 
 const tidy = (m: string) => m.replace(' is needs_check', ' needs a check').replace(' is failed', ' failed');
 
+/** Health: what v_health reports plus the dropped clips that are blocked or failed (they are not in v_health). */
 export function Alerts() {
   const { data } = useStudio();
   if (!data) return null;
+  const clips = problemClips(data);
+  const count = data.health.length + (clips > 0 ? 1 : 0);
   return (
-    <Section id="alerts" title="Health" aside={data.health.length ? `${data.health.length} to look at` : undefined}>
-      {data.health.length === 0 ? (
+    <Section id="alerts" title="Health" aside={count ? `${count} to look at` : undefined}>
+      {count === 0 ? (
         <div className="all-clear">
-          <CircleCheck aria-hidden="true" /> Daily run reported in, no failed posts, spend under 80%.
+          <CircleCheck aria-hidden="true" /> Daily run reported in, no failed posts or clips, spend under 80%.
         </div>
       ) : (
         <div>
@@ -299,6 +308,14 @@ export function Alerts() {
               <span>{tidy(h.message)}</span>
             </div>
           ))}
+          {clips > 0 && (
+            <div className="alert-row warning">
+              <AlertTriangle aria-label="Warning" />
+              <span>
+                <a href={href('clips', undefined, { f: 'problems' })}>{problemClipsLine(clips)}</a>
+              </span>
+            </div>
+          )}
         </div>
       )}
     </Section>

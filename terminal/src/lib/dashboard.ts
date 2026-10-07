@@ -1,6 +1,6 @@
 // Terminal v2, Today page (owner 2026-10-07): what needs the owner now (counts) and a character's last posts. Pure functions
 // over the snapshot; no browser.
-import { clipChip } from './clipstatus';
+import { clipChip, filterClips } from './clipstatus';
 import { dropCredits } from './drop';
 import { formatViews } from './format';
 import { orderRoster } from './roster';
@@ -101,3 +101,17 @@ export function liveLastPosts(data: Pick<Snapshot, 'characters' | 'library'>, n 
 export function creditsLeft(b: Pick<Budget, 'cap' | 'committed'> | null | undefined): number | null {
   return b ? Math.max(0, b.cap - b.committed) : null;
 }
+
+/** Tonight is per live character: the channels of a designing, paused or retired character stay off the board. */
+export function liveChannels<T extends { character_status: string }>(channels: ReadonlyArray<T>): T[] {
+  return channels.filter((c) => c.character_status === 'live');
+}
+
+/** Dropped clips the owner has to look at: blocked (can't be used) or failed. v_health has no drops, so Today counts them here. */
+export const problemClips = (data: Pick<Snapshot, 'tracker'>): number => filterClips(data.tracker, 'problems').length;
+
+/** The warning row for those clips; it links to the Clips page's Blocked or failed filter. */
+export const problemClipsLine = (n: number): string => (n === 1 ? '1 clip is blocked or failed' : `${n} clips are blocked or failed`);
+
+/** Whether Today shows its warnings: something in v_health (a failed post, the daily run, low credits) or a blocked or failed drop. */
+export const hasWarnings = (data: Pick<Snapshot, 'health' | 'tracker'>): boolean => data.health.length > 0 || problemClips(data) > 0;
