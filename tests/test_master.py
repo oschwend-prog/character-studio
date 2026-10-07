@@ -1302,21 +1302,29 @@ def test_tone_filters_exact():
 
 
 ZOOM = "scale=w='trunc(1080*({z})/2)*2':h='trunc(1920*({z})/2)*2':eval=frame:flags=bicubic,crop=1080:1920"
+# A kit's zoom never scales below the frame (C4a): ffmpeg's crop of a smaller frame starts before it and runs past its end.
+KIT_ZOOM = (
+    "scale=w='max(1080,trunc(1080*({z})/2)*2)':h='max(1920,trunc(1920*({z})/2)*2)':eval=frame:flags=bicubic,crop=1080:1920"
+)
 
 
 def test_hook_edit_filter_exact():
     push = master.hook_edit_filter("v", "h", "push_in", drop_s=None)
-    assert push == "[v]" + ZOOM.format(z="1+0.06*min(t,1.5)/1.5") + "[h]"
+    assert push == "[v]" + KIT_ZOOM.format(z="1+0.06*min(t,1.5)/1.5") + "[h]"
     punch = master.hook_edit_filter("v", "h", "punch_in", drop_s=None)
-    assert punch == "[v]" + ZOOM.format(z="1.15-0.15*min(t,0.5)/0.5") + "[h]"
+    assert punch == "[v]" + KIT_ZOOM.format(z="1.15-0.15*min(t,0.5)/0.5") + "[h]"
     flash = master.hook_edit_filter("v", "h", "drop_flash", drop_s=2.0)
     assert flash == (
         "[v]eq=brightness='if(between(t,2,2.12),0.6*(1-(t-2)/0.12),0)':eval=frame[ha];"
-        "[ha]" + ZOOM.format(z="1+0.06*sin(PI*clip((t-2)/0.25,0,1))") + "[hb];"
-        "[hb]" + ZOOM.format(z="1+0.06*sin(PI*clip((t-2.5)/0.25,0,1))") + "[h]"
+        "[ha]" + KIT_ZOOM.format(z="1+0.06*sin(PI*clip((t-2)/0.25,0,1))") + "[hb];"
+        "[hb]" + KIT_ZOOM.format(z="1+0.06*sin(PI*clip((t-2.5)/0.25,0,1))") + "[h]"
     )
-    # the two pulses are the existing zoom hits at the drop and half a second after it
-    assert flash.endswith(master.zoom_hit_filter("hb", "h", master.ZoomHit(2.5)))
+    # the two pulses are the existing zoom hits at the drop and half a second after it, floored like every kit zoom
+    assert flash.endswith(master.zoom_hit_filter("hb", "h", master.ZoomHit(2.5), floored=True))
+    # the zoom-hit enhancement keeps the graph of before the kits (its zoom is never below 1: see master._zoom_filter)
+    assert master.zoom_hit_filter("v", "h", master.ZoomHit(2.5)) == "[v]" + ZOOM.format(
+        z="1+0.06*sin(PI*clip((t-2.5)/0.25,0,1))"
+    ) + "[h]"
     assert master.hook_edit_filter("v", "h", "none", drop_s=None) is None
     assert master.hook_edit_filter("v", "h", "pause", drop_s=None) is None  # the pause is a tpad, after the tone
     assert master.pause_filter("o", "p", master.PAUSE_S) == "[o]tpad=start_mode=clone:start_duration=0.4[p]"
@@ -1344,6 +1352,35 @@ def test_push_in_zooms_by_the_end(tmp_path, synth_video):
     assert diff(0.0) < 3, "1.00 at the start"
     assert diff(1.5) > 8 and diff(1.9) > 8, "1.06 by 1.5 s, and held"
     assert probe(out, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
+
+
+def test_punch_in_ends_on_the_very_frame(tmp_path):
+    """Lenny's punch-in is 1.15x at 0 and the clip itself from 0.5 s on. ``1.15-0.15`` is 0.9999999999999999 in floating
+    point, which gave a 1078x1918 frame for the rest of the clip and a crop of it that started 2 rows before its buffer
+    (C4a: the heap corruption that crashed ffmpeg under the golden tone). Lossless in and out: after the punch-in the
+    picture is the source, but for the scaler's +-2 rounding on a few pixels (shrunk and shifted, it was off by up to 255)."""
+    src, out = tmp_path / "src.mp4", tmp_path / "punched.mp4"
+    lossless = ["-c:v", "libx264", "-qp", "0", "-preset", "ultrafast", "-pix_fmt", "yuv420p"]
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=size=1080x1920:rate=30:duration=1.5", *lossless, str(src))
+    frag = master.hook_edit_filter("0:v", "p", "punch_in", drop_s=None)
+    ffmpeg("-i", str(src), "-filter_complex", frag, "-map", "[p]", *lossless, str(out))
+
+    def worst(t: float) -> int:
+        """The largest channel difference between the source and the punched frame at ``t``."""
+        return max(hi for _, hi in ImageChops.difference(frame_at(src, t, tmp_path), frame_at(out, t, tmp_path)).getextrema())
+
+    assert worst(0.0) > 100, "1.15 at the start"
+    assert worst(0.6) <= 4 and worst(1.4) <= 4, "1.00 from 0.5 s on: the whole frame, not shrunk to 1078x1918 and shifted"
+
+
+def test_lennys_kit_builds_every_time(tmp_path, synth_video):
+    """C4a regression: the punch-in + golden tone (+ slam, pill, bug) crashed ffmpeg 8.1 in 5 of 6 builds; 5 in a row now."""
+    src = synth_video(dur=2)
+    for i in range(5):
+        spec = spec_for(tmp_path, src, None, closeup=None, hook1=[], hook2=["When they put me on hold"], hook2_until_s=1.5,
+                        music="in_app", character="lenny", out=tmp_path / f"lenny{i}.mp4")  # fmt: skip
+        report = probe(build_master(spec), loudness=False)
+        assert (report.width, report.height) == (1080, 1920) and report.duration_s == pytest.approx(2.0, abs=0.05), i
 
 
 def test_pause_adds_four_tenths_and_shifts_everything(tmp_path):
