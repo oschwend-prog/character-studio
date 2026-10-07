@@ -74,3 +74,14 @@ Order: get Biscuit + Reginald running on Instagram first, then expand.
 - Plan: when a Reel is published, also publish it (or a 15 s cut of it) as an Instagram Story on the same account, with the
   caption pill and the AI label; Postiz supports an Instagram `post_type: story` (verify with `postiz integrations:settings`).
   Counts toward nothing in the 2-posts-a-day cap (Stories are not feed posts) but stays approval-gated like the Reel.
+
+## Later: a brand marketplace, brands buy placement on our characters (owner, 2026-10-07)
+- Owner: "set up a terminal to send to brands who can buy space / branding on our characters through the web. Could be a
+  cool way to monetise. Think Franz wearing Alo wear."
+- The idea: a web page per character (audience, reach, style, rate card) where a brand books a placement: Franz in the
+  brand's activewear for N posts, Lenny with the brand's phone/watch/drink, etc.; brief → studio makes the clips with the
+  product → brand approves → posts go out with the paid-partnership label.
+- Notes for when we pick it up: needs real reach first (KPI bars); Instagram/TikTok branded-content rules (the "Paid
+  partnership" label, the AI label stays); brand logos only for paid, contracted deals (today's rule: no brands in prompts);
+  pricing per post/package; Stripe checkout; the brand's own approval step; contracts and usage rights; never a real
+  person's likeness.
