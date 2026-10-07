@@ -3,7 +3,8 @@
 The owner saves clips from the iPhone (Files, Safari downloads, Photos "Save to Files") or the Mac into one folder. ``sync_folder``
 turns each new video in it into a **file drop**, exactly what ``studio drop add --file`` does (no character: the studio recommends
 one after the check; ``drop.add_drop`` then ``drop.attach_file``), and moves the file into ``Added/`` so the owner sees what was
-taken. This module is pure: the CLI command and the LaunchAgent that call it are separate (tasks A2 and A3).
+taken. ``sync_folder`` is given its store, storage, clock and iCloud fetch; the CLI command (``studio drop sync-folder``) and the
+LaunchAgent that call it are elsewhere (tasks A2 and A3).
 
 **Only the top level of the folder is read** (``Added/`` and every other sub-folder are never looked at; hidden files such as
 ``.DS_Store`` are not clips). What is not taken, and why (``skipped``, one ``{"file", "reason"}`` each):
@@ -31,17 +32,24 @@ only moves it. A missing or unreadable folder raises (``OSError``): the caller r
 
 ``studio.drop`` is imported as a module and read at call time (``drop.CLIP_MAX_BYTES``, ``drop.add_drop``) so a test can patch it
 and ``studio.drop`` may itself import this module for its CLI command.
+
+**Around a run** (used by ``studio drop sync-folder``, the LaunchAgent every 5 minutes and the daily run): ``run_lock`` keeps two
+runs from overlapping (an exclusive, non-blocking ``flock`` on ``<ledger>.lock``); ``preview_folder`` is the dry run (read-only);
+``every_file_failed`` is the exit-code rule; ``nudge_cloud`` wakes the cloud check (``gh workflow run studio-drop.yml -f job=sweep``)
+once something was added, and never raises.
 """
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import subprocess
 import tempfile
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -59,6 +67,9 @@ SETTLE_SECONDS = 30  # a file written more recently than this is still being cop
 ICLOUD_SUFFIX = ".icloud"  # a legacy placeholder: ``.<name>.icloud`` stands for ``<name>`` that is not downloaded yet
 SF_DATALESS = 0x40000000  # st_flags of an evicted iCloud file (macOS 14+): the content is not on disk
 BRCTL_TIMEOUT_S = 60
+REPO_ROOT = Path(__file__).resolve().parents[1]
+NUDGE_COMMAND = ["gh", "workflow", "run", "studio-drop.yml", "-f", "job=sweep"]  # the cloud check: ``studio drop sweep``
+NUDGE_TIMEOUT_S = 30
 _CHUNK = 1024 * 1024
 
 Ledger = dict[str, dict[str, Any]]
@@ -249,3 +260,79 @@ def sync_folder(
         except OSError as e:  # the ledger knows the clip: the next run only moves it
             failed.append({"file": name, "error": f"taken, but not moved to {ADDED_DIR}/: {e}"})
     return {"added": added, "skipped": skipped, "failed": failed}
+
+
+# ---- around a run: the lock, the dry run, the exit-code rule, the nudge ---------------------------------------------------------
+
+
+@contextmanager
+def run_lock(ledger_path: Path) -> Iterator[bool]:
+    """Hold an exclusive, non-blocking ``flock`` on ``<ledger>.lock`` (beside the ledger, its folders are created) for the whole
+    ``with`` block; yields False, without waiting, when another run holds it. The lock goes with the process: a run that dies leaves
+    nothing to clean up. Two runs can overlap (the 5-minute agent, a manual run, the daily run); without this they could both take
+    the same clip before either wrote the ledger."""
+    lock_path = ledger_path.with_name(ledger_path.name + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def preview_folder(
+    folder: Path, ledger_path: Path, *, clock: Callable[[], float] = time.time
+) -> dict[str, list[dict[str, str]]]:
+    """The dry run of ``sync_folder``: ``{"would_add": [{"file"}], "skipped": [...], "failed": [{"file", "error"}]}`` with the same
+    rules (scan, then the ledger by content hash, a clip that appears twice in the folder counts once), and no write of any kind:
+    no store, no storage, no move, no ledger, and iCloud is not asked to download anything. Raises like ``sync_folder`` for a
+    missing folder (``OSError``) or an unreadable ledger (``ValueError``)."""
+    seen = set(_load_ledger(ledger_path))
+    ready, skipped = scan_folder(folder, clock(), lambda path: None)
+    would_add: list[dict[str, str]] = []
+    failed: list[dict[str, str]] = []
+    for path in ready:
+        try:
+            digest = file_hash(path)
+        except OSError as e:
+            failed.append({"file": path.name, "error": str(e)})
+            continue
+        if digest in seen:
+            skipped.append({"file": path.name, "reason": "already added"})
+        else:
+            seen.add(digest)
+            would_add.append({"file": path.name})
+    return {"would_add": would_add, "skipped": skipped, "failed": failed}
+
+
+def every_file_failed(result: dict[str, list[dict[str, str]]]) -> bool:
+    """True when something failed and not one file got through: the exit-code rule of ``sync-folder`` (a partial run is not a failed
+    one). Counted on distinct file names: a file in ``added`` (or "already added") was uploaded, so a ledger or move failure on it
+    does not make it a failure; a file waiting (iCloud, still copying) is neither."""
+    uploaded = {a["file"] for a in result["added"]} | {s["file"] for s in result["skipped"] if s["reason"] == "already added"}
+    return bool({f["file"] for f in result["failed"]} - uploaded) and not uploaded
+
+
+def nudge_cloud() -> str | None:
+    """Wake the cloud check now instead of at the next 2-hourly sweep: ``gh workflow run studio-drop.yml -f job=sweep``, run from the
+    repo (``gh`` finds the repository there). None when it worked, else a one-line reason (no ``gh``, not logged in, a workflow that
+    is disabled, too slow). Never raises: a missed nudge only costs the wait for the sweep."""
+    try:
+        done = subprocess.run(
+            NUDGE_COMMAND, cwd=REPO_ROOT, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=NUDGE_TIMEOUT_S, check=False
+        )
+    except FileNotFoundError:
+        return "gh not found"
+    except subprocess.TimeoutExpired:
+        return f"gh timed out after {NUDGE_TIMEOUT_S} s"
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"gh could not run: {e}"
+    if done.returncode == 0:
+        return None
+    said = " ".join((done.stderr or done.stdout or "").split())[:200]
+    return said or f"gh exited with status {done.returncode}"

@@ -8,6 +8,7 @@ Everything is local: ``MemoryStore`` + ``LocalStorage``, a fake ``fetch`` that r
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -16,8 +17,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from typer.testing import CliRunner
 
 from studio import clipfolder, drop
+from studio.cli import app
 from studio.clipfolder import ADDED_DIR, SETTLE_SECONDS, file_hash, scan_folder, sync_folder
 from studio.config import now_london
 from studio.models import Body, Character
@@ -460,3 +463,296 @@ def test_the_defaults_are_the_owners_icloud_folder_and_a_state_ledger():
     assert clipfolder.DEFAULT_FOLDER == Path.home() / "Library/Mobile Documents/com~apple~CloudDocs/ODD EYES clips"
     assert clipfolder.DEFAULT_LEDGER == Path.home() / ".local/state/odd-eyes/clips-ledger.json"
     assert ADDED_DIR == "Added" and SETTLE_SECONDS == 30
+
+
+# ---- the CLI: ``studio drop sync-folder`` and the nudge to the cloud check ----------------------------------------------------
+
+
+class Nudge:
+    """A stand-in for ``clipfolder.nudge_cloud``: counts the calls and answers ``error`` (None = it worked). Never runs ``gh``."""
+
+    def __init__(self, error=None):
+        self.error, self.calls = error, 0
+
+    def __call__(self):
+        self.calls += 1
+        return self.error
+
+
+@pytest.fixture
+def nudge(monkeypatch):
+    fake = Nudge()
+    monkeypatch.setattr(clipfolder, "nudge_cloud", fake)
+    return fake
+
+
+@pytest.fixture
+def cli(monkeypatch, world):
+    """``cli(folder, ledger, *flags)`` runs the command against the in-memory store and the local storage."""
+    store, storage = world
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: storage)
+
+    def invoke(folder, ledger, *flags):
+        return CliRunner().invoke(app, ["drop", "sync-folder", "--folder", str(folder), "--ledger", str(ledger), *flags])
+
+    return invoke
+
+
+def test_cli_sync_folder_adds_and_nudges_the_cloud_once(world, folder, ledger, cli, nudge):
+    put(folder, "a.mp4", MP4 + b"a")
+    put(folder, "b.mov", MP4 + b"b")
+    r = cli(folder, ledger)
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert len(out["added"]) == 2 and out["failed"] == [] and out["dispatched"] is True and out["dispatch_error"] is None
+    assert nudge.calls == 1  # once for the run, not once per clip
+    assert len(drops(world[0])) == 2 and names(folder) == [ADDED_DIR] and len(json.loads(ledger.read_text())) == 2
+    # the next run finds nothing, so it does not wake the cloud again
+    again = json.loads(cli(folder, ledger).output)
+    assert again["added"] == [] and again["dispatched"] is False and again["dispatch_error"] is None and nudge.calls == 1
+
+
+def test_cli_sync_folder_nothing_added_nudges_nothing(folder, ledger, cli, nudge):
+    put(folder, "notes.txt", b"hello")
+    r = cli(folder, ledger)
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output)["skipped"] == [{"file": "notes.txt", "reason": "not a video"}] and nudge.calls == 0
+
+
+def test_cli_sync_folder_no_dispatch_adds_without_the_nudge(world, folder, ledger, cli, nudge):
+    put(folder, "a.mp4")
+    r = cli(folder, ledger, "--no-dispatch")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert len(out["added"]) == 1 and out["dispatched"] is False and out["dispatch_error"] is None and nudge.calls == 0
+
+
+def test_cli_sync_folder_dry_run_writes_nothing(world, folder, ledger, nudge, monkeypatch):
+    def forbidden(*a, **k):
+        raise AssertionError("a dry run opens neither the store nor the storage")
+
+    monkeypatch.setattr(drop, "open_store", forbidden)
+    monkeypatch.setattr(drop, "open_storage", forbidden)
+    ran: list[list[str]] = []
+    monkeypatch.setattr(clipfolder.subprocess, "run", lambda cmd, **kw: ran.append(cmd))  # no brctl, no gh
+    put(folder, "a.mp4", MP4 + b"a")
+    put(folder, "b.mp4", MP4 + b"a")  # the same clip again: only one would be added
+    (folder / "c.mov").write_bytes(MP4 + b"c")  # written just now (the command reads the real clock): still copying
+    clip = (folder / "a.mp4").read_bytes()
+    (folder / ".d.mov.icloud").write_bytes(b"x")  # a placeholder: a dry run does not even ask iCloud for it
+    r = CliRunner().invoke(app, ["drop", "sync-folder", "--folder", str(folder), "--ledger", str(ledger), "--dry-run"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["dry_run"] is True and out["would_add"] == [{"file": "a.mp4"}] and out["failed"] == []
+    assert {"file": "b.mp4", "reason": "already added"} in out["skipped"]
+    assert {"file": "c.mov", "reason": "still copying"} in out["skipped"]
+    assert {"file": "d.mov", "reason": "in iCloud, downloading"} in out["skipped"]
+    assert out["dispatched"] is False and nudge.calls == 0 and ran == []
+    assert names(folder) == [".d.mov.icloud", "a.mp4", "b.mp4", "c.mov"] and (folder / "a.mp4").read_bytes() == clip
+    assert not ledger.exists() and not ledger.parent.exists()  # no ledger, no lock file, not even the state folder
+
+
+def test_cli_sync_folder_dry_run_knows_what_the_ledger_already_added(world, folder, ledger, cli, nudge):
+    put(folder, "a.mp4")
+    assert json.loads(cli(folder, ledger).output)["added"]
+    put(folder, "a.mp4")  # the same clip saved again
+    r = cli(folder, ledger, "--dry-run")
+    assert r.exit_code == 0 and json.loads(r.output)["would_add"] == []
+    assert json.loads(r.output)["skipped"] == [{"file": "a.mp4", "reason": "already added"}]
+
+
+def test_cli_sync_folder_dry_run_with_an_unreadable_ledger_says_so(folder, ledger, cli, nudge):
+    put(folder, "a.mp4")
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("{not json")
+    r = cli(folder, ledger, "--dry-run")
+    assert r.exit_code == 1 and "ledger" in r.output and "Traceback" not in r.output and (folder / "a.mp4").exists()
+
+
+def test_cli_sync_folder_without_a_folder_says_how_to_install(tmp_path, ledger, cli, nudge):
+    r = cli(tmp_path / "no such folder", ledger)
+    assert r.exit_code == 2
+    assert "bin/install-clip-sync" in r.output and "no clips folder at" in r.output and "no such folder" in r.output
+    assert "Traceback" not in r.output and nudge.calls == 0 and not ledger.parent.exists()
+    assert cli(tmp_path / "no such folder", ledger, "--dry-run").exit_code == 2  # the same answer for a dry run
+
+
+def test_cli_sync_folder_that_is_a_file_is_not_a_clips_folder(tmp_path, ledger, cli, nudge):
+    not_a_folder = tmp_path / "ODD EYES clips"
+    not_a_folder.write_text("oops")
+    r = cli(not_a_folder, ledger)
+    assert r.exit_code == 2 and "bin/install-clip-sync" in r.output
+
+
+def test_cli_sync_folder_defaults_are_the_owners_folder_and_ledger(monkeypatch, tmp_path, nudge):
+    store = make_store()
+    monkeypatch.setattr(clipfolder, "DEFAULT_FOLDER", tmp_path / "default folder")
+    monkeypatch.setattr(clipfolder, "DEFAULT_LEDGER", tmp_path / "default state" / "ledger.json")
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: LocalStorage(tmp_path / "storage"))
+    r = CliRunner().invoke(app, ["drop", "sync-folder"])
+    assert r.exit_code == 2 and str(tmp_path / "default folder") in r.output
+    (tmp_path / "default folder").mkdir()
+    put(tmp_path / "default folder", "a.mp4")
+    r = CliRunner().invoke(app, ["drop", "sync-folder"])
+    assert r.exit_code == 0 and len(json.loads(r.output)["added"]) == 1
+    assert (tmp_path / "default state" / "ledger.json").exists()
+
+
+def test_cli_sync_folder_nudge_failure_is_only_reported(world, folder, ledger, cli, monkeypatch):
+    nudge = Nudge("gh not found")
+    monkeypatch.setattr(clipfolder, "nudge_cloud", nudge)
+    put(folder, "a.mp4")
+    r = cli(folder, ledger)
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert len(out["added"]) == 1 and out["dispatched"] is False and out["dispatch_error"] == "gh not found" and nudge.calls == 1
+
+
+def test_cli_sync_folder_another_run_holding_the_lock_is_skipped(world, folder, ledger, cli, nudge):
+    put(folder, "a.mp4")
+    ledger.parent.mkdir(parents=True)
+    with (ledger.parent / (ledger.name + ".lock")).open("a") as held:  # the 5-minute agent is in the middle of a run
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        r = cli(folder, ledger)
+        assert r.exit_code == 0, r.output
+        assert json.loads(r.output) == {"skipped_run": "another sync is running"}
+        assert drops(world[0]) == [] and names(folder) == ["a.mp4"] and nudge.calls == 0
+    again = cli(folder, ledger)  # the other run is over: the lock is free
+    assert again.exit_code == 0 and len(json.loads(again.output)["added"]) == 1
+
+
+def test_cli_sync_folder_releases_the_lock_when_the_run_fails(folder, ledger, cli, nudge, monkeypatch):
+    put(folder, "a.mp4")
+    real = drop.add_drop
+
+    def down(*a, **k):
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(drop, "add_drop", down)
+    assert cli(folder, ledger).exit_code == 1
+    monkeypatch.setattr(drop, "add_drop", real)
+    r = cli(folder, ledger)
+    assert r.exit_code == 0 and len(json.loads(r.output)["added"]) == 1
+
+
+def test_cli_sync_folder_a_database_error_is_one_line_not_a_traceback(world, folder, ledger, cli, nudge, monkeypatch):
+    put(folder, "a.mp4")
+
+    def boom(*a, **k):
+        raise RuntimeError("connection to the database was lost\nserver closed the connection unexpectedly")
+
+    monkeypatch.setattr(drop, "add_drop", boom)  # not a ValueError / StorageError / OSError: sync_folder lets it out
+    r = cli(folder, ledger)
+    assert r.exit_code == 1
+    assert isinstance(r.exception, SystemExit) and "Traceback" not in r.output  # a clean exit, so the LaunchAgent log stays readable
+    assert r.output.count("\n") == 1 and r.output.startswith("error:") and "connection to the database was lost" in r.output
+    assert (folder / "a.mp4").exists() and nudge.calls == 0 and not ledger.exists()
+
+
+def test_cli_sync_folder_an_unreadable_ledger_is_one_line_exit_1(world, folder, ledger, cli, nudge):
+    put(folder, "a.mp4")
+    ledger.parent.mkdir(parents=True)
+    ledger.write_text("[1, 2]")
+    r = cli(folder, ledger)
+    assert r.exit_code == 1 and "ledger" in r.output and "Traceback" not in r.output and r.output.count("\n") == 1
+    assert drops(world[0]) == [] and (folder / "a.mp4").exists() and nudge.calls == 0
+
+
+def test_cli_sync_folder_a_folder_macos_refuses_to_list_is_one_line_exit_1(folder, ledger, cli, nudge, monkeypatch):
+    def refused(*a, **k):
+        raise PermissionError(1, "Operation not permitted", str(folder))
+
+    monkeypatch.setattr(clipfolder, "scan_folder", refused)  # iCloud Drive privacy: listing the folder is refused
+    r = cli(folder, ledger)
+    assert r.exit_code == 1 and "Operation not permitted" in r.output and "Traceback" not in r.output and r.output.count("\n") == 1
+    assert "bin/install-clip-sync" not in r.output  # it exists: installing again would not help
+    assert cli(folder, ledger, "--dry-run").exit_code == 1
+
+
+def test_cli_sync_folder_exits_1_only_when_every_file_failed(world, folder, ledger, tmp_path, monkeypatch, nudge):
+    store, _ = world
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    put(folder, "a.mp4", MP4 + b"a")
+    put(folder, "b.mp4", MP4 + b"b")
+
+    def invoke(storage):
+        monkeypatch.setattr(drop, "open_storage", lambda: storage)
+        return CliRunner().invoke(app, ["drop", "sync-folder", "--folder", str(folder), "--ledger", str(ledger)])
+
+    r = invoke(DownStorage(tmp_path / "down"))
+    assert r.exit_code == 1  # nothing could be uploaded: the run says so
+    out = json.loads(r.output)  # the JSON is still printed, for the log
+    assert out["added"] == [] and len(out["failed"]) == 2 and out["dispatched"] is False and nudge.calls == 0
+    r = invoke(DownStorage(tmp_path / "flaky", fail_first=1))
+    assert r.exit_code == 0, r.output  # one went in: a partial run is not a failed one
+    out = json.loads(r.output)
+    assert [a["file"] for a in out["added"]] == ["b.mp4"] and [f["file"] for f in out["failed"]] == ["a.mp4"] and nudge.calls == 1
+
+
+def test_every_file_failed_does_not_count_a_file_twice():
+    def res(added=(), skipped=(), failed=()):
+        return {
+            "added": [{"file": n, "pick_id": "p"} for n in added],
+            "skipped": [{"file": n, "reason": why} for n, why in skipped],
+            "failed": [{"file": n, "error": "x"} for n in failed],
+        }
+
+    assert clipfolder.every_file_failed(res()) is False  # nothing to do is not a failure
+    assert clipfolder.every_file_failed(res(failed=["a"])) is True
+    assert clipfolder.every_file_failed(res(failed=["a", "b"])) is True
+    assert clipfolder.every_file_failed(res(added=["a"], failed=["b"])) is False
+    assert clipfolder.every_file_failed(res(added=["a"], failed=["a"])) is False  # uploaded, then the ledger or the move failed
+    assert clipfolder.every_file_failed(res(failed=["a", "a"])) is True  # one file, however many ways it failed
+    assert clipfolder.every_file_failed(res(skipped=[("b", "already added")], failed=["a"])) is False
+    assert clipfolder.every_file_failed(res(skipped=[("b", "already added")], failed=["b"])) is False  # only its move failed
+    assert clipfolder.every_file_failed(res(skipped=[("c", "still copying")], failed=["a"])) is True  # waiting is not a success
+
+
+# ---- the nudge ---------------------------------------------------------------------------------------------------------------
+
+
+def test_nudge_cloud_runs_the_sweep_workflow_from_the_repo(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, **kw):
+        seen.update(cmd=cmd, **kw)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    monkeypatch.setattr(clipfolder.subprocess, "run", fake_run)
+    assert clipfolder.nudge_cloud() is None
+    assert seen["cmd"] == ["gh", "workflow", "run", "studio-drop.yml", "-f", "job=sweep"]
+    assert seen["cwd"] == Path(clipfolder.__file__).resolve().parents[1] and seen["cwd"].joinpath("bin", "studio").exists()
+    assert 0 < seen["timeout"] <= 60 and seen["capture_output"] is True and seen["stdin"] == subprocess.DEVNULL
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected"),
+    [
+        (FileNotFoundError("gh"), "gh not found"),
+        (subprocess.TimeoutExpired("gh", 30), "gh timed out"),
+        (PermissionError("gh: permission denied"), "gh could not run"),
+    ],
+)
+def test_nudge_cloud_reports_a_gh_that_cannot_run_and_never_raises(monkeypatch, failure, expected):
+    def broken(cmd, **kw):
+        raise failure
+
+    monkeypatch.setattr(clipfolder.subprocess, "run", broken)
+    assert expected in clipfolder.nudge_cloud()
+
+
+def test_nudge_cloud_reports_what_gh_said_when_it_fails(monkeypatch):
+    def refused(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 1, "", "HTTP 404: workflow studio-drop.yml not found\nsee gh help\n")
+
+    monkeypatch.setattr(clipfolder.subprocess, "run", refused)
+    why = clipfolder.nudge_cloud()
+    assert "HTTP 404" in why and "\n" not in why  # one line
+
+    def silent(cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 4, "", "")
+
+    monkeypatch.setattr(clipfolder.subprocess, "run", silent)
+    assert "4" in clipfolder.nudge_cloud()  # at least the exit status

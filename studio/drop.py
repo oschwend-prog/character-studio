@@ -72,6 +72,10 @@ hand with ``--qa-file``).
 for free and prints ``{"higgsfield": "ok|invalid: ..|error: ..|missing: ..", "gemini": ...}``, never the keys (the workflow's manual
 ``job: check-keys`` runs it with the GitHub secrets); exit 1 unless both are ``ok``.
 
+**The owner's clips folder** (Terminal v2): ``studio drop sync-folder`` (``studio/clipfolder.py``) turns each new video in the iCloud
+Drive folder into a file drop (no character: the studio recommends) and moves it to ``Added/``; after a run that added clips it
+wakes this workflow's sweep with ``gh workflow run`` (a failure of that is only reported: the 2-hourly sweep catches the drops).
+
 CLI (``studio drop ...``) prints JSON. Exit 0 when the step was recorded (whatever the drop's state), 1 when a job stopped on a
 failure it recorded (the JSON says), 2 for anything the caller must fix, 3 when the budget refused the reservation.
 """
@@ -89,7 +93,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, NoReturn
 
 import typer
 
@@ -1564,4 +1568,61 @@ def sweep_command(
             failed = True
     emit({"ran": len(results), "results": results})
     if failed:
+        raise typer.Exit(EXIT_FAILED)
+
+
+def _sync_stopped(error: BaseException) -> NoReturn:
+    """One line on stderr, exit 1: an unattended run (the LaunchAgent) must leave a readable log, never a traceback."""
+    what = str(error) if isinstance(error, (OSError, ValueError)) else f"{type(error).__name__}: {error}"
+    hint = " (macOS may be refusing access to iCloud Drive)" if isinstance(error, PermissionError) else ""
+    typer.echo(f"error: the clips sync stopped: {' '.join(what.split())[:300]}{hint}", err=True)
+    raise typer.Exit(EXIT_FAILED)
+
+
+@app.command("sync-folder")
+def sync_folder_command(
+    folder: Annotated[Path | None, typer.Option("--folder", help="The clips folder (default: ODD EYES clips in iCloud Drive).")] = None,
+    ledger: Annotated[
+        Path | None, typer.Option("--ledger", help="The ledger of the clips taken (default: ~/.local/state/odd-eyes/clips-ledger.json).")
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Only list what would be taken: nothing is uploaded, moved or written, iCloud is not asked.")
+    ] = False,
+    dispatch: Annotated[
+        bool, typer.Option("--dispatch/--no-dispatch", help="After a run that added clips, wake the cloud check (gh workflow run).")
+    ] = True,
+) -> None:
+    """Take the new videos of the owner's iCloud clips folder as file drops (no character: the studio recommends) and move them to
+    Added/. Exit 0 unless every file failed (1); a missing folder is 2 (run bin/install-clip-sync); any other error stops the run
+    with one line and exit 1. A second run at the same time does nothing."""
+    from studio import clipfolder  # here, not at the top: clipfolder imports this module
+
+    folder = folder if folder is not None else clipfolder.DEFAULT_FOLDER
+    ledger = ledger if ledger is not None else clipfolder.DEFAULT_LEDGER
+    try:
+        present = folder.is_dir()
+    except OSError as e:  # macOS refuses even the look at it
+        _sync_stopped(e)
+    if not present:
+        fail(f"no clips folder at {folder}: run bin/install-clip-sync")
+    if dry_run:  # no store, no storage, no lock: nothing is written
+        try:
+            result: dict[str, Any] = {"dry_run": True, **clipfolder.preview_folder(folder, ledger)}
+        except (OSError, ValueError) as e:
+            _sync_stopped(e)
+        emit({**result, "dispatched": False, "dispatch_error": None})
+        return
+    store, storage = open_store(), open_storage()  # outside the try: fail() is an exit, not an error to report
+    try:
+        with clipfolder.run_lock(ledger) as free:
+            if not free:
+                emit({"skipped_run": "another sync is running"})
+                return
+            result = clipfolder.sync_folder(store, storage, folder, ledger, now_london())
+    except Exception as e:  # whatever it is (a database error included) is one line in the log, never a traceback
+        _sync_stopped(e)
+    nudge = dispatch and bool(result["added"])  # once per run, and only when there is something new to check
+    dispatch_error = clipfolder.nudge_cloud() if nudge else None
+    emit({**result, "dispatched": nudge and dispatch_error is None, "dispatch_error": dispatch_error})
+    if clipfolder.every_file_failed(result):
         raise typer.Exit(EXIT_FAILED)
