@@ -1524,6 +1524,48 @@ def test_resolve_drop_needs_a_reason_and_refuses_a_post_that_was_ever_live(cli):
     assert cli.store.list_posts(id=p.id) != []
 
 
+@pytest.mark.parametrize("clip_state", [ClipState.rejected, ClipState.dropped])
+def test_resolve_drop_takes_a_scheduled_post_of_a_clip_that_is_no_longer_scheduled(cli, clip_state):
+    """An orphan: the clip was rejected / dropped after the post was scheduled, the publisher would refuse it."""
+    clip = cli.clip(state=clip_state)
+    p = cli.post(clip=clip)  # status scheduled
+    reason = cli.tmp / "reason.txt"
+    reason.write_text("old version, clip rejected; never posted\n", encoding="utf-8")
+    r = invoke("resolve", p.id, "--drop", "--reason-file", str(reason))
+    assert r.exit_code == 0, r.output
+    assert cli.store.list_posts(id=p.id) == []
+    assert cli.store.get_clip(clip.id).state is clip_state  # already final: nothing to reject
+    out = json.loads(r.stdout)
+    assert out["dropped"] == p.id and out["clip_state"] == clip_state.value
+
+
+def test_resolve_drop_still_refuses_a_scheduled_post_of_a_scheduled_clip(cli):
+    p = cli.post()  # scheduled, and so is its clip: not stuck, the publisher will send it
+    reason = cli.tmp / "reason.txt"
+    reason.write_text("why", encoding="utf-8")
+    r = invoke("resolve", p.id, "--drop", "--reason-file", str(reason))
+    assert r.exit_code == 2 and "scheduled" in r.output
+    assert cli.get(p).status is PostStatus.scheduled
+
+
+def test_resolve_drop_of_an_orphan_still_refuses_a_post_that_was_ever_live(cli):
+    p = cli.post(clip=cli.clip(state=ClipState.rejected))
+    cli.store.add_snapshot(Snapshot(post_id=p.id, views=10))
+    reason = cli.tmp / "reason.txt"
+    reason.write_text("why", encoding="utf-8")
+    r = invoke("resolve", p.id, "--drop", "--reason-file", str(reason))
+    assert r.exit_code == 2 and "snapshot" in r.output
+    assert cli.store.list_posts(id=p.id) != []
+
+
+def test_resolve_live_and_retry_still_refuse_a_scheduled_orphan(cli):
+    p = cli.post(clip=cli.clip(state=ClipState.rejected))
+    for flags in (["--live", "--platform-post-id", "pz-9"], ["--retry"]):
+        r = invoke("resolve", p.id, *flags)
+        assert r.exit_code == 2 and "scheduled" in r.output
+    assert cli.get(p).status is PostStatus.scheduled
+
+
 def test_resolve_is_in_the_publish_help():
     r = invoke("--help")
     assert r.exit_code == 0 and "resolve" in r.output

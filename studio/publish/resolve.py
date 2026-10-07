@@ -12,11 +12,15 @@ in the CLI could move them. After looking at the platform, the owner picks exact
   claim cleared) at ``--at`` (no offset = London) or its old time, so the next publish run (every 15 minutes in the evening window, else within 3 hours) publishes it.
 * ``--drop --reason-file F``: forget it. The never-posted row is deleted (refused when it has a platform
   id or any metrics snapshot: it was live). A clip left with no posts at all moves ``scheduled ->
-  rejected`` with the reason; a clip with other posts stays as it is.
+  rejected`` with the reason; a clip with other posts stays as it is. ``--drop`` also takes a
+  ``scheduled`` post whose clip is no longer ``scheduled`` (an orphan of a rejected / dropped clip that
+  the publisher would only refuse; ``studio.clips.transition`` now deletes those itself): the row goes,
+  the clip is already final and stays as it is.
 
-Only ``needs_check`` and ``failed`` posts can be resolved: a ``scheduled`` one is not stuck, a ``posting``
-one is in flight (it turns ``needs_check`` after 30 minutes), a ``posted`` one is settled. A wrong call
-changes nothing. Every function is one transaction.
+Only ``needs_check`` and ``failed`` posts can be resolved (``--drop`` also the orphan above): a
+``scheduled`` one of a ``scheduled`` clip is not stuck, a ``posting`` one is in flight (it turns
+``needs_check`` after 30 minutes), a ``posted`` one is settled. A wrong call changes nothing. Every
+function is one transaction.
 """
 
 from __future__ import annotations
@@ -31,13 +35,20 @@ from studio.store import Store, require_aware
 RESOLVABLE = (PostStatus.needs_check, PostStatus.failed)
 
 
-def _stuck_post(store: Store, post_id: str) -> Post:
+def _orphan(store: Store, post: Post) -> bool:
+    """A ``scheduled`` post whose clip is no longer ``scheduled``: the publisher would refuse it."""
+    clip = store.get_clip(post.clip_id)
+    return post.status is PostStatus.scheduled and (clip is None or clip.state is not ClipState.scheduled)
+
+
+def _stuck_post(store: Store, post_id: str, *, orphans: bool = False) -> Post:
     post = next(iter(store.list_posts(id=post_id)), None)
     if post is None:
         raise KeyError(post_id)
-    if post.status not in RESOLVABLE:
+    if post.status not in RESOLVABLE and not (orphans and _orphan(store, post)):
+        extra = " (--drop also takes a scheduled post whose clip is no longer scheduled)" if orphans else ""
         raise ValueError(
-            f"post {post.id} is {post.status.value}: only a needs_check or failed post can be resolved"
+            f"post {post.id} is {post.status.value}: only a needs_check or failed post can be resolved{extra}"
         )
     return post
 
@@ -88,12 +99,15 @@ def resolve_retry(store: Store, post_id: str, at: datetime | None = None) -> dic
 
 
 def resolve_drop(store: Store, post_id: str, reason: str) -> dict[str, Any]:
-    """Forget a post that never went out: delete the row; reject a clip left with no posts."""
+    """Forget a post that never went out: delete the row; reject a clip left with no posts.
+
+    Also takes a ``scheduled`` post of a clip that is no longer ``scheduled`` (an orphan): the clip stays as it is.
+    """
     reason = reason.strip()
     if not reason:
         raise ValueError("--reason-file is empty: say why the post is dropped")
     with store.transaction():
-        post = _stuck_post(store, post_id)
+        post = _stuck_post(store, post_id, orphans=True)
         if post.platform_post_id or store.snapshots_for(post.id):
             raise ValueError(
                 f"post {post.id} has a platform id or a metrics snapshot: it was "

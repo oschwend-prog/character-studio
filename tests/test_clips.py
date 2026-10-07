@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 
 import pytest
 from typer.testing import CliRunner
@@ -14,7 +15,8 @@ from studio.clips import (
     set_source,
     transition,
 )
-from studio.models import Body, Character, ClipState, Mode, Source, SourceKind
+from studio.config import LONDON
+from studio.models import Body, Character, ClipState, Mode, Post, Snapshot, Source, SourceKind
 from studio.store import MemoryStore
 
 S = ClipState
@@ -249,6 +251,81 @@ def test_transition_reads_and_writes_inside_one_transaction():
     events.clear()
     transition(store, clip.id, S.generating)
     assert events == ["begin", "get_clip", "update_clip", "end"]
+
+
+# ---- a clip that leaves `scheduled` for rejected / dropped takes its never-sent posts with it ------
+
+
+def scheduled_clip_with_posts(**posts: dict):
+    """A scheduled clip and one post per name in ``posts`` (the fields it is made with); {name: Post}."""
+    store, clip = fresh()
+    walk(store, clip.id, S.generating, S.generated, S.qa_passed, S.mastered, S.scheduled)
+    when = datetime(2026, 10, 7, 19, 30, tzinfo=LONDON)
+    made = {
+        name: store.add_post(Post(clip_id=clip.id, account_id=f"acct-{name}", scheduled_for=when, **fields))
+        for name, fields in posts.items()
+    }
+    return store, clip, made
+
+
+def test_rejecting_a_scheduled_clip_deletes_its_scheduled_and_failed_posts():
+    store, clip, p = scheduled_clip_with_posts(
+        due={}, broken={"status": "failed", "attempts": 3, "error": "boom"}
+    )
+    assert transition(store, clip.id, S.rejected, reject_reason="old version").state is S.rejected
+    assert store.list_posts(clip_id=clip.id) == []
+    assert store.list_posts(id=p["due"].id) == [] and store.list_posts(id=p["broken"].id) == []
+
+
+def test_rejecting_a_scheduled_clip_keeps_a_post_that_may_be_live():
+    store, clip, p = scheduled_clip_with_posts(
+        sending={"status": "posting"},
+        unsure={"status": "needs_check"},
+        live={"status": "posted", "platform_post_id": "pz-1"},
+        refused={"status": "failed", "platform_post_id": "pz-2"},  # a platform id: it went out
+        measured={"status": "failed"},
+        due={},
+    )
+    store.add_snapshot(Snapshot(post_id=p["measured"].id, views=10))  # a metrics reading: it was live
+    transition(store, clip.id, S.rejected, reject_reason="old version")
+    assert {x.id for x in store.list_posts(clip_id=clip.id)} == {
+        p[k].id for k in ("sending", "unsure", "live", "refused", "measured")
+    }
+
+
+def test_rejecting_a_scheduled_clip_leaves_the_posts_of_other_clips_alone():
+    store, clip, _ = scheduled_clip_with_posts(due={})
+    _, other = fresh(store)
+    walk(store, other.id, S.generating, S.generated, S.qa_passed, S.mastered, S.scheduled)
+    keep = store.add_post(
+        Post(clip_id=other.id, account_id="acct-due", scheduled_for=datetime(2026, 10, 7, 19, 30, tzinfo=LONDON))
+    )
+    transition(store, clip.id, S.rejected, reject_reason="old version")
+    assert [x.id for x in store.list_posts()] == [keep.id]
+
+
+def test_dropping_a_scheduled_clip_deletes_its_never_sent_posts(monkeypatch):
+    # the table has no scheduled -> dropped today; the rule follows the destination, not the table
+    monkeypatch.setitem(ALLOWED, S.scheduled, {S.posted, S.rejected, S.dropped})
+    store, clip, _ = scheduled_clip_with_posts(due={}, broken={"status": "failed"})
+    transition(store, clip.id, S.dropped, reject_reason="gone")
+    assert store.list_posts(clip_id=clip.id) == []
+
+
+def test_other_moves_out_of_scheduled_or_into_rejected_do_not_delete_posts():
+    store, clip, p = scheduled_clip_with_posts(live={"status": "posted", "platform_post_id": "pz-1"})
+    transition(store, clip.id, S.posted)
+    assert [x.id for x in store.list_posts(clip_id=clip.id)] == [p["live"].id]
+    store, clip = fresh()  # a clip rejected from awaiting_approval has no posts to take
+    walk(store, clip.id, S.generating, S.generated, S.qa_passed, S.mastered, S.awaiting_approval)
+    assert transition(store, clip.id, S.rejected, reject_reason="no").state is S.rejected
+
+
+def test_a_refused_transition_deletes_no_post():
+    store, clip, p = scheduled_clip_with_posts(due={})
+    with pytest.raises(IllegalTransition):
+        transition(store, clip.id, S.approved)  # scheduled -> approved is not allowed
+    assert [x.id for x in store.list_posts(clip_id=clip.id)] == [p["due"].id]
 
 
 # ---- set_fields (non-state fields, written directly) ------------------------------------------

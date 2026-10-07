@@ -12,7 +12,10 @@ Every clip walks one fixed path (``ALLOWED``); ``transition`` is the only way it
                                                                                scheduled once every post
                                                                                of the clip was dropped)
 
-``rejected``, ``posted`` and ``dropped`` are final: they have no entry in ``ALLOWED``.
+``rejected``, ``posted`` and ``dropped`` are final: they have no entry in ``ALLOWED``. A clip that leaves
+``scheduled`` for ``rejected`` / ``dropped`` takes its never-sent posts with it, in the same transaction
+(``scheduled`` / ``failed`` ones with no platform id and no metrics snapshot); a ``posting``, ``needs_check``
+or ``posted`` post stays, it may be live.
 
 **Re-rolls.** A clip that failed QA may go back to ``generating`` exactly once
 (``qa_failed -> generating``); ``features['rerolls']`` counts it and a second one raises
@@ -81,7 +84,7 @@ import typer
 from studio.captions import caption_length, compose_content
 from studio.cli_support import emit, fail, open_store, parse_when, text_option
 from studio.config import now_london
-from studio.models import MUSIC_ARMS, Clip, ClipState, Mode, Post
+from studio.models import MUSIC_ARMS, Clip, ClipState, Mode, Post, PostStatus
 from studio.planning import accounts_for_clip, free_slot, taken_days
 from studio.store import DuplicatePost, Store, require_aware
 
@@ -190,7 +193,21 @@ def transition(store: Store, clip_id: str, to: ClipState | str, **fields: Any) -
             if rerolls >= MAX_REROLLS:
                 raise IllegalTransition("max one re-roll")
             update["features"] = {**clip.features, "rerolls": rerolls + 1}
-        return store.update_clip(clip_id, state=to, **update)
+        moved = store.update_clip(clip_id, state=to, **update)
+        if clip.state is S.scheduled and to in (S.rejected, S.dropped):
+            _discard_unsent_posts(store, clip_id)
+        return moved
+
+
+def _discard_unsent_posts(store: Store, clip_id: str) -> None:
+    """Delete the posts of a clip that left ``scheduled`` for good and never went out: ``scheduled`` or ``failed``,
+    no platform id, no metrics snapshot. Otherwise the publisher would refuse each one (the clip is not scheduled)
+    and raise a failed-post alert for a post nobody wants. ``posting``, ``needs_check`` and ``posted`` may be live: kept."""
+    for post in store.list_posts(clip_id=clip_id):
+        if post.status in (PostStatus.scheduled, PostStatus.failed) and not (
+            post.platform_post_id or store.snapshots_for(post.id)
+        ):
+            store.delete_post(post.id)
 
 
 def set_fields(store: Store, clip_id: str, **fields: Any) -> Clip:

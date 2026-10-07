@@ -12,7 +12,8 @@ With the kill switch on, ``due`` claims nothing and prints ``"paused": true``.
 
 ``studio publish resolve <post>`` settles a ``needs_check`` / ``failed`` post by hand, with exactly one
 of ``--live --platform-post-id ID [--url U]``, ``--retry [--at ISO]``, ``--drop --reason-file F`` (see
-``studio.publish.resolve``); exit 2 for a wrong call, nothing written.
+``studio.publish.resolve``; ``--drop`` also takes a ``scheduled`` post whose clip is no longer ``scheduled``);
+exit 2 for a wrong call, nothing written.
 """
 
 from __future__ import annotations
@@ -83,10 +84,21 @@ def due_command(
 
 @app.command("resolve")
 def resolve_command(
-    post: Annotated[str, typer.Argument(help="Post id (a needs_check or failed post).")],
+    post: Annotated[
+        str,
+        typer.Argument(
+            help="Post id (a needs_check or failed post; with --drop also a scheduled post of a rejected/dropped clip)."
+        ),
+    ],
     live: Annotated[bool, typer.Option("--live", help="It is live on the platform: record it as posted.")] = False,
     retry: Annotated[bool, typer.Option("--retry", help="It is NOT live: send it again.")] = False,
-    drop: Annotated[bool, typer.Option("--drop", help="Forget it: delete the never-posted row.")] = False,
+    drop: Annotated[
+        bool,
+        typer.Option(
+            "--drop",
+            help="Forget it: delete the never-posted row (also a scheduled post whose clip is rejected or dropped).",
+        ),
+    ] = False,
     platform_post_id: Annotated[
         str | None, typer.Option("--platform-post-id", help="With --live: the Postiz post id (metrics use it).")
     ] = None,
@@ -99,7 +111,7 @@ def resolve_command(
     ] = None,
 ) -> None:
     """Settle a needs_check / failed post by hand, after looking at the platform. Exactly one of
-    --live, --retry, --drop."""
+    --live, --retry, --drop. --drop also clears a scheduled post whose clip is no longer scheduled (an orphan)."""
     if [live, retry, drop].count(True) != 1:
         fail("pass exactly one of --live, --retry, --drop")
     store = open_store()
