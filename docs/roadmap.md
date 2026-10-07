@@ -11,6 +11,17 @@ Order: get Biscuit + Reginald running on Instagram first, then expand.
 | 4 One character per niche | Dec-Jan | Library tests (Karen Supreme, Big Dave, Granny Gangster, Lola Luxe, The Sigma), Napoleon-type archetype, the Singer; events calendar (PFW, festivals); full loop scan -> check -> Make it -> master -> post | weekly digest, kill switch, new characters, spend above the cap |
 | 5 Make it pay | Q1 2027 | Brand marketplace, paid amplification, terminal subscription | brand deals, pricing |
 
+**Roster target (owner 2026-10-07): 10-12 characters live at once, not 15-30.** Reached step by step: 3 -> 5 by November
+(the owner's saved clips feed five), 5 -> 8 in Dec-Jan once the scan and autopilot run on their own, 10-12 in 2027. From
+then on, one new character a month gets a fair test (20 posts, 4 weeks): those that pass the promote bar stay, those under
+the kill bar are replaced. About 15-20 characters tested in 12 months, 3-5 winners expected. The limits are clip supply,
+account risk (one Accounts Centre), the number of niches with swappable clips (about 10-12) and craft, not money.
+Characters appear in each other's videos (crossovers) so each one's followers find the others.
+**Clip supply per character:** about 15 saved clips a month, not 30: 3 Drop-ins a week from clips (about 13 videos, 70% of
+clips usable, a long clip can give 2 windows), and from week 3 the other 2 weekdays are the character's own series
+(Recreates, no clip needed, 160 credits: e.g. Franz's "Sausage coming through!" entrances, Lenny's phone-call bits),
+which are also the format brands sponsor.
+
 Credits: one character posting Mon-Fri at 91 credits a video is about 2,000 credits a month; three fit under the 6,000 cap, five need about 10,000 (raise the cap and the plan in phase 3).
 
 ## Now: launch (Instagram)
