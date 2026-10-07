@@ -1,6 +1,13 @@
-# Publish due posts through Postiz (`studio publish due`): every 15 minutes through the evening posting window
-# (17:00-20:59 UTC), at 11:30 and 12:30 UTC for the midday slot, and every 3 hours otherwise, to stay inside GitHub's free
-# minutes (see below).
+# Publish due posts through Postiz (`studio publish due`).
+#
+# Primary trigger: the database. A pg_cron job (migration 0014_publish_timer.sql, `studio-publish-tick`, every 5 minutes)
+# sends a repository_dispatch of type `publish` as soon as a post is due (never more than once in 10 minutes, never while the
+# kill switch is on). GitHub's own `schedule` is best-effort: on 2026-10-07 it skipped every run between 18:53 and 21:00
+# London and the first 19:30 post went out late, so posting no longer depends on it.
+#
+# Fallback: the schedule below stays, every 15 minutes through the evening posting window (17:00-20:59 UTC), at 11:30 and
+# 12:30 UTC for the midday slot, and every 3 hours otherwise, to stay inside GitHub's free minutes (see below). A dispatch
+# starts the workflow file of the DEFAULT branch only, so this file must be merged there for the timer to work.
 #
 # Secrets (repo secrets, added by the owner at go-live): DATABASE_URL, SUPABASE_URL,
 # SUPABASE_SERVICE_KEY, POSTIZ_API_KEY. Until DATABASE_URL exists the job prints a notice and
@@ -21,10 +28,14 @@ on:
     - cron: '*/15 17-20 * * *'
     - cron: '30 11,12 * * *'
     - cron: '40 */3 * * *'
+  # Started by the database timer (studio.publish_tick, event_type `publish`); the same job as a scheduled run.
+  repository_dispatch:
+    types: [publish]
   workflow_dispatch:
 
 # One publisher at a time. A run that is still going when the next tick fires is never cancelled:
-# cancelling mid-post is exactly how a post would be left half done.
+# cancelling mid-post is exactly how a post would be left half done. A dispatched run and a scheduled run share this group,
+# so they never post in parallel (publish is claim-safe as well: a post is claimed by exactly one runner).
 concurrency:
   group: publish
   cancel-in-progress: false

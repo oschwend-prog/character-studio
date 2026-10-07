@@ -1182,3 +1182,146 @@ def test_0013_set_drop_character_clears_the_old_characters_check_and_asks_for_it
     from studio import drop
 
     assert drop.CHARACTER_BY == ("owner", "studio")
+
+
+# ---- 0014: the publish timer (a database job starts the publish workflow when a post is due) ------------------------------------
+
+TIMER_PATH = MIGRATIONS / "0014_publish_timer.sql"
+TIMER_SQL = TIMER_PATH.read_text()
+TIMER_CODE = re.sub(r"--[^\n]*", "", TIMER_SQL)
+WORKFLOWS_DIR = Path(__file__).resolve().parents[1] / ".github" / "workflows"
+
+
+def _do_blocks(code: str) -> list[str]:
+    return re.findall(r"do \$\$.*?\n\$\$;", code, re.S)
+
+
+def test_0014_is_the_timer_table_two_functions_their_grants_and_the_cron_job_only():
+    code = re.sub(r"create or replace function studio\.\w+\(.*?\n\$\$;", "", TIMER_CODE, flags=re.S)
+    code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
+    statements = [" ".join(s.split()) for s in code.split(";") if s.strip()]
+    assert statements == [
+        "create table studio.timer_state ( name text primary key, last_at timestamptz )",
+        "alter table studio.timer_state enable row level security",
+        "revoke all on function studio.dispatch_publish() from public",
+        "revoke all on function studio.publish_tick() from public",
+        "revoke all on studio.timer_state from public",
+    ]
+    assert re.findall(r"create or replace function studio\.(\w+)", TIMER_CODE) == ["dispatch_publish", "publish_tick"]
+    assert len(_do_blocks(TIMER_CODE)) == 3  # pg_cron where the database has it; the role revokes; the job
+    assert not re.search(r"\b(truncate|delete|drop|rename|create policy|grant)\b", TIMER_CODE, re.I)
+    assert not re.search(r"\balter\s+column\b", TIMER_CODE, re.I)
+    # outside schema studio: the Vault view and pg_net's http_post (as 0012's request_job) and the cron schema (pg_cron)
+    outside = set(re.findall(r"\b(?:public|auth|storage|extensions|vault|net|cron)\.[a-z_]+", TIMER_CODE))
+    assert outside == {"vault.decrypted_secrets", "net.http_post", "cron.job", "cron.unschedule", "cron.schedule"}
+    # the migration stays clear of the words tests/test_schema's global checks search every migration for
+    assert not re.search(r"\b(?:public|auth|storage|extensions)\.[a-z_]+", TIMER_SQL)
+
+
+def test_0014_both_functions_are_security_definers_with_a_fixed_path_and_qualified_names():
+    for name in ("dispatch_publish", "publish_tick"):
+        body = _function(TIMER_SQL, name)
+        assert f"studio.{name}()" in body and "returns jsonb" in body
+        assert "security definer" in body and "set search_path = ''" in body and "security invoker" not in body
+        for schema, _ in re.findall(r"\b(?:from|update|into|join)\s+(\w+)\.(\w+)", body):
+            assert schema in ("studio", "vault", "pg_catalog"), (name, schema)
+
+
+def test_0014_dispatch_publish_mirrors_request_jobs_dispatch_and_never_exposes_the_token():
+    body = _function(TIMER_SQL, "dispatch_publish")
+    old = _function(DROPVIDEO_SQL, "request_job")
+    # the same endpoint, Vault secret, headers and timeout as 0012's request_job, with its own event type
+    for same in (
+        "url := 'https://api.github.com/repos/oschwend-prog/character-studio/dispatches'",
+        "select s.decrypted_secret into token from vault.decrypted_secrets s where s.name = 'github_dispatch_token' limit 1;",
+        "headers := jsonb_build_object('Authorization', 'Bearer ' || token, 'Accept', 'application/vnd.github+json',",
+        "'X-GitHub-Api-Version', '2022-11-28', 'User-Agent', 'odd-eyes-studio',",
+        "'Content-Type', 'application/json'),",
+        "timeout_milliseconds := 5000",
+        "to_regclass('vault.decrypted_secrets')",
+    ):
+        assert same in body and same in old, same
+    assert "body := jsonb_build_object('event_type', 'publish')" in body
+    assert "client_payload" not in body  # the workflow needs no payload: it publishes whatever is due
+    # the id of the queued pg_net request is returned (to look up GitHub's answer in net._http_response), never the token
+    assert "req := net.http_post(" in body and "return jsonb_build_object('dispatched', true, 'request_id', req);" in body
+    for returned in re.findall(r"return [^;]*;", body):
+        assert "token" not in re.sub(r"'(?:[^']|'')*'", "''", returned), returned  # a reason word is not the value
+        assert "sqlerrm" not in returned.lower(), returned
+    assert "raise" not in body and "notice" not in body.lower() and "sqlerrm" not in body.lower()
+    # a failure is swallowed with the token cleared, and the token is cleared on the way out
+    assert "exception when others then\n    token := null;\n    return jsonb_build_object('dispatched', false, 'reason', 'dispatch_failed');" in body
+    assert body.split("end;\n  token := null;", 1)[1].count("token") == 0
+    # nothing else in the function touches the token but its declaration, the select, the check, the header and the two clearings
+    uses = [" ".join(line.split()) for line in re.sub(r"'(?:[^']|'')*'", "''", re.sub(r"--[^\n]*", "", body)).splitlines() if "token" in line]
+    assert uses == [
+        "token text;", "select s.decrypted_secret into token from vault.decrypted_secrets s where s.name = '' limit 1;",
+        "if coalesce(token, '') = '' then", "headers := jsonb_build_object('', '' || token, '', '',", "token := null;", "token := null;",
+    ]  # fmt: skip
+
+
+def test_0014_publish_tick_dispatches_only_when_a_post_is_due_and_not_twice_in_ten_minutes():
+    body = _function(TIMER_SQL, "publish_tick")
+    due = "select count(*) into due_n from studio.posts p where p.status = 'scheduled' and p.scheduled_for <= now();"
+    assert due in body  # the publisher's own claim predicate (PostgresStore.claim_due_posts)
+    nothing = "return jsonb_build_object('dispatched', false, 'due', 0, 'reason', 'nothing_due');"
+    kill = "select st.kill_switch into paused from studio.settings st where st.id = 1;"
+    lock = "select t.last_at into last_ from studio.timer_state t where t.name = 'publish_dispatch' for update;"
+    recent = "if last_ is not null and last_ > now() - interval '10 minutes' then"
+    call = "sent := studio.dispatch_publish();"
+    marker = "update studio.timer_state t set last_at = now() where t.name = 'publish_dispatch';"
+    assert body.index(due) < body.index(nothing) < body.index(kill) < body.index(lock) < body.index(recent) < body.index(call) < body.index(marker)
+    assert "if due_n = 0 then" in body and "if coalesce(paused, false) then" in body and "'reason', 'kill_switch'" in body
+    assert "'reason', 'recent_dispatch'" in body
+    assert body.count("studio.dispatch_publish()") == 1  # the one and only dispatch
+    # the time is stored only when the dispatch was really queued, so a missing token retries on the next tick
+    assert "if coalesce((sent ->> 'dispatched')::boolean, false) then\n    " + marker in body
+    assert body.count("last_at = now()") == 1
+    assert "insert into studio.timer_state (name) values ('publish_dispatch') on conflict (name) do nothing;" in body
+    assert "return sent || jsonb_build_object('due', due_n);" in body
+    # the publisher does nothing while the kill switch is on (studio.publish.base.publish_due), so neither does the timer
+    from studio.publish import base
+
+    assert "if settings.kill_switch:" in Path(base.__file__).read_text(encoding="utf-8")
+
+
+def test_0014_the_last_dispatch_time_lives_in_a_tiny_table_of_its_own_that_no_api_role_can_touch():
+    assert "create table studio.timer_state (\n  name    text primary key,\n  last_at timestamptz\n);" in TIMER_CODE
+    assert "alter table studio.timer_state enable row level security;" in TIMER_CODE
+    assert "create policy" not in TIMER_CODE.lower() and not re.search(r"\bgrant\b", TIMER_CODE)
+    # studio.settings is typed columns plus a cadence keyed by character slug: there is no free-form place for a timer
+    assert re.search(r"create table studio\.settings \(.*?cadence\s+jsonb not null default '\{\}'::jsonb\n\);", SQL, re.S)
+    revoke = [b for b in _do_blocks(TIMER_CODE) if "revoke" in b]
+    assert len(revoke) == 1
+    assert "array['anon', 'authenticated', 'service_role']" in revoke[0] and "from pg_catalog.pg_roles where rolname = r" in revoke[0]
+    for what in ("function studio.dispatch_publish()", "function studio.publish_tick()", "studio.timer_state"):
+        assert f"execute format('revoke all on {what} from %I', r);" in revoke[0], what
+
+
+def test_0014_the_cron_job_runs_every_five_minutes_by_name_and_is_never_duplicated():
+    job = [b for b in _do_blocks(TIMER_CODE) if "cron.schedule" in b]
+    assert len(job) == 1
+    job = job[0]
+    schedule = "perform cron.schedule('studio-publish-tick', '*/5 * * * *', 'select studio.publish_tick()');"
+    assert job.count("cron.schedule(") == 1 and schedule in job
+    # guarded: only where pg_cron exists, and an existing job of that name is unscheduled first
+    assert job.index("if to_regclass('cron.job') is not null then") < job.index("cron.unschedule") < job.index("cron.schedule(")
+    assert "if exists (select 1 from cron.job j where j.jobname = 'studio-publish-tick') then\n      perform cron.unschedule('studio-publish-tick');" in job
+    # pg_cron itself is enabled only where the database offers it (a plain Postgres test database does not)
+    ext = [b for b in _do_blocks(TIMER_CODE) if "create extension" in b]
+    assert len(ext) == 1 and "pg_available_extensions where name = 'pg_cron'" in ext[0] and "create extension if not exists pg_cron;" in ext[0]
+    # the extension and the table exist before the job is scheduled; the grants come before the job too
+    assert TIMER_CODE.index("create extension") < TIMER_CODE.index("create table studio.timer_state") < TIMER_CODE.index("cron.schedule(")
+    assert TIMER_CODE.index("revoke all on function studio.publish_tick() from public") < TIMER_CODE.index("cron.schedule(")
+    # the file says how to switch it off
+    assert "select cron.unschedule('studio-publish-tick');" in TIMER_SQL
+    # a post is picked up within one tick, and the 10 minute guard spans two ticks (the tick is not the bottleneck)
+    minutes = 5
+    assert "'*/5 * * * *'" in schedule and 10 // minutes == 2
+
+
+def test_0014_the_dispatch_event_is_the_one_publish_yml_listens_for():
+    workflow = (WORKFLOWS_DIR / "publish.yml").read_text(encoding="utf-8")
+    assert re.search(r"(?m)^  repository_dispatch:\n    types: \[publish\]$", workflow)
+    assert "body := jsonb_build_object('event_type', 'publish')" in TIMER_CODE
+    assert "oschwend-prog/character-studio/dispatches" in TIMER_CODE

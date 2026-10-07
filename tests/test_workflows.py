@@ -233,3 +233,22 @@ def test_drop_secrets_reach_only_the_job_that_needs_them():
         assert names <= {"DATABASE_URL"}, block[:60]  # the pending count reads the database, nothing else
     assert "env:" not in text("studio-drop").split("    steps:")[0].split("jobs:")[1]
     assert set(re.findall(r"secrets\.([A-Z_]+)", text("studio-drop"))) == set(DROP_SECRETS)
+
+
+# ---- publish: started by the database timer (migration 0014), with GitHub's own schedule as the fallback ------------------------
+
+
+def test_publish_is_started_by_the_database_timers_dispatch_and_keeps_the_schedule_as_the_fallback():
+    """GitHub's scheduler skipped every run between 18:53 and 21:00 London on 2026-10-07 (the 19:30 post went out late): a pg_cron
+    job (studio.publish_tick) sends a repository_dispatch of type `publish` when a post is due. The schedule stays."""
+    t = text("publish")
+    assert re.search(r"(?m)^  repository_dispatch:\n    types: \[publish\]$", t)
+    assert re.search(r"(?m)^  workflow_dispatch:", t)
+    assert re.findall(r"- cron: '([^']+)'", t) == list(SPEC["publish"][0])  # the fallback is unchanged
+    # the dispatch and the schedule share the one non-cancelling group: they never post in parallel
+    assert re.search(r"(?m)^concurrency:\n  group: publish\n  cancel-in-progress: false$", t)
+    # the event type is the one the migration's dispatch_publish() sends
+    migration = (Path(__file__).resolve().parents[1] / "supabase" / "migrations" / "0014_publish_timer.sql").read_text(encoding="utf-8")
+    assert "jsonb_build_object('event_type', 'publish')" in migration
+    # a dispatch carries no payload the job needs: the command is the same for every trigger and nothing reads client_payload
+    assert "client_payload" not in "\n".join(line for line in t.splitlines() if not line.lstrip().startswith("#"))

@@ -142,6 +142,9 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
     # 0013 (the character of a drop): add_drop re-created with the character optional (it exists after 0012 already) and
     # set_drop_character, the owner's menu on a row of the drops table: the new function is what tells 0013 from 0012.
     "0013": (("function", "add_drop"), ("function", "set_drop_character")),
+    # 0014 (the publish timer): timer_state (where the last dispatch time lives) and the two functions the pg_cron job
+    # `studio-publish-tick` calls. The job itself lives in schema cron, which the probe does not read.
+    "0014": (("table", "timer_state"), ("function", "dispatch_publish"), ("function", "publish_tick")),
 }
 
 PROBE_SQL = """
