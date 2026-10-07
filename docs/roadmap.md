@@ -51,3 +51,20 @@ Order: get Biscuit + Reginald running on Instagram first, then expand.
   and Gemini costs per video, multi-user accounts (today the terminal is single-owner by design), each customer's own
   Higgsfield/Postiz keys, and platform rules on AI labels. Our own channels are the demo.
 - Related parked idea: the 10-character library `docs/influencers/2026-10-06-character-library-v1.md`.
+
+## Long term: a fully autonomous studio, one character per niche (owner, 2026-10-07)
+- Owner: "this could run totally autonomously long term: a character per niche, scanning social media for adequate videos
+  within that niche or that are matching, then generating the content and uploading it. It could even say, for example,
+  right now it's PFW in Paris, so I will upload stories around that in Paris for that weekend, so it looks more live and cool."
+- What it means for the studio (notes for when we pick it up, not decisions):
+  - **One character per niche:** each character owns a niche (dogs, butlers/deadpan, Hollywood/business, DJ/club, fashion,
+    sport ...) with its own scan profile (`config/scan.json` themes, the bible's `## Scan profile`) and fit scoring.
+  - **Autonomous loop:** scan → pick the clips that fit the character → free check → Make it → master → post, with the
+    owner's approval switched off per account only after the autopilot gate (6 approved posts, KPI bars binding) and the
+    monthly credit cap as the hard brake. Today's launch phase (owner drops only, auto-approve off) is the first step.
+  - **Event awareness ("looks live"):** an events calendar (fashion weeks, festivals, award shows, big matches, holidays) that
+    steers the scan and the settings: e.g. Paris Fashion Week → the character "is in Paris" that weekend: Paris-set
+    Recreates or Drop-ins of PFW clips, Stories from the city, captions in the moment. Needs: a calendar source, a
+    Stories publishing path (Postiz/Instagram Stories), location-true settings without real-person likeness or brands.
+  - **Guardrails stay:** AI label on everything, no real person's likeness, the never-scrape rule (the scan files picks;
+    a fetch takes one approved pick), at most 2 posts per account per day, the credit cap.

@@ -20,11 +20,11 @@ Biscuit is retired (C5) and `biscuit.moves` is a live, Postiz-connected Instagra
 **Owner 2026-10-07: Franz is the happy show-off, not posh, so "Posh" no longer fits.** Instagram allows only two name changes per 14 days and both were used on 6 Oct, so the name cannot change until about 20 Oct. Then suggest **Franz · Party Sausage 👑**.
 
 ## Bio
-- **Instagram, suggestion for the happy show-off (owner 2026-10-07; the owner still chooses the bio) (113 of 150 characters):**
-  The happiest sausage on the dance floor 👑
-  Short legs, big moves. Sausage coming through!
+- **Instagram (OWNER'S PICK 2026-10-07, option 1):**
+  Short legs. Huge ego. Zero chill. 👑
+  Sausage coming through!
   AI-generated character 🤖
-- **TikTok, suggestion (52 of 80):** Happiest sausage on the dance floor 👑 · AI character
+- **TikTok (52 of 80):** Short legs. Huge ego. Zero chill. 👑 · AI character
 - *Before 2026-10-07 (posh Franz, superseded):* "Old money. Short legs. Permanently unimpressed. 👑 One does not walk. One arrives. AI-generated character 🤖"
 
 ## Profile picture
