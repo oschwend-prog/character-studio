@@ -164,6 +164,14 @@ describe('the words on a card', () => {
     expect(trackerTitle(row())).toBe('Hop and lasso');
     expect(trackerTitle(row({ concept: null }))).toBe('“oppan sausage style”');
   });
+
+  it('names a dropped video "Your video" or "Your link", never its internal key, when the check has not written a concept yet', () => {
+    const key = 'owner-drop:abc';
+    expect(trackerTitle(row({ url: key, concept: null, hook: null, drop_card: { state: 'making', kind: 'file' } }))).toBe('Your video');
+    expect(trackerTitle(row({ url: key, concept: null, hook: null, drop_card: { state: 'making', kind: 'link' } }))).toBe('Your link');
+    expect(trackerTitle(row({ url: key, concept: 'A man spins\nmore', drop_card: { state: 'making' } }))).toBe('A man spins'); // the check's sentence first
+    expect(trackerTitle(row({ concept: null, hook: null, drop_card: null }))).toMatch(/^https:/); // a scan pick still falls back to its url
+  });
 });
 
 // ---- the demo shows every step and every flag ----------------------------------------------------------------------------------------

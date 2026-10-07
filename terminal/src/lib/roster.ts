@@ -2,6 +2,7 @@
 // kept for his history); the Borat-type joins once he is named (`characters/<slug>/`). The database (v_characters) is the truth:
 // these are only the owner's order, the names and liveries of the known slugs, and the fallback while nothing has loaded. A slug
 // the terminal has never heard of still works everywhere: a title-cased name, a three-letter code and the neutral livery.
+import type { Channel, Character } from './types';
 
 export interface RosterEntry {
   slug: string;
@@ -51,4 +52,40 @@ export function orderRoster<T extends { slug: string; status?: string | null }>(
 export function activeRoster(characters: ReadonlyArray<{ slug: string; name: string; status?: string | null }> | null | undefined): RosterEntry[] {
   const list = characters?.length ? orderRoster(characters).filter((c) => !isPaused(c)) : ROSTER;
   return list.map((c) => ({ slug: c.slug, name: c.name }));
+}
+
+export interface CharacterCard {
+  slug: string;
+  name: string;
+  status: string;
+  /** His accounts' handles (instagram, then tiktok): the seeded one of each platform, else the planned one (`planned`) until the account exists. */
+  handles: { platform: 'instagram' | 'tiktok'; handle: string; planned: boolean }[];
+  /** The soonest slot still ahead on his connected accounts (ISO); null when no account of his is connected or has a slot. */
+  nextSlot: string | null;
+}
+
+/**
+ * The Characters page's cards in the owner's order (the roster, then others by slug, a paused one last): name, status, handles and
+ * the next slot, which is the soonest `next_slot` still ahead among his connected channels (a slot in the past is stale).
+ */
+export function characterCards(
+  characters: ReadonlyArray<Pick<Character, 'slug' | 'name' | 'status' | 'accounts' | 'setup'>>,
+  channels: ReadonlyArray<Pick<Channel, 'character_slug' | 'connected' | 'next_slot'>>,
+  now: number,
+): CharacterCard[] {
+  return orderRoster(characters).map((c) => {
+    // per platform, instagram first: the seeded handle, else the planned one until the account exists
+    const handles = (['instagram', 'tiktok'] as const).flatMap((platform) => {
+      const seeded = c.accounts.find((a) => a.platform === platform && a.handle?.trim())?.handle?.trim();
+      if (seeded) return [{ platform, handle: seeded, planned: false }];
+      const planned = c.setup?.planned_handles?.[platform]?.trim();
+      return planned ? [{ platform, handle: planned, planned: true }] : [];
+    });
+    const slots = channels
+      .filter((ch) => ch.character_slug === c.slug && ch.connected && ch.next_slot)
+      .map((ch) => ch.next_slot as string)
+      .filter((at) => Date.parse(at) > now)
+      .sort((a, b) => Date.parse(a) - Date.parse(b));
+    return { slug: c.slug, name: c.name, status: c.status, handles, nextSlot: slots[0] ?? null };
+  });
 }

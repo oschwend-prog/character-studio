@@ -1,4 +1,4 @@
-// The picks on their way, as cards (moved here from the old "In the works" page for Videos > Making): grouped by character and
+// The picks on their way, as cards (moved here from the old "In the works" page, now Videos > Making): grouped by character and
 // sorted by slot, else by when they were approved (v_tracker, migration 0010). Per card: the picture, what it is, the 8-step
 // progress (done ticked, the current one lit, the rest muted), how long it has been at that step, the credits spent so far, and a
 // red flag with the reason when it is stuck or something failed. The steps and flags come from trackerStep (lib/tracker.ts).
@@ -32,7 +32,7 @@ export function WorkCards({ rows, now }: { rows: ReadonlyArray<TrackerRow>; now:
             <h3 className="h2" id={`works-${g.slug ?? 'none'}`}>
               {g.slug ? <a className="name-link" href={href('artist', g.slug)}>{g.name}</a> : g.name}
             </h3>
-            <span className="stage-count num on" aria-label={`${g.rows.length} in the works`}>{g.rows.length}</span>
+            <span className="stage-count num on" aria-label={`${g.rows.length} making`}>{g.rows.length}</span>
           </header>
           <div className="picks-grid stack" style={{ gap: 12 }}>
             {g.rows.map((r) => <WorkCard key={r.pick_id} row={r} now={now} />)}
@@ -92,7 +92,7 @@ export function WorkCard({ row, now }: { row: TrackerRow; now: number }) {
           <div className="work-links">
             {s.action === 'queue' && row.clip_id && (
               <a className="btn primary" href={href('videos', row.clip_id)}>
-                Review in Queue
+                Review in Videos
               </a>
             )}
             {s.step === 8 && row.post_url && /^https:/.test(row.post_url) && (

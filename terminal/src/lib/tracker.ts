@@ -1,7 +1,7 @@
 // "In the works": where each approved pick is on its way to being posted. Pure functions over v_tracker rows (migration 0010): the
 // 8-step mapping with its flags, who is listed (a posted one stays 7 days), the order, the grouping by character and the words the
 // card shows. No browser.
-import { dropCredits, dropLine, isStaleUpload } from './drop';
+import { dropCredits, dropLine, dropTitle, isStaleUpload } from './drop';
 import { londonTime, londonWeekday } from './format';
 import { MUSIC_OPTIONS, defaultMusicForMode, tierOf } from './rules';
 import type { OwnerMode, OwnerMusic, Tier, TrackerRow } from './types';
@@ -242,10 +242,12 @@ export function musicLabel(r: Pick<TrackerRow, 'owner_music' | 'clip_mode' | 'ow
   return MUSIC_OPTIONS.find((o) => o.id === music)?.name.replace(' (default)', '') ?? music;
 }
 
-/** The card's title: the concept's first line, else the hook, else the URL. */
-export function trackerTitle(r: Pick<TrackerRow, 'concept' | 'hook' | 'url'>): string {
+/** The card's title: the concept's first line, else the hook, else the URL; a dropped video never shows its internal key ("Your video"). */
+export function trackerTitle(r: Pick<TrackerRow, 'concept' | 'hook' | 'url' | 'drop_card'>): string {
   const line = (r.concept ?? '').split(/\r?\n/).map((l) => l.trim()).find(Boolean);
-  return line || (r.hook ? `“${r.hook}”` : r.url);
+  if (line) return line;
+  if (r.drop_card) return dropTitle(r);
+  return r.hook ? `“${r.hook}”` : r.url;
 }
 
 /** The tier of a tracker row (the analyst's, else worked out from the numbers like a pick card). */

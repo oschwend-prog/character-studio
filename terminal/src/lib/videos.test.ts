@@ -1,6 +1,7 @@
 // Terminal v2, Videos page: what is being made and what is scheduled. Pure functions over the snapshot.
 import { describe, expect, it } from 'vitest';
-import { isTrackerRow, videoGroups } from './videos';
+import { artistGroups, artistVideos } from './artist';
+import { clipPlatforms, isTrackerRow, slotTime, videoGroups } from './videos';
 import type { ClipState, DropCard, DropState, LibraryClip, LibraryPost, Snapshot, TrackerRow } from './types';
 
 const NOW = Date.parse('2026-10-07T12:00:00Z');
@@ -121,5 +122,93 @@ describe('isTrackerRow', () => {
   it('tells a tracker row from a library clip', () => {
     expect(isTrackerRow(row(null))).toBe(true);
     expect(isTrackerRow(clip('c', 'planned'))).toBe(false);
+  });
+});
+
+describe('slotTime', () => {
+  it('is the first live slot (else the first post), null when no post has a time', () => {
+    expect(slotTime(clip('a', 'scheduled', { posts: [post(ahead(9)), post(ahead(5), { platform: 'instagram' })] }))).toBe(ahead(5));
+    expect(slotTime(clip('b', 'scheduled', { posts: [post(ago(40), { status: 'failed' }), post(ahead(12))] }))).toBe(ahead(12));
+    expect(slotTime(clip('c', 'posted', { posts: [post(ago(3), { status: 'posted' }), post(ago(2), { status: 'posted' })] }))).toBe(ago(3));
+    expect(slotTime(clip('d', 'approved'))).toBeNull();
+    expect(slotTime(clip('e', 'approved', { posts: [post('not a time')] }))).toBeNull();
+  });
+});
+
+describe('clipPlatforms', () => {
+  it('is where the posts go, each platform once, else the clip’s own list', () => {
+    expect(clipPlatforms(clip('a', 'scheduled', { posts: [post(ahead(5)), post(ahead(6), { platform: 'instagram' }), post(ahead(7))] }))).toEqual(['instagram', 'tiktok']);
+    expect(clipPlatforms(clip('b', 'approved', { platforms: ['tiktok'] }))).toEqual(['tiktok']);
+    expect(clipPlatforms(clip('c', 'approved'))).toEqual([]);
+  });
+});
+
+describe("the artist page's three groups (artistVideos, artistGroups)", () => {
+  it('lists Scheduled with the soonest slot first, where it goes and the clips without a slot last, other characters left out', () => {
+    const data = snapshot({
+      library: [
+        clip('later', 'scheduled', { posts: [post(ahead(30))] }),
+        clip('soon', 'scheduled', { posts: [post(ahead(7)), post(ahead(7.5), { platform: 'instagram' })] }),
+        clip('no-slot', 'approved'),
+        clip('franz-one', 'scheduled', { character_slug: 'franz', posts: [post(ahead(2))] }),
+        clip('done', 'posted', { posts: [post(ago(3), { status: 'posted' })], posted_at: ago(3), views: 1200 }),
+      ],
+    });
+    const v = artistVideos('reginald', data, NOW);
+    expect(v.scheduled.map((x) => [x.id, x.where, x.at])).toEqual([
+      ['soon', 'Scheduled', ahead(7)], ['later', 'Scheduled', ahead(30)], ['no-slot', 'Approved', null],
+    ]);
+    expect(v.scheduled[0].platforms).toEqual(['instagram', 'tiktok']);
+    expect(v.scheduled.every((x) => x.route === 'library')).toBe(true);
+    expect(v.stats).toMatchObject({ scheduled: 3, posted: 1, views: 1200 });
+    expect(artistVideos('franz', data, NOW).scheduled.map((x) => x.id)).toEqual(['franz-one']);
+  });
+
+  it('lists a clip once: a tracker row whose clip waits for the OK, is scheduled or posted gives way to the clip', () => {
+    const making = row(card('making'), { clip_id: 'c1', clip_state: 'generating' });
+    const atOk = row(card('made'), { clip_id: 'c2', clip_state: 'awaiting_approval' });
+    const booked = row(card('made'), { clip_id: 'c3', clip_state: 'scheduled', status: 'made' });
+    const sent = row(null, { clip_id: 'c4', clip_state: 'posted', status: 'made', post_status: 'posted', post_posted_at: ago(5) });
+    const ready = row(card('ready', { character_by: 'owner' }));
+    const data = snapshot({
+      tracker: [making, atOk, booked, sent, ready],
+      queue: [{ id: 'c2', character_slug: 'reginald', hook: 'two' } as unknown as Snapshot['queue'][number]],
+      library: [
+        clip('c1', 'generating'), clip('c2', 'awaiting_approval'), clip('c3', 'scheduled', { posts: [post(ahead(3))] }),
+        clip('c4', 'posted', { posted_at: ago(5), posts: [post(ago(5), { status: 'posted' })] }),
+      ],
+    });
+    const v = artistVideos('reginald', data, NOW);
+    expect(v.works.map((x) => x.id)).toEqual([making.pick_id, ready.pick_id]); // c2, c3 and c4 are listed by their own groups
+    expect(v.queue.map((x) => x.id)).toEqual(['c2']);
+    expect(v.scheduled.map((x) => x.id)).toEqual(['c3']);
+    expect(v.posted.map((x) => x.id)).toEqual(['c4']);
+    const ids = [...v.works, ...v.queue, ...v.scheduled, ...v.posted].map((x) => x.id);
+    expect(ids).toHaveLength(5);
+    expect(new Set(ids).size).toBe(5);
+  });
+
+  it('sends each row where it is: a making clip to Videos, a drop before Make it to Clips', () => {
+    const making = row(card('making'), { clip_id: 'c1', clip_state: 'generating', concept: 'He spins' });
+    const ready = row(card('ready', { character_by: 'owner' }));
+    const checking = row(card('checking'));
+    const v = artistVideos('reginald', snapshot({ tracker: [making, ready, checking], library: [clip('c1', 'generating')] }), NOW);
+    expect(v.works.map((x) => [x.route, x.where])).toEqual([['making', 'Generating'], ['works', 'Ready'], ['works', 'Checking']]);
+    expect(v.works[0].title).toBe('He spins');
+    expect(v.works[1].title).toBe('Your video'); // never the internal owner-drop: key
+  });
+
+  it('groups them Live, Scheduled, In the making (his OK first, then the steps)', () => {
+    const making = row(card('making'), { clip_id: 'c1', clip_state: 'generating' });
+    const v = artistVideos('reginald', snapshot({
+      tracker: [making],
+      queue: [{ id: 'c2', character_slug: 'reginald', hook: 'two' } as unknown as Snapshot['queue'][number]],
+      library: [clip('c1', 'generating'), clip('c2', 'awaiting_approval'), clip('c3', 'scheduled', { posts: [post(ahead(3))] }), clip('c4', 'posted', { posted_at: ago(5) })],
+    }), NOW);
+    const g = artistGroups(v);
+    expect(g.making.map((x) => x.route)).toEqual(['queue', 'making']);
+    expect(g.scheduled.map((x) => x.id)).toEqual(['c3']);
+    expect(g.live.map((x) => x.id)).toEqual(['c4']);
+    expect(artistGroups(artistVideos('nobody', snapshot(), NOW))).toEqual({ live: [], scheduled: [], making: [] });
   });
 });

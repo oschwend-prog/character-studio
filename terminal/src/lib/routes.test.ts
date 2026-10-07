@@ -2,7 +2,7 @@
 // (terminal v2 spec part B; owner 2026-10-07). Pure helpers only: vitest runs in node, there is no DOM.
 import { describe, expect, it } from 'vitest';
 import { HOME, ROUTES, href, parseHash, upgradeHash } from './hooks';
-import { TABS } from './tabs';
+import { CHARACTERS_VIEWS, MORE_VIEWS, TABS, charactersView, moreView } from './tabs';
 
 describe('the five sections', () => {
   it('opens on Today and has one route per section, plus the artist page without a tab', () => {
@@ -96,5 +96,41 @@ describe('old bookmarks land on the right new page (upgradeHash)', () => {
     expect(parseHash(upgradeHash('#/picks?c=franz')!)).toEqual({ route: 'more', param: 'scan', query: 'c=franz' });
     expect(parseHash(upgradeHash('#/budget')!)).toEqual({ route: 'more', param: 'budget', query: '' });
     expect(parseHash(upgradeHash('#/today')!)).toEqual({ route: 'today', param: null, query: '' });
+  });
+});
+
+describe('the views inside Characters and More', () => {
+  const ID = '06eb86e9-1c2d-4e5f-8a9b-0c1d2e3f4a5b';
+
+  it('More opens on the Scan, and an unknown view is the Scan', () => {
+    expect(MORE_VIEWS.map((v) => v.id)).toEqual(['scan', 'budget', 'health']);
+    expect(MORE_VIEWS.map((v) => v.label)).toEqual(['Scan', 'Budget', 'Health']);
+    expect([moreView(null), moreView(undefined), moreView(''), moreView('scan'), moreView('nonsense')]).toEqual(['scan', 'scan', 'scan', 'scan', 'scan']);
+    expect([moreView('budget'), moreView('health')]).toEqual(['budget', 'health']);
+  });
+
+  it('Characters shows the cards, and `all` every video', () => {
+    expect(CHARACTERS_VIEWS.map((v) => v.label)).toEqual(['Characters', 'All videos']);
+    expect([charactersView(null), charactersView('franz'), charactersView('nonsense')]).toEqual(['cards', 'cards', 'cards']);
+    expect(charactersView('all')).toBe('all');
+  });
+
+  it('every link of the views builds an address that reads back as the same view', () => {
+    for (const v of MORE_VIEWS) expect(moreView(parseHash(href('more', v.id)).param)).toBe(v.id);
+    expect(charactersView(parseHash(href('characters')).param)).toBe('cards');
+    expect(charactersView(parseHash(href('characters', 'all')).param)).toBe('all');
+  });
+
+  it('the old bookmarks land on the right view with their parameter', () => {
+    const queue = parseHash(upgradeHash(`#/queue/${ID}`)!);
+    expect([queue.route, queue.param]).toEqual(['videos', ID]); // Videos reads the clip to show from the parameter
+    const library = parseHash(upgradeHash(`#/library/${ID}`)!);
+    expect([library.route, charactersView(library.param), new URLSearchParams(library.query).get('clip')]).toEqual(['characters', 'all', ID]);
+    const channels = parseHash(upgradeHash('#/channels')!);
+    expect([channels.route, charactersView(channels.param)]).toEqual(['characters', 'cards']);
+    const picks = parseHash(upgradeHash('#/picks?c=franz&view=list')!);
+    expect([picks.route, moreView(picks.param), new URLSearchParams(picks.query).get('c'), new URLSearchParams(picks.query).get('view')]).toEqual(['more', 'scan', 'franz', 'list']);
+    const budget = parseHash(upgradeHash('#/budget')!);
+    expect([budget.route, moreView(budget.param)]).toEqual(['more', 'budget']);
   });
 });

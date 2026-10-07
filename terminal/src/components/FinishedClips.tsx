@@ -1,6 +1,7 @@
-// "Finished clips" (owner 2026-10-06) under the drops table: every made clip, waiting for his OK, approved, scheduled or posted,
-// with the Queue's player (ClipPlayer: the master through a short-lived signed URL), its character and where it is. Approving
-// stays in the Queue: a clip waiting for his OK links there. The newest first; the first FINISHED_PAGE, then "Show all".
+// "Finished clips" (owner 2026-10-06), on Characters > All videos under the list: every made clip, waiting for his OK, approved,
+// scheduled or posted, with the Queue's player (ClipPlayer: the master through a short-lived signed URL), its character and where
+// it is. Approving stays in Videos (To approve): a clip waiting for his OK links there. The newest first; the first FINISHED_PAGE,
+// then "Show all".
 import { ExternalLink } from 'lucide-react';
 import { useState } from 'react';
 import { FINISHED_LABEL, FINISHED_PAGE, FINISHED_TONE, type FinishedState } from '../lib/finished';
@@ -23,7 +24,7 @@ export function FinishedClips({ clips }: { clips: ReadonlyArray<LibraryClip> }) 
         <p className="small muted num" style={{ margin: '6px 0 0' }}>
           {clips.length === 0
             ? 'Nothing made yet: a clip shows here once it is built.'
-            : `${clips.length} made${waiting ? ` · ${waiting} waiting for your OK in the Queue` : ''}`}
+            : `${clips.length} made${waiting ? ` · ${waiting} waiting for your OK in Videos` : ''}`}
         </p>
       </div>
       {clips.length > 0 && (
@@ -63,7 +64,7 @@ function Finished({ clip: c, demo }: { clip: LibraryClip; demo: boolean }) {
         <div className="work-links">
           {state === 'awaiting_approval' && (
             <a className="btn primary" href={href('videos', c.id)}>
-              Review in Queue
+              Review in Videos
             </a>
           )}
           {post && (

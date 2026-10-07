@@ -142,7 +142,7 @@ function DropRow({
   const make = (adjust: DropAdjust | null) =>
     run(key, () => backend.requestJob(row.pick_id, 'make', adjust), `Make it: ${row.character_name ?? 'he'} is on his way (about ${dropCredits(d, adjust ?? {})} credits)`);
   const recheck = () => run(key, () => backend.requestJob(row.pick_id, 'process'), 'Checking it again');
-  const remove = () => run(key, () => backend.decidePick(row.pick_id, 'skip', 'removed by the owner from In the works', null), 'Removed');
+  const remove = () => run(key, () => backend.decidePick(row.pick_id, 'skip', 'removed by the owner from Clips', null), 'Removed');
   const choose = (slug: string) => {
     if (slug === RECOMMEND || (slug === row.character_slug && menu.by === 'owner')) return;
     const name = roster.find((c) => c.slug === slug)?.name ?? slug;
@@ -220,7 +220,7 @@ function DropRow({
           )}
           {row.clip_state === 'awaiting_approval' && row.clip_id && (
             <a className="btn primary" href={href('videos', row.clip_id)}>
-              Review in Queue
+              Review in Videos
             </a>
           )}
         </div>

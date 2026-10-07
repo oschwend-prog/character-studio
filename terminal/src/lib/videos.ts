@@ -8,12 +8,25 @@ export const isTrackerRow = (x: TrackerRow | LibraryClip): x is TrackerRow => 'p
 
 const NO_SLOT = Number.MAX_SAFE_INTEGER;
 
-/** The slot a scheduled clip goes out at: its live posts' first slot (else its posts'), as the character pipeline reads it. */
-function slotOf(c: LibraryClip): number {
+/** When a scheduled clip goes out (ISO): its live posts' first slot (else its posts'), as the character pipeline reads it; null with no slot. */
+export function slotTime(c: Pick<LibraryClip, 'posts'>): string | null {
   const live = c.posts.filter((p) => p.status === 'scheduled' || p.status === 'posting');
-  const slots = (live.length ? live : c.posts).map((p) => Date.parse(p.scheduled_for)).filter((t) => !Number.isNaN(t));
-  return slots.length ? Math.min(...slots) : NO_SLOT;
+  const slots = (live.length ? live : c.posts).filter((p) => !Number.isNaN(Date.parse(p.scheduled_for)));
+  if (!slots.length) return null;
+  return slots.reduce((a, b) => (Date.parse(b.scheduled_for) < Date.parse(a.scheduled_for) ? b : a)).scheduled_for;
 }
+
+/** Where a clip goes out: its posts' platforms, else the clip's own list; sorted (instagram, tiktok). */
+export function clipPlatforms(c: Pick<LibraryClip, 'posts' | 'platforms'>): string[] {
+  const fromPosts = [...new Set<string>(c.posts.map((p) => p.platform))];
+  return (fromPosts.length ? fromPosts : [...c.platforms]).sort();
+}
+
+/** The slot as a sort key: a clip without one sorts last. */
+const slotOf = (c: Pick<LibraryClip, 'posts'>): number => {
+  const at = slotTime(c);
+  return at ? Date.parse(at) : NO_SLOT;
+};
 
 /**
  * The Videos page's two groups. Making: the tracker rows whose chip is Making, then the library clips in production that no
