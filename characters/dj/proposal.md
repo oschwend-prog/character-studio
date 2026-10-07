@@ -50,3 +50,16 @@ Three look tests on gpt_image_2_5 (high, 2K, about 2.75 credits each, about 8 in
 - Sixth round (owner: most DJs wear something on their head: beanie, cap, headband): 1 giant slouchy beanie
   `b023ea80-8be1-4bee-ad8a-2e061d754311`, 2 backwards trucker cap + crest `165be352-8eaf-4ff2-b547-7ba02f11dcc4`, 3 neon
   headband + palm-tree mop `9c0f9769-1307-43e5-bd59-d293559c5171`. 8.25 credits; 52.25 in total for the DJ.
+- Seventh round (owner: "not sure I like the person, export this trend to someone else, don't forget the baggy pants"): the
+  same uniform (neon headband + hair sprouting out, shin-length neon-yellow tee, elephant-wide khaki cargos, chunky white
+  platform sneakers, colossal headphones, gold rave whistle, tiny odd-eye shades: blue over the viewer's left, amber over
+  the viewer's right, all three checked), full body so the trousers show, a different person each: 1 Big Lad (stocky,
+  ginger beard, ginger tuft) `54e7dab2-2297-4d63-8865-ceb81a5fe825`, 2 Dad DJ (mid-50s, receding hairline under the
+  headband, grey ponytail, belly, phone-call pose) `a8fe2d0e-23a5-4743-a82e-28358a1aac3a`, 3 The Long Neck (comically long
+  neck, small head, bleached frizz) `79eb9d1c-09a9-42f7-9550-b4d239ac5a76`. 8.25 credits; 60.5 in total for the DJ.
+
+## Settings (owner 2026-10-07)
+His world: walking into a big Ibiza superclub, playing a legendary Ibiza club booth, a desert-festival art car ("Burning
+Man on a chariot"), Mykonos and St Tropez beach clubs at sunset. As Drop-ins these are the source clips themselves (real
+DJ clips from those places, our DJ swapped in for the star). For stills, sheets and Recreates the places are described,
+never named: no venue or festival names, logos or signage in prompts (the brands-as-reference rule).
