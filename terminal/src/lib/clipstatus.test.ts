@@ -1,7 +1,10 @@
 // Terminal v2, Clips page: one chip per dropped clip (Adding, Checking, Pick a character, Ready, Making, Done, Blocked, Failed) and
 // the filters over them. Pure functions over v_tracker rows; no browser.
 import { describe, expect, it } from 'vitest';
-import { CHIP_LABEL, clipChip, filterClips, type ClipChip, type ClipFilter } from './clipstatus';
+import {
+  CHIP_CLASS, CHIP_LABEL, CLIP_FILTERS, CLIP_FILTER_EMPTY, clipActions, clipChip, clipFilterQuery, filterClips, parseClipFilter,
+  type ClipChip, type ClipFilter,
+} from './clipstatus';
 import type { ClipState, DropCard, DropState, TrackerRow } from './types';
 
 const NOW = Date.parse('2026-10-07T12:00:00Z');
@@ -127,5 +130,85 @@ describe('filterClips', () => {
 
   it('an empty list stays empty', () => {
     for (const f of ['all', 'pick', 'ready', 'making', 'done', 'problems'] as ClipFilter[]) expect(filterClips([], f)).toEqual([]);
+  });
+});
+
+describe('the filter row and its address', () => {
+  it('lists the filters in the owner’s words, one per ClipFilter, All first', () => {
+    expect(CLIP_FILTERS.map((o) => o.label)).toEqual(['All', 'Pick a character', 'Ready', 'Making', 'Done', 'Blocked or failed']);
+    expect(CLIP_FILTERS.map((o) => o.id)).toEqual(['all', 'pick', 'ready', 'making', 'done', 'problems']);
+    // the chips of the filters that are one chip say the chip's own label
+    for (const o of CLIP_FILTERS.filter((x) => x.id in CHIP_LABEL)) expect(o.label).toBe(CHIP_LABEL[o.id as ClipChip]);
+  });
+
+  it('has a one-line empty state for every filter', () => {
+    expect(Object.keys(CLIP_FILTER_EMPTY).sort()).toEqual(CLIP_FILTERS.map((o) => o.id).sort());
+    for (const line of Object.values(CLIP_FILTER_EMPTY)) {
+      expect(line.trim()).not.toBe('');
+      expect(line).not.toMatch(/\n/);
+    }
+    expect(CLIP_FILTER_EMPTY.pick).toBe('No clips wait for a character.');
+  });
+
+  it('reads ?f= from the query of the hash (Today’s tile and warning links), an unknown or missing f is All', () => {
+    expect(parseClipFilter('f=pick')).toBe('pick');
+    expect(parseClipFilter('f=ready')).toBe('ready');
+    expect(parseClipFilter('f=problems')).toBe('problems');
+    expect(parseClipFilter('?f=done')).toBe('done');
+    expect(parseClipFilter('c=franz&f=making')).toBe('making');
+    expect(parseClipFilter('')).toBe('all');
+    expect(parseClipFilter('f=')).toBe('all');
+    expect(parseClipFilter('f=nonsense')).toBe('all');
+    expect(parseClipFilter('f=READY')).toBe('all');
+    expect(parseClipFilter('f=toString')).toBe('all');
+    expect(parseClipFilter('f=__proto__')).toBe('all');
+    expect(parseClipFilter('g=ready')).toBe('all');
+  });
+
+  it('writes the filter back and keeps every other key of the query; All leaves a clean address', () => {
+    expect(clipFilterQuery('', 'ready')).toBe('f=ready');
+    expect(clipFilterQuery('f=pick', 'done')).toBe('f=done');
+    expect(clipFilterQuery('c=franz&f=pick', 'done')).toBe('c=franz&f=done');
+    expect(clipFilterQuery('c=franz', 'problems')).toBe('c=franz&f=problems');
+    expect(clipFilterQuery('f=pick', 'all')).toBe('');
+    expect(clipFilterQuery('c=franz&f=pick', 'all')).toBe('c=franz');
+    expect(clipFilterQuery('', 'all')).toBe('');
+    // a round trip: what is written is what is read
+    for (const o of CLIP_FILTERS) expect(parseClipFilter(clipFilterQuery('c=franz', o.id))).toBe(o.id);
+  });
+});
+
+describe('the status cell’s look and the buttons of a row', () => {
+  it('maps every chip onto an existing .drop-state class: Pick a character looks like Ready, Done like Made, Adding like Uploading', () => {
+    expect(CHIP_CLASS).toEqual({
+      adding: 'uploading', checking: 'checking', pick: 'ready', ready: 'ready', making: 'making', done: 'made', blocked: 'blocked', failed: 'failed',
+    });
+    expect(Object.keys(CHIP_CLASS).sort()).toEqual(Object.keys(CHIP_LABEL).sort());
+  });
+
+  it('a ready clip offers Make it and Adjust; a blocked one Remove; a failed one Try again and Remove', () => {
+    expect(clipActions(row(card('ready', { character_by: 'owner' })), NOW)).toEqual(['make', 'adjust']);
+    expect(clipActions(row(card('ready', { character_by: 'studio' })), NOW)).toEqual(['make', 'adjust']); // Pick a character: Make it confirms it
+    expect(clipActions(row(card('blocked')), NOW)).toEqual(['remove']);
+    expect(clipActions(row(card('failed', { credits: 91 })), NOW)).toEqual(['retry-make', 'remove']);
+    expect(clipActions(row(card('failed')), NOW)).toEqual(['retry-check', 'remove']);
+    expect(clipActions(row(card('waiting')), NOW)).toEqual(['retry-check', 'remove']);
+    expect(clipActions(row(card('checking')), NOW)).toEqual([]);
+  });
+
+  it('never offers a paid button next to a Making or Done chip (the drop card lags behind its clip)', () => {
+    const lagging = card('ready', { character_by: 'owner' });
+    expect(clipActions(row(lagging, { make_requested_at: ago(1) }), NOW)).toEqual([]); // Make it was tapped, no clip yet
+    expect(clipActions(withClip(lagging, 'generating'), NOW)).toEqual([]);
+    expect(clipActions(withClip(lagging, 'awaiting_approval', { status: 'made' }), NOW)).toEqual([]);
+    expect(clipActions(row(card('making')), NOW)).toEqual([]);
+    // Remove stays: a Done clip whose card failed can still be taken off the list
+    expect(clipActions(withClip(card('failed', { credits: 91 }), 'awaiting_approval', { status: 'made' }), NOW)).toEqual(['remove']);
+  });
+
+  it('a stale upload offers Remove; a row without a drop card offers nothing', () => {
+    expect(clipActions(row(card('uploading', { at: ago(45) })), NOW)).toEqual(['remove']);
+    expect(clipActions(row(card('uploading')), NOW)).toEqual([]);
+    expect(clipActions(row(null), NOW)).toEqual([]);
   });
 });

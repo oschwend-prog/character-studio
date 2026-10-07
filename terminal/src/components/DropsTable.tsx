@@ -1,20 +1,22 @@
 // "Your drops" (owner 2026-10-06: "the core of the terminal is dropping our characters into my saved videos"): every dropped video
 // in one table, whatever its character, in the Long list's table look (on a phone each row stacks). Per row: the preview still,
 // what is in it, the character menu (the live roster, ★ on the one the check recommends, with its reason, which the owner may
-// ignore: set_drop_character, migration 0013, then the free check again in that voice), the section and its price, where it is,
-// and the buttons the drop card had (Make it, Adjust, Try again, Remove). The chevron opens the rest of the card: the five-frame
-// strip, the facts, the moments with text on screen, own footage. Nothing is paid before Make it.
+// ignore: set_drop_character, migration 0013, then the free check again in that voice), the section and its price, where it is
+// (one plain chip: Adding, Checking, Pick a character, Ready, Making, Done, Blocked, Failed; lib/clipstatus.ts), and the buttons the
+// drop card had (Make it, Adjust, Try again, Remove). The chevron opens the rest of the card: the five-frame strip, the facts, the
+// moments with text on screen, own footage. Nothing is paid before Make it. The Clips page passes the rows its filter keeps.
 import { AlertTriangle, ChevronRight, SlidersHorizontal } from 'lucide-react';
-import { Fragment, useEffect, useState } from 'react';
+import { Fragment, useEffect, useState, type ReactNode } from 'react';
+import { CHIP_CLASS, CHIP_LABEL, clipActions, clipChip } from '../lib/clipstatus';
 import {
-  DROP_STATE_LABEL, PART_LABEL, RECOMMEND, avoidLabel, characterMenu, dropActions, dropCredits, dropLine, dropTitle, effectiveDrop,
+  PART_LABEL, RECOMMEND, avoidLabel, characterMenu, dropCredits, dropLine, dropTitle, effectiveDrop,
   isDropCard, readyTotal, recommendationLine, sectionLabel, type CharacterMenu,
 } from '../lib/drop';
 import { formatCredits } from '../lib/format';
 import { href } from '../lib/hooks';
 import type { RosterEntry } from '../lib/roster';
 import { useStudio } from '../lib/store';
-import { TRACKER_STEPS, trackerStep } from '../lib/tracker';
+import { trackerStep } from '../lib/tracker';
 import type { Budget, DropAdjust, TrackerRow } from '../lib/types';
 import { AdjustSheet } from './AdjustSheet';
 import { PickThumb } from './PickThumb';
@@ -23,10 +25,21 @@ import { Spinner } from './ui';
 const COLUMNS = 6;
 
 export function DropsTable({
-  rows, roster, budget, now,
-}: { rows: ReadonlyArray<TrackerRow>; roster: ReadonlyArray<RosterEntry>; budget: Budget | null; now: number }) {
+  rows, roster, budget, now, summaryRows = rows, toolbar, empty,
+}: {
+  rows: ReadonlyArray<TrackerRow>;
+  roster: ReadonlyArray<RosterEntry>;
+  budget: Budget | null;
+  now: number;
+  /** The rows the "N ready · about X credits" line adds up: every drop, when `rows` is a filtered view of them. */
+  summaryRows?: ReadonlyArray<TrackerRow>;
+  /** Under the heading, above the table: the Clips page's filter chips. */
+  toolbar?: ReactNode;
+  /** One line to say when there is no row (a filter that keeps none); the two-line "No drops yet" when absent. */
+  empty?: string;
+}) {
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
-  const total = readyTotal(rows);
+  const total = readyTotal(summaryRows);
   const left = budget ? Math.max(0, budget.cap - budget.committed) : null;
   const toggle = (id: string) =>
     setOpen((s) => {
@@ -47,10 +60,17 @@ export function DropsTable({
           {left != null && ` · ${formatCredits(left)} left of this month’s ${formatCredits(budget!.cap)} cap`}
         </p>
       </div>
+      {toolbar}
       {rows.length === 0 ? (
         <div className="panel empty">
-          <b>No drops yet.</b>
-          <span className="muted small">Drop a video above: it is checked for free, and the studio recommends the character.</span>
+          {empty ? (
+            <span className="muted small">{empty}</span>
+          ) : (
+            <>
+              <b>No drops yet.</b>
+              <span className="muted small">Drop a video above: it is checked for free, and the studio recommends the character.</span>
+            </>
+          )}
         </div>
       ) : (
         <div className="panel ll-scroll" role="region" aria-label={`Your drops, ${rows.length}`} tabIndex={0}>
@@ -113,7 +133,7 @@ function DropRow({
   const changing = busy.has(charKey); // the character menu's own run: the buttons wait for it, without a spinner of their own
   const working = busy.has(key);
   const menu = characterMenu(row, roster);
-  const actions = dropActions(d, now);
+  const actions = clipActions(row, now);
   const e = effectiveDrop(d, d.adjust ?? {});
   const priced = d.credits != null && d.window != null;
   const title = dropTitle(row);
@@ -250,12 +270,16 @@ function CharacterCell({
 
 function StatusCell({ row, now }: { row: TrackerRow; now: number }) {
   const d = row.drop_card!;
+  const chip = clipChip(row);
+  const pill = (
+    <span><span className={`drop-state ${CHIP_CLASS[chip]}`}>{CHIP_LABEL[chip]}</span></span>
+  );
   if (!isDropCard(row) && row.clip_state != null) {
-    // Make it was tapped and the clip exists: where it is on the 8 steps of "In the works"
+    // Make it was tapped and the clip exists: the chip says where it is; the step's own note or reason goes under it
     const s = trackerStep(row, now);
     return (
       <span className="stack" style={{ gap: 4 }}>
-        <span className="work-now"><b>{s.step}/8 · {TRACKER_STEPS[s.step - 1]}</b></span>
+        {pill}
         {s.reason ? (
           <span className={`small ${s.state === 'failed' ? 'error-text' : 'muted'}`}>{s.reason}</span>
         ) : s.note ? (
@@ -268,7 +292,7 @@ function StatusCell({ row, now }: { row: TrackerRow; now: number }) {
   const moving = d.state === 'uploading' || d.state === 'checking' || d.state === 'making';
   return (
     <span className="stack" style={{ gap: 4 }}>
-      <span><span className={`drop-state ${d.state}`}>{DROP_STATE_LABEL[d.state]}</span></span>
+      {pill}
       {flagged ? (
         <span className={`small ${d.state === 'waiting' ? 'muted' : 'error-text'}`} role={d.state === 'failed' ? 'alert' : undefined}>
           {d.state !== 'waiting' && <AlertTriangle size={13} aria-hidden="true" style={{ verticalAlign: '-2px', marginRight: 4 }} />}

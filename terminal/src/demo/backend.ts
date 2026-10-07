@@ -615,7 +615,7 @@ export class DemoBackend implements Backend {
     readyDrop(14, 'lenny', 35, 'A man in a suit yells into his phone in a glass office, then hits the trend.', {
       slug: 'lenny', star: person('the man in the navy suit by the window', 0.46), seconds: 8.5, start: 0.5, duration: 11,
       hooks: ['NOON. Not 12:01.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['black smartphone'],
-    }, 'ready', { recommended: { slug: 'lenny', reason: 'a phone tantrum in a glass office: Lenny’s mid-deal call' } });
+    }, 'ready', { character_by: 'owner', recommended: { slug: 'lenny', reason: 'a phone tantrum in a glass office: Lenny’s mid-deal call' } }); // the owner chose him: a Ready clip
     // owner 2026-10-06, the drops table: a drop filed with "Recommend" still being checked (the studio picks after the check), the
     // owner's own choice where the star points to another character, and a clip with a caption in its first seconds (the
     // section keeps clear of it: only the section we use is judged)
@@ -623,7 +623,7 @@ export class DemoBackend implements Backend {
     readyDrop(16, 'lenny', 50, 'A man in a tailcoat glides down a grand staircase with a tray, then hits the trend.', {
       slug: 'lenny', star: person('the man in the tailcoat on the stairs', 0.5), seconds: 12, start: 2, duration: 18,
       hooks: ['Stairs are for closers.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['gold watch'],
-    }, 'ready', { recommended: { slug: 'reginald', reason: 'a grand staircase and a tray: Reginald’s home ground' } });
+    }, 'ready', { character_by: 'owner', recommended: { slug: 'reginald', reason: 'a grand staircase and a tray: Reginald’s home ground' } });
     readyDrop(17, 'reginald', 12, 'A man in a raincoat dances through puddles on a rainy street; a caption sits on the first seconds.', {
       slug: 'reginald', star: person('the man in the raincoat'), seconds: 9, start: 5, duration: 16,
       hooks: ['The umbrella stays closed.', 'Puddles are beneath me.', 'Tea at four regardless.'], gadgets: ['black umbrella'],

@@ -1,8 +1,9 @@
 // Terminal v2, Clips page (owner 2026-10-07): one plain chip per dropped clip instead of the 8-step stepper, and the filters over
 // them. Pure functions over v_tracker rows (drop_card, migrations 0012-0013); no browser.
+import { dropActions, type DropAction } from './drop';
 import { FINISHED_STATES } from './finished';
 import { IN_PRODUCTION_STATES } from './rules';
-import type { TrackerRow } from './types';
+import type { DropState, TrackerRow } from './types';
 
 export type ClipChip = 'adding' | 'checking' | 'pick' | 'ready' | 'making' | 'done' | 'blocked' | 'failed';
 
@@ -61,4 +62,66 @@ export function filterClips(rows: ReadonlyArray<TrackerRow>, f: ClipFilter): Tra
     const chip = clipChip(r);
     return f === 'problems' ? chip === 'blocked' || chip === 'failed' : chip === f;
   });
+}
+
+/** The Clips page's filter row, in order, with the owner's words (the same words as the chips). */
+export const CLIP_FILTERS: ReadonlyArray<{ id: ClipFilter; label: string }> = [
+  { id: 'all', label: 'All' },
+  { id: 'pick', label: 'Pick a character' },
+  { id: 'ready', label: 'Ready' },
+  { id: 'making', label: 'Making' },
+  { id: 'done', label: 'Done' },
+  { id: 'problems', label: 'Blocked or failed' },
+];
+
+/** What the table says, in one line, when a filter shows no clip. */
+export const CLIP_FILTER_EMPTY: Record<ClipFilter, string> = {
+  all: 'No clips yet: add one above and it is checked for free.',
+  pick: 'No clips wait for a character.',
+  ready: 'No clip is ready to make.',
+  making: 'Nothing is being made right now.',
+  done: 'No clip is done yet.',
+  problems: 'Nothing is blocked or failed.',
+};
+
+/** The filter an address asks for (`?f=ready`, the query of the hash); an unknown or missing value is All. */
+export function parseClipFilter(query: string): ClipFilter {
+  const f = new URLSearchParams(query).get('f');
+  return CLIP_FILTERS.find((o) => o.id === f)?.id ?? 'all';
+}
+
+/** The query with the filter set (All removes it, a clean address), every other key of the query kept as it was. */
+export function clipFilterQuery(query: string, f: ClipFilter): string {
+  const q = new URLSearchParams(query);
+  if (f === 'all') q.delete('f');
+  else q.set('f', f);
+  return q.toString();
+}
+
+/** The `.drop-state` look of each chip: the table keeps its colours (amber Ready, ice for what moves, red for Blocked and Failed). */
+export const CHIP_CLASS: Record<ClipChip, DropState> = {
+  adding: 'uploading',
+  checking: 'checking',
+  pick: 'ready',
+  ready: 'ready',
+  making: 'making',
+  done: 'made',
+  blocked: 'blocked',
+  failed: 'failed',
+};
+
+/** The buttons that spend credits (Make it, and Try again after a failed Make it). */
+const PAID_ACTIONS: ReadonlyArray<DropAction> = ['make', 'adjust', 'retry-make'];
+
+/**
+ * The buttons a clip's row offers: the drop card's (dropActions), but never a paid one next to a Making or Done chip. The drop
+ * card can lag behind its clip (Make it was tapped, or the clip exists, and the card still says ready), and a second Make it on
+ * a clip that is on its way would spend twice.
+ */
+export function clipActions(row: TrackerRow, now: number): DropAction[] {
+  const d = row.drop_card;
+  if (!d) return [];
+  const actions = dropActions(d, now);
+  const chip = clipChip(row);
+  return chip === 'making' || chip === 'done' ? actions.filter((a) => !PAID_ACTIONS.includes(a)) : actions;
 }

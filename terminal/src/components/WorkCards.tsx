@@ -1,87 +1,49 @@
-// "In the works" (owner 2026-10-06: the core of the terminal is dropping our characters into his saved videos). At the top the
-// Drop box ("Recommend" by default), then "Your drops": every dropped video in one table with a character menu per row (★ on
-// the studio's recommendation) and Make it (DropsTable), then "Finished clips" with their players (FinishedClips), then any
-// other approved pick on its way, grouped by character and sorted by its slot, else by when it was approved (v_tracker,
-// migration 0010): the picture, what it is, the 8-step progress (done ticked, the current one lit, the rest muted), how long
-// it has been at that step, the credits spent so far, and a red flag with the reason when it is stuck or something failed.
-// The steps and flags come from trackerStep (lib/tracker.ts).
+// The picks on their way, as cards (moved here from the old "In the works" page for Videos > Making): grouped by character and
+// sorted by slot, else by when they were approved (v_tracker, migration 0010). Per card: the picture, what it is, the 8-step
+// progress (done ticked, the current one lit, the rest muted), how long it has been at that step, the credits spent so far, and a
+// red flag with the reason when it is stuck or something failed. The steps and flags come from trackerStep (lib/tracker.ts).
 import { AlertTriangle, Check, ExternalLink } from 'lucide-react';
-import { DropBox } from '../components/DropBox';
-import { DropsTable } from '../components/DropsTable';
-import { FinishedClips } from '../components/FinishedClips';
-import { PickThumb } from '../components/PickThumb';
-import { PostText } from '../components/PostText';
-import { Avatar, Livery, Skeleton } from '../components/ui';
-import { dropRows } from '../lib/drop';
-import { finishedClips } from '../lib/finished';
+import { PickThumb } from './PickThumb';
+import { PostText } from './PostText';
+import { Avatar, Livery } from './ui';
 import { formatCredits } from '../lib/format';
-import { href, useNow } from '../lib/hooks';
+import { href } from '../lib/hooks';
 import { compactCount } from '../lib/longlist';
-import { ROSTER, activeRoster } from '../lib/roster';
+import { ROSTER } from '../lib/roster';
 import { TIER_LABELS } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import {
-  TRACKER_STEPS, groupTracker, inTracker, musicLabel, timeAtStep, trackerMode, trackerStep, trackerTier, trackerTitle, type TrackerStep,
+  TRACKER_STEPS, groupTracker, musicLabel, timeAtStep, trackerMode, trackerStep, trackerTier, trackerTitle, type TrackerStep,
 } from '../lib/tracker';
 import type { TrackerRow } from '../lib/types';
 
-
-export function Works() {
+/** The rows as cards, one section per character (roster order, the unassigned last). Renders nothing when no row is listed. */
+export function WorkCards({ rows, now }: { rows: ReadonlyArray<TrackerRow>; now: number }) {
   const { data } = useStudio();
-  const now = useNow(60_000);
-  if (!data) {
-    return (
-      <div className="page stack" aria-busy="true">
-        <Skeleton h={160} />
-        <Skeleton h={120} />
-        <Skeleton h={300} />
-      </div>
-    );
-  }
-  const roster = data.characters.length ? data.characters.map((c) => ({ slug: c.slug, name: c.name })) : [...ROSTER];
-  const drops = dropRows(data.tracker.filter((r) => inTracker(r, now)));
-  const groups = groupTracker(data.tracker.filter((r) => !r.drop_card), roster, now);
+  const roster = data?.characters.length ? data.characters.map((c) => ({ slug: c.slug, name: c.name })) : [...ROSTER];
+  const groups = groupTracker(rows, roster, now);
+  if (groups.length === 0) return null;
   return (
-    <div className="page stack">
-      <div>
-        <h1 className="h1">In the works</h1>
-        <p className="small muted" style={{ margin: '6px 0 0' }}>
-          Drop the videos you want made with our characters: the studio recommends who goes in, you can put any of them in. Every
-          one, from the drop to the post: where it is, what it costs, and the finished clips to watch.
-        </p>
-      </div>
-      <DropBox />
-      <DropsTable rows={drops} roster={activeRoster(data.characters)} budget={data.budget} now={now} />
-      <FinishedClips clips={finishedClips(data.library)} />
-      {groups.length > 0 && (
-        <div className="stack">
-          <div>
-            <h2 className="h2">Other picks in the works</h2>
-            <p className="small muted" style={{ margin: '6px 0 0' }}>
-              Approved in <a href={href('more', 'scan', { view: 'list' })}>Scan (Long list)</a>, on their 8 steps.
-            </p>
+    <div className="stack">
+      {groups.map((g) => (
+        <section key={g.slug ?? 'none'} className={`pick-sec ${g.slug ?? 'none'}`} data-char={g.slug ?? 'none'} aria-labelledby={`works-${g.slug ?? 'none'}`}>
+          <header className="pick-sec-head">
+            {g.slug ? <Avatar slug={g.slug} name={g.name} size={40} /> : <Livery slug={null} />}
+            <h3 className="h2" id={`works-${g.slug ?? 'none'}`}>
+              {g.slug ? <a className="name-link" href={href('artist', g.slug)}>{g.name}</a> : g.name}
+            </h3>
+            <span className="stage-count num on" aria-label={`${g.rows.length} in the works`}>{g.rows.length}</span>
+          </header>
+          <div className="picks-grid stack" style={{ gap: 12 }}>
+            {g.rows.map((r) => <WorkCard key={r.pick_id} row={r} now={now} />)}
           </div>
-          {groups.map((g) => (
-            <section key={g.slug ?? 'none'} className={`pick-sec ${g.slug ?? 'none'}`} data-char={g.slug ?? 'none'} aria-labelledby={`works-${g.slug ?? 'none'}`}>
-              <header className="pick-sec-head">
-                {g.slug ? <Avatar slug={g.slug} name={g.name} size={40} /> : <Livery slug={null} />}
-                <h3 className="h2" id={`works-${g.slug ?? 'none'}`}>
-                  {g.slug ? <a className="name-link" href={href('artist', g.slug)}>{g.name}</a> : g.name}
-                </h3>
-                <span className="stage-count num on" aria-label={`${g.rows.length} in the works`}>{g.rows.length}</span>
-              </header>
-              <div className="picks-grid stack" style={{ gap: 12 }}>
-                {g.rows.map((r) => <WorkCard key={r.pick_id} row={r} now={now} />)}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
+        </section>
+      ))}
     </div>
   );
 }
 
-function WorkCard({ row, now }: { row: TrackerRow; now: number }) {
+export function WorkCard({ row, now }: { row: TrackerRow; now: number }) {
   const s = trackerStep(row, now);
   const tier = trackerTier(row, now);
   const mode = trackerMode(row);

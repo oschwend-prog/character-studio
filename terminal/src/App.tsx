@@ -14,11 +14,11 @@ import { Login, SetupNeeded } from './Login';
 import { Artist } from './pages/Artist';
 import { Budget } from './pages/Budget';
 import { Channels } from './pages/Channels';
+import { Clips } from './pages/Clips';
 import { Library } from './pages/Library';
 import { Picks } from './pages/Picks';
 import { Queue } from './pages/Queue';
 import { Today } from './pages/Today';
-import { Works } from './pages/Works';
 
 export const isDemo = () =>
   new URLSearchParams(window.location.search).get('demo') === '1' || import.meta.env.VITE_DEMO === '1';
@@ -144,7 +144,7 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
       )}
       <main id="main">
         {route === 'today' && <Today />}
-        {route === 'clips' && <Works />}
+        {route === 'clips' && <Clips />}
         {route === 'videos' && <Queue focus={param} />}
         {route === 'characters' && (param === 'all' ? <Library focus={new URLSearchParams(query).get('clip')} /> : <Channels />)}
         {route === 'more' && (param === 'budget' ? <Budget account={account} /> : <Picks />)}
