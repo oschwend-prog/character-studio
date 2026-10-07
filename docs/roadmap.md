@@ -2,6 +2,17 @@
 
 Order: get Biscuit + Reginald running on Instagram first, then expand.
 
+## Timeline (owner asked 2026-10-07; visual page: https://claude.ai/artifact/RU8EkKDqzeSYigbjz343p2)
+| Phase | When | What happens | Owner approves |
+|---|---|---|---|
+| 1 Launch the three | 7-18 Oct (weeks 1-2, Tue/Wed/Thu) | Credits top-up or plan (134 left = 1 video); the 30 folder clips checked and matched; Franz cap + streetwear look and new masters; Lenny black-suit remake; Reels also to Stories; folder clips taken automatically | character per clip, every Make it, every post |
+| 2 Steady rhythm | 19 Oct-1 Nov (week 3+, Mon-Fri) | TikTok for all three via Postiz; Franz "Party Sausage" name (~20 Oct) + voice; week-3 KPI review (bars binding); autopilot posting per channel after 6 approved posts | character per clip, every Make it |
+| 3 Characters 4 and 5 | November | Borat-type (name, sheets, accounts); the DJ unparked (person, name); scan back as a source with fit scoring; studio suggests the character, Make it automatic under a per-video price limit; LaunchPoint AI Invasion income | only unsure clips, new characters, over-limit spend |
+| 4 One character per niche | Dec-Jan | Library tests (Karen Supreme, Big Dave, Granny Gangster, Lola Luxe, The Sigma), Napoleon-type archetype, the Singer; events calendar (PFW, festivals); full loop scan -> check -> Make it -> master -> post | weekly digest, kill switch, new characters, spend above the cap |
+| 5 Make it pay | Q1 2027 | Brand marketplace, paid amplification, terminal subscription | brand deals, pricing |
+
+Credits: one character posting Mon-Fri at 91 credits a video is about 2,000 credits a month; three fit under the 6,000 cap, five need about 10,000 (raise the cap and the plan in phase 3).
+
 ## Now: launch (Instagram)
 - Launch set: iconic all-time clips people recognise first (Single Ladies, Macarena, Wednesday, Gangnam),
   then the scored viral clips from the daily scan; Genjutsu gallery as backup.
