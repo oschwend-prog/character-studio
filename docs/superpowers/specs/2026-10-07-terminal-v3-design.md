@@ -164,3 +164,6 @@ free. A clip that has versions shows them ("Also: Lenny, ready"). The **All clip
   about 3 years at 25 a day), then `gh secret set SCRAPECREATORS_API_KEY` (he pastes the key; it is never written to a file).
 - **Tests:** the API client against recorded fixture responses (no network), the parsing and skip rules, the score, the cap,
   the upsert, the migration pins, the terminal helper for Worth saving.
+- **Retention (owner 2026-10-07):** finished masters and all data rows are kept; the original clip behind a posted video goes
+  once every family member is made (today's purge); a hit filed but never made is deleted after 30 days, the owner's own
+  upload after 60 days, unless marked Keep (a toggle on the clip card); the owner's Mac folder is never touched.
