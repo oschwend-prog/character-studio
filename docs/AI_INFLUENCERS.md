@@ -34,6 +34,10 @@
   plays, instantly recognisable, an exaggerated take on how DJs dress now (oversized heavyweight tee, baggy cargos, chunky
   sneakers, tinted sunglasses at night, headphones parked round the neck as the badge of the trade). Like for like: he
   replaces the DJ in DJ clips (the owner's saved #09, #11, #15 are DJ clips). Proposal and look tests in `characters/dj/`.
+  **PARKED 2026-10-07 until the roster is live** (owner: "lets park for now and save"). Kept: the uniform (neon headband,
+  shin-length neon tee, elephant cargos, platform sneakers, giant headphones, gold whistle), the Knob Kiss / Phone Call /
+  Drop Point moves, his world (Ibiza clubs, a desert-festival art car, Mykonos and St Tropez beach clubs). Liked: the tiny
+  round odd-eye glasses of the Big Lad still. Open: the person ("slightly younger, different looking") and the name.
 
 **Character decisions (owner, 2026-10-06):**
 - Signature moves locked: Franz the Chin Lift, Reginald the Glove Tug, Lenny the Tie Snap.

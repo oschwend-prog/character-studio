@@ -63,3 +63,9 @@ His world: walking into a big Ibiza superclub, playing a legendary Ibiza club bo
 Man on a chariot"), Mykonos and St Tropez beach clubs at sunset. As Drop-ins these are the source clips themselves (real
 DJ clips from those places, our DJ swapped in for the star). For stills, sheets and Recreates the places are described,
 never named: no venue or festival names, logos or signage in prompts (the brands-as-reference rule).
+
+## Parked (owner 2026-10-07)
+"Like the glasses from 1. Not so sure about the type of guy. Age slightly younger, maybe different looking. Let's park for
+now and save." Kept for the restart: the uniform and the moves above, the tiny round odd-eye glasses of the Big Lad
+(`person-1-big-lad.jpg`, job `54e7dab2-2297-4d63-8865-ceb81a5fe825`), his settings. To do on restart: a younger person
+(late 20s to mid 30s) with a different face, then the name, then his kit (sheet, close-up, the three moves, ~14 credits).
