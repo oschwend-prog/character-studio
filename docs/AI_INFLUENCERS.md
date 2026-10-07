@@ -40,6 +40,9 @@
   round odd-eye glasses of the Big Lad still. Open: the person ("slightly younger, different looking") and the name.
 
 **Character decisions (owner, 2026-10-06):**
+- **Franz also replaces people** (owner 2026-10-07: "franz not only replaces dogs"): refs.json `swap.stars` = dog and
+  person (his upright body). A dog star still goes only to Franz. Genjutsu has answered a dog-for-person swap by adding the dog
+  and keeping the people, so the frame QA checks no original person is left; test one clip first.
 - Signature moves locked: Franz the Wiggle (owner 2026-10-07, replaces the Chin Lift), Reginald the Glove Tug, Lenny the Tie Snap.
 - Catchphrases locked: Franz "Sausage coming through!" (owner 2026-10-07), Reginald "As you were.", Lenny "You're welcome."
 - Reginald is mid-40s (not 74). Franz's voice is Alistair (approved).

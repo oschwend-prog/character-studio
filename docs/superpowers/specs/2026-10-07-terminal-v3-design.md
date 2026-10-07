@@ -49,8 +49,8 @@ Every check that ends `ready` stores `drop.score = {"total": 0-100, "potential":
 
 ## 4. Reuse: one clip, up to three characters
 - **Who may take it.** From a drop whose check finished (`ready`, `making` or `made`), the owner files a **version** for
-  another character: like for like (the star's kind must be one the character replaces: a person to Reginald, Lenny and every
-  later person character; a dog to Franz), not paused, not already in the family. A **family** is the root drop plus its
+  another character: like for like (the star's kind must be one the character replaces: a person to Reginald, Lenny, Franz (owner
+  2026-10-07: "franz not only replaces dogs", his upright body) and every later person character; a dog to Franz), not paused, not already in the family. A **family** is the root drop plus its
   versions (`drop.copy_of` = the root's pick id; a version of a version points at the root), skipped picks not counted; at
   most **3** members (`MAX_FAMILY = 3`).
 - **What a version is.** A new pick (url `owner-drop:<new id>`, platform `drop`, origin `owner`, status `approved`,
