@@ -65,6 +65,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - [ ] Vercel > Add New > Project > import `oschwend-prog/character-studio`. Root Directory `terminal`. Production branch `build/slice1` (or `main` after the merge).
 - [ ] Environment variables: `VITE_SUPABASE_URL` (the project URL) and `VITE_SUPABASE_ANON_KEY` (the anon / publishable key, Settings > API; it is safe in a browser). Deploy.
 - [ ] Open the URL, log in by magic link (only `o.schwend@gmail.com` can see data), then finish step 5's two items.
+- [ ] The clips folder (once, on the Mac): run `bin/install-clip-sync` and allow the iCloud Drive prompt if macOS asks. It creates iCloud Drive > ODD EYES clips and takes every video you save there as a drop, every 5 minutes (guide `docs/launch/clip-folder.md`; `bin/install-clip-sync --uninstall` turns it off).
 
 ## 9. Flip the characters to live
 - [ ] In `characters/<slug>/refs.json` (franz, reginald, lenny) set `"status": "live"` (there is no separate CLI; seeding is how status changes), with the handles and Postiz ids from step 3.
