@@ -135,6 +135,11 @@ free. A clip that has versions shows them ("Also: Lenny, ready"). The **All clip
   (`GET /v2/instagram/reels/search`, `date_posted=last-week`), plus Instagram's trending reels (`GET /v1/instagram/reels/trending`)
   once a day. Header `x-api-key` from the secret `SCRAPECREATORS_API_KEY`. A daily credit cap (`config/scan.json`
   `hits.daily_credit_cap`, default 25; each call costs `credits_charged`, usually 1) stops the run when reached.
+- **General hits too (owner 2026-10-07: "don't skip cool viral up-and-coming clips because you think they don't fit a
+  character"):** a second lane with no character filter: TikTok's trending feed (`GET /v1/tiktok/get-trending-feed`, region GB
+  and US), Instagram's trending reels, and broad searches ("dance trend", "viral dance", "trend challenge", "funny dance") sorted
+  by likes this week. These hits carry no character (`character_slug` null) and are judged only on how hot they are (views,
+  reach, freshness, rising); fit is never a reason to drop one. Any character may take them later (the check recommends who).
 - **Kept per hit:** platform, URL (unique), creator handle, followers when given, views, likes, comments, shares, saves,
   posted_at, caption (first 300 characters), sound name, duration, thumbnail URL (stored, never fetched), the keyword and the
   character it was searched for; `reach` = views ÷ followers (null without followers); `score` 0-100 from views, reach and
@@ -142,7 +147,8 @@ free. A clip that has versions shows them ("Also: Lenny, ready"). The **All clip
   numbers). Skipped: photo carousels, videos over 60 s, posts older than 14 days, a creator already kept 3 times in 30 days.
 - **Table** `studio.hits` (migration 0016, schema studio, RLS like `favorites`, read by the owner's role) with `status`
   new / dropped / dismissed; view `studio.v_hits` (new hits, best first).
-- **Terminal:** Clips › By character gets **Worth saving** per character: his top 5 new hits (thumbnail, views, reach,
+- **Terminal:** a **Hot right now** list (the general lane, top 10, any character) above the per-character sections, and
+  Clips › By character gets **Worth saving** per character: his top 5 new hits (thumbnail, views, reach,
   posted, why), **Open** (the post, to watch it) and **Use this clip** (files it as his drop through `add_drop(link)`: the
   existing one-pick fetch takes it; the hit becomes `dropped`) and **Not for us** (`dismissed`).
 - **Getting a hit into the clips:** "Use this clip" files it as the character's drop; the cloud job fetches that one post with
@@ -150,7 +156,8 @@ free. A clip that has versions shows them ("Also: Lenny, ready"). The **All clip
   tap per clip, never a batch, never a third-party downloader site (owner asked about snapinsta.to, 2026-10-07).
 - **Auto-filing (owner 2026-10-07: "set our system up with tons of clips as we will need them"):** after each pull the
   job files the best new hits as drops on its own, at most `hits.auto_file_per_character` (default 3) a day per live character,
-  best score first, skipping a URL already filed; each goes through `add_drop(link)` for that character (`character_by` studio, so
+  best score first, skipping a URL already filed; plus `hits.auto_file_general` (default 3) a day from the general lane, filed
+  with no character (the check recommends one); each goes through `add_drop(link)` for that character (`character_by` studio, so
   the check may move it) and is fetched one at a time by the cloud drop job; the hit becomes `dropped`. About 65 new clips a
   month for three characters (the need is about 15 per character a month, so this fills a buffer).
 - **Owner steps:** a ScrapeCreators account (100 free credits; the $47 pack = 25,000 credits, which never expire, lasts
