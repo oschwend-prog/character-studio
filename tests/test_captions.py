@@ -161,7 +161,7 @@ def test_each_bible_has_its_search_keywords_the_post_formula_and_the_first_comme
     assert f"· {edition} edition" in voice and "at most 40 characters" in voice
     assert "ONE engagement line" in voice and "send this to" in voice and "series tease" in voice
     assert "🎵 <song> – <artist>" in voice and "no handle known, no credit line" in voice
-    assert "3-5 hashtags" in voice and "#oddeyes" in voice and "Never #fyp, #foryou, #foryoupage, #viral or #explore" in voice
+    assert "3-4 hashtags" in voice and "series tag is added separately" in voice and "#oddeyes" in voice and "Never #fyp, #foryou, #foryoupage, #viral or #explore" in voice
     assert f"**First comment**" in voice and comment in voice
     never = bible.split("## Never", 1)[1]
     assert "no famous IP" not in never and "no third-party footage or audio in the output" not in never

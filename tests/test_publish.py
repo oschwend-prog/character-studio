@@ -7,8 +7,10 @@ argv, so no ``postiz`` binary, network or account is involved.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
@@ -24,7 +26,7 @@ from studio.config import LONDON
 from studio.models import Account, Character, Clip, ClipState, Favorite, Platform, Post, PostStatus, Snapshot
 from studio.publish import base, postiz
 from studio.publish.base import PublishResult, Publisher, UncertainPublish, preview_due, publish_due
-from studio.publish.reach import NO_REACH, Reach, ReachConfig, load_reach
+from studio.publish.reach import MAX_COLLABORATORS, NO_REACH, Reach, ReachConfig, load_reach
 from studio.publish.postiz import (
     INSTAGRAM_SETTING_KEYS,
     INSTAGRAM_SETTINGS,
@@ -952,6 +954,8 @@ class FakeRun:
 
     def option(self, sub: str, flag: str) -> str:
         argv = next(c for c in self.calls if c[1] == sub)
+        if flag == "-c":  # the texts go attached, ``--content=<text>`` (a value starting with "-" would be read as a flag)
+            return values(argv, "-c")[0]
         return argv[argv.index(flag) + 1]
 
 
@@ -1172,9 +1176,7 @@ def test_postiz_with_a_real_subprocess(tmp_path):
     assert result.platform_post_id == "pz-real"
     upload, create = json.loads(log.read_text())
     assert upload[0] == "upload" and upload[1].endswith(".mp4")
-    assert create[create.index("-c") + 1] == (
-        'two words,\nthree lines\n"quoted"\n\nAI-generated character 🤖\n\n#oddeyes'
-    )
+    assert values(create, "-c") == ['two words,\nthree lines\n"quoted"\n\nAI-generated character 🤖\n\n#oddeyes']
     assert create[create.index("-m") + 1] == "https://uploads.postiz.test/real.mp4"
     assert json.loads(create[create.index("--settings") + 1])["content_posting_method"] == "DIRECT_POST"
 
@@ -1709,10 +1711,17 @@ VOTE = "Next move: 🅰️ the moonwalk or 🅱️ the worm? Vote below 👇"
 def reach_rig(tmp_path: Path) -> Rig:
     """Biscuit on TikTok and Instagram, and Reginald on Instagram too (a possible collaborator); every account in approval mode."""
     rig = Rig(tmp_path, instagram=True)
+    rig.store.add_character(Character(slug="reginald", name="Reginald", status="live"))  # only a live character is a partner
     rig.store.upsert_account(
         Account(character_slug="reginald", platform="instagram", handle="reginald.thebutler", postiz_integration_id="int-reg-ig")
     )
     return rig
+
+
+def add_partner(rig: Rig, slug: str, handle: str, *, status: str = "live", integration: str | None = "int-partner") -> None:
+    """Another character with an Instagram account (a possible collaborator)."""
+    rig.store.add_character(Character(slug=slug, name=slug.title(), status=status))
+    rig.store.add_account(Account(character_slug=slug, platform="instagram", handle=handle, postiz_integration_id=integration))
 
 
 def ig_reel(rig: Rig, when: datetime = SLOT, *, story_video: bool = True, **features: Any) -> tuple[Clip, Post]:
@@ -1729,7 +1738,11 @@ def creates(run: FakeRun) -> list[list[str]]:
 
 
 def values(argv: list[str], flag: str) -> list[str]:
-    """Every value of a repeatable flag (``-c``, ``-m``) in one argv, in order."""
+    """Every value of a repeatable flag (``-c``, ``-m``) in one argv, in order. The texts (``-c``) are attached, one argv entry
+    each: ``--content=<text>``."""
+    if flag == "-c":
+        assert "-c" not in argv  # never a separate value: yargs reads one that starts with "-" as another flag
+        return [a.removeprefix("--content=") for a in argv if a.startswith("--content=")]
     return [argv[i + 1] for i, a in enumerate(argv) if a == flag]
 
 
@@ -1745,6 +1758,54 @@ def test_postiz_sends_the_first_comment_as_the_second_content(tmp_path):
     # one -m: the CLI pairs the n-th -m with the n-th -c, so the master goes with the Reel and the comment has none
     assert values(argv, "-m") == ["https://uploads.postiz.test/abc.mp4"]
     assert "-d" not in argv  # Postiz posts the comment as soon as the Reel is live
+
+
+def test_every_text_is_passed_attached_so_one_starting_with_a_dash_is_not_lost(tmp_path):
+    """The CLI's parser (yargs) reads a separate value that starts with "-" as another flag, so ``-c "- A or B"`` arrived as an
+    empty comment. Every text goes as one argv entry, ``--content=<text>``, whatever it starts with."""
+    run = FakeRun()
+    comment = "- A or B? Vote below"
+    _, url = stored_master(tmp_path)
+    PostizPublisher(run).publish(
+        platform=Platform.instagram, integration_id="int-bis-ig", media_url=url, caption="- the caption starts with a dash",
+        hashtags=["#oddeyes"], ai_label=True, reach=Reach(first_comment=comment),
+    )  # fmt: skip
+    [argv] = creates(run)
+    assert "-c" not in argv  # no flag whose value the parser could take for a flag
+    assert f"--content={comment}" in argv
+    assert [a for a in argv if a.startswith("--content=")][0].startswith("--content=- the caption starts with a dash\n\n")
+    assert values(argv, "-c")[1] == comment and values(argv, "-m") == ["https://uploads.postiz.test/abc.mp4"]
+    story = FakeRun()
+    PostizPublisher(story, fetch=fake_fetch).publish_story(integration_id="int-bis-ig", media_url="s", ai_label=True)
+    assert f"--content={AI}" in creates(story)[0] and "-c" not in creates(story)[0]
+
+
+NODE = shutil.which("node")
+POSTIZ_MODULES = Path.home() / ".npm-global" / "lib" / "node_modules" / "postiz" / "node_modules"
+YARGS_CHECK = """
+const yargs = require(process.argv[1] + '/yargs');
+const o = (y) => y.option('content', {alias: 'c', type: 'string'}).option('media', {alias: 'm', type: 'string'});
+const out = yargs(process.argv.slice(2)).command('posts:create', 'x', o, () => {}).exitProcess(false).parse();
+console.log(JSON.stringify(out.content));
+"""
+
+
+@pytest.mark.skipif(not (NODE and (POSTIZ_MODULES / "yargs").is_dir()), reason="the Postiz CLI is not installed here")
+def test_the_installed_postiz_cli_keeps_an_attached_text_that_starts_with_a_dash(tmp_path):
+    """Offline, the CLI's own argument parser only (its option definitions for posts:create, no API call): the attached form keeps
+    "- A or B", the old separate form lost it."""
+    def parsed(*args: str) -> Any:
+        r = subprocess.run([NODE, "-e", YARGS_CHECK, str(POSTIZ_MODULES), "posts:create", *args], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+        return json.loads(r.stdout)
+
+    assert parsed("-c", "post", "-m", "p.mp4", "-c", "- A or B") == ["post", ""]  # the bug: the comment became empty
+    assert parsed("--content=post", "-m", "p.mp4", "--content=- A or B") == ["post", "- A or B"]
+    run = FakeRun()
+    publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=Reach(first_comment="- A or B"))
+    [argv] = creates(run)
+    texts = parsed(*argv[2 : argv.index("-s")])  # what we send: contents and media, as the CLI will read them
+    assert texts[1] == "- A or B" and texts[0].startswith("the right eye is ice-blue")
 
 
 def test_postiz_without_a_first_comment_sends_one_content(tmp_path):
@@ -1938,6 +1999,40 @@ def test_no_story_is_sent_when_its_claim_cannot_be_written(tmp_path):
     assert summary["errors"] == []  # the Reel's outcome is recorded: the CLI still exits 0
 
 
+def test_the_story_claim_and_its_outcome_are_written_under_the_settings_row_lock(tmp_path):
+    """The store has no locking read of a clip, so each Story marker write asks ``get_settings`` first inside its transaction
+    (``FOR UPDATE`` on Postgres, the lock budget reservations and drop leases use): two runners never both claim the Story."""
+    rig = reach_rig(tmp_path)
+    ig_reel(rig)
+    store = rig.store
+    depth, events = 0, []
+    real_tx, real_settings, real_update = store.transaction, store.get_settings, store.update_clip
+
+    @contextmanager
+    def tx():
+        nonlocal depth
+        with real_tx() as t:
+            depth += 1
+            try:
+                yield t
+            finally:
+                depth -= 1
+
+    def settings():
+        events.append(("lock", depth))
+        return real_settings()
+
+    def update_clip(id, /, **kw):
+        if "story" in (kw.get("features") or {}):
+            events.append(("story", depth))
+        return real_update(id, **kw)
+
+    store.transaction, store.get_settings, store.update_clip = tx, settings, update_clip
+    rig.run(FakePublisher(), reach=STORIES)
+    inside = [e for e in events if e[1] >= 1]
+    assert inside == [("lock", 1), ("story", 1), ("lock", 1), ("story", 1)]  # the claim, then the outcome: each locked first
+
+
 def test_stories_do_not_count_toward_the_two_posts_a_day_cap(tmp_path):
     rig = reach_rig(tmp_path)
     reels = [ig_reel(rig, when=SLOT + timedelta(minutes=i))[1] for i in range(3)]
@@ -1989,28 +2084,22 @@ def test_a_trial_reel_gets_no_story(tmp_path):
     assert (marker["status"], marker["reason"]) == ("skipped", "trial reel: followers see it only if it graduates")
 
 
-# -- 3. the series tag -----------------------------------------------------------------------------------------------
+# -- 3. the series tag: written into the clip's hashtags when it is made, never added at publish time ------------------
 
 
-def test_the_characters_series_tag_joins_the_hashtags_when_there_is_room(rig):
-    cfg = ReachConfig(series_tags={"biscuit": "#sausagecomingthrough"})
+def test_the_publisher_posts_the_clips_hashtags_exactly_as_stored_and_previews_them_the_same(rig):
+    """The series tag is part of the clip's own hashtags since Make it (``studio.drop``, ``clip set``): what the owner previews is
+    what goes out. The publisher adds nothing (no config carries a tag any more), so an owner who removes one keeps it removed."""
     p = rig.post()
-    full = rig.store.update_clip(rig.clip().id, hashtags=["#a", "#b", "#c", "#d", "#oddeyes"])
-    rig.post(clip=full, when=SLOT + timedelta(minutes=1))
+    stored = rig.store.update_clip(p.clip_id, hashtags=["#a", "#b", "#c", "#oddeyes", "#sausagecomingthrough"])
+    shown = preview_due(rig.store, NOW, reach=ReachConfig())["would_post"][0]["hashtags"]
     pub = FakePublisher()
-
-    rig.run(pub, reach=cfg)
-
-    assert pub.calls[0]["hashtags"] == ["oddeyes", "#ai", "#sausagecomingthrough"]
-    assert pub.calls[1]["hashtags"] == ["#a", "#b", "#c", "#d", "#oddeyes"]  # never a sixth
-    assert rig.store.get_clip(p.clip_id).hashtags == ["oddeyes", "#ai"]  # the clip itself is not rewritten
-
-
-def test_another_characters_series_tag_never_joins(rig):
-    p = rig.post("@reginald.tt")
-    pub = FakePublisher()
-    rig.run(pub, reach=ReachConfig(series_tags={"biscuit": "#sausagecomingthrough"}))
-    assert pub.calls[0]["hashtags"] == ["oddeyes", "#ai"] and rig.get(p).status is PostStatus.posted
+    rig.run(pub, reach=ReachConfig())
+    assert shown == pub.calls[0]["hashtags"] == stored.hashtags
+    assert not hasattr(ReachConfig(), "series_tags")
+    plain = rig.post("@reginald.tt")
+    rig.run(pub, reach=ReachConfig())
+    assert pub.calls[1]["hashtags"] == ["oddeyes", "#ai"] and rig.get(plain).status is PostStatus.posted  # nothing joined
 
 
 # -- 4. collaborators: only from the clip's features, only our other characters --------------------------------------
@@ -2026,6 +2115,35 @@ def test_collaborators_come_only_from_the_clips_collab_and_only_our_other_charac
     assert pub.calls[0]["reach"].collaborators == ("reginald.thebutler",)
     assert summary["posted"][0]["reach"]["collaborators"] == ["reginald.thebutler"]
     assert summary["posted"][0]["reach"]["collab_dropped"] == ["someone.famous", "@biscuit.ig", "7"]
+
+
+def test_only_a_live_character_with_a_postiz_integration_can_be_a_collaborator(tmp_path):
+    """A paused or still-designing character, or an account Postiz cannot post to, is no partner: dropped, listed, never sent."""
+    rig = reach_rig(tmp_path)
+    add_partner(rig, "franz", "franz.unimpressed", status="paused")
+    add_partner(rig, "lenny", "lennygold.agent", status="designing")
+    add_partner(rig, "dj", "dj.noint", integration=None)  # live, but no Postiz integration
+    collab = ["reginald.thebutler", "franz.unimpressed", "lennygold.agent", "dj.noint"]
+    ig_reel(rig, collab=collab)
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert pub.calls[0]["reach"].collaborators == ("reginald.thebutler",)
+    assert summary["posted"][0]["reach"]["collab_dropped"] == ["franz.unimpressed", "lennygold.agent", "dj.noint"]
+
+
+def test_at_most_three_collaborators_go_out_in_the_clips_order_and_the_rest_are_listed(tmp_path):
+    """Instagram's limit is 3 collaborators on one Reel."""
+    rig = reach_rig(tmp_path)
+    add_partner(rig, "franz", "franz.unimpressed")
+    add_partner(rig, "lenny", "lennygold.agent")
+    add_partner(rig, "dj", "dj.spins")
+    assert MAX_COLLABORATORS == 3
+    ig_reel(rig, collab=["@dj.spins", "reginald.thebutler", "someone.famous", "lennygold.agent", "franz.unimpressed"])
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert pub.calls[0]["reach"].collaborators == ("dj.spins", "reginald.thebutler", "lennygold.agent")
+    assert summary["posted"][0]["reach"]["collaborators"] == ["dj.spins", "reginald.thebutler", "lennygold.agent"]
+    assert summary["posted"][0]["reach"]["collab_dropped"] == ["someone.famous", "franz.unimpressed"]
 
 
 @pytest.mark.parametrize("collab", [None, [], "reginald.thebutler", {"reginald": "reginald.thebutler"}])
@@ -2215,12 +2333,12 @@ def test_the_dry_run_shows_the_reach_pack_and_writes_nothing(tmp_path):
     rig = reach_rig(tmp_path)
     clip, post = ig_reel(rig, first_comment=VOTE, collab=["reginald.thebutler"])
     tt = rig.post("@biscuit.tt", clip=clip, when=SLOT + timedelta(minutes=1))
-    cfg = ReachConfig(series_tags={"biscuit": "#sausagecomingthrough"}, stories=True)
+    cfg = ReachConfig(stories=True)
 
     out = preview_due(rig.store, NOW, reach=cfg)
 
     ig_row, tt_row = out["would_post"]
-    assert ig_row["hashtags"] == tt_row["hashtags"] == ["oddeyes", "#ai", "#sausagecomingthrough"]
+    assert ig_row["hashtags"] == tt_row["hashtags"] == ["oddeyes", "#ai"]  # as stored
     assert ig_row["reach"] == {"first_comment": True, "collaborators": ["reginald.thebutler"], "collab_dropped": [],
                                "trial_reel": False, "story": True}  # fmt: skip
     assert tt_row["reach"] == {"first_comment": False, "collaborators": [], "collab_dropped": [], "trial_reel": False,
@@ -2238,11 +2356,10 @@ def test_the_dry_run_names_why_a_story_would_be_skipped(tmp_path):
     assert "in_app" in row["reach"]["story"]
 
 
-def test_the_committed_reach_config_has_every_switch_off_and_the_three_series_tags():
-    cfg = load_reach()
+def test_the_committed_reach_config_has_every_switch_off_and_every_key_a_real_handle():
+    cfg = load_reach()  # also checks that each trial_reels key is an Instagram handle of the roster (finding 8)
     assert cfg.trial_reels == {"franz.unimpressed": False, "reginald.thebutler": False, "lennygold.agent": False}
     assert cfg.stories is False  # a Story only with its labelled video, and only once the owner switches Stories on
-    assert cfg.series_tags == {"franz": "#sausagecomingthrough", "reginald": "#asyouwere", "lenny": "#yourewelcome"}
     scan = json.loads((Path(base.__file__).resolve().parents[2] / "config" / "scan.json").read_text())
     assert "never switched on by the build" in scan["reach"]["_doc"]
 
@@ -2269,15 +2386,86 @@ def test_no_reach_block_means_every_switch_off(tmp_path):
     scan = tmp_path / "scan.json"
     scan.write_text(json.dumps({"_doc": "x", "reach": {"_doc": "y", "trial_reels": {"_doc": "z"}}}))
     cfg = load_reach(scan, tmp_path / "no-characters")
-    assert cfg.trial_reels == {} and cfg.series_tags == {}
+    assert cfg.trial_reels == {}
     scan.write_text("{}")
     assert load_reach(scan, tmp_path / "no-characters") == ReachConfig()
 
 
-def test_a_bad_series_tag_in_refs_json_is_refused_naming_the_file(tmp_path):
+def write_refs(base: Path, slug: str, **ref: Any) -> None:
+    (base / slug).mkdir(parents=True, exist_ok=True)
+    (base / slug / "refs.json").write_text(json.dumps({"slug": slug, **ref}))
+
+
+def test_a_bad_series_tag_in_refs_json_never_stops_the_publish_run(tmp_path):
+    """The series tag is optional and is not read at publish time: one broken refs.json tag stops no post (the switches that can
+    leave a Trial Reel on by mistake still fail closed)."""
     scan = tmp_path / "scan.json"
-    scan.write_text("{}")
-    (tmp_path / "chars" / "franz").mkdir(parents=True)
-    (tmp_path / "chars" / "franz" / "refs.json").write_text(json.dumps({"slug": "franz", "style": {"series_tag": "#fyp"}}))
-    with pytest.raises(ValueError, match=r"franz/refs\.json.*series_tag"):
-        load_reach(scan, tmp_path / "chars")
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"franz.unimpressed": True}}}))
+    chars = tmp_path / "chars"
+    write_refs(chars, "franz", style={"series_tag": "#fyp"},
+               accounts=[{"platform": "instagram", "handle": "franz.unimpressed"}])  # fmt: skip
+    cfg = load_reach(scan, chars)
+    assert cfg.trial_reels == {"franz.unimpressed": True}
+
+
+def test_a_trial_reels_key_that_is_no_known_handle_stops_the_run_naming_the_key(tmp_path):
+    """A typo would silently leave the switch off: fail closed, say which key."""
+    scan = tmp_path / "scan.json"
+    chars = tmp_path / "chars"
+    write_refs(chars, "franz", accounts=[
+        {"platform": "tiktok", "handle": None, "planned_handle": "@franz.unimpressed"},
+        {"platform": "instagram", "handle": "franz.unimpressed", "planned_handle": "franz.unimpressed"},
+    ])  # fmt: skip
+    write_refs(chars, "lenny", accounts=[{"platform": "instagram", "handle": None, "planned_handle": "@LennyGold.agent"}])
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"_doc": "x", "@Franz.Unimpressed": True, "lennygold.agent": False}}}))
+    assert load_reach(scan, chars).trial_reels == {"franz.unimpressed": True, "lennygold.agent": False}  # a planned handle counts
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"franz.unimpresed": True}}}))
+    with pytest.raises(ValueError, match=r"reach\.trial_reels\.franz\.unimpresed.*no character.*franz\.unimpressed, lennygold\.agent"):
+        load_reach(scan, chars)
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"franz.unimpressed": False, "reginald.thebutler": False}}}))
+    with pytest.raises(ValueError, match=r"reginald\.thebutler"):  # off or on, a key that matches nothing is a mistake
+        load_reach(scan, chars)
+
+
+def test_a_tiktok_handle_is_not_a_trial_reels_handle(tmp_path):
+    scan = tmp_path / "scan.json"
+    chars = tmp_path / "chars"
+    write_refs(chars, "franz", accounts=[{"platform": "tiktok", "handle": "franz.tt", "planned_handle": "@franz.tt"}])
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"franz.tt": True}}}))
+    with pytest.raises(ValueError, match=r"franz\.tt"):
+        load_reach(scan, chars)
+
+
+def test_an_unreadable_refs_json_is_skipped_with_a_warning_and_can_only_make_a_key_unknown(tmp_path, capsys):
+    scan = tmp_path / "scan.json"
+    chars = tmp_path / "chars"
+    write_refs(chars, "franz", accounts=[{"platform": "instagram", "handle": "franz.unimpressed"}])
+    (chars / "broken").mkdir()
+    (chars / "broken" / "refs.json").write_text("{not json")
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"franz.unimpressed": True}}}))
+    assert load_reach(scan, chars).trial_reels == {"franz.unimpressed": True}  # the good file is enough
+    err = capsys.readouterr().err
+    assert "broken" in err and "refs.json" in err and "warning" in err
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"reginald.thebutler": True}}}))
+    with pytest.raises(ValueError, match="reginald.thebutler"):
+        load_reach(scan, chars)
+
+
+def test_no_trial_reels_keys_needs_no_roster(tmp_path):
+    scan = tmp_path / "scan.json"
+    scan.write_text(json.dumps({"reach": {"stories": True, "trial_reels": {"_doc": "x"}}}))
+    assert load_reach(scan, tmp_path / "no-characters") == ReachConfig(stories=True)
+
+
+def test_cli_due_with_a_mistyped_trial_reels_key_stops_before_anything_is_claimed(cli, tmp_path, monkeypatch):
+    p = cli.post()
+    scan = tmp_path / "scan.json"
+    chars = tmp_path / "chars"
+    write_refs(chars, "franz", accounts=[{"platform": "instagram", "handle": "franz.unimpressed"}])
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"franz.unimpresed": True}}}))
+    monkeypatch.setattr(publish, "load_reach", lambda: load_reach(scan, chars))
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: pytest.fail("a publisher was made"))
+    r = invoke("due")
+    assert r.exit_code == 2 and "franz.unimpresed" in r.stderr and "typo" in r.stderr
+    assert cli.get(p).status is PostStatus.scheduled
+    assert invoke("due", "--dry-run").exit_code == 2

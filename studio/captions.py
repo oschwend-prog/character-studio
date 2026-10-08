@@ -20,10 +20,11 @@ the cases both sides must agree on).
 
 **The series tag** (terminal v3 spec section 11, item 3): each character has his own series hashtag (``characters/<slug>/refs.json``
 ``style.series_tag``: Franz ``#sausagecomingthrough``, Reginald ``#asyouwere``, Lenny ``#yourewelcome``; ``check_series_tag``
-is the one rule for it, the seed uses it). ``with_series_tag(caption, hashtags, tag)`` is what the publisher posts: the clip's
-hashtags plus the series tag at the end, only when there is room: never a sixth hashtag, never past ``CAPTION_LIMIT``, never
-twice (case-insensitive), never a refused one; otherwise the clip's hashtags exactly as they are. ``compose_content`` itself is
-unchanged (the terminal mirrors it), so the clip's own text and the terminal's preview stay the owner's.
+is the one rule for it, the seed uses it). ``with_series_tag(caption, hashtags, tag)`` is applied where a clip's hashtags are
+written (``studio.drop`` at Make it, ``clip set --hashtag``), never at publish time, so what is stored is what the terminal
+previews and what is posted: the hashtags plus the series tag at the end, only when there is room: never a sixth hashtag, never
+past ``CAPTION_LIMIT``, never twice (case-insensitive), never a refused one; otherwise the hashtags exactly as they are.
+``compose_content`` itself is unchanged (the terminal mirrors it).
 """
 
 from __future__ import annotations

@@ -598,7 +598,7 @@ def test_make_it_swaps_qas_masters_and_waits_for_the_owners_ok(world, portrait, 
     assert (story.width, story.height) == (1080, 1920) and abs(story.duration_s - master.duration_s) <= 0.1
     assert clip.caption.splitlines()[0] == "Shoulder shimmy · butler edition" and clip.hook == "The household is unaware."
     assert clip.caption.splitlines()[2] == "Send this to your butler."  # the first engagement kind
-    assert clip.hashtags == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes"]
+    assert clip.hashtags == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes", "#asyouwere"]  # + Reginald's series tag
     assert clip.features["first_comment"].startswith("Requests for next week") and clip.features["music"] == "original"
     assert clip.features["fav_id"] == pid and clip.features["eye_closeup_end"] is False and clip.qa["problems"] == []
     assert g.calls[0]["mime"] == "image/jpeg"  # the frame QA saw a sheet of OUR output
@@ -616,6 +616,51 @@ def test_the_next_drop_of_the_character_rotates_the_engagement_line(world, portr
         assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
         clip = store.get_clip(store.get_favorite(pid).clip_id)
         assert clip.caption.splitlines()[2] == expected
+
+
+def make_clip(store, storage, pid, gen_out):
+    tap_make(store, pid)
+    assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
+    return store.get_clip(store.get_favorite(pid).clip_id)
+
+
+def test_the_series_tag_is_written_into_the_clips_hashtags_when_it_is_made(world, portrait, gen_out, fast_master):
+    """Stored = previewed = posted: the character's ``style.series_tag`` joins the hashtags at Make it, after the deconstruct's
+    3-4 tags, so the terminal's post text already shows it and the publisher adds nothing."""
+    store, storage = world
+    clip = make_clip(store, storage, ready_drop(store, storage, portrait), gen_out)  # Reginald: #asyouwere
+    assert clip.hashtags == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes", "#asyouwere"]
+    drop.compose_content(clip.caption, clip.hashtags)  # and it is a post the publisher accepts as it stands
+
+
+def test_the_series_tag_never_makes_a_sixth_hashtag(world, portrait, gen_out, fast_master):
+    """A deconstruct stored before the 3-4 rule can carry 5 tags already: no room, so the clip keeps exactly those."""
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    f = store.get_favorite(pid)
+    full = ["#a", "#b", "#c", "#d", "#oddeyes"]
+    d = {**f.proposal["drop"], "deconstruct": {**f.proposal["drop"]["deconstruct"], "hashtags": full}}
+    store.update_favorite(pid, proposal={**f.proposal, "drop": d})
+    assert make_clip(store, storage, pid, gen_out).hashtags == full
+
+
+def test_the_same_clip_made_for_another_character_gets_that_characters_series_tag(world, portrait, gen_out, fast_master):
+    """Made for Lenny (a version, or a drop the owner moved to him) it carries ``#yourewelcome``, never Reginald's tag."""
+    store, storage = world
+    store.add_character(Character(slug="lenny", name="Lenny Gold", bodies=[Body.biped]))
+    tags = {}
+    for slug in ("reginald", "lenny"):
+        pid = ready_drop(store, storage, portrait, slug=slug, recommended={"slug": slug, "reason": "the shimmy suits him"})
+        tags[slug] = make_clip(store, storage, pid, gen_out).hashtags
+    assert tags["reginald"] == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes", "#asyouwere"]
+    assert tags["lenny"] == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes", "#yourewelcome"]
+
+
+def test_a_character_without_a_series_tag_keeps_the_deconstructs_hashtags(world, portrait, gen_out, fast_master):
+    store, storage = world
+    dog = {"kind": "dog", "body": "quadruped", "description": "the dachshund on the rug", "x_center": 0.5, "full_body": True, "child": False}
+    pid = ready_drop(store, storage, portrait, slug="biscuit", star=dog)
+    assert make_clip(store, storage, pid, gen_out).hashtags == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes"]
 
 
 def test_a_made_drop_masters_in_its_characters_style(world, portrait, gen_out, fast_master):

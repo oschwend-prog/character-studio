@@ -101,7 +101,7 @@ Examples: "The household is unaware. 🎩" · "Breakfast will be served at eight
 3. ONE engagement line, a different kind from the last post: a send trigger ("send this to ..."), a question, or a series tease ("next week: ...").
 4. Credit: `🎵 <song> – <artist>` when known, then ` · dance: @<creator>` (or `trend: @<handle>` / `original: <creator>`); no handle known, no credit line.
 5. The AI disclosure (added automatically).
-6. 3-5 hashtags: the moment, the niche, the format and #oddeyes. Never #fyp, #foryou, #foryoupage, #viral or #explore.
+6. 3-4 hashtags: the moment, the niche, the format and #oddeyes. His series tag is added separately, so never write one. Never #fyp, #foryou, #foryoupage, #viral or #explore.
 
 **First comment** (the owner pins it): one line in his voice that starts a thread: "Requests for next week may be left below. Within reason."
 Example: "Wednesday dance · butler edition" / "The household requested something seasonal. 🎩" / "Send this to whoever still does it every Halloween." / "🎵 Bloody Mary – Lady Gaga · dance: Sveta" + #wednesdaydance #butler #deadpan #halloween #oddeyes

@@ -35,9 +35,9 @@
      The day of a posted post is the London date of its ``claimed_at`` (the posts table has no
      ``posted_at``), falling back to ``scheduled_for``;
    * the master's signed URL goes to ``publisher.publish(..., ai_label=True)`` (never without the AI
-     label), with the post's **reach pack** (``studio.publish.reach.plan_post``, terminal v3 spec section 11): the hashtags
-     with the character's series tag when there is room and, for an Instagram Reel, the clip's first comment, its
-     collaborators and the account's Trial Reel switch;
+     label), with the post's **reach pack** (``studio.publish.reach.plan_post``, terminal v3 spec section 11): the clip's hashtags
+     as stored (its series tag was written into them when the clip was made) and, for an Instagram Reel, the clip's first
+     comment, its collaborators (live characters only, at most 3) and the account's Trial Reel switch;
    * success: the post is ``posted`` with the platform id and URL; the clip's learning tags ``first_comment_posted`` and
      ``trial_reel`` are written (``clips.set_publish_tags``: an Instagram Reel writes both, a TikTok post only the ones the clip
      does not carry yet, so it never undoes its Reel's); an Instagram Reel is followed by its **Story** (below); and the clip
@@ -232,6 +232,11 @@ def _decide(account: Account | None, clip: Clip | None, posted_today: int) -> tu
     return PUBLISH, ""
 
 
+def _live_characters(store: Store) -> frozenset[str]:
+    """The slugs of the characters who are ``live``: the only possible collaborators of a Reel (``reach.plan_post``)."""
+    return frozenset(c.slug for c in store.characters() if c.status == "live")
+
+
 def _short(error: BaseException | str) -> str:
     text = error if isinstance(error, str) else f"{type(error).__name__}: {error}"
     return text if len(text) <= _ERROR_CHARS else text[:_ERROR_CHARS] + "…"
@@ -272,13 +277,14 @@ def publish_due(
     today = _day(now)
     cadence = settings.cadence
     accounts = {a.id: a for a in store.accounts()}
+    live = _live_characters(store)
     counts = _posted_counts(store, today, now)
     deferred_days: dict[str, set[date]] = {}
 
     for post in store.claim_due_posts(now):
         try:
             _publish_one(
-                store, storage, publisher, post, accounts, cadence, today, counts, deferred_days, out, config, now
+                store, storage, publisher, post, accounts, cadence, today, counts, deferred_days, out, config, now, live
             )
         except Exception as e:  # noqa: BLE001 - one post must never stop the rest
             # Whatever happened, the post is still `posting`: it becomes needs_check, never a retry.
@@ -299,6 +305,7 @@ def _publish_one(
     out: dict[str, Any],
     config: ReachConfig,
     now: datetime,
+    live: frozenset[str],
 ) -> None:
     account = accounts.get(post.account_id)
     clip = store.get_clip(post.clip_id)
@@ -319,7 +326,7 @@ def _publish_one(
 
     media_url = ""
     try:
-        plan = plan_post(clip, account, accounts.values(), config)  # pure; were it to raise, nothing was sent: one attempt
+        plan = plan_post(clip, account, accounts.values(), config, live=live)  # pure; were it to raise, nothing was sent: one attempt
         if not account.postiz_integration_id:
             raise ValueError(f"{account.handle} has no postiz_integration_id")
         if not clip.master_path:
@@ -386,8 +393,9 @@ def _record_reach(store: Store, clip: Clip, account: Account, plan: PostPlan, ou
 def _story_marker(store: Store, clip_id: str, marker: dict[str, Any], *, claim: bool) -> bool:
     """Write ``features['story']``. ``claim``: only when the clip has none yet (False when it has one: never a second Story)."""
     with store.transaction():
-        # No row lock (the store has no locking read of a clip): safe, one runner claims a clip's Story (one Instagram Reel row
-        # per clip, posts are claimed atomically, and the publish workflow runs one at a time, ``concurrency: publish``).
+        # The store has no locking read of a clip, so the claim queues on the settings row lock (``get_settings`` inside a
+        # transaction is ``FOR UPDATE`` on Postgres, the lock budget reservations and drop leases use): two runners never both claim.
+        store.get_settings()
         clip = store.get_clip(clip_id)
         if clip is None:
             raise KeyError(clip_id)
@@ -491,6 +499,7 @@ def preview_due(store: Store, now: datetime, *, reach: ReachConfig | None = None
     settings = store.get_settings()
     cadence = settings.cadence
     accounts = {a.id: a for a in store.accounts()}
+    live = _live_characters(store)
     counts = _posted_counts(store, today, now)
     deferred_days: dict[str, set[date]] = {}
 
@@ -520,6 +529,6 @@ def preview_due(store: Store, now: datetime, *, reach: ReachConfig | None = None
             out["would_reschedule"].append({**row, "to": target, "reason": why})
         else:
             counts[post.account_id] += 1
-            plan = plan_post(clip, account, accounts.values(), config)
+            plan = plan_post(clip, account, accounts.values(), config, live=live)
             out["would_post"].append({**row, "hashtags": plan.hashtags, "reach": plan.summary()})
     return out

@@ -42,9 +42,9 @@
 * ``style`` (optional, Terminal v2 part C) is the character's kit: the caption ``pill`` (``studio.media.overlays.PillStyle``: colours,
   font from ``assets/fonts/``, case, tracking, border, tilt, shear, block), how it comes in (``entrance``), the edit on the hook
   (``hook_edit``) and the colour ``tone``, plus his ``series_tag`` (terminal v3 spec section 11: ONE hashtag, ``captions.check_series_tag``,
-  which the publisher adds to a post's hashtags when there is room, ``studio.publish.reach``). ``validate_style`` checks it (a bad hex,
-  an unknown name, a missing font or a series tag that is not one live hashtag refuses the file); ``bin/studio master build`` and the
-  publisher read the file, so the seed stores nothing. No kit keeps today's dark pill. The parked DJ's kit is
+  which is written into a clip's hashtags when the clip is made when there is room, ``studio.drop`` at Make it and ``clip set``). ``validate_style`` checks it (a bad hex,
+  an unknown name, a missing font or a series tag that is not one live hashtag refuses the file); ``bin/studio master build`` and Make it
+  read the file, so the seed stores nothing. No kit keeps today's dark pill. The parked DJ's kit is
   ``characters/dj/style.json`` (no refs.json, so he is not seeded).
 * ``dropin_share`` is the first-insert value of a new account row (owner decision 2026-10-05: ``characters/*/refs.json``
   ships 1.00 for every account, Drop-in is the default for every video); the controller updates live rows.
@@ -85,6 +85,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Annotated, Any
@@ -116,7 +117,7 @@ SWAP_NOUN_MAX = 40
 SWAP_PARTS = ("cameo", "featured", "star")  # = studio.drop.PARTS (drop imports seed, so not shared): a test pins them equal
 SWAP_PERFORMANCE_MAX = 200  # the Object swap prompt's one performance sentence (the prompt stays SHORT)
 # a character's style kit (Terminal v2, part C): how his caption pill comes in, the edit on the hook, the colour tone; and his series
-# hashtag (terminal v3 spec section 11), which the publisher adds to his posts' hashtags when there is room
+# hashtag (terminal v3 spec section 11), which joins his clips' hashtags when they are made (Make it, clip set) when there is room
 STYLE_KEYS = ("pill", "entrance", "hook_edit", "tone", "series_tag")
 STYLE_ENTRANCES = ("none", "fade_rise", "slam", "word_pop")
 STYLE_HOOK_EDITS = ("none", "push_in", "pause", "punch_in", "drop_flash")
@@ -347,6 +348,30 @@ def load_refs(characters_dir: Path | str = DEFAULT_CHARACTERS_DIR) -> list[dict[
             raise ValueError(f"{path}: cannot read refs.json: {e}") from None
         loaded.append(_validate_ref(raw, path))
     return loaded
+
+
+def series_tag_of(slug: str, characters_dir: Path | str | None = None) -> str | None:
+    """The ``style.series_tag`` of ``<dir>/<slug>/refs.json`` (default dir: ``DEFAULT_CHARACTERS_DIR``), or None.
+
+    Only this one file is read, and an optional tag never stops anything: a character without one, a missing or unreadable file or a
+    tag that is not one live hashtag (``captions.check_series_tag``) gives None, the last two with a warning on stderr (the seed
+    refuses such a file; here a clip is simply made without the tag). Used where a clip's hashtags are written (``clip set``)."""
+    path = Path(DEFAULT_CHARACTERS_DIR if characters_dir is None else characters_dir) / slug / "refs.json"
+    try:
+        ref = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"warning: {path}: cannot read refs.json ({e}); no series tag is added", file=sys.stderr)
+        return None
+    style = ref.get("style") if isinstance(ref, dict) else None
+    if not isinstance(style, dict) or style.get("series_tag") is None:
+        return None
+    try:
+        return check_series_tag(style["series_tag"])
+    except ValueError as e:
+        print(f"warning: {path}: style.{e}; no series tag is added", file=sys.stderr)
+        return None
 
 
 def character_setup(ref: dict[str, Any]) -> dict[str, Any]:

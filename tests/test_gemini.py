@@ -156,7 +156,8 @@ def test_a_second_miss_fails_loudly(clip):
         ({"star": {k: v for k, v in GOOD["star"].items() if k != "child"}}, "star.child must be true or false"),
         ({"camera": "drone"}, "camera must be one of"),
         ({"hashtags": ["#fyp", "#butler", "#deadpan"]}, "may not include #fyp"),
-        ({"hashtags": ["#butler"]}, "3-5 distinct tags"),
+        ({"hashtags": ["#butler"]}, "3-4 distinct tags"),
+        ({"hashtags": ["#a", "#b", "#c", "#d", "#oddeyes"]}, "3-4 distinct tags"),  # the series tag is the fifth, added at Make it
         ({"first_comment": "two\nlines"}, "first_comment"),
         ({"suggested_part": "lead"}, "suggested_part"),
         ({"recommended": "reginald"}, "recommended must be an object"),
@@ -225,6 +226,17 @@ def test_each_hook_carries_its_pattern_and_the_first_comment_a_question_variant(
         assert deconstruct_problems({k: v for k, v in GOOD.items() if k != key}, REGINALD) == [f"missing field(s) {key}"]
     labels = gemini.DECONSTRUCT_SCHEMA["properties"]["hook_patterns"]
     assert labels["items"]["enum"] == list(gemini.HOOK_PATTERNS) and labels["minItems"] == labels["maxItems"] == 3
+
+
+def test_gemini_is_asked_for_3_4_hashtags_because_the_series_tag_is_added_separately():
+    """Instagram takes 5: the deconstruct's 3-4 leave room for the character's series tag, which joins them at Make it."""
+    assert gemini.HASHTAGS == (3, 4)
+    tags = gemini.DECONSTRUCT_SCHEMA["properties"]["hashtags"]
+    assert (tags["minItems"], tags["maxItems"]) == (3, 4)
+    line = gemini.deconstruct_prompt(REGINALD).split("- hashtags:", 1)[1].split("\n- notes:", 1)[0]
+    assert line.startswith(" 3-4:") and "series tag is added separately" in line and "#oddeyes" in line
+    full = gemini.tidy_deconstruct({**GOOD, "hashtags": ["#a", "#b", "#c", "#d"]}, REGINALD)["hashtags"]
+    assert full == ["#a", "#b", "#c", "#oddeyes"]  # four at most, #oddeyes always in
 
 
 def test_the_hook_patterns_and_the_question_are_asked_for_and_tidied(clip):

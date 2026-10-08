@@ -86,7 +86,7 @@ Examples: "When they put me on hold for the third time 📞" (the first clip's c
 3. ONE engagement line, a different kind from the last post: a send trigger ("send this to ..."), a question, or a series tease ("next week: ...").
 4. Credit: `🎵 <song> – <artist>` when known, then ` · dance: @<creator>` (or `trend: @<handle>` / `original: <creator>`); no handle known, no credit line.
 5. The AI disclosure (added automatically).
-6. 3-5 hashtags: the moment, the niche, the format. Never #fyp, #foryou, #foryoupage, #viral or #explore.
+6. 3-4 hashtags: the moment, the niche, the format. His series tag is added separately, so never write one. Never #fyp, #foryou, #foryoupage, #viral or #explore.
 
 **First comment** (the owner pins it): "Requests go through my assistant. My assistant is busy."
 

@@ -102,7 +102,7 @@ MOMENT_MAX = 60
 NOTES_MAX = 300
 GADGET_MAX = 40
 GADGETS_MAX = 3
-HASHTAGS = (3, 5)
+HASHTAGS = (3, 4)  # the character's series tag joins them at Make it (captions.with_series_tag): 4 + 1 = Instagram's 5
 STAR_WORDS = {"person": "a person", "dog": "a dog", "animal": "a small animal"}
 SPANS_MAX = 12  # moments with text or a watermark on screen (owner 2026-10-06: only the section we use is judged)
 SPAN_KEYS = ("watermark_spans", "burned_in_text_spans")
@@ -641,7 +641,7 @@ week: ..."). Never mention AI, never explain the joke.
 word, one line of at most {FIRST_COMMENT_MAX} characters.
 - first_comment_question: the same first comment as an open question to the viewer instead of a vote, in his voice, one line \
 of at most {FIRST_COMMENT_MAX} characters.
-- hashtags: 3-5: the moment, the niche, the format and #oddeyes. Never #fyp, #foryou, #foryoupage, #viral or #explore.
+- hashtags: 3-4: the moment, the niche, the format and #oddeyes. The character's series tag is added separately, so never write one. Never #fyp, #foryou, #foryoupage, #viral or #explore.
 - notes: anything the editor should know (cuts, crowds, fast camera), at most {NOTES_MAX} characters, "" when nothing.
 - recommended: which of our characters below should replace this clip's star, whoever it was dropped for: slug = one of \
 {", ".join(r.slug for r in crew)}; reason = why him, one concrete line of at most {REASON_MAX} characters naming what in the clip \

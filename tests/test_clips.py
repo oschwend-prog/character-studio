@@ -786,6 +786,61 @@ def test_cli_set_hashtags_are_checked_against_the_caption_already_stored(cli_sto
     assert cli_store.get_clip(cid).hashtags == []
 
 
+def test_cli_set_hashtags_gain_the_characters_series_tag_when_there_is_room(cli_store):
+    """Written here, not at publish time: what is stored is what the terminal previews and what is posted. Reginald's tag is
+    ``#asyouwere`` (refs.json); a character without one (Biscuit) keeps the tags given."""
+    cid = cli_clip(cli_store, **{"--character": "reginald"})
+    r = run("set", cid, "--hashtag", "#shouldershimmy", "--hashtag", "#butler", "--hashtag", "#deadpan", "--hashtag", "#oddeyes")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["hashtags"] == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes", "#asyouwere"]
+    assert cli_store.get_clip(cid).hashtags == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes", "#asyouwere"]
+    # set again with the tag already there, or with all five taken: the same list, never a sixth
+    assert run("set", cid, "--hashtag", "#a", "--hashtag", "#AsYouWere").exit_code == 0
+    assert cli_store.get_clip(cid).hashtags == ["#a", "#AsYouWere"]
+    five = ["#a", "#b", "#c", "#d", "#oddeyes"]
+    assert run("set", cid, *[x for t in five for x in ("--hashtag", t)]).exit_code == 0
+    assert cli_store.get_clip(cid).hashtags == five
+    other = cli_clip(cli_store)  # Biscuit
+    assert run("set", other, "--hashtag", "#a", "--hashtag", "#b", "--hashtag", "#c").exit_code == 0
+    assert cli_store.get_clip(other).hashtags == ["#a", "#b", "#c"]
+
+
+def test_cli_set_without_hashtags_leaves_them_alone_and_a_state_move_with_them_carries_the_tag(cli_store):
+    cid = cli_clip(cli_store, **{"--character": "reginald"})
+    assert run("set", cid, "--caption", "tea. again.").exit_code == 0
+    assert cli_store.get_clip(cid).hashtags == []  # no --hashtag: nothing joined
+    r = run("set", cid, "--state", "generating", "--hashtag", "#a", "--hashtag", "#oddeyes")
+    assert r.exit_code == 0, r.output
+    assert cli_store.get_clip(cid).hashtags == ["#a", "#oddeyes", "#asyouwere"]
+
+
+def test_cli_set_a_series_tag_that_would_overflow_the_post_is_left_out(cli_store):
+    """The tag joins only if the composed post text still passes every rule (2,200 characters here)."""
+    cid = cli_clip(cli_store, **{"--character": "reginald"})
+    assert run("set", cid, "--caption", "z" * 2125).exit_code == 0
+    # 2,125 + 4 breaks + the 25-unit disclosure + 41 = 2,195 fits; the 12 more of " #asyouwere" would not
+    assert run("set", cid, "--hashtag", "#" + "t" * 40).exit_code == 0
+    assert cli_store.get_clip(cid).hashtags == ["#" + "t" * 40]
+
+
+def test_a_bad_series_tag_in_refs_json_is_a_warning_not_a_failure(cli_store, tmp_path, monkeypatch):
+    """An optional tag never stops a clip: the file is refused by the seed, here the clip is made without the tag."""
+    from studio import seed
+
+    chars = tmp_path / "chars"
+    (chars / "reginald").mkdir(parents=True)
+    (chars / "reginald" / "refs.json").write_text(json.dumps({"slug": "reginald", "style": {"series_tag": "#fyp"}}))
+    monkeypatch.setattr(seed, "DEFAULT_CHARACTERS_DIR", chars)
+    cid = cli_clip(cli_store, **{"--character": "reginald"})
+    r = run("set", cid, "--hashtag", "#a")
+    assert r.exit_code == 0, r.output
+    assert cli_store.get_clip(cid).hashtags == ["#a"]
+    assert "warning" in r.stderr and "series_tag" in r.stderr  # said on stderr, the JSON on stdout stays clean
+    json.loads(r.stdout)
+    (chars / "reginald" / "refs.json").write_text("{nope")
+    assert seed.series_tag_of("reginald") is None and seed.series_tag_of("nobody") is None
+
+
 def test_cli_set_a_state_move_with_an_over_long_caption_writes_nothing(cli_store):
     cid = cli_clip(cli_store)
     r = run("set", cid, "--state", "generating", "--caption", "z" * 3000)

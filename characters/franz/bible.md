@@ -99,7 +99,7 @@ Examples: "Sausage coming through! 🐾" · "Short legs. Big moves. ✨" · "Nob
 3. ONE engagement line, a different kind from the last post: a send trigger ("send this to ..."), a question, or a series tease ("next week: ...").
 4. Credit: `🎵 <song> – <artist>` when known, then ` · dance: @<creator>` (or `trend: @<handle>` / `original: <creator>`); no handle known, no credit line.
 5. The AI disclosure (added automatically).
-6. 3-5 hashtags: the moment, the niche, the format. Never #fyp, #foryou, #foryoupage, #viral or #explore. (He has the odd eyes since 2026-10-06; whether his posts carry #oddeyes and the two-dot bug follows the rest of C8, one universe or standalone brands, still the owner's call.)
+6. 3-4 hashtags: the moment, the niche, the format. His series tag is added separately, so never write one. Never #fyp, #foryou, #foryoupage, #viral or #explore. (He has the odd eyes since 2026-10-06; whether his posts carry #oddeyes and the two-dot bug follows the rest of C8, one universe or standalone brands, still the owner's call.)
 
 **First comment** (the owner pins it; a two-option vote for his next clip, in his voice): "Next move: <option A> or <option B>? You pick, I dance. 🐾" (e.g. "Next move: the Wiggle at a wedding or the Wiggle at the gym? You pick, I dance. 🐾"). With no two options to offer: "Drop your requests for my next move below. I read them all. 🐾"
 

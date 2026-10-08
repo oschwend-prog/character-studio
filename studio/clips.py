@@ -86,7 +86,9 @@ CLI (``studio clip ...``) prints JSON on stdout; exit 2 for anything the caller 
 ``transition``, so the table cannot be bypassed from the command line either. ``clip set --caption`` /
 ``--hashtag`` refuse (exit 2, nothing written) a caption that, composed with the AI disclosure and the
 hashtags (``studio.captions``), would be over the 2,200-character post limit, carry more than 5 hashtags or a refused one
-(#fyp, #foryou, #foryoupage, #viral, #explore).
+(#fyp, #foryou, #foryoupage, #viral, #explore). ``clip set --hashtag`` adds the clip's character's series tag
+(``refs.json`` ``style.series_tag``) after the tags given when there is room (``captions.with_series_tag``), so what is stored,
+previewed in the terminal and posted is the same; the publisher adds nothing.
 """
 
 from __future__ import annotations
@@ -102,7 +104,7 @@ from typing import Annotated, Any
 
 import typer
 
-from studio.captions import caption_length, compose_content
+from studio.captions import caption_length, compose_content, with_series_tag
 from studio.cli_support import emit, fail, open_store, parse_when, text_option
 from studio.config import now_london
 from studio.models import HOOK_PATTERNS, MUSIC_ARMS, Clip, ClipState, Mode, Post, PostStatus
@@ -711,6 +713,14 @@ def set_command(
         with store.transaction():  # the source first (it needs the clip still planned), then the rest
             if "caption" in fields or "hashtags" in fields:
                 current = store.get_clip(id)  # unknown clip: the writes below say so
+                if current is not None and "hashtags" in fields:
+                    # the character's series tag joins the hashtags HERE, when they are written (stored = previewed = posted; the
+                    # publisher adds nothing): after the ones given, only when there is room, never a sixth
+                    from studio.seed import series_tag_of  # local: seed imports a lot, and only this command needs it
+
+                    fields["hashtags"] = with_series_tag(
+                        fields.get("caption", current.caption or ""), fields["hashtags"], series_tag_of(current.character_slug)
+                    )
                 if current is not None:  # the text posted must fit the 2,200 limit, disclosure included
                     compose_content(
                         fields.get("caption", current.caption or ""),

@@ -88,7 +88,8 @@ frame), the credits reserved (``budget.reserve``: the monthly cap and the kill s
 downloaded, the credits settled (the API reports no cost: the estimate for the trimmed seconds is booked), ``qa tech``, the
 original audio muxed back if it was lost, the Gemini frame QA (a leftover person, a watermark, the eyes), one automatic
 re-roll on a fail then stop, the master (``closeup: null``, music ``original``, the hook on screen), the upload, the caption +
-first comment + hashtags of the deconstruct (playbook: a searchable title, the joke, a rotating engagement line, the credit),
+first comment + hashtags of the deconstruct (playbook: a searchable title, the joke, a rotating engagement line, the credit; the
+hashtags are 3-4 and the character's series tag joins them here, ``captions.with_series_tag``, so stored = previewed = posted),
 ``awaiting_approval``. The card then follows the 8 tracker steps of "In the works".
 
 **Resumable and one at a time.** Every step reads where the clip is (its state, ``drop['make']``) and goes on from there, so a
@@ -146,7 +147,7 @@ import typer
 
 from studio import budget, clips, fetch, gemini, seed, sources
 from studio.budget import BudgetRefused
-from studio.captions import compose_content
+from studio.captions import compose_content, with_series_tag
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
 from studio.config import LONDON, now_london
 from studio.favorites import (
@@ -1837,7 +1838,9 @@ def _master(store: Store, storage: Storage, pick: Favorite, clip: Clip, ref: Map
     upload_master(store, storage, clip.id, out)
     kind = clip.features.get("engagement_kind") if clip.features.get("engagement_kind") in ENGAGEMENT_ORDER else ENGAGEMENT_ORDER[0]
     caption = caption_text(pick, look, kind) if look.get("caption") else hook
-    hashtags = list(look.get("hashtags") or ["#oddeyes"])
+    # The character's series tag (refs.json ``style.series_tag``) joins the deconstruct's 3-4 tags HERE, when the clip is made, so
+    # the post text the owner previews is the one that is posted (the publisher adds nothing); never a sixth tag.
+    hashtags = with_series_tag(caption, list(look.get("hashtags") or ["#oddeyes"]), (ref.get("style") or {}).get("series_tag"))
     compose_content(caption, hashtags)  # the 2,200 limit, 5 tags, no refused tag: before anything is written
     clips.transition(store, clip.id, S.mastered, hook=hook, caption=caption, hashtags=hashtags)
     if look.get("first_comment"):

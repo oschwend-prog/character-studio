@@ -29,7 +29,7 @@ Examples: "tracksuit on. worries off. 💙" · "one blue eye, one gold eye, zero
 3. ONE engagement line, a different kind from the last post: a send trigger ("send this to ..."), a question, or a series tease ("next week: ...").
 4. Credit: `🎵 <song> – <artist>` when known, then ` · dance: @<creator>` (or `trend: @<handle>` / `original: <creator>`); no handle known, no credit line.
 5. The AI disclosure (added automatically).
-6. 3-5 hashtags: the moment, the niche, the format and #oddeyes. Never #fyp, #foryou, #foryoupage, #viral or #explore.
+6. 3-4 hashtags: the moment, the niche, the format and #oddeyes. His series tag is added separately, so never write one. Never #fyp, #foryou, #foryoupage, #viral or #explore.
 
 **First comment** (the owner pins it): one line in his voice that starts a thread: "which eye did you notice first? 💙🧡"
 Example: "Single Ladies · dachshund edition" / "lead dancer. obviously. 💙" / "which eye did you notice first? 🌭" / "🎵 Single Ladies – Beyoncé · trend: @muduronline" + #singleladies #dachshund #dogdance #sausagedog #oddeyes

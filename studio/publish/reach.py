@@ -1,6 +1,6 @@
 """The reach pack (terminal v3 spec section 11): the free levers every approved Reel goes out with, decided per post.
 
-``plan_post(clip, account, accounts, config)`` is pure: it says what one due post carries, and ``publish_due`` /
+``plan_post(clip, account, accounts, config, live=...)`` is pure: it says what one due post carries, and ``publish_due`` /
 ``preview_due`` (``studio.publish.base``) both use it, so the dry run shows exactly what a real run sends.
 
 1. **The first comment** (``Reach.first_comment``): the clip's ``features['first_comment']`` (the two-option vote,
@@ -14,31 +14,32 @@
    (``features['story']``), a silent master (``features['music'] == 'in_app'``: the owner adds the song to the Reel in the app,
    a Story would go out silent on autopilot, CLAUDE.md), a Trial Reel ("trial reel: followers see it only if it graduates") or
    no Story video ("no labelled story video").
-3. **The series tag**: the character's ``style.series_tag`` (``characters/<slug>/refs.json``) joins the post's hashtags when
-   there is room (``captions.with_series_tag``: never a sixth, never past 2,200 characters); every platform.
+3. **The series tag** is NOT added here: it is written into the clip's own hashtags when the clip is made (``studio.drop`` at
+   Make it, ``clip set``; ``captions.with_series_tag``), so the text the owner previews is the text that goes out.
 4. **Collaborators** (Instagram only): only from ``features['collab']``, a list of our OTHER characters' Instagram handles.
    Each is matched (case and ``@`` aside) against our own Instagram account rows and posted as that row's handle: a name that
-   is not one of our other characters' accounts is dropped (``PostPlan.collab_dropped``), never invented, never the
-   character himself. Not a list: no collaborators.
+   is not the Instagram account of another character who is ``live`` and has a Postiz integration is dropped
+   (``PostPlan.collab_dropped``), never invented, never the character himself; at most ``MAX_COLLABORATORS`` (3, Instagram's
+   limit) are kept, in the clip's order, and the rest are listed in ``collab_dropped`` too. Not a list: no collaborators.
 5. **Trial Reels** (Instagram only): ``config/scan.json`` ``reach.trial_reels``, a map of Instagram handle -> true / false (off
    for every account; proposed to the owner for new accounts with few followers, never switched on by the build). On: the Reel
    goes out with ``is_trial_reel`` + ``graduation_strategy: SS_PERFORMANCE``. A Reel with collaborators is never a Trial Reel
    (Instagram takes no collaborators on one): the clip's own collab wins over the account's switch.
 
-``load_reach()`` reads the two files (``config/scan.json`` ``reach``: ``stories`` and ``trial_reels``, and every
-``characters/*/refs.json`` ``style.series_tag``) and refuses, naming the key or the file, a switch that is not true or false or a
-series tag that is not one live hashtag.
+``load_reach()`` reads ``config/scan.json`` ``reach`` (``stories`` and ``trial_reels``) and refuses, naming the key, a switch that
+is not true or false and a ``trial_reels`` key that is no Instagram handle of ``characters/*/refs.json`` (a typo would silently
+leave the switch off: the run stops, nothing is posted). A character's ``style.series_tag`` is not read here.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Iterable, Mapping
+import sys
+from collections.abc import Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from studio.captions import check_series_tag, with_series_tag
 from studio.clips import validate_first_comment
 from studio.models import Account, Clip, Platform
 
@@ -50,6 +51,7 @@ SILENT_STORY = (
     "silent master: the clip's music is in_app (the owner adds the song to the Reel in the app), so a Story of it would go "
     "out with no sound on autopilot"
 )
+MAX_COLLABORATORS = 3  # Instagram's limit on collaborators of one Reel
 STORIES_OFF = "stories are off"
 TRIAL_STORY = "trial reel: followers see it only if it graduates"
 NO_STORY_VIDEO = "no labelled story video"
@@ -74,11 +76,10 @@ def handle_key(handle: str) -> str:
 
 @dataclass(frozen=True)
 class ReachConfig:
-    """The reach pack's settings: ``trial_reels`` (Instagram handle -> on), ``series_tags`` (character slug -> ``#tag``) and
-    ``stories`` (a Reel is followed by its Story; off by default)."""
+    """The reach pack's settings: ``trial_reels`` (Instagram handle -> on) and ``stories`` (a Reel is followed by its Story; off
+    by default)."""
 
     trial_reels: Mapping[str, bool] = field(default_factory=dict)
-    series_tags: Mapping[str, str] = field(default_factory=dict)
     stories: bool = False
 
     def trial_reel_on(self, handle: str | None) -> bool:
@@ -97,7 +98,7 @@ class PostPlan:
     story: bool = False  # an Instagram Reel: a Story of its labelled Story video follows it
     story_skip: str | None = None  # why an Instagram Reel gets no Story (None: it does, or the post is not a Reel)
     story_path: str | None = None  # the labelled Story video (bucket clips) the Story is posted from, when ``story``
-    collab_dropped: tuple[str, ...] = ()  # names in features['collab'] that are not our other characters' Instagram accounts
+    collab_dropped: tuple[str, ...] = ()  # names in features['collab'] that are not sent (see ``_collaborators``)
 
     def summary(self) -> dict[str, Any]:
         """The JSON the run summary and the dry run show (the first comment's text stays on the clip)."""
@@ -120,35 +121,43 @@ def _first_comment(features: Mapping[str, Any]) -> str | None:
         return None
 
 
-def _collaborators(features: Mapping[str, Any], account: Account, accounts: Iterable[Account]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(collaborators, dropped): ``features['collab']`` matched against our other characters' Instagram accounts."""
+def _collaborators(
+    features: Mapping[str, Any], account: Account, accounts: Iterable[Account], live: Collection[str]
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(collaborators, dropped): ``features['collab']`` matched against the Instagram accounts of OUR OTHER characters who are
+    ``live`` (``live``: their slugs) and have a Postiz integration (an account that cannot post is no partner), at most
+    ``MAX_COLLABORATORS`` of them, in the clip's order. Everything else, an eligible name over the limit included, is dropped."""
     raw = features.get("collab")
     if not isinstance(raw, list):
         return (), ()
     ours = {
         handle_key(a.handle): a.handle.strip().lstrip("@").strip()
         for a in accounts
-        if a.platform is Platform.instagram and a.handle and a.character_slug != account.character_slug
+        if a.platform is Platform.instagram and a.handle and a.postiz_integration_id
+        and a.character_slug != account.character_slug and a.character_slug in live
     }
     kept: list[str] = []
     dropped: list[str] = []
     for item in raw:
         name = ours.get(handle_key(item)) if isinstance(item, str) else None
-        if name is None:
+        if name is None or (name not in kept and len(kept) >= MAX_COLLABORATORS):
             dropped.append(str(item))
         elif name not in kept:
             kept.append(name)
     return tuple(kept), tuple(dropped)
 
 
-def plan_post(clip: Clip, account: Account, accounts: Iterable[Account], config: ReachConfig) -> PostPlan:
-    """What the post of ``clip`` on ``account`` goes out with: its hashtags (the series tag joined when there is room) and, for an
-    Instagram Reel, the first comment, the collaborators, the Trial Reel switch and the Story that follows."""
+def plan_post(
+    clip: Clip, account: Account, accounts: Iterable[Account], config: ReachConfig, *, live: Collection[str]
+) -> PostPlan:
+    """What the post of ``clip`` on ``account`` goes out with: its hashtags exactly as stored (the series tag is part of them since
+    the clip was made) and, for an Instagram Reel, the first comment, the collaborators (``live``: the slugs of the characters
+    who are live, the only possible partners), the Trial Reel switch and the Story that follows."""
     features = clip.features or {}
-    hashtags = with_series_tag(clip.caption or "", list(clip.hashtags), config.series_tags.get(clip.character_slug))
+    hashtags = list(clip.hashtags)
     if account.platform is not Platform.instagram:
         return PostPlan(hashtags=hashtags)
-    collaborators, dropped = _collaborators(features, account, accounts)
+    collaborators, dropped = _collaborators(features, account, accounts, live)
     trial = config.trial_reel_on(account.handle) and not collaborators
     reach = Reach(first_comment=_first_comment(features), collaborators=collaborators, trial_reel=trial)
     video = features.get("story_path")
@@ -206,30 +215,40 @@ def trial_reels(scan: Mapping[str, Any]) -> dict[str, bool]:
     return out
 
 
-def series_tags(characters_dir: Path | str = CHARACTERS_DIR) -> dict[str, str]:
-    """Every ``<dir>/<slug>/refs.json`` ``style.series_tag``, by slug; ``ValueError`` naming the file for a bad one."""
-    out: dict[str, str] = {}
+def instagram_handles(characters_dir: Path | str = CHARACTERS_DIR) -> set[str]:
+    """Every Instagram handle the roster has or plans (``handle`` and ``planned_handle`` of the ``instagram`` accounts in
+    ``<dir>/*/refs.json``, as ``handle_key``). A refs.json that cannot be read is skipped with a warning on stderr: that can only
+    make a ``trial_reels`` key look unknown (the run then stops), never hide a typo."""
+    found: set[str] = set()
     for path in sorted(Path(characters_dir).glob("*/refs.json")):
         try:
             ref = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as e:
-            raise ValueError(f"{path}: cannot read refs.json: {e}") from None
-        style = ref.get("style") if isinstance(ref, dict) else None
-        if not isinstance(style, dict) or style.get("series_tag") is None:
+            print(f"warning: {path}: cannot read refs.json ({e}); its handles are not known to the reach pack", file=sys.stderr)
             continue
-        try:
-            out[str(ref.get("slug") or path.parent.name)] = check_series_tag(style["series_tag"])
-        except ValueError as e:
-            raise ValueError(f"{path}: style.{e}") from None
-    return out
+        for acc in (ref.get("accounts") or []) if isinstance(ref, dict) else []:
+            if isinstance(acc, dict) and acc.get("platform") == "instagram":
+                found.update(handle_key(h) for h in (acc.get("handle"), acc.get("planned_handle")) if isinstance(h, str) and h.strip())
+    return found
 
 
 def load_reach(scan_path: Path | str = SCAN_PATH, characters_dir: Path | str = CHARACTERS_DIR) -> ReachConfig:
-    """The reach pack's settings from the repo's files (see the module docstring)."""
+    """The reach pack's settings from the repo's files (see the module docstring). ``ValueError`` (the CLI exits 2, nothing is
+    posted) for a switch that is not true or false and for a ``trial_reels`` key that is no Instagram handle of the roster: a
+    typo there would silently leave a Trial Reel switch off."""
     try:
         scan = json.loads(Path(scan_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
         raise ValueError(f"{scan_path}: cannot read it: {e}") from None
     if not isinstance(scan, Mapping):
         raise ValueError(f"{scan_path}: must be a JSON object")
-    return ReachConfig(trial_reels=trial_reels(scan), series_tags=series_tags(characters_dir), stories=stories(scan))
+    switches = trial_reels(scan)
+    if switches:
+        known = instagram_handles(characters_dir)
+        if unknown := sorted(h for h in switches if h not in known):
+            raise ValueError(
+                f"config/scan.json reach.trial_reels.{unknown[0]}: no character has an Instagram account with that handle "
+                f"(known: {', '.join(sorted(known)) or 'none'}); fix the key, a typo would leave the switch off"
+                + (f" ({len(unknown) - 1} more unknown)" if len(unknown) > 1 else "")
+            )
+    return ReachConfig(trial_reels=switches, stories=stories(scan))

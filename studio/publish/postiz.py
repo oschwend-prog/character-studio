@@ -5,14 +5,14 @@
 1. fetches the master from its signed URL into a private temp folder (Postiz only accepts media it
    hosted itself, so the file has to pass through ``postiz upload``; Rule 2 of the postiz skill),
 2. ``postiz upload <file>`` and reads the ``path`` it returns, then deletes the temp folder,
-3. ``postiz posts:create -c <caption + hashtags> -m <path> [-c <first comment>] -s <now> -i <integration> --settings
-   <json>``, with the per-platform settings below, and reads the Postiz post id from its output.
+3. ``postiz posts:create --content=<caption + hashtags> -m <path> [--content=<first comment>] -s <now> -i <integration>
+   --settings <json>``, with the per-platform settings below, and reads the Postiz post id from its output.
 
 **The reach pack** (terminal v3 spec section 11; ``studio.publish.reach`` decides, this adapter only writes it down):
 
-* the first comment is the second ``-c`` (Postiz turns every content after the first into a comment; on Instagram the first
-  comment). The CLI pairs the n-th ``-m`` with the n-th ``-c``, so the one ``-m`` stays the Reel's and the comment has no media.
-  No first comment: one ``-c``, as before;
+* the first comment is the second ``--content`` (Postiz turns every content after the first into a comment; on Instagram the
+  first comment). The CLI pairs the n-th ``-m`` with the n-th content, so the one ``-m`` stays the Reel's and the comment has no
+  media. No first comment: one ``--content``, as before. Every text is passed attached (``--content=<text>``, see ``_create``);
 * the Instagram settings are pinned to the CLI's schema (``postiz integrations:settings <id>``, CLI 2.0.16, checked 2026-10-08):
   ``post_type`` post | story, ``is_trial_reel``, ``graduation_strategy`` MANUAL | SS_PERFORMANCE, ``collaborators`` (a list of
   ``{label}``) and ``audio`` (never sent). ``INSTAGRAM_SETTING_KEYS`` holds them; Postiz drops an unknown key without a word, so
@@ -289,13 +289,16 @@ class PostizPublisher:
     def _create(
         self, contents: list[str], integration_id: str, media_path: str, settings: dict[str, Any], when: datetime
     ) -> PublishResult:
-        """``posts:create``: ``contents[0]`` is the post (with the one media), each further one a comment (no media)."""
-        comments = [arg for comment in contents[1:] for arg in ("-c", comment)]
+        """``posts:create``: ``contents[0]`` is the post (with the one media), each further one a comment (no media).
+
+        Every text goes as ``--content=<text>`` (one argv entry, the value attached): the CLI's argument parser (yargs) reads a
+        separate value that starts with ``-`` as another flag and turns ``-c "- A or B"`` into an empty text, which would lose
+        the post's or the comment's text without an error (checked offline against CLI 2.0.16: attached it keeps ``- A or B``)."""
         argv = [
             self._exe, "posts:create",
-            "-c", contents[0],
+            f"--content={contents[0]}",
             "-m", media_path,
-            *comments,
+            *(f"--content={comment}" for comment in contents[1:]),
             "-s", when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "-i", integration_id,
             "--settings", json.dumps(settings),

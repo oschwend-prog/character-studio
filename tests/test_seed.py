@@ -437,9 +437,28 @@ def test_a_kit_may_name_only_some_of_its_parts():
 
 
 def test_a_kit_may_carry_the_characters_series_tag():
-    """Terminal v3 spec section 11: the series tag joins the hashtags at publish time (studio.publish.reach reads it)."""
+    """Terminal v3 spec section 11: the series tag joins the clip's hashtags when it is made (Make it, ``clip set``)."""
     ok = seed.validate_style({**FRANZ_KIT, "series_tag": "#sausagecomingthrough"}, Path("x/refs.json"))
     assert ok["series_tag"] == "#sausagecomingthrough" and "series_tag" in seed.STYLE_KEYS
+
+
+def test_series_tag_of_reads_one_characters_tag_and_never_raises(tmp_path, capsys):
+    """Where a clip's hashtags are written (``clip set``) one file is read: no tag, no file or a bad tag is None (a warning for the
+    last two, on stderr); the seed itself still refuses a bad one."""
+    assert seed.series_tag_of("reginald") == "#asyouwere" and seed.series_tag_of("franz") == "#sausagecomingthrough"
+    assert seed.series_tag_of("biscuit") is None and seed.series_tag_of("nobody") is None  # no style / no file: silent
+    assert capsys.readouterr().err == ""
+    for slug, ref in (("good", {"style": {"series_tag": " #fine "}}), ("none", {"style": {"tone": "warm"}}), ("bad", {"style": {"series_tag": "#viral"}}),
+                      ("two", {"style": {"series_tag": "#a #b"}}), ("list", {"style": {"series_tag": ["#a"]}})):
+        (tmp_path / slug).mkdir()
+        (tmp_path / slug / "refs.json").write_text(json.dumps({"slug": slug, **ref}))
+    (tmp_path / "broken").mkdir()
+    (tmp_path / "broken" / "refs.json").write_text("{nope")
+    assert [seed.series_tag_of(s, tmp_path) for s in ("good", "none")] == ["#fine", None]
+    assert capsys.readouterr().err == ""
+    assert [seed.series_tag_of(s, tmp_path) for s in ("bad", "two", "list", "broken")] == [None] * 4
+    err = capsys.readouterr().err
+    assert err.count("warning") == 4 and "bad/refs.json" in err and "broken/refs.json" in err
 
 
 def test_the_roster_kits_load():
