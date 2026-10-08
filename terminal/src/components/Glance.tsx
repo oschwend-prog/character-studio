@@ -3,16 +3,32 @@
 // that character's clips. Under it the views per day (one line per live character, 7 days, 30 days or all time) or, before any
 // post was measured, what will appear there. overview.ts counts; lib/glance.ts says it in words; this file only draws.
 import { Play } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { formatViews, londonDate, londonDayKey } from '../lib/format';
 import {
   TEST_STATUS_TONE, chartGeometry, hitsLabel, lastWeekViews, nextPostLabel, runwayLabel, seriesColor, testStatusLabel,
 } from '../lib/glance';
+import { needYourChoice, readyWithChoice } from '../lib/clipsview';
 import { href } from '../lib/hooks';
 import { VIEWS_EMPTY, VIEWS_PERIODS, overviewRows, viewsSeries, type OverviewRow, type ViewsPeriod, type ViewsSeries } from '../lib/overview';
 import { nameOf } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import { Avatar, Livery, Section } from './ui';
+
+const WIDE = '(min-width: 720px)';
+/** A wide screen (the table, the chart always open) or a phone (the cards, the chart folded under "Views per day"). */
+function useWide(): boolean {
+  const query = () => typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(WIDE).matches;
+  const [wide, setWide] = useState(query);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const m = window.matchMedia(WIDE);
+    const on = () => setWide(m.matches);
+    m.addEventListener?.('change', on);
+    return () => m.removeEventListener?.('change', on);
+  }, []);
+  return wide;
+}
 
 const clipsOf = (r: OverviewRow) => (r.slug ? href('clips', undefined, { c: r.slug }) : href('clips'));
 const n = (x: number) => x.toLocaleString('en-GB');
@@ -21,6 +37,7 @@ const plural = (k: number, one: string, many: string) => (k === 1 ? one : many);
 export function Glance({ now }: { now: number }) {
   const { data } = useStudio();
   const [period, setPeriod] = useState<ViewsPeriod>('30d');
+  const wide = useWide();
   const rows = useMemo(() => (data ? overviewRows(data, now) : []), [data, now]);
   const slugs = useMemo(() => rows.filter((r) => r.slug).map((r) => r.slug!), [rows]);
   // the live characters only (a paused one keeps his history but has no line): Task 4 review
@@ -36,12 +53,12 @@ export function Glance({ now }: { now: number }) {
     <Section
       id="glance"
       title="Studio at a glance"
-      aside={all ? <span className="num g-aside">{all.readyToMake} ready · {all.toApprove} to approve · {all.posted} posted</span> : undefined}
+      aside={all ? <span className="num g-aside">{readyWithChoice(all.readyToMake, all.needsYou)} · {all.toApprove} to approve · {all.posted} posted</span> : undefined}
     >
       {live.length === 0 ? (
         <div className="panel empty">
           <b>No live character yet.</b>
-          <span className="muted small">Each character gets a row here once his status is live (refs.json, then bin/studio seed).</span>
+          <span className="muted small">Characters appear here once they go live.</span>
         </div>
       ) : (
         <>
@@ -54,15 +71,22 @@ export function Glance({ now }: { now: number }) {
           <details className="hint glance-key">
             <summary>What these numbers mean</summary>
             <p>
-              Ready to make: checked clips with no Make it yet (some may first need your choice of character). Views: what his posts
-              gained per London day (the stats pull runs daily), with last week next to the 7 days. Runway: how long his ready clips last
-              at his posting days. Test status: his Instagram against the bar of the weekly review (not yet, on track, promote, at risk).
+              Ready to make: checked clips with your character chosen and no Make it yet; “+2 need your choice”: checked clips the studio
+              filed under him that wait for you to keep him or choose another. Views: what his posts gained per London day (the stats pull
+              runs daily), with last week next to the 7 days. Runway: how long his clips (ready and to choose) last at his posting days. Test status: his Instagram against the bar of the weekly review (not yet, on track, promote, at risk).
               Hits: the share of his measured videos at 3× his usual views or more.
             </p>
           </details>
         </>
       )}
-      <ViewsChart series={series} period={period} onPeriod={setPeriod} now={now} names={names} />
+      {wide || !series.hasViews ? (
+        <ViewsChart series={series} period={period} onPeriod={setPeriod} now={now} names={names} />
+      ) : (
+        <details className="chart-fold">
+          <summary>Views per day <span className="muted num">· {formatViews(all?.views7d ?? 0)} in 7 days</span></summary>
+          <ViewsChart series={series} period={period} onPeriod={setPeriod} now={now} names={names} folded />
+        </details>
+      )}
     </Section>
   );
 }
@@ -71,7 +95,7 @@ function ReadyCell({ r }: { r: OverviewRow }) {
   return (
     <>
       <b className="num">{r.readyToMake}</b>
-      {r.needsYou > 0 && <span className="g-sub">{r.needsYou} {plural(r.needsYou, 'needs', 'need')} your choice</span>}
+      {r.needsYou > 0 && <span className="g-sub">{needYourChoice(r.needsYou)}</span>}
     </>
   );
 }
@@ -168,7 +192,7 @@ function GlanceTable({ rows, lastWeek, now }: { rows: OverviewRow[]; lastWeek(r:
                   <span className="g-sub">{next.note}</span>
                 </td>
                 <td>
-                  <span>{runwayLabel(r.runwayWeeks)}</span>
+                  <span className="g-wrap">{runwayLabel(r.runwayWeeks)}</span>
                   {r.postsPerWeek != null && <span className="g-sub num">{r.postsPerWeek} {plural(r.postsPerWeek, 'post', 'posts')} a week</span>}
                 </td>
                 <td>{r.testStatus ? <span className={`tag g-test ${TEST_STATUS_TONE[r.testStatus]}`}>{testStatusLabel(r.testStatus)}</span> : <span className="faint">—</span>}</td>
@@ -183,44 +207,69 @@ function GlanceTable({ rows, lastWeek, now }: { rows: OverviewRow[]; lastWeek(r:
   );
 }
 
+/**
+ * A character on a phone, compact (fix round 1): his name and test status, then the four numbers he checks every day (ready to
+ * make with the clips to choose, to approve, views in 7 days against last week, next post); the rest behind "More numbers". A tap
+ * on the name or the four numbers opens his clips; the open "More numbers" is not a link.
+ */
 function GlanceCard({ row: r, lastWeek, now }: { row: OverviewRow; lastWeek: number; now: number }) {
   const next = nextPostLabel(r.nextPost, now);
+  const name = r.slug ? r.name : 'All characters';
   return (
     <li className={`panel glance-card${r.slug ? '' : ' all'}`} data-char={r.slug ?? 'all'}>
-      <div className="g-card-head">
-        {r.slug ? <Avatar slug={r.slug} name={r.name} size={32} /> : null}
-        <a className="g-card-name row-link" href={clipsOf(r)}>
-          {r.slug ? r.name : 'All characters'}
-        </a>
-        {r.testStatus && <span className={`tag g-test ${TEST_STATUS_TONE[r.testStatus]}`}>{testStatusLabel(r.testStatus)}</span>}
-      </div>
-      <div className="kv g-kv">
-        <div><span className="label">Ready to make</span><span className="v"><ReadyCell r={r} /></span></div>
-        <div><span className="label">Being made</span><span className="v num">{r.beingMade}</span></div>
-        <div><span className="label">To approve</span><span className="v num">{r.toApprove}</span></div>
-        <div><span className="label">Scheduled</span><span className="v num">{r.scheduled}</span></div>
-        <div><span className="label">Posted</span><span className="v num">{r.posted}</span></div>
-        <div><span className="label">Follows 7 days</span><span className="v num">{r.hasViews ? `+${n(r.follows7d)}` : '—'}</span></div>
-      </div>
-      <div className="kv g-kv four" role="group" aria-label="Views">
-        <span className="label g-kv-cap" aria-hidden="true">Views</span>
-        <div><span className="label">Today</span><span className="v num">{views(r, r.viewsToday)}</span></div>
-        <div><span className="label">7 days</span><span className="v"><WeekViews r={r} lastWeek={lastWeek} /></span></div>
-        <div><span className="label">30 days</span><span className="v num">{views(r, r.views30d)}</span></div>
-        <div><span className="label">All time</span><span className="v num">{views(r, r.viewsAll)}</span></div>
-      </div>
-      <dl className="g-lines">
-        <div><dt>Next post</dt><dd><span className="num">{next.when}</span> <span className="muted">· {next.note}</span></dd></div>
-        <div>
-          <dt>Runway</dt>
-          <dd>
-            {runwayLabel(r.runwayWeeks)}
-            {r.postsPerWeek != null && <span className="muted"> · {r.postsPerWeek} {plural(r.postsPerWeek, 'post', 'posts')} a week</span>}
-          </dd>
+      <div className="g-card-main">
+        <div className="g-card-head">
+          {r.slug ? <Avatar slug={r.slug} name={r.name} size={26} /> : null}
+          <a className="g-card-name row-link" href={clipsOf(r)} aria-label={r.slug ? `${r.name}’s clips` : 'All clips'}>
+            {name}
+          </a>
+          {r.testStatus && <span className={`tag g-test ${TEST_STATUS_TONE[r.testStatus]}`}>{testStatusLabel(r.testStatus)}</span>}
         </div>
-        <div><dt>Hits</dt><dd className="num">{hitsLabel(r.hitRate)}</dd></div>
-        <div><dt>Best this week</dt><dd><BestLink r={r} /></dd></div>
-      </dl>
+        <div className="g-key">
+          <div>
+            <span className="label">Ready to make</span>
+            <span className="v"><ReadyCell r={r} /></span>
+          </div>
+          <div>
+            <span className="label">To approve</span>
+            <span className="v num"><b>{r.toApprove}</b></span>
+          </div>
+          <div>
+            <span className="label">Views 7 days</span>
+            <span className="v"><WeekViews r={r} lastWeek={lastWeek} /></span>
+          </div>
+          <div>
+            <span className="label">Next post</span>
+            <span className="v"><b className="num g-when">{next.when}</b><span className="g-sub">{next.short}</span></span>
+          </div>
+        </div>
+      </div>
+      <details className="g-more">
+        <summary aria-label={`More numbers for ${name}`}>More numbers</summary>
+        <div className="kv g-kv four">
+          <div><span className="label">Being made</span><span className="v num">{r.beingMade}</span></div>
+          <div><span className="label">Scheduled</span><span className="v num">{r.scheduled}</span></div>
+          <div><span className="label">Posted</span><span className="v num">{r.posted}</span></div>
+          <div><span className="label">Follows 7 days</span><span className="v num">{r.hasViews ? `+${n(r.follows7d)}` : '—'}</span></div>
+        </div>
+        <div className="kv g-kv four" role="group" aria-label="Views">
+          <div><span className="label">Views today</span><span className="v num">{views(r, r.viewsToday)}</span></div>
+          <div><span className="label">30 days</span><span className="v num">{views(r, r.views30d)}</span></div>
+          <div><span className="label">All time</span><span className="v num">{views(r, r.viewsAll)}</span></div>
+          <div><span className="label">Hits</span><span className="v num">{hitsLabel(r.hitRate)}</span></div>
+        </div>
+        <dl className="g-lines">
+          <div>
+            <dt>Runway</dt>
+            <dd>
+              {runwayLabel(r.runwayWeeks)}
+              {r.postsPerWeek != null && <span className="muted"> · {r.postsPerWeek} {plural(r.postsPerWeek, 'post', 'posts')} a week</span>}
+            </dd>
+          </div>
+          <div><dt>Best this week</dt><dd><BestLink r={r} /></dd></div>
+          <div><dt>Next post</dt><dd><span className="num">{next.when}</span> <span className="muted">· {next.note}</span></dd></div>
+        </dl>
+      </details>
     </li>
   );
 }
@@ -228,8 +277,16 @@ function GlanceCard({ row: r, lastWeek, now }: { row: OverviewRow; lastWeek: num
 const dayLabel = (day: string, today: string) => (day === today ? 'Today' : londonDate(Date.parse(`${day}T12:00:00Z`)));
 
 function ViewsChart({
-  series, period, onPeriod, now, names,
-}: { series: ViewsSeries; period: ViewsPeriod; onPeriod(p: ViewsPeriod): void; now: number; names: ReadonlyMap<string, string> }) {
+  series, period, onPeriod, now, names, folded = false,
+}: {
+  series: ViewsSeries;
+  period: ViewsPeriod;
+  onPeriod(p: ViewsPeriod): void;
+  now: number;
+  names: ReadonlyMap<string, string>;
+  /** Inside the phone's "Views per day" fold, which names it: no title of its own. */
+  folded?: boolean;
+}) {
   const g = chartGeometry(series);
   const label = VIEWS_PERIODS.find((p) => p.id === period)?.label ?? '';
   const name = (slug: string) => names.get(slug) ?? nameOf(slug);
@@ -238,7 +295,7 @@ function ViewsChart({
   return (
     <div className="views-chart">
       <div className="chart-head">
-        <h3 className="label" style={{ margin: 0 }}>Views per day</h3>
+        {folded ? <span /> : <h3 className="label" style={{ margin: 0 }}>Views per day</h3>}
         {series.hasViews && (
           <div className="seg" role="group" aria-label="Period">
             {VIEWS_PERIODS.map((p) => (
@@ -256,11 +313,11 @@ function ViewsChart({
           <div className="chart-frame">
             <div className="chart-y num" aria-hidden="true">
               <span>{formatViews(g.max)}</span>
-              <span>{formatViews(g.max / 2)}</span>
+              {g.mid != null && <span>{formatViews(g.mid)}</span>}
               <span>0</span>
             </div>
             <svg className="chart-svg" viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label={summary}>
-              {[2, 50, 98].map((y) => (
+              {(g.mid != null ? [2, 50, 98] : [2, 98]).map((y) => (
                 <line key={y} x1="0" x2="100" y1={y} y2={y} className="chart-grid" />
               ))}
               {g.lines.map((l) => (

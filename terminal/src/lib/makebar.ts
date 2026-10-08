@@ -83,13 +83,8 @@ export function confirmFacts(rows: ReadonlyArray<Pick<TrackerRow, 'pick_id' | 'd
   return { count, credits, left, cap: budget?.cap ?? null, leftAfter, blocked };
 }
 
-const intGB = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
-
-/** Credits in words, as the bar says them: "291 credits", "1 credit". */
-export function creditsWords(n: number): string {
-  const r = Math.round(n);
-  return `${intGB.format(r)} ${r === 1 ? 'credit' : 'credits'}`;
-}
+/** Credits in words, as the bar says them: "291 credits", "1 credit" (formatCredits). */
+export const creditsWords = (n: number): string => formatCredits(n);
 
 /** The bar's button: "Make 3 selected · 291 credits"; "Make selected" while nothing is ticked. */
 export function makeBarLabel(total: { count: number; credits: number }): string {

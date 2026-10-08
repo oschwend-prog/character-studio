@@ -8,9 +8,11 @@ export type Tone = 'hit' | 'good' | 'neutral' | 'weak' | 'none';
 
 const isNum = (n: number | null | undefined): n is number => typeof n === 'number' && Number.isFinite(n);
 
-/** `1234` -> `"1,234 cr"` (Higgsfield credits). `null` -> an em dash. */
+/** `1234` -> `"1,234 credits"`, `1` -> `"1 credit"` (Higgsfield credits, the unit in words on every screen). `null` -> an em dash. */
 export function formatCredits(n: number | null | undefined): string {
-  return isNum(n) ? `${intGB.format(Math.round(n))} cr` : '—';
+  if (!isNum(n)) return '—';
+  const r = Math.round(n);
+  return `${intGB.format(r)} ${r === 1 ? 'credit' : 'credits'}`;
 }
 
 /**

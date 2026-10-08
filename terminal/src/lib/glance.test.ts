@@ -1,7 +1,7 @@
 // Today's "Studio at a glance" in words and the views chart's shape (spec 5.1).
 import { describe, expect, it } from 'vitest';
 import {
-  TEST_STATUS_TONE, approvalOrder, chartGeometry, hitsLabel, lastWeekViews, nextPostLabel, niceCeil, runwayLabel, seriesColor,
+  TEST_STATUS_TONE, approvalList, approvalOrder, chartGeometry, hitsLabel, lastWeekViews, nextPostLabel, niceCeil, runwayLabel, seriesColor,
   testStatusLabel,
 } from './glance';
 import type { ViewsDay } from './types';
@@ -12,11 +12,11 @@ const views = (slug: string, day: string, v: number | string): ViewsDay => ({ ch
 
 describe('runwayLabel', () => {
   it('says the weeks his ready clips last, rounded, in words', () => {
-    expect(runwayLabel(2)).toBe('≈ 2 weeks');
-    expect(runwayLabel(1.4)).toBe('≈ 1 week');
-    expect(runwayLabel(1.5)).toBe('≈ 2 weeks');
-    expect(runwayLabel(0.7)).toBe('under a week');
-    expect(runwayLabel(0)).toBe('nothing ready');
+    expect(runwayLabel(2)).toBe('≈ 2 weeks of clips');
+    expect(runwayLabel(1.4)).toBe('≈ 1 week of clips');
+    expect(runwayLabel(1.5)).toBe('≈ 2 weeks of clips');
+    expect(runwayLabel(0.7)).toBe('under a week of clips');
+    expect(runwayLabel(0)).toBe('no clips left');
   });
   it('is a dash without a cadence or with a number that is not one', () => {
     expect(runwayLabel(null)).toBe('—');
@@ -47,16 +47,16 @@ describe('test status and hits in words', () => {
 
 describe('nextPostLabel', () => {
   it('says today, tomorrow or the date, in London time, and whether a video is booked', () => {
-    expect(nextPostLabel({ at: '2026-10-08T18:30:00Z', booked: true }, NOW)).toEqual({ when: 'Today 19:30', note: 'booked' });
-    expect(nextPostLabel({ at: '2026-10-09T11:30:00Z', booked: false }, NOW)).toEqual({ when: 'Tomorrow 12:30', note: 'nothing booked yet' });
-    expect(nextPostLabel({ at: '2026-10-12T18:00:00Z', booked: true }, NOW)).toEqual({ when: 'Mon 12 Oct 19:00', note: 'booked' });
+    expect(nextPostLabel({ at: '2026-10-08T18:30:00Z', booked: true }, NOW)).toEqual({ when: 'Today 19:30', note: 'booked', short: 'booked' });
+    expect(nextPostLabel({ at: '2026-10-09T11:30:00Z', booked: false }, NOW)).toEqual({ when: 'Tomorrow 12:30', note: 'nothing booked yet', short: 'not booked' });
+    expect(nextPostLabel({ at: '2026-10-12T18:00:00Z', booked: true }, NOW)).toMatchObject({ when: 'Mon 12 Oct 19:00', note: 'booked' });
   });
   it('counts London days: 23:30 UTC on the 8th is already Friday in London', () => {
     expect(nextPostLabel({ at: '2026-10-08T23:30:00Z', booked: true }, NOW).when).toBe('Tomorrow 00:30');
   });
   it('is a dash with no slot or a time that is not one', () => {
-    expect(nextPostLabel(null, NOW)).toEqual({ when: '—', note: 'no slot yet' });
-    expect(nextPostLabel({ at: 'soon', booked: true }, NOW)).toEqual({ when: '—', note: 'no slot yet' });
+    expect(nextPostLabel(null, NOW)).toEqual({ when: '—', note: 'no slot yet', short: 'no slot yet' });
+    expect(nextPostLabel({ at: 'soon', booked: true }, NOW)).toMatchObject({ when: '—', note: 'no slot yet' });
   });
 });
 
@@ -95,6 +95,22 @@ describe('approvalOrder', () => {
   });
 });
 
+describe('approvalList', () => {
+  it('lists the live characters’ videos first, then the others with their status for the tag, each newest first', () => {
+    const q = [
+      { id: 'biscuit-old', created_at: '2026-10-06T10:00:00Z', character_slug: 'biscuit' },
+      { id: 'reg-old', created_at: '2026-10-07T10:00:00Z', character_slug: 'reginald' },
+      { id: 'biscuit-new', created_at: '2026-10-08T10:00:00Z', character_slug: 'biscuit' },
+      { id: 'reg-new', created_at: '2026-10-08T09:00:00Z', character_slug: 'reginald' },
+      { id: 'stranger', created_at: '2026-10-05T09:00:00Z', character_slug: 'borat-type' },
+    ];
+    const roster = [{ slug: 'reginald', status: 'live' }, { slug: 'biscuit', status: 'paused' }];
+    const { live, others } = approvalList(q, roster);
+    expect(live.map((x) => x.id)).toEqual(['reg-new', 'reg-old']);
+    expect(others.map((o) => [o.clip.id, o.status])).toEqual([['biscuit-new', 'paused'], ['biscuit-old', 'paused'], ['stranger', 'not live']]);
+  });
+});
+
 describe('the views chart', () => {
   it('rounds the scale up to 1, 2 or 5 times a power of ten', () => {
     expect(niceCeil(0)).toBe(1);
@@ -116,6 +132,7 @@ describe('the views chart', () => {
       ],
     });
     expect(g.max).toBe(200);
+    expect(g.mid).toBe(100);
     expect(g.lines[0]).toEqual({ slug: 'reginald', points: '0,98 50,50 100,2', total: 300 });
     expect(g.lines[1].points).toBe('0,74 50,98 100,86');
     expect(g.lines[1].total).toBe(75);
@@ -125,6 +142,9 @@ describe('the views chart', () => {
     expect(chartGeometry({ days: ['2026-10-08'], lines: [{ slug: 'franz', views: [3] }] }).lines[0].points).toBe('0,40.4 100,40.4');
     const flat = chartGeometry({ days: ['2026-10-07', '2026-10-08'], lines: [{ slug: 'franz', views: [0, 0] }] });
     expect(flat.max).toBe(1);
+    expect(flat.mid).toBeNull(); // no "0.5" on the axis
+    expect(chartGeometry({ days: ['2026-10-08'], lines: [{ slug: 'franz', views: [4] }] }).mid).toBeNull(); // a scale of 5: no 2.5
+    expect(chartGeometry({ days: ['2026-10-08'], lines: [{ slug: 'franz', views: [2] }] }).mid).toBe(1);
     expect(flat.lines[0].points).toBe('0,98 100,98');
   });
 
@@ -132,7 +152,7 @@ describe('the views chart', () => {
     const g = chartGeometry({ days: ['2026-10-07', '2026-10-08'], lines: [{ slug: 'franz', views: [-5, 10] }] });
     expect(g.lines[0].points).toBe('0,98 100,2');
     expect(g.lines[0].total).toBe(10);
-    expect(chartGeometry({ days: [], lines: [] })).toEqual({ max: 1, lines: [] });
+    expect(chartGeometry({ days: [], lines: [] })).toEqual({ max: 1, mid: null, lines: [] });
   });
 
   it('gives each character his series colour, the second ink otherwise', () => {

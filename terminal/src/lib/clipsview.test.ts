@@ -1,6 +1,9 @@
 // Clips by character (spec section 6): the sections, the Top pick badge, the versions line, the folded line, the view switch.
 import { describe, expect, it } from 'vitest';
-import { cantUseLine, clipsByCharacter, clipsViewQuery, isTopPick, parseClipsView, sectionSummary, versionsLine } from './clipsview';
+import {
+  cantUseLine, clipsByCharacter, clipsViewQuery, filterAddressQuery, isTopPick, makeTheseIds, needYourChoice, parseClipsView,
+  readyWithChoice, sectionSummary, versionsLine,
+} from './clipsview';
 import type { DropCard, DropState, TrackerRow } from './types';
 
 const NOW = Date.parse('2026-10-08T12:00:00+01:00');
@@ -39,6 +42,16 @@ describe('parseClipsView and clipsViewQuery', () => {
     expect(clipsViewQuery('f=ready', 'all')).toBe('f=ready&v=all');
     expect(clipsViewQuery('v=all&f=ready&c=franz', 'character')).toBe('c=franz');
     expect(clipsViewQuery('', 'character')).toBe('');
+  });
+  it('a filter chip keeps the address on All clips, so By character always changes the address (no dead button)', () => {
+    // an old link `#/clips?f=problems`, then the All chip: the address keeps v=all instead of becoming a bare #/clips
+    const afterAllChip = filterAddressQuery('f=problems', 'all');
+    expect(afterAllChip).toBe('v=all');
+    expect(parseClipsView(afterAllChip)).toBe('all');
+    expect(clipsViewQuery(afterAllChip, 'character')).not.toBe(afterAllChip); // By character asks for a different address
+    expect(filterAddressQuery('f=problems', 'ready')).toBe('f=ready&v=all');
+    expect(filterAddressQuery('v=all&c=franz', 'done')).toBe('v=all&c=franz&f=done');
+    expect(parseClipsView(clipsViewQuery(filterAddressQuery('f=problems', 'ready'), 'character'))).toBe('character');
   });
 });
 
@@ -87,10 +100,28 @@ describe('clipsByCharacter', () => {
 
   it('says his counts in one line', () => {
     const { groups } = clipsByCharacter(rows, LIVE);
-    expect(sectionSummary(groups[0])).toBe('4 ready · 1 needs your choice · 2 on their way · 1 done');
+    expect(sectionSummary(groups[0])).toBe('4 ready +1 needs your choice · 2 on their way · 1 done');
     expect(sectionSummary(groups[1])).toBe('1 ready');
+    expect(sectionSummary({ ...groups[1], ready: [], needsYou: [pick, pick] })).toBe('0 ready +2 need your choice');
     expect(sectionSummary({ ...groups[1], ready: [] })).toBe('nothing yet');
     expect(sectionSummary({ ...groups[1], ready: [], problems: [blocked] })).toBe('nothing usable yet');
+  });
+});
+
+describe('one meaning of Ready, and what Make these shows', () => {
+  it('says the clips to choose next to Ready, never inside it', () => {
+    expect(needYourChoice(0)).toBe('');
+    expect(needYourChoice(1)).toBe('+1 needs your choice');
+    expect(needYourChoice(2)).toBe('+2 need your choice');
+    expect(readyWithChoice(4, 2)).toBe('4 ready +2 need your choice');
+    expect(readyWithChoice(3, 0)).toBe('3 ready');
+  });
+  it('can tick only the top 3 Ready clips of each live character on Today', () => {
+    const ready = Array.from({ length: 5 }, (_, i) => row('franz', card('ready', { score: score(90 - i) })));
+    const lenny = row('reginald', card('ready'));
+    const studio = row('franz', card('ready', { character_by: 'studio', score: score(99) }));
+    const ids = makeTheseIds([...ready, lenny, studio], LIVE);
+    expect([...ids].sort()).toEqual([ready[0], ready[1], ready[2], lenny].map((r) => r.pick_id).sort());
   });
 });
 

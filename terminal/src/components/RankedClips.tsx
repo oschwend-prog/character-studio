@@ -7,7 +7,7 @@
 import { ArrowRight, CircleAlert } from 'lucide-react';
 import { useState } from 'react';
 import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipChip } from '../lib/clipstatus';
-import { cantUseLine, clipsByCharacter, isTopPick, sectionSummary, versionsLine, type CharacterClips } from '../lib/clipsview';
+import { cantUseLine, clipsByCharacter, isTopPick, readyWithChoice, sectionSummary, versionsLine } from '../lib/clipsview';
 import { characterChoice, characterMenu, dropCredits, dropLine, dropTitle, sectionLabel, effectiveDrop } from '../lib/drop';
 import { href } from '../lib/hooks';
 import { reuseTargets, scoreOf, topPicks } from '../lib/ranking';
@@ -15,7 +15,7 @@ import { activeRoster, nameOf, type RosterEntry } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import type { TrackerRow } from '../lib/types';
 import { CharacterCell, DropThumb } from './DropsTable';
-import { Avatar } from './ui';
+import { Avatar, Spinner } from './ui';
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
@@ -61,7 +61,7 @@ export function RankedClips({
               <header className="pick-sec-head">
                 <Avatar slug={g.slug} name={g.name} size={32} />
                 <h3 className="h2" id={`make-${g.slug}`}>{g.name}</h3>
-                <span className="small muted num sec-count">{readyLine(g)}</span>
+                <span className="small muted num sec-count">{readyWithChoice(g.ready.length, g.needsYou.length)}</span>
               </header>
               {top.length ? (
                 <ol className="rank-list" aria-label={`${g.name}’s best ready clips`}>
@@ -76,11 +76,9 @@ export function RankedClips({
                   {g.needsYou.length ? ` ${g.needsYou.length === 1 ? '1 clip waits' : `${g.needsYou.length} clips wait`} for your choice of character.` : ''}
                 </p>
               )}
-              {(g.ready.length > top.length || g.needsYou.length > 0) && (
-                <a className="link" href={href('clips', undefined, { c: g.slug })}>
-                  All of {g.name}’s clips <ArrowRight size={14} aria-hidden="true" />
-                </a>
-              )}
+              <a className="link" href={href('clips', undefined, { c: g.slug })}>
+                See all of {g.name}’s clips{g.ready.length > top.length ? ` (${g.ready.length} ready)` : ''} <ArrowRight size={14} aria-hidden="true" />
+              </a>
             </section>
           );
         })}
@@ -103,17 +101,10 @@ export function RankedClips({
   );
 }
 
-/** "4 ready · 2 need your choice": the gap between his Ready count at a glance and the ready clips ranked here, explained. */
-function readyLine(g: CharacterClips): string {
-  const parts = [`${g.ready.length} ready`];
-  if (g.needsYou.length) parts.push(`${g.needsYou.length} need${g.needsYou.length === 1 ? 's' : ''} your choice`);
-  return parts.join(' · ');
-}
-
 function CharacterSection({
   group: g, rows, names, ticked, onTick, now,
 }: {
-  group: CharacterClips;
+  group: ReturnType<typeof clipsByCharacter>['groups'][number];
   rows: ReadonlyArray<TrackerRow>;
   names: ReadonlyMap<string, string>;
   ticked: ReadonlySet<string>;
@@ -263,19 +254,20 @@ function ReadyItem({
   );
 }
 
-/** "Use for another character" (spec 4): a version for a like-for-like character, checked again in his voice for free. A
- * refusal of copy_drop is shown on the card in its own plain line; the data is reloaded either way. */
+/** "Use for another character" (spec 4): a version for a like-for-like character, checked again in his voice for free. Picking a
+ * name asks once more on the card ("Use this clip for Lenny Gold too? Yes · Cancel": a family has only 3 places, a mis-tap on a
+ * phone must not take one). A refusal of copy_drop is shown on the card in its own plain line; the data is reloaded either way. */
 function ReuseMenu({ row, title }: { row: TrackerRow; title: string }) {
   const { data, backend, run, toast, busy } = useStudio();
   const [refusal, setRefusal] = useState<string | null>(null);
+  const [pending, setPending] = useState<{ slug: string; name: string } | null>(null);
   const targets = reuseTargets(row, data?.characters ?? [], data?.tracker ?? []);
   const key = `copy-${row.pick_id}`;
   const working = busy.has(key);
-  if (!targets.length && !refusal) return null;
+  if (!targets.length && !refusal && !pending) return null;
   const id = `reuse-${row.pick_id}`;
 
-  const copy = async (slug: string) => {
-    const name = targets.find((t) => t.slug === slug)?.name ?? nameOf(slug);
+  const copy = async ({ slug, name }: { slug: string; name: string }) => {
     setRefusal(null);
     let refused: string | null = null;
     await run(key, async () => {
@@ -285,22 +277,46 @@ function ReuseMenu({ row, title }: { row: TrackerRow; title: string }) {
         refused = message(e); // shown on the card, not as a toast; run still reloads the data
       }
     });
+    setPending(null);
     if (refused) setRefusal(refused);
     else toast(`${name} gets this clip too: checking it in his voice (free)`);
   };
 
   return (
     <div className="reuse">
-      {targets.length > 0 && (
-        <>
-          <label className="sr-only" htmlFor={id}>Use {title} for another character</label>
-          <select id={id} className="select reuse-select" value="" disabled={working} onChange={(e) => e.target.value && void copy(e.target.value)}>
-            <option value="">Use for another character…</option>
-            {targets.map((t) => (
-              <option key={t.slug} value={t.slug}>{t.name} (free check)</option>
-            ))}
-          </select>
-        </>
+      {pending ? (
+        <div className="reuse-confirm" role="group" aria-label={`Use this clip for ${pending.name}?`}>
+          <span className="small">Use this clip for {pending.name} too? It is checked again for him, free.</span>
+          <span className="reuse-buttons">
+            <button type="button" className="btn line" autoFocus disabled={working} aria-busy={working} onClick={() => void copy(pending)}>
+              {working && <Spinner />} Yes
+            </button>
+            <button type="button" className="btn ghost" disabled={working} onClick={() => setPending(null)}>
+              Cancel
+            </button>
+          </span>
+        </div>
+      ) : (
+        targets.length > 0 && (
+          <>
+            <label className="sr-only" htmlFor={id}>Use {title} for another character</label>
+            <select
+              id={id} className="select reuse-select" value="" disabled={working}
+              onChange={(e) => {
+                const t = targets.find((x) => x.slug === e.target.value);
+                if (t) {
+                  setRefusal(null);
+                  setPending({ slug: t.slug, name: t.name ?? nameOf(t.slug) });
+                }
+              }}
+            >
+              <option value="">Use for another character…</option>
+              {targets.map((t) => (
+                <option key={t.slug} value={t.slug}>{t.name} (free check)</option>
+              ))}
+            </select>
+          </>
+        )
       )}
       {refusal && (
         <p className="error-text" role="alert" style={{ margin: 0 }}>

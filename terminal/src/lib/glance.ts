@@ -6,15 +6,16 @@ import { TEST_STATUS_LABEL, type NextPost, type TestStatus, type ViewsSeries } f
 import type { QueueClip, ViewsDay } from './types';
 
 /**
- * Runway (ready clips ÷ his posts per week) in words: "≈ 2 weeks", "≈ 1 week", "under a week", "nothing ready"; "—" without a
- * cadence (null) or a number that is not one.
+ * Runway (his stock of checked clips, ready or waiting for his choice, ÷ his posts per week) in words, said "of clips" so it is
+ * not read as the Ready figure: "≈ 2 weeks of clips", "≈ 1 week of clips", "under a week of clips", "no clips left"; "—" without
+ * a cadence (null) or a number that is not one.
  */
 export function runwayLabel(weeks: number | null | undefined): string {
   if (weeks == null || !Number.isFinite(weeks)) return '—';
-  if (weeks <= 0) return 'nothing ready';
-  if (weeks < 1) return 'under a week';
+  if (weeks <= 0) return 'no clips left';
+  if (weeks < 1) return 'under a week of clips';
   const n = Math.round(weeks);
-  return `≈ ${n} week${n === 1 ? '' : 's'}`;
+  return `≈ ${n} week${n === 1 ? '' : 's'} of clips`;
 }
 
 /** His test status in words (not yet, on track, promote, at risk); "—" when he has no Instagram channel (and on the All row). */
@@ -37,15 +38,15 @@ export function hitsLabel(rate: number | null | undefined): string {
 
 /**
  * When his next video goes out, in London time: "Today 19:30", "Tomorrow 12:30", else "Mon 12 Oct 19:00"; the note says whether a
- * video is booked for it or nothing is booked yet. No slot at all: "—", "no slot yet".
+ * video is booked for it or nothing is booked yet (`short`: the phone card's two words). No slot at all: "—", "no slot yet".
  */
-export function nextPostLabel(next: NextPost | null | undefined, now: number): { when: string; note: string } {
+export function nextPostLabel(next: NextPost | null | undefined, now: number): { when: string; note: string; short: string } {
   const at = next ? Date.parse(next.at) : NaN;
-  if (!next || !Number.isFinite(at)) return { when: '—', note: 'no slot yet' };
+  if (!next || !Number.isFinite(at)) return { when: '—', note: 'no slot yet', short: 'no slot yet' };
   const today = londonDayKey(now);
   const day = londonDayKey(at);
   const word = day === today ? 'Today' : day === addDays(today, 1) ? 'Tomorrow' : londonDate(at);
-  return { when: `${word} ${londonTime(at)}`, note: next.booked ? 'booked' : 'nothing booked yet' };
+  return { when: `${word} ${londonTime(at)}`, note: next.booked ? 'booked' : 'nothing booked yet', short: next.booked ? 'booked' : 'not booked' };
 }
 
 const count = (v: unknown): number => {
@@ -68,6 +69,23 @@ export function lastWeekViews(rows: ReadonlyArray<ViewsDay>, slugs: ReadonlyArra
     }, 0);
     return total + Math.max(0, raw);
   }, 0);
+}
+
+/**
+ * Approve these (spec 5.3): the live characters' finished videos, newest first (what the glance counts as To approve); then the
+ * videos of a character who is not live (a paused one: they still wait for an OK or a reject), newest first, with his status for
+ * their tag. A character the roster does not know counts as not live.
+ */
+export function approvalList<Q extends Pick<QueueClip, 'id' | 'created_at' | 'character_slug'>>(
+  queue: ReadonlyArray<Q>,
+  characters: ReadonlyArray<{ slug: string; status: string }>,
+): { live: Q[]; others: { clip: Q; status: string }[] } {
+  const status = new Map(characters.map((c) => [c.slug, c.status]));
+  const ordered = approvalOrder(queue);
+  return {
+    live: ordered.filter((q) => status.get(q.character_slug) === 'live'),
+    others: ordered.filter((q) => status.get(q.character_slug) !== 'live').map((clip) => ({ clip, status: status.get(clip.character_slug) ?? 'not live' })),
+  };
 }
 
 /** The finished videos waiting for his OK, the newest first (Approve these, spec 5.3); a bad time sorts last. */
@@ -97,6 +115,9 @@ export function niceCeil(n: number): number {
 export interface ChartGeometry {
   /** The top of the scale: the highest day of any line, rounded up to a round number. */
   max: number;
+  /** The middle line of the scale when it is a whole number of views (max 2 or more and even): null otherwise, so no axis label is
+   * ever a fraction (a scale of 1 or 5 has only 0 and its top). */
+  mid: number | null;
   /** One polyline per character in a 0-100 box (y grows downward), the order of the series. */
   lines: { slug: string; points: string; total: number }[];
 }
@@ -116,6 +137,7 @@ export function chartGeometry(series: Pick<ViewsSeries, 'days' | 'lines'>): Char
   const y = (v: number) => 98 - (Math.max(0, v) / max) * 96;
   return {
     max,
+    mid: max >= 2 && Number.isInteger(max / 2) ? max / 2 : null,
     lines: series.lines.map((l) => {
       const pts = l.views.map((v, i) => `${r1(x(i))},${r1(y(v))}`);
       if (n === 1 && pts.length === 1) pts.push(`100,${r1(y(l.views[0]))}`);

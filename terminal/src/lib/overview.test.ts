@@ -117,23 +117,23 @@ describe('overviewRows', () => {
     expect(rows.map((r) => [r.slug, r.name])).toEqual([['franz', 'Franz'], ['reginald', 'Reginald'], [null, OVERVIEW_ALL]]);
   });
 
-  it('counts his clips: ready to make, being made, to approve, scheduled, posted', () => {
+  it('counts his clips: ready to make (the Ready chip only), being made, to approve, scheduled, posted', () => {
     const [franz, reginald] = overviewRows(fixture(), NOW);
-    expect(franz).toMatchObject({ readyToMake: 6, needsYou: 2, beingMade: 2, toApprove: 2, scheduled: 3, posted: 3 });
-    expect(reginald).toMatchObject({ readyToMake: 1, needsYou: 0, beingMade: 1, toApprove: 1, scheduled: 0, posted: 2 });
+    expect(franz).toMatchObject({ readyToMake: 4, needsYou: 2, stock: 6, beingMade: 2, toApprove: 2, scheduled: 3, posted: 3 });
+    expect(reginald).toMatchObject({ readyToMake: 1, needsYou: 0, stock: 1, beingMade: 1, toApprove: 1, scheduled: 0, posted: 2 });
   });
 
-  it('counts the clips that wait for his character choice among the ready ones ("6 ready · 2 need your choice")', () => {
+  it('counts the clips that wait for his character choice next to the ready ones ("4 ready +2 need your choice"), never inside', () => {
     const [franz, , all] = overviewRows(fixture(), NOW);
-    expect([franz.readyToMake, franz.needsYou]).toEqual([6, 2]); // the studio chose him on 2 of his 6 checked clips
+    expect([franz.readyToMake, franz.needsYou]).toEqual([4, 2]); // the studio chose him on 2 of his 6 checked clips
     expect(all.needsYou).toBe(2);
     const legacy = overviewRows(fixture({ tracker: [row('franz', card('ready', { character_by: undefined }))] }), NOW)[0];
-    expect([legacy.readyToMake, legacy.needsYou]).toEqual([1, 1]); // a drop from before 0013: still his to confirm
+    expect([legacy.readyToMake, legacy.needsYou, legacy.stock]).toEqual([0, 1, 1]); // a drop from before 0013: still his to confirm
   });
 
-  it('works out the runway: ready clips ÷ his posts per week from the cadence, none without a cadence', () => {
+  it('works out the runway: his stock (ready + need your choice) ÷ his posts per week from the cadence, none without a cadence', () => {
     const [franz, reginald, all] = overviewRows(fixture(), NOW);
-    expect([franz.postsPerWeek, franz.runwayWeeks]).toEqual([3, 2]); // 6 ready, 3 posts a week
+    expect([franz.postsPerWeek, franz.runwayWeeks]).toEqual([3, 2]); // 4 ready + 2 to choose, 3 posts a week
     expect([reginald.postsPerWeek, reginald.runwayWeeks]).toEqual([null, null]);
     expect(all.runwayWeeks).toBe(2); // only the characters with a cadence count
     const none = overviewRows(fixture({ cadence: {} }), NOW);
@@ -208,10 +208,10 @@ describe('overviewRows', () => {
     const rows = overviewRows(fixture(), NOW);
     const all = rows.at(-1)!;
     const live = rows.slice(0, -1);
-    for (const key of ['readyToMake', 'needsYou', 'beingMade', 'toApprove', 'scheduled', 'posted', 'viewsToday', 'views7d', 'views30d', 'viewsAll', 'follows7d'] as const) {
+    for (const key of ['readyToMake', 'needsYou', 'stock', 'beingMade', 'toApprove', 'scheduled', 'posted', 'viewsToday', 'views7d', 'views30d', 'viewsAll', 'follows7d'] as const) {
       expect([key, all[key]]).toEqual([key, live.reduce((s, r) => s + r[key], 0)]);
     }
-    expect(all).toMatchObject({ readyToMake: 7, toApprove: 3, viewsToday: 107, viewsAll: 1377, hasViews: true });
+    expect(all).toMatchObject({ readyToMake: 5, needsYou: 2, stock: 7, toApprove: 3, viewsToday: 107, viewsAll: 1377, hasViews: true });
   });
 
   it('shows zeros and hasViews false before anything is measured', () => {
@@ -221,7 +221,7 @@ describe('overviewRows', () => {
     }
     const empty = overviewRows(snapshot(), NOW);
     expect(empty).toHaveLength(1); // no character live yet: only All, all zeros
-    expect(empty[0]).toMatchObject({ slug: null, readyToMake: 0, needsYou: 0, viewsAll: 0, hasViews: false, runwayWeeks: null, hitRate: null, bestThisWeek: null });
+    expect(empty[0]).toMatchObject({ slug: null, readyToMake: 0, needsYou: 0, stock: 0, viewsAll: 0, hasViews: false, runwayWeeks: null, hitRate: null, bestThisWeek: null });
   });
 });
 

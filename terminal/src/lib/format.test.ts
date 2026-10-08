@@ -16,12 +16,13 @@ import {
 
 describe('formatCredits', () => {
   it('groups thousands and appends the unit', () => {
-    expect(formatCredits(1234)).toBe('1,234 cr');
-    expect(formatCredits(0)).toBe('0 cr');
-    expect(formatCredits(6000)).toBe('6,000 cr');
+    expect(formatCredits(1234)).toBe('1,234 credits');
+    expect(formatCredits(0)).toBe('0 credits');
+    expect(formatCredits(6000)).toBe('6,000 credits');
+    expect(formatCredits(1)).toBe('1 credit');
   });
   it('rounds fractional credits and shows a dash for no value', () => {
-    expect(formatCredits(159.6)).toBe('160 cr');
+    expect(formatCredits(159.6)).toBe('160 credits');
     expect(formatCredits(null)).toBe('—');
     expect(formatCredits(undefined)).toBe('—');
   });

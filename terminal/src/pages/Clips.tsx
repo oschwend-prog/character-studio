@@ -14,9 +14,9 @@ import { RankedClips } from '../components/RankedClips';
 import { ViewSwitch } from '../components/ViewSwitch';
 import { Skeleton } from '../components/ui';
 import {
-  CLIP_FILTERS, CLIP_FILTER_EMPTY, clipChip, clipFilterQuery, filterClips, newestFirst, parseClipFilter, type ClipFilter,
+  CLIP_FILTERS, CLIP_FILTER_EMPTY, clipChip, filterClips, newestFirst, parseClipFilter, type ClipFilter,
 } from '../lib/clipstatus';
-import { clipsViewQuery, parseClipsView, type ClipsView } from '../lib/clipsview';
+import { clipsViewQuery, filterAddressQuery, parseClipsView, type ClipsView } from '../lib/clipsview';
 import { href, parseHash, useNow } from '../lib/hooks';
 import { liveSelection } from '../lib/makebar';
 import { activeRoster, orderRoster } from '../lib/roster';
@@ -28,7 +28,7 @@ const readFilter = () => parseClipFilter(parseHash(window.location.hash).query);
 
 /**
  * The filter chip that is on, bound to `?f=` of the address. A tap rewrites the address in place (replaceState: no history entry
- * per tap, the page keeps its scroll, any other query key stays); a link to `#/clips?f=…` while the page is open (Today's tiles,
+ * per tap, the page keeps its scroll, any other query key stays, `v=all` is set: a filter exists only in All clips); a link to `#/clips?f=…` while the page is open (Today's tiles,
  * the tab, a pasted address) fires hashchange and the chip follows. An unknown `f` is All.
  */
 function useClipFilter(): [ClipFilter, (f: ClipFilter) => void] {
@@ -42,7 +42,7 @@ function useClipFilter(): [ClipFilter, (f: ClipFilter) => void] {
     setFilter(next);
     try {
       const { param, query } = parseHash(window.location.hash);
-      const q = clipFilterQuery(query, next);
+      const q = filterAddressQuery(query, next); // v=all too: a filter exists only in All clips
       window.history.replaceState(null, '', href('clips', param ?? undefined, Object.fromEntries(new URLSearchParams(q))));
     } catch {
       // the address could not be rewritten: the filter still works, it is just not in the link
@@ -107,7 +107,8 @@ export function Clips() {
         label="Show the clips"
         value={view}
         options={VIEWS}
-        to={(id) => href('clips', undefined, Object.fromEntries(new URLSearchParams(clipsViewQuery(query, id))))}
+        // the address at the moment of the tap (a filter chip rewrites it without a hashchange)
+        to={(id) => href('clips', undefined, Object.fromEntries(new URLSearchParams(clipsViewQuery(parseHash(window.location.hash).query, id))))}
       />
       {view === 'character' ? (
         <ByCharacter rows={all} now={now} />

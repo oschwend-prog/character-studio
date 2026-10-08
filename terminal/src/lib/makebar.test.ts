@@ -63,7 +63,7 @@ describe('confirmFacts', () => {
   });
 
   it('blocks past what is left of the cap, with the kill switch on, or with nothing priced', () => {
-    expect(confirmFacts(rows, ['a'], budget(6000, 5950)).blocked).toBe('That is more than the 50 cr left this month. Untick some clips.');
+    expect(confirmFacts(rows, ['a'], budget(6000, 5950)).blocked).toBe('That is more than the 50 credits left this month. Untick some clips.');
     expect(confirmFacts(rows, ['a'], budget(6000, 7000)).left).toBe(0);
     expect(confirmFacts(rows, ['a'], budget(6000, 0, true)).blocked).toMatch(/^The kill switch is on/);
     expect(confirmFacts(rows, ['c'], budget(6000, 0)).blocked).toMatch(/^None of these clips has a price yet/);

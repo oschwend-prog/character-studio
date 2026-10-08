@@ -100,11 +100,14 @@ export interface OverviewRow {
   /** null = the All row. */
   slug: string | null;
   name: string;
-  /** Checked clips filed for him, no Make it yet (the Ready and the Pick a character chips). */
+  /** Ready to make: checked clips with his character chosen by the owner and no Make it yet (the Ready chip only: one meaning of
+   * "Ready" on every screen, controller ruling 2026-10-08). */
   readyToMake: number;
-  /** Of those, the ones whose character the studio chose and that wait for the owner's choice (the Pick a character chip):
-   * "6 ready · 2 need your choice". */
+  /** Checked clips the studio filed under him that wait for the owner's character choice (the Pick a character chip): shown
+   * next to Ready as "+2 need your choice", never inside it. */
   needsYou: number;
+  /** His stock of checked clips: readyToMake + needsYou (what the runway counts). */
+  stock: number;
   /** Make it tapped, or his clip is being generated, checked or built. */
   beingMade: number;
   /** Finished videos waiting for the owner's OK (the queue). */
@@ -127,7 +130,7 @@ export interface OverviewRow {
   nextPost: NextPost | null;
   /** From his cadence; null without one. */
   postsPerWeek: number | null;
-  /** Ready clips ÷ his posts per week, to one decimal ("≈ 2 weeks"); null without a cadence. */
+  /** His stock of checked clips ÷ his posts per week, to one decimal ("≈ 2 weeks of clips"); null without a cadence. */
   runwayWeeks: number | null;
   /** His Instagram channel's bar; null when he has no Instagram channel (and on the All row). */
   testStatus: TestStatus | null;
@@ -139,7 +142,6 @@ export interface OverviewRow {
 
 type OverviewData = Pick<Snapshot, 'characters' | 'tracker' | 'queue' | 'library' | 'channels' | 'viewsDaily' | 'cadence'>;
 
-const READY_CHIPS = new Set(['ready', 'pick']);
 const ts = (iso: string | null | undefined) => (iso ? Date.parse(iso) : NaN);
 const round1 = (x: number) => Math.round(x * 10) / 10;
 
@@ -201,7 +203,8 @@ function characterRow(slug: string, name: string, data: OverviewData, days: Map<
   const tracker = data.tracker.filter((r) => r.character_slug === slug);
   const library = data.library.filter((c) => c.character_slug === slug);
   const channels = data.channels.filter((ch) => ch.character_slug === slug);
-  const readyToMake = tracker.filter((r: TrackerRow) => r.drop_card && READY_CHIPS.has(clipChip(r))).length;
+  const readyToMake = tracker.filter((r: TrackerRow) => r.drop_card && clipChip(r) === 'ready').length;
+  const needsYou = tracker.filter((r) => r.drop_card && clipChip(r) === 'pick').length;
   // the raw days of the window added up, then never below 0 (days after today were left out by byDay)
   const sum = (from: string, key: keyof DayValue) =>
     Math.max(0, [...(days ?? new Map<string, DayValue>())].reduce((s, [d, v]) => (d >= from ? s + v[key] : s), 0));
@@ -211,7 +214,8 @@ function characterRow(slug: string, name: string, data: OverviewData, days: Map<
     slug,
     name,
     readyToMake,
-    needsYou: tracker.filter((r) => r.drop_card && clipChip(r) === 'pick').length,
+    needsYou,
+    stock: readyToMake + needsYou,
     beingMade: tracker.filter((r) => clipChip(r) === 'making').length,
     toApprove: data.queue.filter((q) => q.character_slug === slug).length,
     scheduled: library.filter((c) => c.state === 'approved' || c.state === 'scheduled').length,
@@ -224,18 +228,18 @@ function characterRow(slug: string, name: string, data: OverviewData, days: Map<
     hasViews: Boolean(days?.size),
     nextPost: nextPostOf(library, channels, now),
     postsPerWeek: perWeek,
-    runwayWeeks: perWeek ? round1(readyToMake / perWeek) : null,
+    runwayWeeks: perWeek ? round1((readyToMake + needsYou) / perWeek) : null,
     testStatus: instagram ? testStatusOf(instagram.bar_status) : null,
     hitRate: hitRateOf(channels),
     bestThisWeek: bestOf(library, today, now),
   };
 }
 
-const SUMMED = ['readyToMake', 'needsYou', 'beingMade', 'toApprove', 'scheduled', 'posted', 'viewsToday', 'views7d', 'views30d', 'viewsAll', 'follows7d'] as const;
+const SUMMED = ['readyToMake', 'needsYou', 'stock', 'beingMade', 'toApprove', 'scheduled', 'posted', 'viewsToday', 'views7d', 'views30d', 'viewsAll', 'follows7d'] as const;
 
 /**
  * The studio at a glance (spec 5.1): a row per live character in the owner's order, then the All row. All adds up the live rows
- * (counts, views, follows); its next post is the studio's soonest (a booked one first), its runway the ready clips of the
+ * (counts, views, follows); its next post is the studio's soonest (a booked one first), its runway the stock of the
  * characters with a cadence over their posts per week, its hit rate over every live channel, its best video the most viewed of
  * theirs; it has no test status. Views come from v_views_daily: today is the London day of `now`, "7 days" today and the 6 before.
  */
@@ -253,7 +257,7 @@ export function overviewRows(data: OverviewData, now: number): OverviewRow[] {
     hasViews: rows.some((r) => r.hasViews),
     nextPost: rows.reduce<NextPost | null>((n, r) => sooner(n, r.nextPost), null),
     postsPerWeek: perWeek || null,
-    runwayWeeks: perWeek ? round1(paced.reduce((s, r) => s + r.readyToMake, 0) / perWeek) : null,
+    runwayWeeks: perWeek ? round1(paced.reduce((s, r) => s + r.stock, 0) / perWeek) : null,
     testStatus: null,
     hitRate: hitRateOf(data.channels.filter((ch) => live.some((c) => c.slug === ch.character_slug))),
     bestThisWeek: rows.reduce<BestVideo | null>((b, r) => better(b, r.bestThisWeek), null),

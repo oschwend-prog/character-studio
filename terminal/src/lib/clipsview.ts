@@ -2,9 +2,9 @@
 // approving, maybe rank them so it's easy for me to approve the top choices for rendering"): a section per live character with
 // "Needs you" first, then his Ready clips ranked by score, then what is on its way and done, the blocked and failed folded into one
 // line. The switch By character | All clips lives in the address (`#/clips?v=all`). Pure functions over v_tracker rows; no browser.
-import { clipChip, newestFirst, type ClipChip } from './clipstatus';
+import { clipChip, clipFilterQuery, newestFirst, type ClipChip, type ClipFilter } from './clipstatus';
 import { nameOf } from './roster';
-import { familyOf, rankClips, scoreOf } from './ranking';
+import { familyOf, rankClips, scoreOf, topPicks } from './ranking';
 import type { TrackerRow } from './types';
 
 export type ClipsView = 'character' | 'all';
@@ -26,6 +26,15 @@ export function clipsViewQuery(query: string, view: ClipsView): string {
     q.delete('f');
   }
   return q.toString();
+}
+
+/**
+ * The query after a filter chip of All clips: the filter (clipFilterQuery: All removes it) and `v=all`, because a filter exists
+ * only in All clips. Without `v=all`, the All chip on an old `#/clips?f=…` address would leave a bare `#/clips` that still shows
+ * All clips, and the By character button (which asks for that same bare address) would do nothing.
+ */
+export function filterAddressQuery(query: string, f: ClipFilter): string {
+  return clipsViewQuery(clipFilterQuery(query, f), 'all');
 }
 
 /** One live character's clips, as the By character view shows them. */
@@ -105,11 +114,29 @@ export function cantUseLine(n: number): string {
   return `${n} ${n === 1 ? 'clip' : 'clips'} can’t be used: see why`;
 }
 
-/** His section's one line of counts: "4 ready · 2 need your choice · 1 on its way"; "nothing yet" for a character with no clip. */
+/** The clips that wait for his character choice, said next to Ready and never inside it: "+2 need your choice", "+1 needs your
+ * choice"; "" for none. One meaning of Ready on every screen (controller ruling 2026-10-08): Ready is the Ready chip only. */
+export function needYourChoice(n: number): string {
+  return n > 0 ? `+${n} ${n === 1 ? 'needs' : 'need'} your choice` : '';
+}
+
+/** "4 ready", "4 ready +2 need your choice", "0 ready +1 needs your choice". */
+export function readyWithChoice(ready: number, needs: number): string {
+  return [`${ready} ready`, needYourChoice(needs)].filter(Boolean).join(' ');
+}
+
+/**
+ * Today's Make these: the clips it shows, each live character's top 3 Ready clips (topPicks). Only these can be ticked there, so a
+ * ticked clip never drops out of view while it stays in the bar.
+ */
+export function makeTheseIds(rows: ReadonlyArray<TrackerRow>, characters: ReadonlyArray<{ slug: string; name: string }>): Set<string> {
+  return new Set(clipsByCharacter(rows, characters).groups.flatMap((g) => topPicks(g.ready, 3).map((r) => r.pick_id)));
+}
+
+/** His section's one line of counts: "4 ready +2 need your choice · 1 on its way"; "nothing yet" for a character with no clip. */
 export function sectionSummary(g: CharacterClips): string {
   const parts = [
-    g.ready.length ? `${g.ready.length} ready` : '',
-    g.needsYou.length ? `${g.needsYou.length} need${g.needsYou.length === 1 ? 's' : ''} your choice` : '',
+    g.ready.length || g.needsYou.length ? readyWithChoice(g.ready.length, g.needsYou.length) : '',
     g.onTheWay.length ? `${g.onTheWay.length} on ${g.onTheWay.length === 1 ? 'its' : 'their'} way` : '',
     g.done.length ? `${g.done.length} done` : '',
   ].filter(Boolean);

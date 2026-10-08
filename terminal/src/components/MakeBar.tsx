@@ -58,12 +58,17 @@ export function MakeBar({
   stateRef.current = state;
   const dispatch = (e: MakeBarEvent) => setState((s) => makeBarReducer(s, e));
   const doneRef = useRef<HTMLUListElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const lastStep = useRef<MakeBarState['step']>(state.step);
   // the names of the clips as they were when the confirm opened: a result still names its clip after the reload moved it on
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
 
-  // the sheet focuses its first button when it opens; the results take the focus when they replace the confirm's buttons
+  // the sheet focuses its first button when it opens; the results take the focus when they replace the confirm's buttons; when
+  // the results close, the focus comes back to the bar (the button that opened the sheet is gone: the sent clips were unticked)
   useEffect(() => {
     if (state.step === 'done') doneRef.current?.focus();
+    if (state.step === 'pick' && lastStep.current === 'done') barRef.current?.focus();
+    lastStep.current = state.step;
   }, [state.step]);
 
   const byId = new Map(rows.map((r) => [r.pick_id, r]));
@@ -128,7 +133,7 @@ export function MakeBar({
   );
 
   const bar = total.count > 0 ? (
-    <div className="make-bar on" role="group" aria-label="Make the ticked clips">
+    <div className="make-bar on" role="group" aria-label="Make the ticked clips" tabIndex={-1} ref={barRef}>
       <span className="small num make-count">
         {total.count} ticked · about {formatCredits(total.credits)}
       </span>
@@ -136,13 +141,13 @@ export function MakeBar({
         <button type="button" className="btn primary" disabled={busy.has('make-many')} onClick={open}>
           {makeBarLabel(total)}
         </button>
-        <button type="button" className="btn ghost" onClick={onClear}>
+        <button type="button" className="make-clear" onClick={onClear}>
           Clear
         </button>
       </div>
     </div>
   ) : (
-    <div className="make-bar idle">
+    <div className="make-bar idle" tabIndex={-1} ref={barRef}>
       <span className="small muted">Nothing ticked. Tick the clips you want made: the total shows here, and nothing is spent before you confirm.</span>
       <button type="button" className="btn primary" disabled>
         {makeBarLabel(total)}
@@ -192,7 +197,7 @@ function Confirm({
         </div>
         <div>
           <dt>Left this month</dt>
-          <dd className="num">{f.left == null ? 'could not be read' : `${formatCredits(f.left)} of the ${formatCredits(f.cap)} cap`}</dd>
+          <dd className="num">{f.left == null ? 'could not be read' : `${Math.round(f.left).toLocaleString('en-GB')} of ${formatCredits(f.cap)}`}</dd>
         </div>
         {f.leftAfter != null && (
           <div>

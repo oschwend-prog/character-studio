@@ -11,10 +11,10 @@ import { MakeBar, useTicks } from '../components/MakeBar';
 import { PickThumb } from '../components/PickThumb';
 import { RankedClips } from '../components/RankedClips';
 import { Flap, Livery, PlatformCode, Section, Skeleton, Spinner, characterName } from '../components/ui';
-import { clipChip } from '../lib/clipstatus';
+import { makeTheseIds } from '../lib/clipsview';
 import { creditsLeft, hasWarnings, liveChannels, liveLastPosts, postNumbers, problemClips, problemClipsLine } from '../lib/dashboard';
 import { clipCode, formatAge, formatCountdown, formatCredits, londonDate, platformName } from '../lib/format';
-import { approvalOrder } from '../lib/glance';
+import { approvalList } from '../lib/glance';
 import { href, useNow } from '../lib/hooks';
 import { useApproveAll } from '../lib/actions';
 import { liveSelection } from '../lib/makebar';
@@ -144,11 +144,14 @@ function MakeThese({ now }: { now: number }) {
   const rows = useMemo(() => (data ? data.tracker.filter((r) => r.drop_card && inTracker(r, now)) : []), [data, now]);
   const live = useMemo(() => orderRoster((data?.characters ?? []).filter((c) => c.status === 'live')), [data]);
   if (!data) return null;
-  // only the clips this block shows can be ticked here: each character's top 3 Ready ones
-  const makeable = new Set(rows.filter((r) => clipChip(r) === 'ready').map((r) => r.pick_id));
-  const selected = liveSelection(ticked, makeable);
+  // only the clips this block shows can be ticked here (each live character's top 3 Ready ones): a ticked clip that drops out of
+  // the top 3 (a better one arrived) also drops out of the bar, so nothing unseen is ever made
+  const selected = liveSelection(ticked, makeTheseIds(rows, live));
   return (
-    <Section id="make-these" title="Make these" aside={<a href={href('clips')}>All clips <ArrowRight size={14} aria-hidden="true" /></a>}>
+    <Section
+      id="make-these" title="Make these"
+      aside={<a href={href('clips')}>See all their clips <ArrowRight size={14} aria-hidden="true" /></a>}
+    >
       <p className="small muted" style={{ margin: 0 }}>
         Each character’s best ready clips, ranked by the free check’s score (how likely the clip gets views with him in it). Tick the
         ones to make: the price shows first, and nothing is spent before you confirm.
@@ -161,27 +164,33 @@ function MakeThese({ now }: { now: number }) {
   );
 }
 
-/** Approve these (spec 5.3): the finished videos waiting for his OK, the newest first, each with a Review button to the Queue. */
+/**
+ * Approve these (spec 5.3): the finished videos waiting for his OK, the live characters' first (the glance's To approve), newest
+ * first, each with a Review button to the Queue; a video of a character who is not live (paused) comes after them, tagged so.
+ */
 function ApproveThese({ now }: { now: number }) {
   const { data } = useStudio();
   if (!data) return null;
-  const queue = approvalOrder(data.queue);
+  const { live, others } = approvalList(data.queue, data.characters);
+  const extra = others.length ? ` +${others.length} ${others.every((o) => o.status === 'paused') ? 'paused' : 'not live'}` : '';
+  const items = [...live.map((clip) => ({ clip, status: null as string | null })), ...others];
   return (
-    <Section id="approve-these" title="Approve these" aside={queue.length ? <span className="num">{queue.length}</span> : undefined}>
-      {queue.length === 0 ? (
+    <Section id="approve-these" title="Approve these" aside={items.length ? <span className="num">{live.length}{extra ? ` ·${extra}` : ''}</span> : undefined}>
+      {items.length === 0 ? (
         <p className="small muted" style={{ margin: 0 }}>
           Nothing to approve. Finished videos land here.
         </p>
       ) : (
         <ul className="pipe-list approve-list" aria-label="Videos waiting for your OK">
-          {queue.map((q) => (
-            <li key={q.id} className="pipe-row" data-char={q.character_slug}>
+          {items.map(({ clip: q, status }) => (
+            <li key={q.id} className={`pipe-row${status ? ' not-live' : ''}`} data-char={q.character_slug}>
               <QueueThumb clip={q} />
               <div className="pipe-main">
                 <b className="pipe-hook">{q.hook ? `“${q.hook}”` : 'untitled video'}</b>
                 <div className="pipe-meta">
                   <Livery slug={q.character_slug} />
                   <span>{q.character_name || characterName(q.character_slug)}</span>
+                  {status && <span className="tag">{status}</span>}
                   <span>made {formatAge(q.created_at, now)}</span>
                   {q.blocked_reason && <span className="tag alert">can’t go yet</span>}
                 </div>
