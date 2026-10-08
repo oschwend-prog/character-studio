@@ -31,6 +31,9 @@ talks to a ``Store``. ``studio.pgstore.PostgresStore`` is the production impleme
   (first seen); its numbers and details (``HIT_REFRESHED``) take the new value when one is given, else stay; who found it
   (``HIT_FIRST_FOUND``: the character and the keyword) is filled in only while it is empty; ``reach``, ``score`` and
   ``last_seen`` are always the new ones. ``list_hits`` is ordered by ``created_at``.
+* ``get_hit_spend(day)`` is the London day's ScrapeCreators spend (a zero record when nothing was spent);
+  ``add_hit_spend(day, search_credits=, download_credits=, downloads=)`` adds to it in one step (an increment, never a
+  read-then-write) and returns the day's new totals.
 """
 
 from __future__ import annotations
@@ -41,7 +44,7 @@ import uuid
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import fields, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Protocol, runtime_checkable
 
 from studio.models import (
@@ -50,6 +53,7 @@ from studio.models import (
     Clip,
     Favorite,
     Hit,
+    HitSpend,
     LedgerEntry,
     Post,
     PostStatus,
@@ -145,6 +149,8 @@ class Store(Protocol):
     def get_hit(self, id: str) -> Hit | None: ...
     def update_hit(self, id: str, /, **kw: Any) -> Hit: ...
     def list_hits(self, **filters: Any) -> list[Hit]: ...
+    def get_hit_spend(self, day: date, /) -> HitSpend: ...
+    def add_hit_spend(self, day: date, /, *, search_credits: int = 0, download_credits: int = 0, downloads: int = 0) -> HitSpend: ...
 
     # scheduled-run log and weekly reviews
     def add_run(self, r: Run) -> Run: ...
@@ -178,6 +184,7 @@ class MemoryStore:
         self._posts: dict[str, Post] = {}
         self._favorites: dict[str, Favorite] = {}
         self._hits: dict[str, Hit] = {}
+        self._hit_spend: dict[date, HitSpend] = {}
         self._runs: dict[str, Run] = {}
         self._reviews: dict[str, Review] = {}
         self._ledger: list[LedgerEntry] = []
@@ -432,6 +439,23 @@ class MemoryStore:
     def list_hits(self, **filters: Any) -> list[Hit]:
         with self._lock:
             return self._select(self._hits.values(), filters, Hit, lambda h: h.created_at)
+
+    def get_hit_spend(self, day: date, /) -> HitSpend:
+        with self._lock:
+            return copy.deepcopy(self._hit_spend.get(day) or HitSpend(day=day))
+
+    def add_hit_spend(self, day: date, /, *, search_credits: int = 0, download_credits: int = 0, downloads: int = 0) -> HitSpend:
+        for value in (search_credits, download_credits, downloads):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"a spend is a whole number of 0 or more, got {value!r}")
+        with self._lock:
+            old = self._hit_spend.get(day) or HitSpend(day=day)
+            new = HitSpend(
+                day=day, search_credits=old.search_credits + search_credits,
+                download_credits=old.download_credits + download_credits, downloads=old.downloads + downloads, updated_at=_now(),
+            )  # fmt: skip
+            self._hit_spend[day] = new
+            return copy.deepcopy(new)
 
     # ---- runs and reviews --------------------------------------------------
 

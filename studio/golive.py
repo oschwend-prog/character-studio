@@ -151,10 +151,12 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("function", "family_root_id"), ("function", "family_days"), ("function", "free_slot"), ("function", "copy_drop"),
         ("function", "set_drop_character"), ("function", "add_drop"), ("view", "v_views_daily"),
     ),
-    # 0016 (the cloud hits job): the hits table and its view, the owner's two buttons (set_hit_status on a hit, set_drop_keep on a
-    # drop) and copy_drop re-created with the hits job's tag: the table and the new functions tell 0016 from 0015.
+    # 0016 (the cloud hits job): the hits table and its view, the day's ScrapeCreators spend (hits_spend), the owner's two buttons
+    # (set_hit_status on a hit, set_drop_keep on a drop) and copy_drop re-created with the hits job's tag: the tables and the new
+    # functions tell 0016 from 0015.
     "0016": (
-        ("table", "hits"), ("view", "v_hits"), ("function", "set_hit_status"), ("function", "set_drop_keep"), ("function", "copy_drop"),
+        ("table", "hits"), ("table", "hits_spend"), ("view", "v_hits"), ("function", "set_hit_status"), ("function", "set_drop_keep"),
+        ("function", "copy_drop"),
     ),
 }
 

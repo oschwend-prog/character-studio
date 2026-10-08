@@ -19,7 +19,7 @@ from studio import drop, hits
 from studio.cli import app
 from studio.config import LONDON
 from studio.hits import ScrapeCreators, ScrapeCreatorsError, hit_score, parse_instagram, parse_tiktok
-from studio.models import Body, Character, Favorite, Hit
+from studio.models import Body, Character, Favorite, Hit, HitSpend
 from studio.store import MemoryStore
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "scrapecreators"
@@ -27,7 +27,7 @@ NOW = datetime(2026, 10, 8, 6, 30, tzinfo=LONDON)
 KEY = "sc-test-key-0123456789"
 CONFIG = {
     "hits": {
-        "daily_credit_cap": 25, "auto_file_per_character": 3, "auto_file_general": 3,
+        "daily_credit_cap": 45, "download_cap_per_day": 2, "auto_file_per_character": 3, "auto_file_general": 3,
         "keywords": {"franz": ["dog dance", "dachshund", "dog trend"], "reginald": ["dance trend", "deadpan dance", "butler"],
                      "lenny": ["boss on the phone", "office dance", "dance challenge"]},
         "general": {"keywords": ["viral dance", "dance trend", "trend challenge", "funny dance"], "tiktok_regions": ["GB", "US"],
@@ -294,7 +294,7 @@ def test_the_plan_takes_the_trending_feeds_then_each_characters_keywords_in_turn
     ]
     assert not any("lenny" in p for p in plan)  # a paused character is not searched for
     full = hits.plan_calls(roster_store(), hits.hits_config(CONFIG))
-    assert len(full) == 3 + 3 * 3 * 2 + 4 == 25  # exactly the daily cap of 25 one-credit calls
+    assert len(full) == 3 + 3 * 3 * 2 + 4 == 25  # exactly the day's search budget: 45 less 2 downloads of 10
 
 
 def test_pull_keeps_new_hits_updates_known_ones_and_counts_the_skips():
@@ -307,7 +307,7 @@ def test_pull_keeps_new_hits_updates_known_ones_and_counts_the_skips():
     api.answer(TT_SEARCH, page(TT_SEARCH, [tt_item(2, views=900_000), tt_item(3, seconds=90), tt_item(4, days=20), tt_item(1)]))
     api.answer(IG_SEARCH, page(IG_SEARCH, [ig_item(5)]))
     out = hits.pull(store, api.client(), CONFIG, NOW)
-    assert out["calls"] == 25 and out["credits"] == 25 and out["stopped"] is None and out["errors"] == []
+    assert out["calls"] == 25 and out["credits"] == out["day_credits"] == 25 and out["stopped"] is None and out["errors"] == []
     assert out["kept"] == 2 and out["updated"] == 1
     assert out["skipped"] == {"photo": 1, "too_long": 1, "too_old": 1, "duplicate": 1}
     by_url = {h.url: h for h in store.list_hits()}
@@ -320,17 +320,48 @@ def test_pull_keeps_new_hits_updates_known_ones_and_counts_the_skips():
     assert again.character_slug == "franz" and again.keyword == "dog dance"  # a general or older hit learns who found it
 
 
+def capped(cap: int, downloads: int = 0) -> dict:
+    return {"hits": {**CONFIG["hits"], "daily_credit_cap": cap, "download_cap_per_day": downloads}}
+
+
 def test_the_daily_credit_cap_stops_the_run_mid_way():
-    store = roster_store()
     api = FakeAPI()
-    out = hits.pull(store, api.client(), {"hits": {**CONFIG["hits"], "daily_credit_cap": 3}}, NOW)
+    out = hits.pull(roster_store(), api.client(), capped(3), NOW)
     assert (out["calls"], out["credits"], out["stopped"]) == (3, 3, "cap") and len(api.paths()) == 3
     api = FakeAPI()
     api.charge = 2  # a call that costs more counts what it cost
-    out = hits.pull(store, api.client(), {"hits": {**CONFIG["hits"], "daily_credit_cap": 5}}, NOW)
+    out = hits.pull(roster_store(), api.client(), capped(5), NOW)
     assert (out["calls"], out["credits"], out["stopped"]) == (3, 6, "cap")
-    out = hits.pull(store, FakeAPI().client(), {"hits": {**CONFIG["hits"], "daily_credit_cap": 0}}, NOW)
+    out = hits.pull(roster_store(), FakeAPI().client(), capped(0), NOW)
     assert (out["calls"], out["credits"], out["stopped"]) == (0, 0, "cap")
+    out = hits.pull(roster_store(), FakeAPI().client(), capped(25, downloads=2), NOW)  # 25 less 2 downloads of 10: 5 searches
+    assert (out["calls"], out["credits"], out["stopped"]) == (5, 5, "cap")
+
+
+def test_the_days_spend_carries_over_to_a_second_run_and_resets_the_next_london_day():
+    store = roster_store()
+    late = datetime(2026, 10, 8, 23, 30, tzinfo=LONDON)  # 22:30 UTC: still the 8th in London
+    first = hits.pull(store, FakeAPI().client(), capped(8), NOW)
+    assert (first["calls"], first["credits"], first["day_credits"], first["stopped"]) == (8, 8, 8, "cap")
+    api = FakeAPI()
+    second = hits.pull(store, api.client(), capped(8), late)  # the same London day: it starts from what the first spent
+    assert (second["calls"], second["credits"], second["day_credits"], second["stopped"]) == (0, 0, 8, "cap") and api.paths() == []
+    spend = store.get_hit_spend(NOW.date())
+    assert (spend.search_credits, spend.download_credits, spend.downloads) == (8, 0, 0)
+    api = FakeAPI()
+    next_day = hits.pull(store, api.client(), capped(8), late + timedelta(hours=1))  # 00:30 on the 9th in London: a new day
+    assert (next_day["calls"], next_day["day_credits"]) == (8, 8) and len(api.paths()) == 8
+    assert store.get_hit_spend(datetime(2026, 10, 9).date()).search_credits == 8
+
+
+def test_downloads_made_today_count_into_the_day_and_the_searches_keep_their_share():
+    store = roster_store()
+    store.add_hit_spend(NOW.date(), download_credits=10, downloads=1)  # one copy fetched by the night's drop sweep
+    out = hits.pull(store, FakeAPI().client(), CONFIG, NOW)
+    assert (out["calls"], out["credits"], out["day_credits"]) == (25, 25, 35)  # 45: 10 spent, 10 kept for the last download
+    assert hits.download_refusal(store.get_hit_spend(NOW.date()), hits.hits_config(CONFIG)) is None
+    store.add_hit_spend(NOW.date(), download_credits=10, downloads=1)
+    assert "download_cap_per_day" in hits.download_refusal(store.get_hit_spend(NOW.date()), hits.hits_config(CONFIG))
 
 
 def test_a_creator_kept_three_times_in_thirty_days_is_skipped():
@@ -443,7 +474,8 @@ def test_cli_pull_dry_run_prints_the_plan_and_calls_nothing(cli_store, monkeypat
     r = CliRunner().invoke(app, ["hits", "pull", "--dry-run"])
     assert r.exit_code == 0, r.output
     out = json.loads(r.stdout)
-    assert out["dry_run"] is True and out["cap"] == 25 and len(out["plan"]) == 25 and out["plan"][0] == "tiktok trending GB"
+    assert out["dry_run"] is True and (out["cap"], out["search_budget"], out["download_cap"]) == (45, 25, 2)
+    assert len(out["plan"]) == 25 and out["plan"][0] == "tiktok trending GB" and cli_store.get_hit_spend(NOW.date()).total == 0
 
 
 def test_cli_pull_pulls_then_files_and_prints_both(cli_store, monkeypatch):
@@ -461,17 +493,20 @@ def test_cli_pull_pulls_then_files_and_prints_both(cli_store, monkeypatch):
 
 def test_scan_json_carries_the_hits_block_the_brief_names():
     cfg = hits.hits_config(hits.load_scan())
-    assert (cfg["daily_credit_cap"], cfg["auto_file_per_character"], cfg["auto_file_general"]) == (25, 3, 3)
+    assert (cfg["daily_credit_cap"], cfg["download_cap_per_day"], cfg["auto_file_per_character"], cfg["auto_file_general"]) == (
+        45, 2, 3, 3)
     assert cfg["keywords"] == {
         "franz": ["dog dance", "dachshund", "dog trend"], "reginald": ["dance trend", "deadpan dance", "butler"],
         "lenny": ["boss on the phone", "office dance", "dance challenge"],
     }  # fmt: skip
     assert cfg["general_keywords"] == ["viral dance", "dance trend", "trend challenge", "funny dance"]
     assert cfg["tiktok_regions"] == ["GB", "US"] and cfg["instagram_trending"] is True
-    assert len(hits.plan_calls(roster_store(), cfg)) <= cfg["daily_credit_cap"]  # the whole plan fits in a day's cap
-    with pytest.raises(ValueError):
-        hits.hits_config({"hits": {"daily_credit_cap": -1}})
-    assert hits.hits_config({})["daily_credit_cap"] == 25  # no block: the defaults
+    budget = hits.search_limit(HitSpend(day=NOW.date()), cfg)
+    assert budget == 45 - 2 * hits.DOWNLOAD_CREDITS == 25 and len(hits.plan_calls(roster_store(), cfg)) <= budget  # the plan fits
+    for bad in ({"daily_credit_cap": -1}, {"download_cap_per_day": "2"}):
+        with pytest.raises(ValueError):
+            hits.hits_config({"hits": bad})
+    assert (hits.hits_config({})["daily_credit_cap"], hits.hits_config({})["download_cap_per_day"]) == (45, 2)  # the defaults
 
 
 # ---- one post's hosted copy (the fetch fallback of a dropped link) --------------------------------------------------------------------
@@ -550,3 +585,52 @@ def test_cli_list_filters_by_lane_and_status(cli_store):
     lenny = json.loads(CliRunner().invoke(app, ["hits", "list", "--character", "lenny", "--status", "new"]).stdout)
     assert [h["score"] for h in lenny] == [80]
     assert [h["score"] for h in json.loads(CliRunner().invoke(app, ["hits", "list", "--limit", "2"]).stdout)] == [90, 80]
+
+
+
+# ---- the day's one-post downloads (controller ruling 2026-10-08: hits.download_cap_per_day) ------------------------------------------
+
+
+def budgeted(api: FakeAPI, store=None, config=CONFIG, at=NOW) -> hits.DownloadBudget:
+    return hits.DownloadBudget(api.client(), store or roster_store(), config, clock=lambda: at)
+
+
+def test_a_download_is_counted_into_the_day_as_soon_as_the_api_answered(tmp_path):
+    api = FakeAPI()
+    api.media = b"video bytes"
+    paid = fixture("tiktok_video") | {"credits_charged": 10}
+    api.answer(TT_VIDEO, paid, paid)
+    store = roster_store()
+    budget = budgeted(api, store)
+    assert budget.download_post(VIDEO_URL, "tiktok", tmp_path / "a.mp4")["credits"] == 10
+    spend = store.get_hit_spend(NOW.date())
+    assert (spend.search_credits, spend.download_credits, spend.downloads) == (0, 10, 1)
+    api.media = b""  # the copy's own download fails: the API's credits were spent all the same
+    with pytest.raises(ScrapeCreatorsError, match="empty"):
+        budget.download_post(VIDEO_URL, "tiktok", tmp_path / "b.mp4")
+    assert (store.get_hit_spend(NOW.date()).download_credits, store.get_hit_spend(NOW.date()).downloads) == (20, 2)
+
+
+def test_a_download_over_the_days_cap_is_refused_without_calling_scrapecreators(tmp_path):
+    store = roster_store()
+    store.add_hit_spend(NOW.date(), download_credits=20, downloads=2)
+    api = FakeAPI()
+    with pytest.raises(ScrapeCreatorsError, match="download_cap_per_day"):
+        budgeted(api, store).download_post(VIDEO_URL, "tiktok", tmp_path / "a.mp4")
+    full = roster_store()
+    full.add_hit_spend(NOW.date(), search_credits=40)  # 40 of 45: no room for a download of 10
+    with pytest.raises(ScrapeCreatorsError, match="daily_credit_cap"):
+        budgeted(api, full).download_post(VIDEO_URL, "tiktok", tmp_path / "a.mp4")
+    assert api.requests == [] and not (tmp_path / "a.mp4").exists()
+    tomorrow = NOW + timedelta(days=1)
+    api.answer(TT_VIDEO, fixture("tiktok_video"))
+    api.media = b"video"
+    assert budgeted(api, store, at=tomorrow).download_post(VIDEO_URL, "tiktok", tmp_path / "a.mp4")["bytes"] == 5  # a new day
+
+
+def test_the_drop_job_gets_the_budget_only_with_the_key(monkeypatch):
+    store = roster_store()
+    assert hits.download_budget(store, CONFIG) is None  # no SCRAPECREATORS_API_KEY in a test
+    monkeypatch.setenv("SCRAPECREATORS_API_KEY", KEY)
+    budget = hits.download_budget(store, CONFIG)
+    assert isinstance(budget, hits.DownloadBudget) and isinstance(budget.client, ScrapeCreators) and budget.store is store

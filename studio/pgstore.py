@@ -23,7 +23,7 @@ import threading
 import uuid
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
@@ -40,6 +40,7 @@ from studio.models import (
     Clip,
     Favorite,
     Hit,
+    HitSpend,
     LedgerEntry,
     Post,
     Review,
@@ -86,6 +87,7 @@ _FAVORITES = _Table("favorites", Favorite, json_cols=frozenset({"proposal", "sco
 _RUNS = _Table("runs", Run, json_cols=frozenset({"details"}), db_default=frozenset({"id", "started_at"}))
 _REVIEWS = _Table("reviews", Review)
 _HITS = _Table("hits", Hit, db_default=frozenset({"id", "created_at", "last_seen"}))
+_HIT_SPEND = _Table("hits_spend", HitSpend, db_default=frozenset({"updated_at"}))
 
 
 def _as_uuid(value: str) -> uuid.UUID | None:
@@ -474,6 +476,29 @@ class PostgresStore:
 
     def list_hits(self, **filters: Any) -> list[Hit]:
         return self._list(_HITS, filters, ["created_at", "id"])
+
+    def get_hit_spend(self, day: date, /) -> HitSpend:
+        query = sql.SQL("select {ret} from {t} where day = %s").format(ret=self._cols(_HIT_SPEND.columns), t=self._tbl(_HIT_SPEND))
+        rows = self._execute(query, [day])
+        return self._from_row(_HIT_SPEND, rows[0]) if rows else HitSpend(day=day)
+
+    def add_hit_spend(self, day: date, /, *, search_credits: int = 0, download_credits: int = 0, downloads: int = 0) -> HitSpend:
+        """One ``insert ... on conflict (day) do update`` that ADDS to the day's numbers: two jobs adding at once both count."""
+        adds = {"search_credits": search_credits, "download_credits": download_credits, "downloads": downloads}
+        for value in adds.values():
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"a spend is a whole number of 0 or more, got {value!r}")
+        query = sql.SQL(
+            "insert into {t} as s (day, {cols}) values (%s, {vals}) on conflict (day) do update set {sets}, "
+            "updated_at = now() returning {ret}"
+        ).format(
+            t=self._tbl(_HIT_SPEND),
+            cols=self._cols(list(adds)),
+            vals=sql.SQL(", ").join([sql.Placeholder()] * len(adds)),
+            sets=sql.SQL(", ").join(sql.SQL("{c} = s.{c} + excluded.{c}").format(c=sql.Identifier(c)) for c in adds),
+            ret=sql.SQL(", ").join(sql.SQL("s.{}").format(sql.Identifier(c)) for c in _HIT_SPEND.columns),
+        )
+        return self._from_row(_HIT_SPEND, self._execute(query, [day, *adds.values()])[0])
 
     # ---- scheduled-run log and weekly reviews ------------------------------
 

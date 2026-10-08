@@ -12,8 +12,14 @@ keyword): the general lane's trending feeds (TikTok ``GET /v1/tiktok/get-trendin
 ``hits.keywords``, at most 3) on TikTok (``GET /v1/tiktok/search/keyword``, ``date_posted=this-week``, ``sort_by=most-liked``,
 ``trim=true``) and Instagram (``GET /v2/instagram/reels/search``, ``date_posted=last-week``), each round followed by one broad
 search of the general lane (``hits.general.keywords`` on TikTok, by likes this week). Header ``x-api-key`` from the environment
-(``SCRAPECREATORS_API_KEY``, a GitHub secret: never in a file). ``hits.daily_credit_cap`` (25) stops the run when the credits the
-calls charged (``credits_charged``, usually 1) reach it.
+(``SCRAPECREATORS_API_KEY``, a GitHub secret: never in a file).
+
+**The day's credits** (controller ruling 2026-10-08). What the jobs spend is kept per London day in ``studio.hits_spend``
+(``Store.get_hit_spend`` / ``add_hit_spend``, migration 0016): the searches' ``credits_charged`` (usually 1 a call) and the
+one-post downloads' (10 when the media is found). ``hits.daily_credit_cap`` (45) covers both together; the searches stop at the
+cap less the room kept for the day's downloads still allowed (``search_limit``: 45 - 2 x 10 = 25 on a fresh day), so a second
+run the same day starts from what the first spent and stops at once, and the next London day starts from zero. Each call's
+credits are recorded as soon as it answered.
 
 **The two lanes.** A character's search keeps whatever it finds for him (``character_slug`` = his slug); the general lane
 (``character_slug`` None) keeps any hot post whatever its topic (owner 2026-10-07: "don't skip cool viral up-and-coming clips
@@ -45,10 +51,14 @@ one at a time (yt-dlp, else ``ScrapeCreators.download_post`` for that ONE post).
 job filed, after yt-dlp failed): ``GET /v2/tiktok/video`` or ``/v1/instagram/post`` with ``download_media=true`` (10 credits
 when the media is found, 1 otherwise) answers with a hosted copy of that one post; it is downloaded (https only, a timeout,
 at most 200 MB, our key never sent to it) and ingested exactly like a yt-dlp result. Never a batch, never a third-party
-downloader site.
+downloader site. The drop job hands fetch a ``DownloadBudget``: at most ``hits.download_cap_per_day`` (2) downloads a London
+day and never past ``hits.daily_credit_cap``; over either, the download is refused and the drop waits as before (the Mac's
+daily run tries yt-dlp again). The budget is a read, then the call, then an increment of the day's record: one job at a time
+is what the drop job's concurrency gives (one run per pick, the sweeps in one group), so at worst two jobs at the same instant
+each take the last download.
 
-CLI: ``studio hits pull [--dry-run] [--no-file]`` prints ``{"calls", "credits", "kept", "updated", "skipped": {reason: n},
-"stopped": "cap" | null, "errors": [...], "filed": [{"hit_id", "pick_id", "character", "provisional"}]}``; without the key it
+CLI: ``studio hits pull [--dry-run] [--no-file]`` prints ``{"calls", "credits", "day_credits", "kept", "updated", "skipped":
+{reason: n}, "stopped": "cap" | null, "errors": [...], "filed": [{"hit_id", "pick_id", "character", "provisional"}]}``; without the key it
 prints a ``::notice::`` and exits 0; ``--dry-run`` prints the plan of calls and calls nothing. ``studio hits list`` prints the
 stored hits. Exit 1 only when not one call worked.
 """
@@ -59,9 +69,9 @@ import json
 import math
 import os
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
 from urllib.parse import urlsplit
@@ -74,13 +84,14 @@ from studio.fetch import filed_at
 from studio.cli_support import emit, fail, open_store
 from studio.config import LONDON, now_london
 from studio.favorites import is_drop, parse_video_url
-from studio.models import HIT_CAPTION_MAX, Hit
+from studio.models import HIT_CAPTION_MAX, Hit, HitSpend
 from studio.store import HIT_REFRESHED, Store
 
 API_ROOT = "https://api.scrapecreators.com"
 KEY_ENV = "SCRAPECREATORS_API_KEY"
 SCAN_PATH = Path(__file__).resolve().parents[1] / "config" / "scan.json"
-DEFAULTS = {"daily_credit_cap": 25, "auto_file_per_character": 3, "auto_file_general": 3}
+DEFAULTS = {"daily_credit_cap": 45, "download_cap_per_day": 2, "auto_file_per_character": 3, "auto_file_general": 3}
+DOWNLOAD_CREDITS = 10  # what a one-post download costs when the media is found (ScrapeCreators' own price list)
 KEYWORDS_PER_CHARACTER = 3
 TIKTOK_REGIONS = ("GB", "US")
 MAX_SECONDS = 60.0  # skipped: videos over 60 s
@@ -180,16 +191,21 @@ class ScrapeCreators:
     def instagram_post(self, url: str, *, download_media: bool = False) -> dict[str, Any]:
         return self._get("/v1/instagram/post", {"url": url, "download_media": download_media or None})
 
-    def download_post(self, url: str, platform: str, dest: Path | str) -> dict[str, Any]:
+    def download_post(
+        self, url: str, platform: str, dest: Path | str, *, charged: Callable[[int], None] | None = None,
+    ) -> dict[str, Any]:
         """The ONE post at ``url`` (its canonical TikTok / Instagram Reel link) with ``download_media=true``, its video saved to
-        ``dest``: ``{"credits", "media_url", "bytes"}``. ``ScrapeCreatorsError`` when the API has no usable copy or the download
-        fails (``dest`` is then not left behind)."""
+        ``dest``: ``{"credits", "media_url", "bytes"}``. ``charged(credits)`` is told what the API charged as soon as it answered
+        (the copy's own download may still fail). ``ScrapeCreatorsError`` when the API has no usable copy or the download fails
+        (``dest`` is then not left behind)."""
         if platform == "tiktok":
             data = self.tiktok_video(url, download_media=True)
         elif platform == "instagram":
             data = self.instagram_post(url, download_media=True)
         else:
             raise ScrapeCreatorsError(f"ScrapeCreators has no single-post download for {platform}")
+        if charged is not None:
+            charged(credits_of(data))
         media = media_url(data, platform)
         size = self._download(media, Path(dest))
         return {"credits": credits_of(data), "media_url": media, "bytes": size}
@@ -242,7 +258,11 @@ def media_url(data: Mapping[str, Any], platform: str) -> str:
     """The video of a single-post answer: the permanent copy ``download_media=true`` hosts (an https video file on a
     ``*.supabase.co`` host, wherever the answer carries it), else the documented fields: TikTok
     ``aweme_detail.video.download_no_watermark_addr.url_list[0]``, or ``play_addr`` when TikTok says the video has no watermark
-    (never a watermarked copy); Instagram ``data.xdt_shortcode_media.video_url``. ``ScrapeCreatorsError`` when there is none."""
+    (never a watermarked copy); Instagram ``data.xdt_shortcode_media.video_url``. ``ScrapeCreatorsError`` when there is none.
+
+    NOT YET VERIFIED: ScrapeCreators' documentation names no field for the copy ``download_media=true`` hosts (its examples show
+    none), so the ``*.supabase.co`` rule is an informed guess. One supervised live call (1-10 credits) must confirm where the
+    copy is before this path is relied on."""
     for url in _walk_urls(data):
         parts = urlsplit(url)
         if (parts.hostname or "").endswith(".supabase.co") and parts.path.lower().endswith(VIDEO_SUFFIXES):
@@ -442,6 +462,54 @@ def hits_config(scan: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def london_day(now: datetime) -> date:
+    return now.astimezone(LONDON).date()
+
+
+def search_limit(spend: HitSpend, cfg: Mapping[str, Any]) -> int:
+    """Where the day's searches stop: the daily cap less the room kept for the downloads still allowed today."""
+    room = max(0, cfg["download_cap_per_day"] - spend.downloads) * DOWNLOAD_CREDITS
+    return cfg["daily_credit_cap"] - room
+
+
+def download_refusal(spend: HitSpend, cfg: Mapping[str, Any]) -> str | None:
+    """Why the day has no one-post download left (None when it has): the count cap, or the credit cap."""
+    if spend.downloads >= cfg["download_cap_per_day"]:
+        return f"today's {cfg['download_cap_per_day']} one-post downloads are used (hits.download_cap_per_day)"
+    if spend.total + DOWNLOAD_CREDITS > cfg["daily_credit_cap"]:
+        return f"today's {cfg['daily_credit_cap']} ScrapeCreators credits are used (hits.daily_credit_cap)"
+    return None
+
+
+class DownloadBudget:
+    """``ScrapeCreators.download_post`` under the London day's caps (see the module doc): what ``studio.fetch`` is handed by the
+    drop job. A refusal is a ``ScrapeCreatorsError`` (the drop waits, with the reason); what the API charged is added to the
+    day's record (``download_credits``, ``downloads``) as soon as it answered."""
+
+    def __init__(
+        self, client: ScrapeCreators, store: Store, scan_config: Mapping[str, Any], clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.client, self.store, self.cfg = client, store, hits_config(scan_config)
+        self._clock = clock or now_london
+
+    def download_post(self, url: str, platform: str, dest: Path | str) -> dict[str, Any]:
+        day = london_day(self._clock())
+        refused = download_refusal(self.store.get_hit_spend(day), self.cfg)
+        if refused is not None:
+            raise ScrapeCreatorsError(refused)
+
+        def charged(credits: int) -> None:
+            self.store.add_hit_spend(day, download_credits=credits, downloads=1)
+
+        return self.client.download_post(url, platform, dest, charged=charged)
+
+
+def download_budget(store: Store, scan_config: Mapping[str, Any] | None = None) -> DownloadBudget | None:
+    """The drop job's one-post downloads: None without ``SCRAPECREATORS_API_KEY`` (a link yt-dlp cannot fetch then waits)."""
+    client = ScrapeCreators.from_env()
+    return DownloadBudget(client, store, scan_config if scan_config is not None else load_scan()) if client is not None else None
+
+
 # ---- the pull ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -537,11 +605,15 @@ def _creator_kept(store: Store, hit: Hit, now: datetime) -> int:
 
 
 def pull(store: Store, client: ScrapeCreators, scan_config: Mapping[str, Any], now: datetime) -> dict[str, Any]:
-    """Run the day's calls (see the module doc) and keep what they found. Returns ``{"calls", "credits", "kept", "updated",
-    "skipped": {reason: n}, "stopped": "cap" | None, "errors": [{"call", "error"}]}``: ``calls`` are the calls that answered.
-    A refused key (401/403) stops the run; any other failed call is listed and the run goes on."""
+    """Run the day's calls (see the module doc) and keep what they found. Returns ``{"calls", "credits", "day_credits", "kept",
+    "updated", "skipped": {reason: n}, "stopped": "cap" | None, "errors": [{"call", "error"}]}``: ``calls`` are the calls that
+    answered, ``credits`` what this run spent, ``day_credits`` the London day's whole spend (searches and downloads) after it.
+    The searches stop at ``search_limit`` of the day's record, read once at the start. A refused key (401/403) stops the run;
+    any other failed call is listed and the run goes on."""
     cfg = hits_config(scan_config)
-    cap = cfg["daily_credit_cap"]
+    day = london_day(now)
+    start = store.get_hit_spend(day)
+    cap = search_limit(start, cfg) - start.total  # what this run may still spend on searches
     plan = plan_calls(store, cfg)
     calls = spent = kept = updated = 0
     skipped: Counter[str] = Counter()
@@ -560,8 +632,10 @@ def pull(store: Store, client: ScrapeCreators, scan_config: Mapping[str, Any], n
                 break  # the key is refused: no other call would work
             continue
         calls += 1
-        spent += credits_of(data)
+        charged = credits_of(data)
+        spent += charged
         with store.transaction():  # one connection for the call's reads and writes
+            store.add_hit_spend(day, search_credits=charged)  # recorded as soon as it answered
             for item in call.items(data):
                 try:
                     parsed = call.parse(item)
@@ -590,8 +664,8 @@ def pull(store: Store, client: ScrapeCreators, scan_config: Mapping[str, Any], n
                 store.upsert_hit(parsed)
                 kept += 1
     return {
-        "calls": calls, "credits": spent, "kept": kept, "updated": updated, "skipped": dict(sorted(skipped.items())),
-        "stopped": stopped, "errors": errors,
+        "calls": calls, "credits": spent, "day_credits": store.get_hit_spend(day).total, "kept": kept, "updated": updated,
+        "skipped": dict(sorted(skipped.items())), "stopped": stopped, "errors": errors,
     }  # fmt: skip
 
 
@@ -663,8 +737,8 @@ def pull_command(
     dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the day's calls only: nothing is called, spent or written.")] = False,
     file: Annotated[bool, typer.Option("--file/--no-file", help="After the pull, file the best new hits as drops (the default).")] = True,
 ) -> None:
-    """Pull today's hits (at most hits.daily_credit_cap credits) and file the best as drops. Without SCRAPECREATORS_API_KEY: a
-    notice and exit 0. Exit 1 only when not one call worked."""
+    """Pull today's hits (within the London day's hits.daily_credit_cap, room kept for the day's downloads) and file the best as
+    drops. Without SCRAPECREATORS_API_KEY: a notice and exit 0. Exit 1 only when not one call worked."""
     scan = load_scan()
     try:
         cfg = hits_config(scan)
@@ -672,13 +746,18 @@ def pull_command(
         fail(str(e))
     store = open_store()
     if dry_run:
-        emit({"dry_run": True, "cap": cfg["daily_credit_cap"], "plan": [c.label for c in plan_calls(store, cfg)]})
+        spend = store.get_hit_spend(london_day(now_london()))
+        emit({
+            "dry_run": True, "cap": cfg["daily_credit_cap"], "search_budget": max(0, search_limit(spend, cfg) - spend.total),
+            "download_cap": cfg["download_cap_per_day"], "day": spend.day, "day_credits": spend.total, "downloads": spend.downloads,
+            "plan": [c.label for c in plan_calls(store, cfg)],
+        })  # fmt: skip
         return
     client = ScrapeCreators.from_env()
     if client is None:
         typer.echo(f"::notice::{NO_KEY}", err=True)
-        emit({"skipped_run": NO_KEY, "calls": 0, "credits": 0, "kept": 0, "updated": 0, "skipped": {}, "stopped": None,
-              "errors": [], "filed": []})  # fmt: skip
+        emit({"skipped_run": NO_KEY, "calls": 0, "credits": 0, "day_credits": None, "kept": 0, "updated": 0, "skipped": {},
+              "stopped": None, "errors": [], "filed": []})  # fmt: skip
         return
     now = now_london()
     out = pull(store, client, scan, now)
@@ -713,6 +792,7 @@ def list_command(
 
 
 __all__ = [
-    "Call", "ScrapeCreators", "ScrapeCreatorsError", "auto_file", "credits_of", "hit_score", "hits_config", "media_url",
-    "parse_instagram", "parse_tiktok", "plan_calls", "pull", "skip_reason",
+    "Call", "DownloadBudget", "ScrapeCreators", "ScrapeCreatorsError", "auto_file", "credits_of", "download_budget",
+    "download_refusal", "hit_score", "hits_config", "media_url", "parse_instagram", "parse_tiktok", "plan_calls", "pull",
+    "search_limit", "skip_reason",
 ]

@@ -1938,7 +1938,8 @@ def test_the_cloud_jobs_hand_the_check_the_scrapecreators_key_from_the_environme
     monkeypatch.setattr(drop, "process_drop", fake_process)
     assert CliRunner().invoke(app, ["drop", "process", pick.id]).exit_code == 0
     assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 0
-    assert seen == [sentinel, sentinel]
+    assert len(seen) == 2 and all(isinstance(m, hits.DownloadBudget) and m.client is sentinel and m.store is store for m in seen)
+    assert seen[0].cfg["download_cap_per_day"] == 2  # config/scan.json's caps: at most 2 one-post downloads a London day
 
 
 # ---- the hits job's tag and the owner's Keep (plan Task 6) ------------------------------------------------------------------------------
@@ -1970,3 +1971,17 @@ def test_keep_is_the_owners_toggle_on_any_drop(world, monkeypatch):
     assert r.exit_code == 0 and store.get_favorite(pick.id).proposal["drop"]["keep"] is False
     assert CliRunner().invoke(app, ["drop", "keep", plain.id]).exit_code == 2
     assert CliRunner().invoke(app, ["drop", "keep", "nope"]).exit_code == 2
+
+
+def test_over_the_days_download_cap_the_link_waits_and_scrapecreators_is_not_asked(world, portrait):
+    from studio import hits
+
+    store, storage = world
+    store.add_hit_spend(NOW.date(), download_credits=20, downloads=2)  # today's 2 one-post downloads are used
+    pick, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    media = FakeMedia(portrait)
+    budget = hits.DownloadBudget(media, store, {"hits": {"download_cap_per_day": 2}}, clock=lambda: NOW)
+    out = process_drop(store, storage, pick.id, gemini_client=FakeGemini(), runner=blocked_ytdlp, now=NOW, job="t", media_fallback=budget)
+    assert out.state == store.get_favorite(pick.id).proposal["drop"]["state"] == "waiting" and media.calls == []
+    assert "login required" in out.reason and "download_cap_per_day" in out.reason and out.reason.endswith("tries again")
+    assert store.get_hit_spend(NOW.date()).downloads == 2  # nothing more was spent

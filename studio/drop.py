@@ -115,8 +115,10 @@ wakes this workflow's sweep with ``gh workflow run`` (a failure of that is only 
 **From the hits job, and Keep** (plan Task 6). ``studio hits pull`` files its best new hits as link drops (``add_drop`` with
 ``auto_filed`` and ``hit``, the hit's character as the provisional one): ``drop['auto_filed']`` is the learning tag
 ``source_kind`` and goes into every version (``copy_drop``; SQL ``studio.copy_drop`` of migration 0016). A link yt-dlp cannot
-fetch from the cloud is taken from ScrapeCreators' copy of that one post (``media_fallback``: the cloud jobs pass the client when
-``SCRAPECREATORS_API_KEY`` is set); without the key, or when both fail, the drop waits as before, with both reasons. The owner's
+fetch from the cloud is taken from ScrapeCreators' copy of that one post (``media_fallback``: the cloud jobs pass
+``studio.hits.DownloadBudget`` when ``SCRAPECREATORS_API_KEY`` is set, at most ``hits.download_cap_per_day`` downloads a London
+day within ``hits.daily_credit_cap``); without the key, over a cap, or when both fail, the drop waits as before, with both
+reasons. The owner's
 Keep (``set_keep``, ``studio drop keep <pick> [--off]``, RPC ``studio.set_drop_keep``) sets ``drop['keep']``: retention
 (``studio source purge --stale``) never deletes a kept drop's clip.
 
@@ -1887,11 +1889,15 @@ def _finish(outcome: Outcome) -> None:
         raise typer.Exit(EXIT_FAILED)
 
 
-def _media() -> Any:
-    """The ScrapeCreators client for a dropped link yt-dlp cannot fetch (``SCRAPECREATORS_API_KEY``), else None."""
+def _media(store: Store) -> Any:
+    """The one-post downloads for a dropped link yt-dlp cannot fetch: ScrapeCreators (``SCRAPECREATORS_API_KEY``) under the
+    London day's caps (``studio.hits.DownloadBudget``: ``hits.download_cap_per_day``, ``hits.daily_credit_cap``), else None."""
     from studio import hits  # here, not at the top: studio.hits imports this module
 
-    return hits.ScrapeCreators.from_env()
+    try:
+        return hits.download_budget(store)
+    except ValueError as e:  # config/scan.json hits block broken
+        fail(str(e))
 
 
 @app.command("add")
@@ -1943,7 +1949,7 @@ def process_command(
     store, storage = open_store(), open_storage()
     try:
         outcome = process_drop(
-            store, storage, pick, gemini_client=gemini.GeminiClient.from_env(), deconstruct_answer=answer, media_fallback=_media(),
+            store, storage, pick, gemini_client=gemini.GeminiClient.from_env(), deconstruct_answer=answer, media_fallback=_media(store),
         )
     except KeyError:
         fail(f"unknown pick {pick}")
@@ -2091,7 +2097,7 @@ def sweep_command(
 ) -> None:
     """Run every pending drop job, one after another (the 2-hourly safety net). Exit 1 when one of them stopped on a failure."""
     store, storage = open_store(), open_storage()
-    hf, client, media = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env(), _media()
+    hf, client, media = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env(), _media(store)
     results: list[dict[str, Any]] = []
     failed = False
     for row in pending(store, include_waiting=include_waiting):

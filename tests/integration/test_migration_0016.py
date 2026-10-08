@@ -147,6 +147,33 @@ def test_the_terminal_reads_hits_and_changes_them_only_through_the_owners_rpcs(d
     assert [p["policyname"] for p in policies] == ["owner_all"]  # once, though the migration ran twice
 
 
+def test_the_days_spend_is_for_the_jobs_alone(db):
+    roles = {r["rolname"] for r in db.execute("select rolname from pg_roles where rolname in ('authenticated', 'anon')").fetchall()}
+    for role in roles:
+        for priv in ("select", "insert", "update", "delete"):
+            assert not db.execute("select has_table_privilege(%s, %s, %s) as ok", [role, f"{SCHEMA}.hits_spend", priv]).fetchone()["ok"]
+    rls = db.execute(
+        "select c.relrowsecurity as on_ from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+        "where n.nspname = %s and c.relname = 'hits_spend'", [SCHEMA],
+    ).fetchone()
+    assert rls["on_"] is True
+    assert db.execute("select count(*) as n from pg_policies where schemaname = %s and tablename = 'hits_spend'", [SCHEMA]).fetchone()["n"] == 0
+    with pytest.raises(psycopg.errors.CheckViolation):
+        db.execute(f"insert into {SCHEMA}.hits_spend (day, downloads) values ('2026-10-08', -1)")
+
+
+def test_postgres_store_adds_to_the_days_spend(db):
+    from datetime import date
+
+    store = PostgresStore(DSN, schema=SCHEMA)
+    day = date(2026, 10, 8)
+    assert store.get_hit_spend(day).total == 0
+    store.add_hit_spend(day, search_credits=25)
+    after = store.add_hit_spend(day, download_credits=10, downloads=1)
+    assert (after.search_credits, after.download_credits, after.downloads, after.total) == (25, 10, 1, 35) and after.updated_at
+    assert store.get_hit_spend(day) == after and store.get_hit_spend(date(2026, 10, 9)).total == 0
+
+
 # ---- the owner's buttons -------------------------------------------------------------------------------------------------------------
 
 

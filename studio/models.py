@@ -323,6 +323,31 @@ class Hit:
 
 
 @dataclass(kw_only=True)
+class HitSpend:
+    """What the ScrapeCreators jobs spent on one London day (migration 0016, ``studio.hits_spend``): the searches of
+    ``studio hits pull`` and the one-post downloads of the drop job, in credits, and how many downloads were made. A day
+    with no row spent nothing. ``hits.daily_credit_cap`` covers ``total``; ``hits.download_cap_per_day`` covers ``downloads``."""
+
+    day: date
+    search_credits: int = 0
+    download_credits: int = 0
+    downloads: int = 0
+    updated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if isinstance(self.day, datetime) or not isinstance(self.day, date):
+            raise ValueError(f"HitSpend.day must be a date (a London day), got {self.day!r}")
+        for name in ("search_credits", "download_credits", "downloads"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"HitSpend.{name} must be a whole number of 0 or more, got {value!r}")
+
+    @property
+    def total(self) -> int:
+        return self.search_credits + self.download_credits
+
+
+@dataclass(kw_only=True)
 class LedgerEntry:
     id: str | None = None
     clip_id: str

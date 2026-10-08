@@ -3,14 +3,15 @@
 # cookies, no download), the best new ones are filed as drops, the clips nobody used are deleted, and the drop job is woken.
 #
 # Schedule: 05:30 UTC every day = 06:30 London in British Summer Time; in winter (GMT, from the last Sunday of October) the same
-# cron runs at 05:30 London. GitHub's schedule is best-effort (a run can start late or be skipped): the next day catches up, and
-# the daily credit cap is per run. A manual run: `gh workflow run studio-hits.yml`.
+# cron runs at 05:30 London. GitHub's schedule is best-effort (a run can start late or be skipped): the next day catches up. The
+# credit caps are per London day (studio.hits_spend): a manual run the same day starts from what the scheduled one spent. A
+# manual run: `gh workflow run studio-hits.yml`.
 #
 # Steps:
 # 1. `studio hits pull`: the searches of config/scan.json `hits` (each live character's keywords on TikTok and Instagram, the
-#    general lane's trending feeds and broad searches), at most `hits.daily_credit_cap` credits (25), then the auto-filing (at
-#    most 3 new drops a live character and 3 from the general lane a day). Without SCRAPECREATORS_API_KEY: a notice, nothing is
-#    pulled, the step passes. Its JSON says how many drops were filed (the step's output `filed`).
+#    general lane's trending feeds and broad searches) within the London day's `hits.daily_credit_cap` (45, less the room kept
+#    for the day's 2 one-post downloads: 25 for the searches), then the auto-filing (at most 3 new drops a live character and 3
+#    from the general lane a day). Without SCRAPECREATORS_API_KEY: a notice, nothing is pulled, the step passes. Its JSON says how many drops were filed (the step's output `filed`).
 # 2. `studio source purge --stale`: retention (a drop never made: its clip goes 30 days after filing when it came from a hit, 60
 #    days for the owner's own; never one he marked Keep, one being made, or a family member still to be made). It runs even when
 #    the pull failed.

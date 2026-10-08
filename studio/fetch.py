@@ -20,9 +20,10 @@ A Drop-in needs the actual video file. The owner allowed ``yt-dlp`` for it, with
   (exit 2) and the pick is left alone.
 * **When yt-dlp cannot do it for a dropped link** (owner 2026-10-07, plan Task 6: Instagram and TikTok often block the cloud's
   addresses): a pick the owner dropped or tapped "Use this clip" on, or the hits job filed (``proposal.drop``), is taken from
-  ScrapeCreators' copy of that ONE post (``media_fallback``: ``studio.hits.ScrapeCreators.download_post``, ``download_media=true``,
-  10 credits when the media is found), checked and ingested exactly like a yt-dlp result; its marker says
-  ``via: scrapecreators`` and the credits. TikTok and Instagram only, never a batch, never a third-party downloader site. When
+  ScrapeCreators' copy of that ONE post (``media_fallback``: ``studio.hits.DownloadBudget``, ``download_media=true``, 10 credits
+  when the media is found, at most ``hits.download_cap_per_day`` a London day within ``hits.daily_credit_cap``; over a cap it
+  refuses and the drop waits), checked and ingested exactly like a yt-dlp result; its marker says ``via: scrapecreators`` and the
+  credits. TikTok and Instagram only, never a batch, never a third-party downloader site. When
   that fails too, the one ``FetchFailed`` names both reasons.
 * **Idempotent and shared**: a pick that already carries a live fetched source is not downloaded again, and the other
   character's pick of the same video (the terminal's "Both") reuses the one download, as does a version of a drop (terminal

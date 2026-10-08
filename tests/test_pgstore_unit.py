@@ -355,7 +355,7 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
     proto_methods = [
         n for n, v in inspect.getmembers(Store, inspect.isfunction) if not n.startswith("_")
     ]
-    assert len(proto_methods) == 36  # 35 data methods (4 for the hits of migration 0016) + transaction()
+    assert len(proto_methods) == 38  # 37 data methods (6 for the hits and the day's spend of migration 0016) + transaction()
     for name in proto_methods:
         expected = inspect.signature(getattr(Store, name))
         for impl in (MemoryStore, PostgresStore):
@@ -579,3 +579,20 @@ def test_list_and_update_hits_bind_their_values(db):
     hid = str(uuid.uuid4())
     assert store.update_hit(hid, status="dismissed").status == "dismissed"
     assert db.statements[1][0].startswith('update "studio"."hits" set "status" = %s where id = %s')
+
+
+
+def test_add_hit_spend_is_one_increment_on_the_day_and_a_missing_day_is_zero(db):
+    db.queue([], [{"day": date(2026, 10, 8), "search_credits": 3, "download_credits": 10, "downloads": 1, "updated_at": NOW}])
+    store = PostgresStore(DSN)
+    assert store.get_hit_spend(date(2026, 10, 8)).total == 0  # no row: nothing spent
+    got = store.add_hit_spend(date(2026, 10, 8), download_credits=10, downloads=1)
+    query, params = db.statements[1]
+    assert query.startswith('insert into "studio"."hits_spend" as s (day, "search_credits", "download_credits", "downloads") values')
+    assert "on conflict (day) do update set" in query and "updated_at = now()" in query
+    for col in ("search_credits", "download_credits", "downloads"):
+        assert f'"{col}" = s."{col}" + excluded."{col}"' in query, col  # added, never overwritten
+    assert params == [date(2026, 10, 8), 0, 10, 1] and got.total == 13 and got.downloads == 1
+    with pytest.raises(ValueError):
+        store.add_hit_spend(date(2026, 10, 8), search_credits=-1)
+    assert len(db.statements) == 2  # refused before any query

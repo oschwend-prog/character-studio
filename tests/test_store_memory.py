@@ -532,3 +532,22 @@ def test_a_hit_validates_its_platform_status_score_and_caption():
         Hit(platform="tiktok", url="u", caption="x" * 301)
     with pytest.raises(ValueError):
         MemoryStore().upsert_hit(Hit(platform="tiktok", url="u", last_seen=datetime(2026, 10, 8, 6, 30)))  # never naive
+
+
+def test_the_days_scrapecreators_spend_adds_up_per_day():
+    from studio.models import HitSpend
+
+    store = MemoryStore()
+    day = date(2026, 10, 8)
+    empty = store.get_hit_spend(day)
+    assert (empty.day, empty.total, empty.downloads, empty.updated_at) == (day, 0, 0, None)
+    store.add_hit_spend(day, search_credits=3)
+    after = store.add_hit_spend(day, download_credits=10, downloads=1)
+    assert (after.search_credits, after.download_credits, after.downloads, after.total) == (3, 10, 1, 13) and after.updated_at
+    assert store.get_hit_spend(day) == after and store.get_hit_spend(date(2026, 10, 9)).total == 0
+    for bad in ({"search_credits": -1}, {"downloads": True}, {"download_credits": 1.5}):
+        with pytest.raises(ValueError):
+            store.add_hit_spend(day, **bad)
+    assert store.get_hit_spend(day) == after  # a refused add changes nothing
+    with pytest.raises(ValueError):
+        HitSpend(day=datetime(2026, 10, 8, 6, 30, tzinfo=LONDON))  # a day, never a moment

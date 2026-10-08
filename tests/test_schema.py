@@ -1646,23 +1646,24 @@ HITS_FUNCTIONS = ["set_hit_status", "set_drop_keep", "copy_drop"]
 OWNER_CHECK = "if coalesce((select auth.jwt() ->> 'email'), '') <> 'o.schwend@gmail.com' then"
 
 
-def _hits_table() -> str:
-    m = re.search(r"create table if not exists studio\.hits \((.*?)\n\);", HITS_CODE, re.S)
-    assert m, "no create table studio.hits"
+def _hits_table(name: str = "hits") -> str:
+    m = re.search(rf"create table if not exists studio\.{name} \((.*?)\n\);", HITS_CODE, re.S)
+    assert m, f"no create table studio.{name}"
     return m.group(1)
 
 
 def test_0016_is_the_hits_table_its_view_three_functions_and_their_grants_only():
     assert HITS_PATH.is_file()
-    assert re.findall(r"create table if not exists studio\.(\w+)", HITS_CODE) == ["hits"]
+    assert re.findall(r"create table if not exists studio\.(\w+)", HITS_CODE) == ["hits", "hits_spend"]
     assert re.findall(r"create or replace view studio\.(\w+)", HITS_CODE) == ["v_hits"]
     assert re.findall(r"create or replace function studio\.(\w+)", HITS_CODE) == HITS_FUNCTIONS
-    code = re.sub(r"create table if not exists studio\.hits \(.*?\n\);", "", HITS_CODE, flags=re.S)
+    code = re.sub(r"create table if not exists studio\.\w+ \(.*?\n\);", "", HITS_CODE, flags=re.S)
     code = re.sub(r"create or replace (?:function studio\.\w+\(.*?\n\$\$|view studio\.v_hits .*?);", "", code, flags=re.S)
     code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
     statements = [" ".join(s.split()) for s in code.split(";") if s.strip()]
     assert statements == [
         "alter table studio.hits enable row level security",
+        "alter table studio.hits_spend enable row level security",
         "revoke all on studio.hits from public",
         "revoke all on studio.hits from authenticated",
         "grant select on studio.hits to authenticated",
@@ -1674,6 +1675,8 @@ def test_0016_is_the_hits_table_its_view_three_functions_and_their_grants_only()
         "grant execute on function studio.set_drop_keep(uuid, boolean) to authenticated",
         "revoke all on function studio.copy_drop(uuid, text) from public",
         "grant execute on function studio.copy_drop(uuid, text) to authenticated",
+        "revoke all on studio.hits_spend from public",
+        "revoke all on studio.hits_spend from authenticated",
     ]
     blocks = re.findall(r"do \$\$.*?\n\$\$;", HITS_CODE, re.S)
     assert len(blocks) == 2
@@ -1681,8 +1684,8 @@ def test_0016_is_the_hits_table_its_view_three_functions_and_their_grants_only()
     assert "create policy owner_all on studio.hits for all to authenticated" in policy and "pg_policies" in policy
     assert policy.count("auth.jwt()->>'email' = 'o.schwend@gmail.com'") == 2  # USING and WITH CHECK, as every table of 0001
     assert "rolname = 'anon'" in anon
-    for what in ("studio.hits", "studio.v_hits", "function studio.set_hit_status(uuid, text)", "function studio.set_drop_keep(uuid, boolean)",
-                 "function studio.copy_drop(uuid, text)"):  # fmt: skip
+    for what in ("studio.hits", "studio.hits_spend", "studio.v_hits", "function studio.set_hit_status(uuid, text)",
+                 "function studio.set_drop_keep(uuid, boolean)", "function studio.copy_drop(uuid, text)"):  # fmt: skip
         assert f"execute 'revoke all on {what} from anon';" in anon, what
     assert "to anon" not in HITS_CODE and "service_role" not in HITS_CODE
     words = re.sub(r"'(?:[^']|'')*'", "''", HITS_CODE)  # a string literal is data ('{drop,keep}'), not a statement
@@ -1771,3 +1774,24 @@ def test_0016_copy_drop_is_0015s_word_for_word_plus_the_auto_filed_tag():
 
     copy_src = re.search(r"\ndef copy_drop\(.*?\n    \)\)  # fmt: skip\n", Path(drop.__file__).read_text(encoding="utf-8"), re.S).group(0)
     assert 'if d.get("auto_filed") is True:' in copy_src and 'proposal["drop"]["auto_filed"] = True' in copy_src
+
+
+def test_0016_hits_spend_is_one_row_per_london_day_that_no_api_role_can_touch():
+    from dataclasses import fields
+
+    from studio.models import HitSpend
+
+    body = _hits_table("hits_spend")
+    cols = {m.group(1) for m in re.finditer(r"(?m)^  ([a-z_]+)\s+\S", body)}
+    assert cols == {f.name for f in fields(HitSpend)}
+    assert re.search(r"day\s+date primary key", body)
+    for col in ("search_credits", "download_credits", "downloads"):
+        assert re.search(rf"{col}\s+integer not null default 0 check \({col} >= 0\)", body), col
+    assert re.search(r"updated_at\s+timestamptz not null default now\(\)", body)
+    # like 0014's timer_state: RLS on, no policy, no grant (only the jobs, through the CLI's table-owner connection, write it)
+    assert "create policy owner_all on studio.hits_spend" not in HITS_CODE and "on studio.hits_spend to" not in HITS_CODE
+    assert "revoke all on studio.hits_spend from authenticated;" in HITS_CODE
+    from studio import pgstore
+
+    src = Path(pgstore.__file__).read_text(encoding="utf-8")
+    assert "on conflict (day) do update set" in src and '"{c} = s.{c} + excluded.{c}"' in src  # an increment, never a read-then-write

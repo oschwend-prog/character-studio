@@ -2,7 +2,8 @@
 -- section 10; plan docs/superpowers/plans/2026-10-07-terminal-v3.md, task 6): the posts the daily ScrapeCreators pull keeps
 -- (studio.hits, read by the terminal as studio.v_hits), the owner's buttons on a hit (studio.set_hit_status: "Use this clip"
 -- marks it dropped, "Not for us" dismissed) and on a drop (studio.set_drop_keep: Keep, so retention never deletes its clip),
--- and studio.copy_drop carrying the hits job's tag into a version.
+-- studio.copy_drop carrying the hits job's tag into a version, and what the ScrapeCreators jobs spend each London day
+-- (studio.hits_spend).
 --
 -- WHY. The owner asked for a cloud job that finds what is hot without the Mac (2026-10-07: "set up the scrapecreators cloud
 -- job"; "let it scrape if necessary. I just don't want it to need the Mac running and browsing to get it done"). The workflow
@@ -10,11 +11,14 @@
 -- download), the job keeps one row per post here, files the best as drops (`studio.hits.auto_file`, tagged drop.auto_filed)
 -- and deletes the clips nobody used (`studio source purge --stale`, which spares a drop the owner marked Keep). The terminal
 -- shows the hits ("Hot right now", "Worth saving") and needs two owner-only buttons for them and for Keep; a version of an
--- auto-filed clip must keep the tag (the learning tag source_kind reads it; retention gives a hit's clip 30 days).
+-- auto-filed clip must keep the tag (the learning tag source_kind reads it; retention gives a hit's clip 30 days). The credit
+-- caps are per London day (controller ruling 2026-10-08): a second run the same day must start from what the first spent, and
+-- the drop job's one-post downloads (10 credits each) count into the same day, so the day's spend lives in the database.
 --
 -- Additive / replacing only, schema studio only. To be applied to Supabase project hkcafvzjwkeibbmvskko ("faceless-youtube",
 -- shared with another app) as migration `studio_0016_hits`, AFTER 0015; the controller (or the owner) applies it, it is never
--- run from the studio CLI. Apply it BEFORE the first run of studio-hits.yml (the job writes studio.hits) and before the terminal
+-- run from the studio CLI. Apply it BEFORE the first run of studio-hits.yml (the job writes studio.hits and studio.hits_spend)
+-- and before the terminal
 -- that reads v_hits is deployed. Re-run safe: the table is created if missing, its policy only when it is not there yet, the
 -- view and every function are `create or replace` with an unchanged column list or signature, and every grant and revoke may
 -- repeat.
@@ -24,8 +28,14 @@
 --    saves, each NULL when the API did not give it, never 0; posted_at; caption, at most 300 characters; sound; duration_s;
 --    thumbnail_url, stored, never fetched; the keyword and the character it was searched for, character_slug NULL for the
 --    general lane; reach = views / followers; score 0-100; status new, dropped or dismissed; created_at = first seen, last_seen).
+--    hits_spend(day, search_credits, download_credits, downloads, updated_at): one row per London day, what the searches of
+--    `studio hits pull` and the one-post downloads of the drop job were charged and how many downloads were made (the
+--    dataclass HitSpend). Written only by the jobs through the studio CLI (PostgresStore.add_hit_spend: one insert ... on
+--    conflict (day) do update that adds, so two writers both count); hits.daily_credit_cap covers the day's total,
+--    hits.download_cap_per_day its downloads.
 -- 2. Row level security like every table of 0001: the one owner_all policy (the owner's e-mail in USING and WITH CHECK). The CLI
 --    connects as the table owner, which bypasses RLS. The terminal's role may only read it: hits changes through the RPC.
+--    hits_spend is like 0014's timer_state: RLS on, no policy and no grant, so no API role can read or write it.
 -- 3. v_hits: the new hits, best first (score, then the latest seen), with the character's name, readable by the terminal's role
 --    and running as the caller (security_invoker), like v_views_daily.
 -- 4. set_hit_status(hit_id, status): the owner's "Use this clip" (dropped, after add_drop(link)) and "Not for us" (dismissed),
@@ -38,12 +48,14 @@
 -- 6. copy_drop (0015's, word for word plus one step): a version of a drop the hits job filed (drop.auto_filed true) carries
 --    auto_filed too, as studio.drop.copy_drop does; a root without the tag gives a version without it (0015's version exactly).
 -- 7. Grants: hits revoked from public and from the terminal's role, then select granted back to it; v_hits granted to it; the
---    three functions revoked from public and granted to it; everything revoked from anon where the role exists.
+--    three functions revoked from public and granted to it; hits_spend revoked from public and the terminal's role; everything
+--    revoked from anon where the role exists.
 --
 -- TO UNDO (in this order): re-run the copy_drop section of 0015 (create or replace puts it back), then
 --   drop function studio.set_drop_keep(uuid, boolean);
 --   drop function studio.set_hit_status(uuid, text);
 --   drop view studio.v_hits;
+--   drop table studio.hits_spend;
 --   drop table studio.hits;
 -- The drops already filed stay as ordinary drops (their auto_filed and hit are then only data).
 
@@ -74,9 +86,18 @@ create table if not exists studio.hits (
   last_seen      timestamptz not null default now()
 );
 
+create table if not exists studio.hits_spend (
+  day              date primary key,
+  search_credits   integer not null default 0 check (search_credits >= 0),
+  download_credits integer not null default 0 check (download_credits >= 0),
+  downloads        integer not null default 0 check (downloads >= 0),
+  updated_at       timestamptz not null default now()
+);
+
 -- ---- 2. row level security ---------------------------------------------------------------------------------------------------
 
 alter table studio.hits enable row level security;
+alter table studio.hits_spend enable row level security;
 do $$
 begin
   if not exists (select 1 from pg_catalog.pg_policies
@@ -322,11 +343,14 @@ revoke all on function studio.set_drop_keep(uuid, boolean) from public;
 grant execute on function studio.set_drop_keep(uuid, boolean) to authenticated;
 revoke all on function studio.copy_drop(uuid, text) from public;
 grant execute on function studio.copy_drop(uuid, text) to authenticated;
+revoke all on studio.hits_spend from public;
+revoke all on studio.hits_spend from authenticated;
 do $$
 begin
   -- no API role but the signed-in owner may read or call any of it (the owner checks refuse everyone else too)
   if exists (select 1 from pg_catalog.pg_roles where rolname = 'anon') then
     execute 'revoke all on studio.hits from anon';
+    execute 'revoke all on studio.hits_spend from anon';
     execute 'revoke all on studio.v_hits from anon';
     execute 'revoke all on function studio.set_hit_status(uuid, text) from anon';
     execute 'revoke all on function studio.set_drop_keep(uuid, boolean) from anon';
