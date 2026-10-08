@@ -1,13 +1,16 @@
-// "Your drops" (owner 2026-10-06: "the core of the terminal is dropping our characters into my saved videos"): every dropped video
-// in one table, whatever its character, in the Long list's table look (on a phone each row stacks). Per row: the preview still,
-// what is in it, the character menu (the live roster, ★ on the one the check recommends, with its reason, which the owner may
-// ignore: set_drop_character, migration 0013, then the free check again in that voice), the section and its price, where it is
-// (one plain chip: Adding, Checking, Pick a character, Ready, Making, Done, Blocked, Failed; lib/clipstatus.ts), and the buttons the
-// drop card had (Make it, Adjust, Try again, Remove). The chevron opens the rest of the card: the five-frame strip, the facts, the
-// moments with text on screen, own footage, Keep (a clip not made yet: retention never deletes a kept one). Nothing is paid before
-// Make it. The Clips page passes the rows its filter keeps.
-import { AlertTriangle, ChevronRight, SlidersHorizontal } from 'lucide-react';
-import { Fragment, useEffect, useState, type ReactNode } from 'react';
+// "Your drops" (owner 2026-10-06: "the core of the terminal is dropping our characters into my saved videos"): every dropped video,
+// whatever its character, as a grid of big clip cards you can tap to watch (ClipCard, Task 11, owner 2026-10-08: "make them larger
+// so I can actually see them"). Per card: the picture (the cover of the section, else its five-frame strip, else the drop's tile),
+// the score, what is in it, the character, the section and its price, where it is (one plain chip: Adding, Checking, Pick a
+// character, Ready, Making, Done, Blocked, Failed; lib/clipstatus.ts) and the buttons the drop card had: the character menu first
+// for a Pick a character clip (the live roster, ★ on the one the check recommends, with its reason, which the owner may ignore:
+// set_drop_character, migration 0013, then the free check again in that voice), then Make it (or Try again, or Review in Videos),
+// and Adjust, Try again, Remove under it. More opens the rest of the card: the character menu, the five-frame strip, the facts, the
+// moments with text on screen, own footage, Keep (a clip not made yet: retention never deletes a kept one) and the original post.
+// Nothing is paid before Make it. The Clips page passes the cards its filter keeps.
+import { AlertTriangle } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { cardPrice, originalLink, playableFor } from '../lib/clipcard';
 import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipActions, clipChip, makeTotal } from '../lib/clipstatus';
 import {
   PART_LABEL, RECOMMEND, avoidLabel, characterChoice, characterMenu, dropCredits, dropLine, dropTitle, effectiveDrop,
@@ -15,16 +18,16 @@ import {
 } from '../lib/drop';
 import { formatCredits } from '../lib/format';
 import { href } from '../lib/hooks';
-import type { RosterEntry } from '../lib/roster';
+import { scoreOf } from '../lib/ranking';
+import { nameOf, type RosterEntry } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import { trackerStep } from '../lib/tracker';
 import type { Budget, DropAdjust, TrackerRow } from '../lib/types';
 import { AdjustSheet } from './AdjustSheet';
+import { ClipCard, ClipGrid, OriginalLink, dropPicture } from './ClipCard';
 import { KeepToggle } from './KeepToggle';
 import { PickThumb } from './PickThumb';
 import { Spinner } from './ui';
-
-const COLUMNS = 6;
 
 export function DropsTable({
   rows, roster, budget, now, summaryRows = rows, toolbar, empty,
@@ -35,21 +38,13 @@ export function DropsTable({
   now: number;
   /** The rows the "N to make · about X credits" line adds up: every drop, when `rows` is a filtered view of them. */
   summaryRows?: ReadonlyArray<TrackerRow>;
-  /** Under the heading, above the table: the Clips page's filter chips. */
+  /** Under the heading, above the cards: the Clips page's filter chips. */
   toolbar?: ReactNode;
-  /** One line to say when there is no row (a filter that keeps none); the two-line "No drops yet" when absent. */
+  /** One line to say when there is no card (a filter that keeps none); the two-line "No drops yet" when absent. */
   empty?: string;
 }) {
-  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
   const total = makeTotal(summaryRows, now);
   const left = budget ? Math.max(0, budget.cap - budget.committed) : null;
-  const toggle = (id: string) =>
-    setOpen((s) => {
-      const next = new Set(s);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
 
   return (
     <section className="stack" style={{ gap: 10 }} aria-labelledby="drops-title">
@@ -75,36 +70,18 @@ export function DropsTable({
           )}
         </div>
       ) : (
-        <div className="panel ll-scroll" role="region" aria-label={`Your drops, ${rows.length}`} tabIndex={0}>
-          <table className="ll-table drops-table">
-            <caption className="sr-only">Every video you dropped, the newest first.</caption>
-            <thead>
-              <tr>
-                <th scope="col" className="ll-pic"><span className="sr-only">Picture</span></th>
-                <th scope="col" className="ll-clip"><span className="label">What’s in it</span></th>
-                <th scope="col" className="dt-char"><span className="label">Character</span></th>
-                <th scope="col" className="dt-price"><span className="label">Section · price</span></th>
-                <th scope="col" className="dt-state"><span className="label">Status</span></th>
-                <th scope="col" className="dt-actions"><span className="sr-only">Actions</span></th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => (
-                <Fragment key={r.pick_id}>
-                  <DropRow row={r} roster={roster} now={now} expanded={open.has(r.pick_id)} onToggle={() => toggle(r.pick_id)} />
-                  {open.has(r.pick_id) && <DropDetail row={r} />}
-                </Fragment>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <ClipGrid label={`Your drops, ${rows.length}, the newest first`}>
+          {rows.map((r) => (
+            <DropItem key={r.pick_id} row={r} roster={roster} now={now} />
+          ))}
+        </ClipGrid>
       )}
     </section>
   );
 }
 
-/** The preview still: the middle frame of the five-frame strip of the section (a signed URL), else the drop's tile. Also used by
- * Clips by character and Today. */
+/** The preview still: the middle frame of the five-frame strip of the section (a signed URL), else the drop's tile. Today's
+ * Approve these uses it for a finished video's picture. */
 export function DropThumb({ row }: { row: TrackerRow }) {
   const { backend } = useStudio();
   const path = row.drop_card?.preview_path ?? null;
@@ -125,9 +102,7 @@ export function DropThumb({ row }: { row: TrackerRow }) {
   );
 }
 
-function DropRow({
-  row, roster, now, expanded, onToggle,
-}: { row: TrackerRow; roster: ReadonlyArray<RosterEntry>; now: number; expanded: boolean; onToggle(): void }) {
+function DropItem({ row, roster, now }: { row: TrackerRow; roster: ReadonlyArray<RosterEntry>; now: number }) {
   const { backend, run, busy } = useStudio();
   const d = row.drop_card!;
   const [adjusting, setAdjusting] = useState(false);
@@ -139,8 +114,13 @@ function DropRow({
   const actions = clipActions(row, now);
   const e = effectiveDrop(d, d.adjust ?? {});
   const priced = d.credits != null && d.window != null;
+  const credits = priced ? dropCredits(d, d.adjust ?? {}) : null;
   const title = dropTitle(row);
-  const detailId = `dt-detail-${row.pick_id}`;
+  const score = scoreOf(row);
+  const reason = score != null && typeof d.score?.reason === 'string' && d.score.reason.trim() ? d.score.reason.trim() : null;
+  const pick = clipChip(row) === 'pick';
+  const review = row.clip_state === 'awaiting_approval' && row.clip_id ? row.clip_id : null;
+  const original = originalLink(row.url)?.url ?? null;
 
   const make = (adjust: DropAdjust | null) =>
     run(key, () => backend.requestJob(row.pick_id, 'make', adjust), `Make it: ${row.character_name ?? 'he'} is on his way (about ${dropCredits(d, adjust ?? {})} credits)`);
@@ -154,102 +134,107 @@ function DropRow({
       slug === row.character_slug ? `${name} it is` : `${name}: checking it again in his voice (free)`,
     );
   };
+  // the one big button: Make it, else Try again after a failed Make it, else Review in Videos, else Try again of the check
+  const main = actions.includes('make') ? 'make' : actions.includes('retry-make') ? 'retry-make' : review ? 'review' : actions.includes('retry-check') ? 'retry-check' : null;
+  const cell = (prefix: string) => (
+    <CharacterCell row={row} menu={menu} confirm={characterConfirm(row, roster)} working={working || changing} onChoose={choose} idPrefix={prefix} />
+  );
 
   return (
-    <tr className="ll-row" data-char={row.character_slug ?? 'none'} data-drop={d.state}>
-      <td className="ll-pic">
-        <DropThumb row={row} />
-      </td>
-      <th scope="row" className="ll-clip">
-        <div className="ll-clip-in">
-          <button
-            type="button" className="ll-chev" aria-expanded={expanded} aria-controls={expanded ? detailId : undefined}
-            aria-label={expanded ? 'Hide the details' : 'Show the details: the frames, the hook, own footage'} onClick={onToggle}
-          >
-            <ChevronRight size={15} aria-hidden="true" />
-          </button>
-          <span className="stack" style={{ gap: 2 }}>
-            <span className="ll-title">{title}</span>
+    <>
+      <ClipCard
+        id={`a-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
+        score={score ?? undefined} scoreTitle="The free check’s score: how likely the clip gets views with him in it" reason={reason}
+        price={priced ? cardPrice(credits, e.length_s) : d.state === 'checking' || d.state === 'uploading' ? 'priced by the check' : undefined}
+        sheetPrice={priced ? `about ${credits} credits · ${sectionLabel(e.start_s, e.length_s)}` : undefined}
+        character={row.character_slug ? `For ${row.character_name ?? nameOf(row.character_slug)}` : 'No character yet'}
+        dataChar={row.character_slug ?? 'none'} original={original}
+        extra={
+          <>
             <span className="small muted">
-              {d.star?.description
-                ? `${d.window ? 'Replaces' : 'Star:'} ${e.star}`
-                : d.kind === 'link' ? row.creator_handle ?? 'a link' : 'your video'}
+              {d.star?.description ? `${d.window ? 'Replaces' : 'Star:'} ${e.star}` : d.kind === 'link' ? row.creator_handle ?? 'a link' : 'your video'}
             </span>
-          </span>
-        </div>
-      </th>
-      <td className="dt-char">
-        <CharacterCell row={row} menu={menu} confirm={characterConfirm(row, roster)} working={working || changing} onChoose={choose} />
-      </td>
-      <td className="dt-price">
-        {priced ? (
-          <span className="stack" style={{ gap: 2 }}>
-            <b className="num">about {dropCredits(d, d.adjust ?? {})} credits</b>
-            <span className="small muted num">{sectionLabel(e.start_s, e.length_s)}</span>
-          </span>
-        ) : d.state === 'checking' || d.state === 'uploading' ? (
-          <span className="faint small">priced by the check</span>
-        ) : null}
-      </td>
-      <td className="dt-state">
-        <StatusCell row={row} now={now} />
-      </td>
-      <td className="dt-actions">
-        <div className="drop-actions">
-          {actions.includes('make') && (
-            <button type="button" className="btn primary" disabled={working || changing} aria-busy={working} onClick={() => void make(null)}>
-              {working && <Spinner />} Make it
-            </button>
-          )}
-          {actions.includes('retry-make') && (
-            <button type="button" className="btn primary" disabled={working || changing} aria-busy={working} onClick={() => void make(retryAdjust(d))}>
-              {working && <Spinner />} Try again · <span className="num">about {dropCredits(d, d.adjust ?? {})}</span>
-            </button>
-          )}
-          {actions.includes('adjust') && (
-            <button type="button" className="btn ghost" disabled={working || changing} onClick={() => setAdjusting(true)}>
-              <SlidersHorizontal aria-hidden="true" /> Adjust
-            </button>
-          )}
-          {actions.includes('retry-check') && (
-            <button type="button" className="btn line" disabled={working || changing} onClick={() => void recheck()}>
-              Try again
-            </button>
-          )}
-          {actions.includes('remove') && (
-            <button type="button" className="btn ghost" disabled={working || changing} onClick={() => void remove()}>
-              Remove
-            </button>
-          )}
-          {row.clip_state === 'awaiting_approval' && row.clip_id && (
-            <a className="btn primary" href={href('videos', row.clip_id)}>
-              Review in Videos
-            </a>
-          )}
-        </div>
-        {adjusting && (
-          <AdjustSheet
-            row={row}
-            onClose={() => setAdjusting(false)}
-            onMake={async (adjust) => {
-              const ok = await make(adjust);
-              if (ok) setAdjusting(false);
-            }}
-            working={working}
-          />
+            <StatusCell row={row} now={now} />
+          </>
+        }
+        action={({ where }) => (
+          <>
+            {pick && <div className="needs-choice">{cell(where === 'sheet' ? 'pl-char' : 'dt-char')}</div>}
+            {main === 'make' && (
+              <button type="button" className="btn primary block" disabled={working || changing} aria-busy={working} onClick={() => void make(null)}>
+                {working && <Spinner />} Make it
+              </button>
+            )}
+            {main === 'retry-make' && (
+              <button type="button" className="btn primary block" disabled={working || changing} aria-busy={working} onClick={() => void make(retryAdjust(d))}>
+                {working && <Spinner />} Try again · <span className="num">about {dropCredits(d, d.adjust ?? {})}</span>
+              </button>
+            )}
+            {main === 'review' && (
+              <a className="btn primary block" href={href('videos', review!)}>
+                Review in Videos
+              </a>
+            )}
+            {main === 'retry-check' && (
+              <button type="button" className="btn line block" disabled={working || changing} onClick={() => void recheck()}>
+                Try again
+              </button>
+            )}
+          </>
         )}
-      </td>
-    </tr>
+        links={
+          actions.includes('adjust') || (actions.includes('retry-check') && main !== 'retry-check') || actions.includes('remove') ? (
+            <>
+              {actions.includes('adjust') && (
+                <button type="button" className="cc-textlink" disabled={working || changing} onClick={() => setAdjusting(true)}>
+                  Adjust
+                </button>
+              )}
+              {actions.includes('retry-check') && main !== 'retry-check' && (
+                <button type="button" className="cc-textlink" disabled={working || changing} onClick={() => void recheck()}>
+                  Try again
+                </button>
+              )}
+              {actions.includes('remove') && (
+                <button type="button" className="cc-textlink" disabled={working || changing} onClick={() => void remove()}>
+                  Remove
+                </button>
+              )}
+            </>
+          ) : undefined
+        }
+        more={<DropDetail row={row} character={pick ? null : cell('dt-char')} />}
+      />
+      {adjusting && (
+        <AdjustSheet
+          row={row}
+          onClose={() => setAdjusting(false)}
+          onMake={async (adjust) => {
+            const ok = await make(adjust);
+            if (ok) setAdjusting(false);
+          }}
+          working={working}
+        />
+      )}
+    </>
   );
 }
 
 /** The character menu of a clip (★ on the recommended one, "Use <him>" for a Pick a character clip): also Clips by character's
  * Needs you. */
 export function CharacterCell({
-  row, menu, confirm, working, onChoose,
-}: { row: TrackerRow; menu: CharacterMenu; confirm: { slug: string; name: string } | null; working: boolean; onChoose(slug: string): void }) {
+  row, menu, confirm, working, onChoose, idPrefix = 'dt-char',
+}: {
+  row: TrackerRow;
+  menu: CharacterMenu;
+  confirm: { slug: string; name: string } | null;
+  working: boolean;
+  onChoose(slug: string): void;
+  /** Its ids' prefix: the player sheet draws the same menu while the card's is in the page. */
+  idPrefix?: string;
+}) {
   const line = recommendationLine(menu, row.character_slug);
-  const id = `dt-char-${row.pick_id}`;
+  const id = `${idPrefix}-${row.pick_id}`;
   return (
     <span className="stack" style={{ gap: 4 }}>
       <label className="sr-only" htmlFor={id}>Character for {dropTitle(row)}</label>
@@ -288,7 +273,7 @@ function StatusCell({ row, now }: { row: TrackerRow; now: number }) {
     // Make it was tapped and the clip exists: the chip says where it is; the step's own note or reason goes under it
     const s = trackerStep(row, now);
     return (
-      <span className="stack" style={{ gap: 4 }}>
+      <span className="stack cc-status" style={{ gap: 4 }}>
         {pill}
         {s.reason ? (
           <span className={`small ${s.state === 'failed' ? 'error-text' : 'muted'}`}>{s.reason}</span>
@@ -302,7 +287,7 @@ function StatusCell({ row, now }: { row: TrackerRow; now: number }) {
   const flagged = d.state === 'blocked' || d.state === 'failed' || d.state === 'waiting';
   const moving = d.state === 'uploading' || d.state === 'checking' || d.state === 'making';
   return (
-    <span className="stack" style={{ gap: 4 }}>
+    <span className="stack cc-status" style={{ gap: 4 }}>
       {pill}
       {flagged ? (
         <span className={`small ${d.state === 'waiting' ? 'muted' : 'error-text'}`} role={d.state === 'failed' ? 'alert' : undefined}>
@@ -318,8 +303,9 @@ function StatusCell({ row, now }: { row: TrackerRow; now: number }) {
   );
 }
 
-/** Under a row: what the drop card showed (the strip of the section, the facts, the moments with text, own footage). */
-function DropDetail({ row }: { row: TrackerRow }) {
+/** Under More: the character menu (when it is not the card's own action), what the drop card showed (the strip of the section, the
+ * facts, the moments with text, own footage), Keep and the original post. */
+function DropDetail({ row, character }: { row: TrackerRow; character: ReactNode }) {
   const { backend, run, busy } = useStudio();
   const d = row.drop_card!;
   const key = `drop-${row.pick_id}`;
@@ -343,37 +329,35 @@ function DropDetail({ row }: { row: TrackerRow }) {
   };
 
   return (
-    <tr className="ll-detail" id={`dt-detail-${row.pick_id}`}>
-      <td colSpan={COLUMNS}>
-        <div className="ll-detail-in">
-          {strip && (
-            <div className="drop-strip">
-              <img src={strip} alt={`Five frames of the section ${e.start_s}-${e.start_s + e.length_s} s`} loading="lazy" decoding="async" />
-            </div>
-          )}
-          {d.window && (
-            <dl className="drop-facts">
-              <div><dt>Replaces</dt><dd>{e.star}</dd></div>
-              <div><dt>His part</dt><dd>{PART_LABEL[e.part]}{e.gadgets.length ? ` · ${e.gadgets.join(', ')}` : ''}</dd></div>
-              <div><dt>Section</dt><dd className="num">{sectionLabel(e.start_s, e.length_s)}{e.crop_x != null ? ' · cropped to 9:16' : ''}</dd></div>
-              <div><dt>Hook</dt><dd>“{e.hook}”</dd></div>
-            </dl>
-          )}
-          {avoid && <p className="hint" style={{ margin: 0 }}>Seen: {avoid}. Only the section is judged: it keeps clear of them.</p>}
-          <div className="drop-footage" role="group" aria-label="Where the video comes from">
-            <div className="seg">
-              <button type="button" aria-pressed={!own} disabled={working} onClick={() => setFootage(false)}>
-                Downloaded clip
-              </button>
-              <button type="button" aria-pressed={own} disabled={working} onClick={() => setFootage(true)}>
-                Own footage
-              </button>
-            </div>
-            <span className="hint">Own footage: your recording, or footage you may use. For the records; it does not change the video.</span>
-          </div>
-          <KeepToggle row={row} idPrefix="dt-keep" />
+    <div className="dt-detail" id={`dt-detail-${row.pick_id}`}>
+      {character}
+      {strip && (
+        <div className="drop-strip">
+          <img src={strip} alt={`Five frames of the section ${e.start_s}-${e.start_s + e.length_s} s`} loading="lazy" decoding="async" />
         </div>
-      </td>
-    </tr>
+      )}
+      {d.window && (
+        <dl className="drop-facts">
+          <div><dt>Replaces</dt><dd>{e.star}</dd></div>
+          <div><dt>His part</dt><dd>{PART_LABEL[e.part]}{e.gadgets.length ? ` · ${e.gadgets.join(', ')}` : ''}</dd></div>
+          <div><dt>Section</dt><dd className="num">{sectionLabel(e.start_s, e.length_s)}{e.crop_x != null ? ' · cropped to 9:16' : ''}</dd></div>
+          <div><dt>Hook</dt><dd>“{e.hook}”</dd></div>
+        </dl>
+      )}
+      {avoid && <p className="hint" style={{ margin: 0 }}>Seen: {avoid}. Only the section is judged: it keeps clear of them.</p>}
+      <div className="drop-footage" role="group" aria-label="Where the video comes from">
+        <div className="seg">
+          <button type="button" aria-pressed={!own} disabled={working} onClick={() => setFootage(false)}>
+            Downloaded clip
+          </button>
+          <button type="button" aria-pressed={own} disabled={working} onClick={() => setFootage(true)}>
+            Own footage
+          </button>
+        </div>
+        <span className="hint">Own footage: your recording, or footage you may use. For the records; it does not change the video.</span>
+      </div>
+      <KeepToggle row={row} idPrefix="dt-keep" />
+      <OriginalLink url={row.url} />
+    </div>
   );
 }

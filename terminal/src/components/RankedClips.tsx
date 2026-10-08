@@ -1,27 +1,39 @@
 // The saved clips ranked per character (terminal v3, spec 5.2 and 6). A section per live character: "Needs you" first (clips the
 // studio filed under him that wait for a character choice), then his Ready clips ranked 1, 2, 3... by score with the score, the
 // one-line reason, the price and a Top pick badge on the first three scored ones (an unscored clip is "not scored yet"), then
-// what is on its way and done, the blocked and failed folded into one closed row. Each Ready clip has a tick box (the MakeBar
-// below adds them up and asks before anything is spent) and "Use for another character" (a version for a like-for-like
-// character, free: studio.copy_drop). Under his Ready clips, "Worth saving": his top 5 new hits of the daily cloud pull (spec 10,
-// Hits.tsx). A clip not made yet has the Keep toggle (retention never deletes a kept clip). `compact` is Today's "Make these": his
-// top 3 Ready clips only.
+// what is on its way and done, the blocked and failed folded into one closed row. Every clip is a big card you can tap to watch
+// (ClipCard, Task 11, owner 2026-10-08). Each Ready card has the Make toggle ("＋ Make this" / "✓ In your list": the same tick the
+// MakeBar below adds up, and it asks before anything is spent) and, under More, "Use for another character" (a version for a
+// like-for-like character, free: studio.copy_drop). Under his Ready clips, "Worth saving": his top 5 new hits of the daily cloud
+// pull (spec 10, Hits.tsx). A clip not made yet has the Keep toggle under More (retention never deletes a kept clip). `compact` is
+// Today's "Make these": his top 3 Ready clips only.
 import { ArrowRight, CircleAlert } from 'lucide-react';
 import { useState } from 'react';
+import { cardPrice, originalLink, playableFor } from '../lib/clipcard';
 import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipChip } from '../lib/clipstatus';
 import { cantUseLine, clipsByCharacter, isTopPick, readyWithChoice, sectionSummary, versionsLine } from '../lib/clipsview';
 import { characterChoice, characterMenu, dropCredits, dropLine, dropTitle, sectionLabel, effectiveDrop } from '../lib/drop';
+import { keepable } from '../lib/hits';
 import { href } from '../lib/hooks';
 import { reuseTargets, scoreOf, topPicks } from '../lib/ranking';
 import { activeRoster, nameOf, type RosterEntry } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import type { TrackerRow } from '../lib/types';
-import { CharacterCell, DropThumb } from './DropsTable';
+import { ClipCard, ClipGrid, MakeToggle, OriginalLink, dropPicture } from './ClipCard';
+import { CharacterCell } from './DropsTable';
 import { WorthSaving } from './Hits';
 import { KeepToggle } from './KeepToggle';
 import { Avatar, Spinner } from './ui';
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+const SCORE_TITLE = 'The free check’s score: how likely the clip gets views with him in it';
+
+/** The check's one line why the clip may get views, shown only with its score. */
+const scoreReason = (row: TrackerRow): string | null => {
+  const r = row.drop_card?.score?.reason;
+  return scoreOf(row) != null && typeof r === 'string' && r.trim() ? r.trim() : null;
+};
 
 export function RankedClips({
   rows, characters, ticked, onTick, now, compact = false,
@@ -68,12 +80,12 @@ export function RankedClips({
                 <span className="small muted num sec-count">{readyWithChoice(g.ready.length, g.needsYou.length)}</span>
               </header>
               {top.length ? (
-                <ol className="rank-list" aria-label={`${g.name}’s best ready clips`}>
+                <ClipGrid label={`${g.name}’s best ready clips, best first`}>
                   {top.map((r, i) => (
-                    <ReadyItem key={r.pick_id} row={r} rank={i + 1} top={isTopPick(r, i)} ticked={ticked.has(r.pick_id)} onTick={onTick} compact
+                    <ReadyCard key={r.pick_id} row={r} rank={i + 1} top={isTopPick(r, i)} ticked={ticked.has(r.pick_id)} onTick={onTick} compact
                       versions={versionsLine(r, data?.tracker ?? rows, names)} />
                   ))}
-                </ol>
+                </ClipGrid>
               ) : (
                 <p className="small muted pick-sec-empty">
                   Nothing ready to make for {g.name}.
@@ -140,21 +152,21 @@ function CharacterSection({
         <div className="pick-group">
           <h3 className="pick-group-head">Needs you <span className="count">{g.needsYou.length}</span></h3>
           <p className="hint" style={{ margin: 0 }}>The studio filed these under {g.name}. Keep him (free) or choose another character.</p>
-          <ul className="rank-list">
-            {g.needsYou.map((r) => <NeedsYouItem key={r.pick_id} row={r} roster={roster} />)}
-          </ul>
+          <ClipGrid label={`Needs your choice of character, ${g.needsYou.length}`}>
+            {g.needsYou.map((r) => <NeedsYouCard key={r.pick_id} row={r} roster={roster} />)}
+          </ClipGrid>
         </div>
       )}
 
       {g.ready.length > 0 ? (
         <div className="pick-group">
           <h3 className="pick-group-head">Ready to make, best first <span className="count">{g.ready.length}</span></h3>
-          <ol className="rank-list">
+          <ClipGrid label={`${g.name}’s clips ready to make, best first`}>
             {g.ready.map((r, i) => (
-              <ReadyItem key={r.pick_id} row={r} rank={i + 1} top={isTopPick(r, i)} ticked={ticked.has(r.pick_id)} onTick={onTick}
+              <ReadyCard key={r.pick_id} row={r} rank={i + 1} top={isTopPick(r, i)} ticked={ticked.has(r.pick_id)} onTick={onTick}
                 versions={versionsLine(r, rows, names)} />
             ))}
-          </ol>
+          </ClipGrid>
         </div>
       ) : (
         !empty && <p className="small muted pick-sec-empty">Nothing ready to make for {g.name}.</p>
@@ -165,18 +177,18 @@ function CharacterSection({
       {g.onTheWay.length > 0 && (
         <div className="pick-group">
           <h3 className="pick-group-head">On the way <span className="count">{g.onTheWay.length}</span></h3>
-          <ul className="rank-list">
-            {g.onTheWay.map((r) => <QuietItem key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
-          </ul>
+          <ClipGrid label={`${g.name}’s clips on the way`}>
+            {g.onTheWay.map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
+          </ClipGrid>
         </div>
       )}
 
       {g.done.length > 0 && (
         <div className="pick-group">
           <h3 className="pick-group-head">Done <span className="count">{g.done.length}</span></h3>
-          <ul className="rank-list">
-            {g.done.slice(0, DONE_SHOWN).map((r) => <QuietItem key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
-          </ul>
+          <ClipGrid label={`${g.name}’s clips done`}>
+            {g.done.slice(0, DONE_SHOWN).map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
+          </ClipGrid>
           {g.done.length > DONE_SHOWN && (
             <a className="link" href={href('clips', undefined, { v: 'all', f: 'done' })}>
               {g.done.length - DONE_SHOWN} more in All clips <ArrowRight size={14} aria-hidden="true" />
@@ -207,8 +219,9 @@ function CharacterSection({
   );
 }
 
-/** A Ready clip: tick box, rank, Top pick, score and reason, price; the versions line and the reuse menu (not in compact). */
-function ReadyItem({
+/** A Ready clip: its card with the rank, Top pick, score and reason, price and section, and the Make toggle (the tick the Make bar
+ * adds up); the versions line; under More, "Use for another character", Keep and the original post (not in compact). */
+function ReadyCard({
   row, rank, top, ticked, onTick, versions, compact = false,
 }: {
   row: TrackerRow;
@@ -219,46 +232,33 @@ function ReadyItem({
   versions: string | null;
   compact?: boolean;
 }) {
+  const { data } = useStudio();
   const d = row.drop_card!;
   const title = dropTitle(row);
-  const score = scoreOf(row);
-  const reason = score != null && typeof d.score?.reason === 'string' && d.score.reason.trim() ? d.score.reason.trim() : null;
   const priced = d.credits != null;
   const credits = priced ? dropCredits(d, d.adjust ?? {}) : null;
   const e = effectiveDrop(d, d.adjust ?? {});
-  const tickId = `tick-${compact ? 'c' : 'f'}-${row.pick_id}`;
+  const original = originalLink(row.url)?.url ?? null;
+  const more = !compact && (keepable(row) || original != null || reuseTargets(row, data?.characters ?? [], data?.tracker ?? []).length > 0);
   return (
-    <li className="rank-item" data-char={row.character_slug ?? 'none'} data-ticked={ticked}>
-      <label className="tick" htmlFor={tickId}>
-        <input
-          id={tickId} type="checkbox" checked={ticked} disabled={!priced} onChange={(ev) => onTick(row.pick_id, ev.target.checked)}
-          aria-label={`Tick to make: ${title}${credits != null ? `, about ${credits} credits` : ''}`}
-        />
-      </label>
-      <DropThumb row={row} />
-      <div className="rank-main">
-        <div className="rank-top">
-          <span className="rank-no num" aria-label={`Rank ${rank}`}>#{rank}</span>
-          {top && <span className="tag action">Top pick</span>}
-          {score != null ? (
-            <span className="rank-score num" title="The free check's score: how likely the clip gets views with him in it">
-              <b>{score}</b><span className="muted">/100</span>
-            </span>
-          ) : (
-            <span className="faint small">not scored yet</span>
-          )}
-        </div>
-        <span className="rank-title">{title}</span>
-        {reason && <span className="small muted rank-reason">{reason}</span>}
-        <span className="small num">
-          {credits != null ? <b>about {credits} credits</b> : <span className="faint">priced by the check</span>}
-          {d.window && <span className="muted"> · {sectionLabel(e.start_s, e.length_s)}</span>}
-        </span>
-        {versions && <span className="small muted">{versions}</span>}
-        {!compact && <ReuseMenu row={row} title={title} />}
-        {!compact && <KeepToggle row={row} />}
-      </div>
-    </li>
+    <ClipCard
+      id={`${compact ? 'c' : 'f'}-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
+      rank={rank} top={top} score={scoreOf(row)} scoreTitle={SCORE_TITLE} reason={scoreReason(row)}
+      price={cardPrice(credits, d.window ? e.length_s : null)}
+      sheetPrice={credits != null ? `about ${credits} credits${d.window ? ` · ${sectionLabel(e.start_s, e.length_s)}` : ''}` : 'priced by the check'}
+      extra={versions && <span className="small muted">{versions}</span>}
+      ticked={ticked} dataChar={row.character_slug ?? 'none'} original={original}
+      action={({ describedBy }) => (
+        <MakeToggle ticked={ticked} disabled={!priced} onToggle={(on) => onTick(row.pick_id, on)} describedBy={describedBy} />
+      )}
+      more={more ? (
+        <>
+          <ReuseMenu row={row} title={title} />
+          <KeepToggle row={row} />
+          <OriginalLink url={row.url} />
+        </>
+      ) : undefined}
+    />
   );
 }
 
@@ -337,13 +337,16 @@ function ReuseMenu({ row, title }: { row: TrackerRow; title: string }) {
 }
 
 /** A clip the studio filed under him: keep him with one tap (free) or choose another in the menu (checked again, free). */
-function NeedsYouItem({ row, roster }: { row: TrackerRow; roster: ReadonlyArray<RosterEntry> }) {
+function NeedsYouCard({ row, roster }: { row: TrackerRow; roster: ReadonlyArray<RosterEntry> }) {
   const { backend, run, busy } = useStudio();
   const d = row.drop_card!;
+  const title = dropTitle(row);
   const menu = characterMenu(row, roster);
   const charKey = `char-${row.pick_id}`;
   const working = busy.has(charKey) || busy.has(`drop-${row.pick_id}`);
   const credits = d.credits != null ? dropCredits(d, d.adjust ?? {}) : null;
+  const score = scoreOf(row);
+  const original = originalLink(row.url)?.url ?? null;
   const choose = (slug: string) => {
     if (characterChoice(menu, row.character_slug, slug) === 'none') return;
     const name = roster.find((c) => c.slug === slug)?.name ?? slug;
@@ -353,40 +356,57 @@ function NeedsYouItem({ row, roster }: { row: TrackerRow; roster: ReadonlyArray<
     );
   };
   return (
-    <li className="rank-item no-tick" data-char={row.character_slug ?? 'none'}>
-      <DropThumb row={row} />
-      <div className="rank-main">
-        <span className="rank-title">{dropTitle(row)}</span>
-        {credits != null && <span className="small num muted">about {credits} credits once you choose</span>}
+    <ClipCard
+      id={`n-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
+      score={score ?? undefined} scoreTitle={SCORE_TITLE} reason={scoreReason(row)}
+      price={credits != null ? `about ${credits} credits once you choose` : undefined}
+      dataChar={row.character_slug ?? 'none'} original={original}
+      action={({ where }) => (
         <div className="needs-choice">
-          <CharacterCell row={row} menu={menu} confirm={characterConfirm(row, roster)} working={working} onChoose={choose} />
+          <CharacterCell
+            row={row} menu={menu} confirm={characterConfirm(row, roster)} working={working} onChoose={choose}
+            idPrefix={where === 'sheet' ? 'pl-char' : 'dt-char'}
+          />
         </div>
-        <KeepToggle row={row} />
-      </div>
-    </li>
+      )}
+      more={keepable(row) || original ? (
+        <>
+          <KeepToggle row={row} />
+          <OriginalLink url={row.url} />
+        </>
+      ) : undefined}
+    />
   );
 }
 
 /** A clip on its way or done: its chip, one line, and Review in Videos when it waits for his OK. */
-function QuietItem({ row, now, versions }: { row: TrackerRow; now: number; versions: string | null }) {
+function QuietCard({ row, now, versions }: { row: TrackerRow; now: number; versions: string | null }) {
   const d = row.drop_card!;
+  const title = dropTitle(row);
   const chip = clipChip(row);
   const line = chip === 'checking' || chip === 'adding' ? dropLine(d, now, Boolean(row.owner_clip_path)) : null;
+  const original = originalLink(row.url)?.url ?? null;
   return (
-    <li className="rank-item no-tick quiet" data-char={row.character_slug ?? 'none'}>
-      <DropThumb row={row} />
-      <div className="rank-main">
-        <span className="rank-title">{dropTitle(row)}</span>
-        <span className="small">
-          <span className={`drop-state ${CHIP_CLASS[chip]}`}>{CHIP_LABEL[chip]}</span>
-          {line && <span className="muted"> {line}</span>}
-        </span>
-        {versions && <span className="small muted">{versions}</span>}
-        {row.clip_state === 'awaiting_approval' && row.clip_id && (
-          <a className="btn line rank-review" href={href('videos', row.clip_id)}>Review in Videos</a>
-        )}
-        <KeepToggle row={row} />
-      </div>
-    </li>
+    <ClipCard
+      id={`q-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)} className="quiet"
+      extra={versions && <span className="small muted">{versions}</span>} dataChar={row.character_slug ?? 'none'} original={original}
+      action={() => (
+        <>
+          <span className="small cc-status">
+            <span className={`drop-state ${CHIP_CLASS[chip]}`}>{CHIP_LABEL[chip]}</span>
+            {line && <span className="muted"> {line}</span>}
+          </span>
+          {row.clip_state === 'awaiting_approval' && row.clip_id && (
+            <a className="btn primary block" href={href('videos', row.clip_id)}>Review in Videos</a>
+          )}
+        </>
+      )}
+      more={keepable(row) || original ? (
+        <>
+          <KeepToggle row={row} />
+          <OriginalLink url={row.url} />
+        </>
+      ) : undefined}
+    />
   );
 }

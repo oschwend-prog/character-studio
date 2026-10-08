@@ -227,9 +227,10 @@ const FOCUSABLE =
 /**
  * A modal sheet (bottom sheet on a phone, centred from tablet width): labelled by its title, Escape and a tap on
  * the backdrop close it, Tab stays inside, the page behind is inert and does not scroll, and focus goes back to
- * what opened it. Content is rendered in a portal so no page layout can clip it.
+ * what opened it. Content is rendered in a portal so no page layout can clip it. `className` styles one kind of sheet (the clip
+ * player is full screen on a phone).
  */
-export function Sheet({ title, onClose, children }: { title: ReactNode; onClose(): void; children: ReactNode }) {
+export function Sheet({ title, onClose, children, className }: { title: ReactNode; onClose(): void; children: ReactNode; className?: string }) {
   const titleId = useId();
   const box = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
@@ -272,12 +273,12 @@ export function Sheet({ title, onClose, children }: { title: ReactNode; onClose(
 
   return createPortal(
     <div
-      className="sheet-backdrop"
+      className={className ? `sheet-backdrop ${className}` : 'sheet-backdrop'}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div ref={box} className="sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
+      <div ref={box} className={className ? `sheet ${className}` : 'sheet'} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <div className="sheet-head">
           <h2 className="h2" id={titleId}>
             {title}

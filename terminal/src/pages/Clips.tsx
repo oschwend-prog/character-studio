@@ -2,8 +2,8 @@
 // replaces "In the works"; v3 2026-10-07: "show per character what clips are a good choice ... rank them"). At the top the Add clips
 // box (DropBox), then one of two views, kept in the address. By character (the default, `#/clips`, `#/clips?c=franz` opens on his
 // section): "Hot right now" (the cloud hits job's general lane, Hits.tsx), then a section per live character, Needs you first, his
-// Ready clips ranked by score with tick boxes and the Make bar, his "Worth saving" hits, then what is on its way and done
-// (RankedClips). All clips (`#/clips?v=all`): the long list, one row per clip he dropped, with its
+// Ready clips ranked by score as cards to watch, with the Make toggle and the Make bar, his "Worth saving" hits, then what is on its way and done
+// (RankedClips). All clips (`#/clips?v=all`): every clip he dropped, one card each (ClipCard, Task 11), with its
 // one-word status, the studio's ★ suggestion and the character menu, the price and Make it (DropsTable); the chips filter it (All,
 // Pick a character, Ready, Making, Done, Blocked or failed), newest drop first, and the filter lives in the address too
 // (`#/clips?v=all&f=problems`; an address with only `f` is All clips as well). A clip that is made moves on to Videos.
@@ -101,7 +101,7 @@ export function Clips() {
         <h1 className="h1">Clips</h1>
         <p className="small muted" style={{ margin: '6px 0 0' }}>
           The videos you saved to put our characters into: the studio checks each one for free, scores it and suggests who goes in, you
-          can put any of them in. Tick the best ones and make them. A clip that is made moves on to Videos.
+          can put any of them in. Tap a picture to watch it, add the best ones and make them. A clip that is made moves on to Videos.
         </p>
       </div>
       <DropBox />
@@ -153,9 +153,9 @@ function ByCharacter({ rows, now }: { rows: ReadonlyArray<TrackerRow>; now: numb
     <div className="make-scope stack">
       <HotRightNow now={now} />
       <p className="hint" style={{ margin: 0 }}>
-        Score: the free check’s guess at how likely the clip gets views with him in it (0-100); the best three are Top picks. Tick the
-        ones to make: the total shows in the bar and you confirm it before anything is spent. A clip nobody makes is deleted after a
-        while (30 days for a hit, 60 for your own) unless you switch Keep on.
+        Score: the free check’s guess at how likely the clip gets views with him in it (0-100); the best three are Top picks. Tap a
+        picture to watch the section, then ＋ Make this on the ones to make: the total shows in the bar and you confirm it before anything
+        is spent. A clip nobody makes is deleted after a while (30 days for a hit, 60 for your own) unless you switch Keep on (under More).
       </p>
       <RankedClips rows={rows} characters={live} ticked={ticked} onTick={toggle} now={now} />
       <MakeBar rows={rows} selected={selected} budget={data.budget} onSent={untick} onClear={clear} />

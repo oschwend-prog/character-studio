@@ -153,8 +153,8 @@ function MakeThese({ now }: { now: number }) {
       aside={<a href={href('clips')}>See all their clips <ArrowRight size={14} aria-hidden="true" /></a>}
     >
       <p className="small muted" style={{ margin: 0 }}>
-        Each character’s best ready clips, ranked by the free check’s score (how likely the clip gets views with him in it). Tick the
-        ones to make: the price shows first, and nothing is spent before you confirm.
+        Each character’s best ready clips, ranked by the free check’s score (how likely the clip gets views with him in it). Tap a
+        picture to watch it, ＋ Make this on the ones to make: the price shows first, and nothing is spent before you confirm.
       </p>
       <div className="make-scope">
         <RankedClips compact rows={rows} characters={live} ticked={ticked} onTick={toggle} now={now} />

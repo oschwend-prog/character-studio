@@ -148,7 +148,7 @@ export function MakeBar({
     </div>
   ) : (
     <div className="make-bar idle" tabIndex={-1} ref={barRef}>
-      <span className="small muted">Nothing ticked. Tick the clips you want made: the total shows here, and nothing is spent before you confirm.</span>
+      <span className="small muted">Nothing in your list. Tap ＋ Make this on the clips you want made: the total shows here, and nothing is spent before you confirm.</span>
       <button type="button" className="btn primary" disabled>
         {makeBarLabel(total)}
       </button>
