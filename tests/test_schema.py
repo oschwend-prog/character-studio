@@ -1635,3 +1635,139 @@ def test_0015_add_drop_is_0013s_word_for_word_but_reads_who_he_replaces_where_th
     setup_fn = _py(seed).split("\ndef character_setup", 1)[1].split("\ndef ", 1)[0]
     assert 'setup["stars"] = list(ref["swap"]["stars"])' in setup_fn and 'setup["swap"]' not in setup_fn
     assert 'return next((c.slug for c in crew if "person" in c.stars), crew[0].slug)' in _py(drop)
+
+
+# ---- 0016: the cloud hits job (hits, v_hits, set_hit_status, set_drop_keep; copy_drop carries auto_filed) ---------------------------
+
+HITS_PATH = MIGRATIONS / "0016_hits.sql"
+HITS_SQL = HITS_PATH.read_text() if HITS_PATH.is_file() else ""  # read lazily: a missing file fails these tests, not the module
+HITS_CODE = re.sub(r"--[^\n]*", "", HITS_SQL)
+HITS_FUNCTIONS = ["set_hit_status", "set_drop_keep", "copy_drop"]
+OWNER_CHECK = "if coalesce((select auth.jwt() ->> 'email'), '') <> 'o.schwend@gmail.com' then"
+
+
+def _hits_table() -> str:
+    m = re.search(r"create table if not exists studio\.hits \((.*?)\n\);", HITS_CODE, re.S)
+    assert m, "no create table studio.hits"
+    return m.group(1)
+
+
+def test_0016_is_the_hits_table_its_view_three_functions_and_their_grants_only():
+    assert HITS_PATH.is_file()
+    assert re.findall(r"create table if not exists studio\.(\w+)", HITS_CODE) == ["hits"]
+    assert re.findall(r"create or replace view studio\.(\w+)", HITS_CODE) == ["v_hits"]
+    assert re.findall(r"create or replace function studio\.(\w+)", HITS_CODE) == HITS_FUNCTIONS
+    code = re.sub(r"create table if not exists studio\.hits \(.*?\n\);", "", HITS_CODE, flags=re.S)
+    code = re.sub(r"create or replace (?:function studio\.\w+\(.*?\n\$\$|view studio\.v_hits .*?);", "", code, flags=re.S)
+    code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
+    statements = [" ".join(s.split()) for s in code.split(";") if s.strip()]
+    assert statements == [
+        "alter table studio.hits enable row level security",
+        "revoke all on studio.hits from public",
+        "revoke all on studio.hits from authenticated",
+        "grant select on studio.hits to authenticated",
+        "revoke all on studio.v_hits from public",
+        "grant select on studio.v_hits to authenticated",
+        "revoke all on function studio.set_hit_status(uuid, text) from public",
+        "grant execute on function studio.set_hit_status(uuid, text) to authenticated",
+        "revoke all on function studio.set_drop_keep(uuid, boolean) from public",
+        "grant execute on function studio.set_drop_keep(uuid, boolean) to authenticated",
+        "revoke all on function studio.copy_drop(uuid, text) from public",
+        "grant execute on function studio.copy_drop(uuid, text) to authenticated",
+    ]
+    blocks = re.findall(r"do \$\$.*?\n\$\$;", HITS_CODE, re.S)
+    assert len(blocks) == 2
+    policy, anon = blocks
+    assert "create policy owner_all on studio.hits for all to authenticated" in policy and "pg_policies" in policy
+    assert policy.count("auth.jwt()->>'email' = 'o.schwend@gmail.com'") == 2  # USING and WITH CHECK, as every table of 0001
+    assert "rolname = 'anon'" in anon
+    for what in ("studio.hits", "studio.v_hits", "function studio.set_hit_status(uuid, text)", "function studio.set_drop_keep(uuid, boolean)",
+                 "function studio.copy_drop(uuid, text)"):  # fmt: skip
+        assert f"execute 'revoke all on {what} from anon';" in anon, what
+    assert "to anon" not in HITS_CODE and "service_role" not in HITS_CODE
+    words = re.sub(r"'(?:[^']|'')*'", "''", HITS_CODE)  # a string literal is data ('{drop,keep}'), not a statement
+    assert not re.search(r"\b(truncate|delete|drop|alter column|rename|create index)\b", words, re.I)
+    outside = set(re.findall(r"\b(?:public|auth|storage|extensions|vault|net|cron)\.[a-z_]+", HITS_CODE))
+    assert outside == {"auth.jwt"}
+    for said in ("WHY.", "studio_0016_hits", "AFTER 0015", "TO UNDO", "Re-run safe", "hkcafvzjwkeibbmvskko"):
+        assert said in HITS_SQL, said
+
+
+def test_0016_hits_has_a_column_for_every_field_of_the_hit_dataclass_and_the_same_rules():
+    from dataclasses import fields
+
+    from studio.models import HIT_CAPTION_MAX, Hit, HitStatus
+
+    body = _hits_table()
+    cols = {m.group(1) for m in re.finditer(r"(?m)^  ([a-z_]+)\s+\S", body)}
+    assert cols == {f.name for f in fields(Hit)}
+    assert "url            text not null unique" in body  # one row per post: the pull's upsert key
+    assert re.search(r"platform\s+text not null check \(platform in \('tiktok', 'instagram'\)\)", body)
+    assert {p.value for p in Platform} == {"tiktok", "instagram"}
+    m = re.search(r"status\s+text not null default 'new' check \(status in \(([^)]*)\)\)", body)
+    assert m and set(re.findall(r"'([^']*)'", m.group(1))) == set(get_args(HitStatus))
+    assert "score          integer not null default 0 check (score between 0 and 100)" in body
+    assert f"check (caption is null or char_length(caption) <= {HIT_CAPTION_MAX})" in body and HIT_CAPTION_MAX == 300
+    assert "character_slug text references studio.characters (slug)" in body  # null: the general lane
+    for col in ("followers", "views", "likes", "comments", "shares", "saves"):
+        assert re.search(rf"{col}\s+bigint check \({col} is null or {col} >= 0\)", body), col
+    assert re.search(r"created_at\s+timestamptz not null default now\(\)", body)
+    assert re.search(r"last_seen\s+timestamptz not null default now\(\)", body)
+
+
+def test_0016_v_hits_is_the_new_hits_best_first_with_the_characters_name():
+    view = re.search(r"create or replace view studio\.v_hits .*?;", HITS_CODE, re.S).group(0)
+    assert view.startswith("create or replace view studio.v_hits with (security_invoker = true) as")
+    top = view.split(" as\nselect\n", 1)[1].split("\nfrom studio.hits h", 1)[0]
+    names = [re.search(r"(\w+)$", item.strip()).group(1) for item in top.split(",\n")]
+    assert names == [
+        "hit_id", "platform", "url", "creator_handle", "followers", "views", "likes", "comments", "shares", "saves", "posted_at",
+        "caption", "sound", "duration_s", "thumbnail_url", "keyword", "character_slug", "character_name", "reach", "score",
+        "first_seen", "last_seen",
+    ]
+    assert "left join studio.characters ch on ch.slug = h.character_slug" in view  # the general lane has no character
+    assert "where h.status = 'new'" in view and "order by h.score desc, h.last_seen desc, h.id" in view
+
+
+def test_0016_set_hit_status_is_a_definer_with_the_owner_check_first():
+    body = _function(HITS_SQL, "set_hit_status")
+    assert "set_hit_status(hit_id uuid, status text)" in body and "returns jsonb" in body and "volatile" in body
+    assert "security definer" in body and "set search_path = ''" in body  # studio.hits is read-only for the terminal's role
+    assert OWNER_CHECK in _function(DROPCHAR_SQL, "set_drop_character") and OWNER_CHECK in body
+    assert body.index(OWNER_CHECK) < body.index("update studio.hits")
+    assert "status_ not in ('new', 'dropped', 'dismissed')" in body and "invalid_parameter_value" in body
+    assert "where hi.id = set_hit_status.hit_id returning hi.* into h;" in body
+    assert "'unknown hit %'" in body and "no_data_found" in body
+    for schema, _ in re.findall(r"\b(?:from|update|into|join)\s+(\w+)\.(\w+)", body):
+        assert schema == "studio", schema
+
+
+def test_0016_set_drop_keep_is_set_drop_footage_with_the_owner_check():
+    body = _function(HITS_SQL, "set_drop_keep")
+    footage = _function(DROPVIDEO_SQL, "set_drop_footage")
+    assert "set_drop_keep(pick_id uuid, keep boolean)" in body and "security invoker" in body and "set search_path = ''" in body
+    assert body.index(OWNER_CHECK) < body.index("select * into f from studio.favorites fa where fa.id = set_drop_keep.pick_id for update;")
+    assert "jsonb_set(fa.proposal, '{drop,keep}', to_jsonb(set_drop_keep.keep))" in body
+    for line in ("'unknown pick %'", "'pick % is not a dropped video'", "jsonb_typeof(f.proposal -> 'drop') is distinct from 'object'"):
+        assert line in body and line in footage, line
+    assert "'keep must be true or false'" in body
+    from studio import drop
+
+    src = Path(drop.__file__).read_text(encoding="utf-8")
+    assert 'raise ValueError("keep must be true or false")' in src  # the CLI's own line
+
+
+def test_0016_copy_drop_is_0015s_word_for_word_plus_the_auto_filed_tag():
+    old, new = _function(V3_SQL, "copy_drop"), _function(HITS_SQL, "copy_drop")
+    added = (
+        "\n  if d -> 'auto_filed' = 'true'::jsonb then\n"
+        "    -- the hits job's tag (drop.auto_filed: the learning tag source_kind, retention's 30 days) goes into the version too\n"
+        "    proposal_ := jsonb_set(proposal_, '{drop,auto_filed}', 'true'::jsonb);\n"
+        "  end if;"
+    )
+    assert added in new and new.replace(added, "") == old
+    assert new.index("jsonb_build_object('fetched'") < new.index(added) < new.index("insert into studio.favorites")
+    from studio import drop
+
+    copy_src = re.search(r"\ndef copy_drop\(.*?\n    \)\)  # fmt: skip\n", Path(drop.__file__).read_text(encoding="utf-8"), re.S).group(0)
+    assert 'if d.get("auto_filed") is True:' in copy_src and 'proposal["drop"]["auto_filed"] = True' in copy_src

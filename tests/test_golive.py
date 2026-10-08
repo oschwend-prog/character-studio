@@ -252,7 +252,7 @@ def test_database_and_schema_pass_when_everything_is_applied(world):
     checks = world.run()
     assert checks["database"].status == "pass"
     assert checks["schema"].status == "pass"
-    assert "0001" in checks["schema"].title and "0015" in checks["schema"].title
+    assert "0001" in checks["schema"].title and "0016" in checks["schema"].title
 
 
 def test_no_database_url_fails_both_and_points_at_the_keychain(world):
@@ -312,6 +312,10 @@ def test_a_missing_table_fails_the_schema_check_naming_it(world):
         (("function", "copy_drop"), "0015"),
         (("function", "family_days"), "0015"),
         (("view", "v_views_daily"), "0015"),
+        (("table", "hits"), "0016"),
+        (("view", "v_hits"), "0016"),
+        (("function", "set_hit_status"), "0016"),
+        (("function", "set_drop_keep"), "0016"),
     ],
 )
 def test_each_migration_is_detected_by_its_own_objects(world, missing, migration):
