@@ -228,9 +228,19 @@ const FOCUSABLE =
  * A modal sheet (bottom sheet on a phone, centred from tablet width): labelled by its title, Escape and a tap on
  * the backdrop close it, Tab stays inside, the page behind is inert and does not scroll, and focus goes back to
  * what opened it. Content is rendered in a portal so no page layout can clip it. `className` styles one kind of sheet (the clip
- * player is full screen on a phone).
+ * player is full screen on a phone); `initialFocus` picks what is focused first.
  */
-export function Sheet({ title, onClose, children, className }: { title: ReactNode; onClose(): void; children: ReactNode; className?: string }) {
+export function Sheet({
+  title, onClose, children, className, initialFocus,
+}: {
+  title: ReactNode;
+  onClose(): void;
+  children: ReactNode;
+  className?: string;
+  /** A CSS selector inside the sheet of what takes the focus when it opens (the clip player: Close, not the Make toggle). Without
+   * one (or when nothing matches) the sheet focuses its pressed option, else its first control, as before. */
+  initialFocus?: string;
+}) {
   const titleId = useId();
   const box = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
@@ -243,7 +253,8 @@ export function Sheet({ title, onClose, children, className }: { title: ReactNod
     const overflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     const items = () => Array.from(box.current?.querySelectorAll<HTMLElement>(FOCUSABLE) ?? []);
-    (items().find((el) => el.getAttribute('aria-pressed') === 'true') ?? items()[0] ?? box.current)?.focus();
+    const wanted = initialFocus ? box.current?.querySelector<HTMLElement>(initialFocus) : null;
+    (wanted ?? items().find((el) => el.getAttribute('aria-pressed') === 'true') ?? items()[0] ?? box.current)?.focus();
 
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {

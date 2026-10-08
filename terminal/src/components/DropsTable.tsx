@@ -5,8 +5,9 @@
 // character, Ready, Making, Done, Blocked, Failed; lib/clipstatus.ts) and the buttons the drop card had: the character menu first
 // for a Pick a character clip (the live roster, ★ on the one the check recommends, with its reason, which the owner may ignore:
 // set_drop_character, migration 0013, then the free check again in that voice), then Make it (or Try again, or Review in Videos),
-// and Adjust, Try again, Remove under it. More opens the rest of the card: the character menu, the five-frame strip, the facts, the
-// moments with text on screen, own footage, Keep (a clip not made yet: retention never deletes a kept one) and the original post.
+// and Adjust and Try again under it. More opens the rest of the card: the character menu, the five-frame strip, the facts, the
+// moments with text on screen, own footage, Keep (a clip not made yet: retention never deletes a kept one), the original post and
+// Remove (two steps: "Remove this clip? Yes, remove / Keep it").
 // Nothing is paid before Make it. The Clips page passes the cards its filter keeps.
 import { AlertTriangle } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -24,7 +25,7 @@ import { useStudio } from '../lib/store';
 import { trackerStep } from '../lib/tracker';
 import type { Budget, DropAdjust, TrackerRow } from '../lib/types';
 import { AdjustSheet } from './AdjustSheet';
-import { ClipCard, ClipGrid, OriginalLink, dropPicture } from './ClipCard';
+import { ClipCard, ClipGrid, OriginalLink, RemoveClip, dropPicture } from './ClipCard';
 import { KeepToggle } from './KeepToggle';
 import { PickThumb } from './PickThumb';
 import { Spinner } from './ui';
@@ -183,7 +184,7 @@ function DropItem({ row, roster, now }: { row: TrackerRow; roster: ReadonlyArray
           </>
         )}
         links={
-          actions.includes('adjust') || (actions.includes('retry-check') && main !== 'retry-check') || actions.includes('remove') ? (
+          actions.includes('adjust') || (actions.includes('retry-check') && main !== 'retry-check') ? (
             <>
               {actions.includes('adjust') && (
                 <button type="button" className="cc-textlink" disabled={working || changing} onClick={() => setAdjusting(true)}>
@@ -195,15 +196,15 @@ function DropItem({ row, roster, now }: { row: TrackerRow; roster: ReadonlyArray
                   Try again
                 </button>
               )}
-              {actions.includes('remove') && (
-                <button type="button" className="cc-textlink" disabled={working || changing} onClick={() => void remove()}>
-                  Remove
-                </button>
-              )}
             </>
           ) : undefined
         }
-        more={<DropDetail row={row} character={pick ? null : cell('dt-char')} />}
+        more={
+          <DropDetail
+            row={row} character={pick ? null : cell('dt-char')}
+            remove={actions.includes('remove') ? { disabled: working || changing, run: () => void remove() } : null}
+          />
+        }
       />
       {adjusting && (
         <AdjustSheet
@@ -305,7 +306,7 @@ function StatusCell({ row, now }: { row: TrackerRow; now: number }) {
 
 /** Under More: the character menu (when it is not the card's own action), what the drop card showed (the strip of the section, the
  * facts, the moments with text, own footage), Keep and the original post. */
-function DropDetail({ row, character }: { row: TrackerRow; character: ReactNode }) {
+function DropDetail({ row, character, remove }: { row: TrackerRow; character: ReactNode; remove: { disabled: boolean; run(): void } | null }) {
   const { backend, run, busy } = useStudio();
   const d = row.drop_card!;
   const key = `drop-${row.pick_id}`;
@@ -358,6 +359,7 @@ function DropDetail({ row, character }: { row: TrackerRow; character: ReactNode 
       </div>
       <KeepToggle row={row} idPrefix="dt-keep" />
       <OriginalLink url={row.url} />
+      {remove && <RemoveClip title={dropTitle(row)} disabled={remove.disabled} onRemove={remove.run} />}
     </div>
   );
 }

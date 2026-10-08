@@ -133,9 +133,9 @@ export function MakeBar({
   );
 
   const bar = total.count > 0 ? (
-    <div className="make-bar on" role="group" aria-label="Make the ticked clips" tabIndex={-1} ref={barRef}>
+    <div className="make-bar on" role="group" aria-label="Make the clips in your list" tabIndex={-1} ref={barRef}>
       <span className="small num make-count">
-        {total.count} ticked · about {formatCredits(total.credits)}
+        {total.count} in your list · about {formatCredits(total.credits)}
       </span>
       <div className="make-buttons">
         <button type="button" className="btn primary" disabled={busy.has('make-many')} onClick={open}>

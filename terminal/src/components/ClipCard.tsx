@@ -10,7 +10,8 @@
 import { ExternalLink, Play } from 'lucide-react';
 import { useEffect, useId, useRef, useState, type ReactNode, type Ref, type SyntheticEvent } from 'react';
 import {
-  MAKE_TOGGLE, originalLink, pictureSources, shouldLoopBack, withFragment, type Playable, type PlayableSource,
+  MAKE_TOGGLE, afterPictureError, originalLink, pictureSources, removeStep, shouldLoopBack, withFragment, type PicturePos, type Playable,
+  type PlayableSource, type RemoveStep,
 } from '../lib/clipcard';
 import { thumbFor } from '../lib/rules';
 import { useStudio } from '../lib/store';
@@ -187,16 +188,18 @@ function CardMedia({ playable, title, onWatch, children }: { playable: Playable;
 export function CardPicture({ picture, title }: { picture: CardPictureSpec; title: string }) {
   const { backend } = useStudio();
   const key = picture.sources.map((s) => s.path).join('|');
-  const [step, setStep] = useState(0);
+  const [pos, setPos] = useState<PicturePos>({ step: 0, resigned: false });
   const [src, setSrc] = useState<string | null>(null);
   const [thumbFailed, setThumbFailed] = useState(false);
-  const current = picture.sources[step] ?? null;
+  const current = picture.sources[pos.step] ?? null;
 
   useEffect(() => {
-    setStep(0);
+    setPos({ step: 0, resigned: false });
     setThumbFailed(false);
   }, [key, picture.thumb.thumbnail_url]);
 
+  // each file is signed for the owner's browser; a file that fails to load is signed once more (the URL may have expired), and
+  // only then gives way to the next one (afterPictureError)
   useEffect(() => {
     let live = true;
     setSrc(null);
@@ -204,20 +207,20 @@ export function CardPicture({ picture, title }: { picture: CardPictureSpec; titl
       void backend.previewUrl(current.path).then((u) => {
         if (!live) return;
         if (u) setSrc(u);
-        else setStep((s) => s + 1);
+        else setPos((p) => ({ step: p.step + 1, resigned: false }));
       });
     }
     return () => {
       live = false;
     };
-  }, [backend, current?.path]);
+  }, [backend, current?.path, pos.step, pos.resigned]);
 
   if (current) {
     if (!src) return <span className="cc-img cc-loading" aria-hidden="true" />;
     return (
       <img
         className={`cc-img ${current.kind}`} src={src} alt={`A frame of ${title}`} loading="lazy" decoding="async"
-        onError={() => setStep((s) => s + 1)}
+        onError={() => setPos(afterPictureError)}
       />
     );
   }
@@ -250,7 +253,7 @@ export function OriginalLink({ url, label = 'Open original' }: { url: string | n
 }
 
 /** The ready card's action: the same tick the Make bar adds up ("＋ Make this" / "✓ In your list"); nothing is spent before its
- * confirm. */
+ * confirm. A toggle button: its name stays "In your make list" and `aria-pressed` says whether it is; only the visible text changes. */
 export function MakeToggle({ ticked, disabled, onToggle, describedBy }: {
   ticked: boolean;
   disabled?: boolean;
@@ -260,10 +263,44 @@ export function MakeToggle({ ticked, disabled, onToggle, describedBy }: {
   const t = ticked ? MAKE_TOGGLE.on : MAKE_TOGGLE.off;
   return (
     <button
-      type="button" className={`btn block cc-toggle ${ticked ? 'primary' : 'line'}`} aria-pressed={ticked} disabled={disabled}
-      aria-describedby={describedBy} onClick={() => onToggle(!ticked)}
+      type="button" className={`btn block cc-toggle ${ticked ? 'primary' : 'line'}`} aria-pressed={ticked} aria-label="In your make list"
+      disabled={disabled} aria-describedby={describedBy} onClick={() => onToggle(!ticked)}
     >
       <span className="cc-mark" aria-hidden="true">{t.mark}</span> {t.text}
+    </button>
+  );
+}
+
+/** Remove a clip, in two steps (Task 11 fix 1): the first tap turns the button into "Remove this clip? Yes, remove / Keep it" (44 px
+ * buttons, the focus on Keep it: a mis-tap on a phone must not delete a clip); only "Yes, remove" removes (lib/clipcard removeStep). */
+export function RemoveClip({ title, disabled, onRemove }: { title: string; disabled?: boolean; onRemove(): void }) {
+  const [step, setStep] = useState<RemoveStep>('idle');
+  const opener = useRef<HTMLButtonElement>(null);
+  const act = (action: 'ask' | 'confirm' | 'cancel') => {
+    const next = removeStep(step, action);
+    setStep(next.step);
+    if (next.remove) onRemove();
+    else if (action === 'cancel') window.setTimeout(() => opener.current?.focus(), 0); // back to the button that asked
+  };
+  if (step === 'asking') {
+    return (
+      <div className="remove-ask" role="group" aria-label={`Remove ${title}?`}>
+        <span className="small">Remove this clip?</span>
+        <span className="remove-buttons">
+          <button type="button" className="btn danger" disabled={disabled} onClick={() => act('confirm')}>
+            Yes, remove
+          </button>
+          {/* the focus lands on Keep it: Enter on a mis-tap must not remove the clip */}
+          <button type="button" className="btn line" autoFocus disabled={disabled} onClick={() => act('cancel')}>
+            Keep it
+          </button>
+        </span>
+      </div>
+    );
+  }
+  return (
+    <button ref={opener} type="button" className="cc-textlink" disabled={disabled} onClick={() => act('ask')} aria-label={`Remove ${title}`}>
+      Remove
     </button>
   );
 }
@@ -298,6 +335,7 @@ export function ClipPlayerSheet({
   const titleId = `${id}-sheet-title`;
   const priceId = `${id}-sheet-price`;
   const { start, end } = playable;
+  const link = originalLink(original); // the sheet checks it too: only an https post on TikTok, Instagram or YouTube is a link
 
   useEffect(() => {
     let live = true;
@@ -327,14 +365,16 @@ export function ClipPlayerSheet({
   };
 
   return (
-    <Sheet title={<>Watch<span className="sr-only">: {title}</span></>} onClose={onClose} className="player-sheet">
-      <div className="player-body">
+    <Sheet title={<>Watch<span className="sr-only">: {title}</span></>} onClose={onClose} className="player-sheet" initialFocus="[data-sheet-close]">
+      <div className={playable.note ? 'player-body noted' : 'player-body'}>
         <div className="player-frame">
           {state === 'ready' && url ? (
             <video
               ref={video} src={withFragment(url, start, end)} controls playsInline autoPlay preload="auto" loop={end == null}
               aria-label={`${title}: the section we would use`} onTimeUpdate={onTime} onPause={onPause}
               onEnded={(e) => back(e.currentTarget)} onError={() => setState('broken')}
+              // iOS ignores autoplay until the data is in: play when it is (a refusal is fine, the controls are the fallback)
+              onLoadedData={(e) => void e.currentTarget.play().catch(() => undefined)}
             />
           ) : (
             <div className="player-none">
@@ -345,6 +385,7 @@ export function ClipPlayerSheet({
             </div>
           )}
         </div>
+        {playable.note && <p className="small muted player-section-note">{playable.note}</p>}
         <div className="player-facts">
           <span className="cc-title player-title" id={titleId}>{title}</span>
           {(score != null || reason) && (
@@ -363,12 +404,12 @@ export function ClipPlayerSheet({
         </div>
         {action && <div className="player-action">{action({ where: 'sheet', describedBy: price ? `${titleId} ${priceId}` : titleId })}</div>}
         <div className="sheet-actions">
-          {original && (
-            <a className="btn ghost" href={original} target="_blank" rel="noopener noreferrer">
+          {link && (
+            <a className="btn ghost" href={link.url} target="_blank" rel="noopener noreferrer">
               Open the original <ExternalLink aria-hidden="true" />
             </a>
           )}
-          <button type="button" className="btn line" onClick={onClose}>
+          <button type="button" className="btn line" data-sheet-close onClick={onClose}>
             Close
           </button>
         </div>
