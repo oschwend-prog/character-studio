@@ -176,11 +176,18 @@ values, the first is the post and the next are comments; Instagram settings `pos
 2. **Every Reel also as a Story** (owner 2026-10-07: "do stories ... when uploading"): a second Postiz post with
    `post_type: story` and the same master, right after the Reel is published; same AI disclosure. It does not count toward the
    2-posts-a-day cap (not a feed post). A failed Story never fails the Reel.
+   *Fix round 1 (2026-10-08, review):* a Story shows no caption, so it goes out only as the clip's **labelled Story video**
+   (`<clip>-story.mp4`, the master with the AI label burned in at y 1450-1600, written by the master build and recorded as
+   `features.story_path`), never the plain master; a clip without it gets no Story ("no labelled story video"). A new switch
+   `reach.stories` in `config/scan.json` is off by default. No Story follows a Trial Reel.
 3. **Hashtags (3-5):** the trend's exact tag, the niche, the format, `#oddeyes` and the character's own series tag
    (`characters/<slug>/refs.json` `style.series_tag`: Franz `#sausagecomingthrough`, Reginald `#asyouwere`, Lenny
-   `#yourewelcome`); never #fyp/#foryou/#viral/#explore.
+   `#yourewelcome`); never #fyp/#foryou/#viral/#explore. *Fix round 1:* Gemini writes 3-4 and the series tag is written into
+   the clip's own hashtags when the clip is made (Make it, `clip set --hashtag`), so stored = previewed = posted; the
+   publisher adds nothing.
 4. **Collab posts:** a clip may name our other characters' accounts as `collaborators` (a crossover, or the "who did it best"
-   family post): the Reel shows on both profiles. Off unless the clip's features carry `collab`.
+   family post): the Reel shows on both profiles. Off unless the clip's features carry `collab`. *Fix round 1:* only live
+   characters with a Postiz integration, at most 3 (Instagram's limit).
 5. **Trial Reels (switch, off by default):** `is_trial_reel` + `graduation_strategy: SS_PERFORMANCE` shows a Reel to
    non-followers first and shares it with followers if it performs. Per account in `config/scan.json` `reach.trial_reels`;
    proposed to the owner for new accounts with few followers, not switched on by the build.
