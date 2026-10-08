@@ -1644,3 +1644,66 @@ def test_no_used_hooks_no_list(world, portrait):
     g = FakeGemini(deconstruct())
     process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
     assert "Angles already used" not in g.calls[0]["prompt"]
+
+
+# ---- fix round 1: a version keeps a full-length section; refusals say what is true ---------------------------------------------
+
+
+def flat(seconds: int) -> dict:
+    return analysis([2.0] * (2 * seconds))
+
+
+def version_span(start: float, end: float) -> list[dict]:
+    return [{"start_s": start, "end_s": end, "what": "version"}]
+
+
+@pytest.mark.parametrize(("seconds", "classic"), [(17, False), (22, True), (26, True)])
+def test_a_version_never_takes_a_shorter_cut_to_avoid_the_root(seconds, classic):
+    """The family's sections are no text: only a clear section of the target length (12 s for a classic, 8 s for any other
+    clip) moves a version; clear of the root only 7 s (17 s clip, 22 s classic) or 11 s (26 s classic) are left, so the
+    version takes the root's full-length section."""
+    best = drop_window(flat(seconds), classic=classic, duration=float(seconds))
+    assert best == {"start_s": 0.0, "length_s": 15.0 if classic else 10.0}
+    root = version_span(0.0, best["length_s"])
+    got = drop._section(flat(seconds), classic=classic, duration=float(seconds), avoid=[], others=root, lead_s=0.0)
+    assert got == best
+
+
+def test_a_version_takes_the_other_strong_full_length_section():
+    energy = [5.0] * 20 + [1.0] * 10 + [5.0] * 20 + [1.0] * 10  # 30 s: 0-10 s and 15-25 s move the most
+    best = drop_window(analysis(energy), classic=False, duration=30.0)
+    assert best == {"start_s": 0.0, "length_s": 10.0}
+    got = drop._section(analysis(energy), classic=False, duration=30.0, avoid=[], others=version_span(0.0, 10.0), lead_s=0.0)
+    assert got == {"start_s": 15.0, "length_s": 10.0}
+    # the root's own section when the family takes every full-length part
+    both = [*version_span(0.0, 10.0), *version_span(15.0, 25.0)]
+    assert drop._section(analysis(energy), classic=False, duration=30.0, avoid=[], others=both, lead_s=0.0) == best
+
+
+def test_a_shorter_best_section_lets_a_version_move_to_one_as_long():
+    """Text leaves only 7 s clean sections (best = 7 s): a version moves to another clean section of the same length."""
+    text = [{"start_s": 7.0, "end_s": 13.0, "what": "text"}]
+    best = drop_window(flat(20), classic=False, duration=20.0, avoid=text)
+    assert best == {"start_s": 0.0, "length_s": 7.0}
+    got = drop._section(flat(20), classic=False, duration=20.0, avoid=text, others=version_span(0.0, 7.0), lead_s=0.0)
+    assert got == {"start_s": 13.0, "length_s": 7.0}
+
+
+def test_copy_from_a_version_says_what_is_true_of_the_original(world):
+    store, _ = world
+    with_lenny_and_franz(store)
+    root = checked(store)
+    v = drop.copy_drop(store, root.id, "lenny", now=NOW)
+    for state, line in (
+        ("checking", "the original clip is being checked again: try in a few minutes"),
+        ("blocked", "the original clip can't be used any more"),
+        ("failed", "the original clip can't be used any more"),
+    ):
+        f = store.get_favorite(root.id)
+        store.update_favorite(root.id, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": state}})
+        refused(store, v.id, "franz", line)
+    refused(store, root.id, "franz", "the clip is not checked yet")  # from the root's own card: as before
+
+
+def test_the_seeds_parts_are_the_drops_parts():
+    assert drop.seed.SWAP_PARTS == drop.PARTS == drop.gemini.PARTS

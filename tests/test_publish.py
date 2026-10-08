@@ -21,7 +21,7 @@ from typer.testing import CliRunner
 from studio import publish
 from studio.cli import app
 from studio.config import LONDON
-from studio.models import Account, Character, Clip, ClipState, Platform, Post, PostStatus, Snapshot
+from studio.models import Account, Character, Clip, ClipState, Favorite, Platform, Post, PostStatus, Snapshot
 from studio.publish import base, postiz
 from studio.publish.base import PublishResult, Publisher, UncertainPublish, preview_due, publish_due
 from studio.publish.postiz import (
@@ -757,6 +757,28 @@ def test_a_deferred_post_skips_a_day_the_account_already_posts_on(rig):
     summary = rig.run(FakePublisher())
     thu = datetime(2026, 10, 8, 19, 0, tzinfo=LONDON)
     assert rig.get(extra).scheduled_for == thu and summary["rescheduled"][0]["to"] == thu
+
+
+def test_a_deferred_post_never_lands_within_13_days_of_a_family_members_post(rig):
+    """Biscuit's version of a clip Reginald posts on Thu 8 Oct: past today's cap it waits until Thu 22 Oct (terminal v3: a
+    clip's family posts at least 14 days apart, the same rule as scheduling)."""
+    store = rig.store
+    root = store.add_favorite(Favorite(url="owner-drop:root", platform="drop", origin="owner", status="made",
+                                       character_slug="reginald", proposal={"drop": {"state": "made"}}))
+    version = store.add_favorite(Favorite(url="owner-drop:v", platform="drop", origin="owner", status="made",
+                                          character_slug="biscuit", proposal={"drop": {"state": "made", "copy_of": root.id}}))
+    root_clip, v_clip = rig.clip("reginald"), rig.clip("biscuit")
+    for pick, clip in ((root, root_clip), (version, v_clip)):
+        store.update_clip(clip.id, features={"fav_id": pick.id})
+        store.update_favorite(pick.id, clip_id=clip.id)
+    rig.post("@reginald.tt", when=datetime(2026, 10, 8, 19, 30, tzinfo=LONDON), clip=root_clip)
+    for minutes in (0, 1):
+        rig.post(status="posted", claimed_at=SLOT + timedelta(minutes=minutes), platform_post_id=f"p{minutes}")
+    extra = rig.post(when=SLOT + timedelta(minutes=10), clip=v_clip)
+    summary = rig.run(FakePublisher())
+    thu_22 = datetime(2026, 10, 22, 19, 0, tzinfo=LONDON)  # 8 Oct + 14 days, a cadence day (Wed 7 .. Wed 21 are too close)
+    assert rig.get(extra).scheduled_for == thu_22 and summary["rescheduled"][0]["to"] == thu_22
+    assert preview_due(store, NOW)["would_post"] == []  # nothing else is due
 
 
 def test_two_deferrals_in_one_run_land_on_different_days(rig):

@@ -26,7 +26,8 @@
    * **at most 2 posted per account per London day.** A third due post goes back to ``scheduled``
      at that account's character's first *free* cadence slot after today (``planning.free_slot``: the
      first cadence day, from tomorrow, on which the account has no post in ``scheduled`` / ``posting`` /
-     ``posted`` / ``needs_check``, so a deferral never stacks a second post on a taken day). A
+     ``posted`` / ``needs_check``, so a deferral never stacks a second post on a taken day, and none within 13 days of a
+     post of another clip of the same family: ``planning.family_days``). A
      ``needs_check`` post counts like a posted one: it may well be live, and so does a fresh ``posting``
      post (claimed within the last 30 minutes: another runner has it in flight). The in-run counter is
      bumped as soon as the publisher returns, before any database write, so a lost write cannot let a
@@ -66,7 +67,7 @@ from typing import Any, Protocol, runtime_checkable
 from studio.clips import transition
 from studio.config import LONDON
 from studio.models import Account, Clip, ClipState, Platform, Post, PostStatus
-from studio.planning import free_slot, taken_days
+from studio.planning import family_days, free_slot, taken_days
 from studio.storage import Storage
 from studio.store import Store, require_aware
 
@@ -135,10 +136,11 @@ def _deferred_slot(
 ) -> datetime:
     """Where a post that hit the daily cap goes: the first free cadence slot after today, else tomorrow.
 
-    Free = a day on which the account has no post that holds a slot (``planning.taken_days``), plus the days
-    this run already deferred other posts of the account to (``extra``: a dry run writes nothing).
+    Free = a day on which the account has no post that holds a slot (``planning.taken_days``), not within 13 days of a post of
+    another clip of the post's family (``planning.family_days``, terminal v3: the same rule as scheduling), and not one of the
+    days this run already deferred other posts of the account to (``extra``: a dry run writes nothing).
     """
-    taken = taken_days(store, [account.id]) | extra.get(account.id, set())
+    taken = taken_days(store, [account.id]) | family_days(store, post.clip_id) | extra.get(account.id, set())
     midnight = datetime.combine(today + timedelta(days=1), time(0), tzinfo=LONDON)
     try:
         target = free_slot(account.character_slug, midnight, cadence, taken)

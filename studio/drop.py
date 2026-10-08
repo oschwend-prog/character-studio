@@ -843,7 +843,9 @@ def copy_drop(
     ``requested.process`` stamped: the cloud sweep (or the RPC's dispatch) checks it.
 
     Refused (``DropError``, one plain line, nothing written), in this order: the root's check has not finished (``ready``,
-    ``making`` or ``made``, with a source) "the clip is not checked yet"; its file was deleted after posting; an unknown
+    ``making`` or ``made``, with a source) "the clip is not checked yet" (asked from a version's card: "the original clip is being
+    checked again: try in a few minutes" while the root is uploading, checking or waiting, "the original clip can't be used any
+    more" when it is blocked or failed); its file was deleted after posting; an unknown
     character; he is in the family already "<Name> already has a version of this clip"; the family has ``MAX_FAMILY`` members
     "a clip goes to at most 3 characters" (skipped picks do not count); he is paused "<Name> is paused"; like for like with the
     root's star fails (``like_for_like``'s own line, from his refs.json). ``KeyError`` for an unknown pick. SQL
@@ -856,6 +858,10 @@ def copy_drop(
         raise DropError(f"the original clip {root_id} is gone")
     d = drop_of(root)
     source_id = root.source_id or d.get("source_id")
+    if root.id != pick.id and d.get("state") in ("blocked", "failed"):  # from a version's card: say what is true of the root
+        raise DropError("the original clip can't be used any more")
+    if root.id != pick.id and d.get("state") in PROCESS_FROM:
+        raise DropError("the original clip is being checked again: try in a few minutes")
     if d.get("state") not in CHECKED_STATES or not source_id:
         raise DropError("the clip is not checked yet")
     src = next(iter(store.list_sources(id=source_id)), None)
@@ -990,14 +996,20 @@ def _section(
     free: Mapping[str, Any], *, classic: bool, duration: float, avoid: list[Mapping[str, Any]], others: list[Mapping[str, Any]],
     lead_s: float,
 ) -> dict[str, float]:
-    """``drop_window``, first clear of the family's other sections too (``family_spans``: a version takes a different part of
-    the clip when it has one), else the best section as usual. ``NoCleanSection`` only when text or a watermark leaves none."""
-    if others:
-        try:
-            return drop_window(free, classic=classic, duration=duration, avoid=[*avoid, *others], lead_s=lead_s)
-        except NoCleanSection:
-            pass
-    return drop_window(free, classic=classic, duration=duration, avoid=avoid, lead_s=lead_s)
+    """The section a check takes: the best one (``drop_window``), or, for a family member, another part of the clip clear of
+    the other members' sections too (``family_spans``) when that part is as long as the target (12 s for a classic, 8 s for any
+    other clip, capped as ``drop_window`` caps) or as the best section, whichever is shorter. The family's sections are no text:
+    a version never takes a shorter cut to avoid them (``drop_window``'s shorter fallback is for text and watermarks only).
+    ``NoCleanSection`` only when text or a watermark leaves no section at all."""
+    best = drop_window(free, classic=classic, duration=duration, avoid=avoid, lead_s=lead_s)
+    if not others:
+        return best
+    try:
+        other = drop_window(free, classic=classic, duration=duration, avoid=[*avoid, *others], lead_s=lead_s)
+    except NoCleanSection:
+        return best
+    target = min((WINDOW_CLASSIC if classic else WINDOW_OTHER)[0], MASTER_MAX_S - lead_s, duration)
+    return other if other["length_s"] >= min(best["length_s"], target) - 1e-3 else best
 
 
 def _recommended_slug(answer: Mapping[str, Any], crew: list[gemini.Character]) -> str | None:

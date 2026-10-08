@@ -110,7 +110,7 @@ TRAIT_PROPS_MAX = 12
 REFERENCE_URL_MAX = 2048
 SWAP_STARS = ("person", "dog", "animal")  # the kinds of star a drop can name (studio.drop reads the clip's star into one)
 SWAP_NOUN_MAX = 40
-SWAP_PARTS = ("cameo", "featured", "star")  # studio.drop.PARTS: how big his part in an Object swap is
+SWAP_PARTS = ("cameo", "featured", "star")  # = studio.drop.PARTS (drop imports seed, so not shared): a test pins them equal
 SWAP_PERFORMANCE_MAX = 200  # the Object swap prompt's one performance sentence (the prompt stays SHORT)
 # a character's style kit (Terminal v2, part C): how his caption pill comes in, the edit on the hook, the colour tone
 STYLE_KEYS = ("pill", "entrance", "hook_edit", "tone")
