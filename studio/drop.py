@@ -46,6 +46,26 @@ reason}``, the potential from the deconstruct, the swap points from the check); 
 drop without the owner's Make it can be checked again for free (``request_recheck``, ``studio drop recheck <pick>`` or
 ``--all-ready``): it goes back to ``checking`` for the sweep, so a drop checked before the score gets one.
 
+**The balance of suggestions and fresh hooks** (controller 2026-10-08). ``roster`` counts each character's drops ``ready`` to
+make (``ready_clips``): the prompt shows the counts and, when two characters fit about as well, prefers the one with fewer. The
+check shows Gemini the character's latest hooks (``used_hooks``: his drops' ``hook`` and his clips' ``hook_text``, newest first,
+at most ``USED_HOOKS``) as "Angles already used", so his next hooks take another angle.
+
+**One clip, up to three characters** (terminal v3, spec section 4). From a drop whose check finished (``CHECKED_STATES``) the
+owner files a **version** for another character (``copy_drop``, ``studio drop copy <pick> --character <slug>``; the RPC
+``studio.copy_drop`` in SQL): a new file drop that shares the root's full clip (``source_id``, no new upload) with
+``drop['copy_of']`` = the root's pick id (a version of a version points at the root) and gets its own free check, in his voice
+and at his price; Make it stays per version. A **family** (``family``) is the root and its versions, skipped picks not counted,
+at most ``MAX_FAMILY`` (3); a character is in it once, like for like, never a paused one. The check of a family member looks
+first for a section clear of the other members' sections (``family_spans``, ``what: version``) and takes the best one as usual
+when the clip has none; the studio never moves a member to a character the family already has. ``planning.family_days`` keeps
+the family's posts at least 14 days apart.
+
+**His part and his performance** (owner 2026-10-08, refs.json). A character's ``swap_part`` (Franz: ``star``) is his default
+part: the check writes it as the drop's ``part`` (the Adjust sheet's default) and Make it reads it from refs.json again (the
+owner's Adjust wins, then ``swap_part``, then the check's suggestion, then featured); his ``swap_performance`` line is added to
+the swap prompt as one sentence. A character without them builds exactly the prompt it did before.
+
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
 record (``{"at", "by": "owner"}``, written only by ``request_job``; nothing in this CLI writes it). The owner's Adjust
 (``drop['adjust']``: who is replaced, his part, gadgets, hook, section start and length, crop) overrides the defaults. A clip is
@@ -94,6 +114,7 @@ import shutil
 import socket
 import tempfile
 import uuid
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -107,7 +128,16 @@ from studio.budget import BudgetRefused
 from studio.captions import compose_content
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
 from studio.config import now_london
-from studio.favorites import DROP_PLATFORM, DROP_URL_PREFIX, is_drop, mark_favorite, parse_video_url, validate_analysis
+from studio.favorites import (
+    DROP_PLATFORM,
+    DROP_URL_PREFIX,
+    family_picks,
+    family_root_id,
+    is_drop,
+    mark_favorite,
+    parse_video_url,
+    validate_analysis,
+)
 from studio import higgsfield_api
 from studio.higgsfield_api import (
     HiggsfieldClient,
@@ -150,6 +180,9 @@ CHARACTER_BY = ("owner", "studio")  # who chose the drop's character: the owner'
 SPAN_PAD_S = 0.5  # Gemini's times are approximate: a section keeps this far from text or a watermark on screen
 CHANGE_RESTARTS = 2  # the owner changed the character mid-check this often in a row: the next run checks it again
 SCORE_CLEAR_S = 1.0  # the score's "clear" point: the section keeps this far from every text or watermark span (terminal v3)
+MAX_FAMILY = 3  # terminal v3: one clip goes to at most 3 characters (the root drop and 2 versions; skipped picks do not count)
+CHECKED_STATES = ("ready", "making", "made")  # a drop whose check finished: its clip may be used for another character
+USED_HOOKS = gemini.USED_HOOKS_MAX  # "Angles already used": the character's latest hooks the check shows Gemini
 
 EXIT_FAILED = 1
 EXIT_REFUSED = 3
@@ -272,7 +305,7 @@ def character(slug: str, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DI
     return ref, _who(ref, characters_dir)
 
 
-def _who(ref: Mapping[str, Any], characters_dir: Path | str) -> gemini.Character:
+def _who(ref: Mapping[str, Any], characters_dir: Path | str, ready_clips: int | None = None) -> gemini.Character:
     slug = ref["slug"]
     swap = ref.get("swap")
     if not swap:
@@ -283,16 +316,21 @@ def _who(ref: Mapping[str, Any], characters_dir: Path | str) -> gemini.Character
     return gemini.Character(
         slug=slug, name=ref["name"], noun=swap["noun"], stars=tuple(swap["stars"]),
         voice=voice, keywords=gemini.bible_section(bible, "Search keywords"),
-        traits=ref.get("traits") or {}, edition=gemini.bible_edition(voice),
+        traits=ref.get("traits") or {}, edition=gemini.bible_edition(voice), ready_clips=ready_clips,
     )
 
 
 def roster(store: Store, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR) -> list[gemini.Character]:
     """The live roster a check recommends from, by slug: every character of the database that is not paused (the owner's
-    v_characters) and has a swap rule in its refs.json (a character Genjutsu cannot be given is no choice)."""
+    v_characters) and has a swap rule in its refs.json (a character Genjutsu cannot be given is no choice). Each carries his
+    count of drops ``ready`` to make (``ready_clips``; a skipped one is not counted): the prompt's balance of suggestions."""
     refs = {r["slug"]: r for r in seed.load_refs(characters_dir)}
+    ready = Counter(
+        f.character_slug for f in store.list_favorites()
+        if f.status != "skipped" and is_drop(f.proposal) and f.proposal["drop"].get("state") == "ready"
+    )
     return [
-        _who(refs[c.slug], characters_dir)
+        _who(refs[c.slug], characters_dir, ready_clips=ready[c.slug])
         for c in sorted(store.characters(), key=lambda c: c.slug)
         if c.status != "paused" and refs.get(c.slug, {}).get("swap")
     ]
@@ -319,6 +357,61 @@ def like_for_like(star: Mapping[str, Any], ref: Mapping[str, Any], name: str) ->
     if star.get("body") not in ref["bodies"]:
         return f"the wrong star: {name} has no {star.get('body')} body"
     return None
+
+
+# ---- a clip used by several characters: the family (terminal v3) ---------------------------------------------------------------
+
+
+def family(store: Store, pick: Favorite) -> list[Favorite]:
+    """``pick``'s family: the root drop and its versions (``drop.copy_of`` = the root's pick id; a version of a version points
+    at the root), the root first, then the versions oldest first. Skipped picks are no members: they never count towards
+    ``MAX_FAMILY``, and the owner may file that character again."""
+    return [m for m in family_picks(store, pick) if m.status != "skipped"]
+
+
+def _finite(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def family_spans(store: Store, pick: Favorite) -> list[dict[str, Any]]:
+    """The sections the family's other members use (``CHECKED_STATES``: the check's window, or the owner's Adjust of it), as
+    ``drop_window`` avoid spans ``{start_s, end_s, what: "version"}``: a version looks for a different part of the clip first."""
+    out: list[dict[str, Any]] = []
+    for m in family(store, pick):
+        d = m.proposal.get("drop")
+        if m.id == pick.id or not isinstance(d, Mapping) or d.get("state") not in CHECKED_STATES:
+            continue
+        window = d.get("window") if isinstance(d.get("window"), Mapping) else {}
+        adjust = d.get("adjust") if isinstance(d.get("adjust"), Mapping) else {}
+        start, length = adjust.get("start_s", window.get("start_s")), adjust.get("length_s", window.get("length_s"))
+        if _finite(start) and _finite(length) and length > 0:
+            out.append({"start_s": round(float(start), 2), "end_s": round(float(start) + float(length), 2), "what": "version"})
+    return sorted(out, key=lambda x: (x["start_s"], x["end_s"]))
+
+
+def used_hooks(store: Store, slug: str, exclude_pick_id: str | None = None) -> list[str]:
+    """The character's latest hooks, newest first, at most ``USED_HOOKS`` (the check's "Angles already used"): the ``hook`` of
+    his drops and the ``hook_text`` (else the on-screen ``hook``) of his clips, by when they were filed, each once (whitespace and
+    case aside, in its newest place). The pick being checked (``exclude_pick_id``) and its clips are left out: its old hook is
+    the one this check replaces."""
+    found: list[tuple[float, str]] = []
+    for f in store.list_favorites(character_slug=slug):
+        hook = f.proposal["drop"].get("hook") if is_drop(f.proposal) and f.id != exclude_pick_id else None
+        if isinstance(hook, str) and hook.strip():
+            found.append((f.created_at.timestamp() if f.created_at else 0.0, hook))
+    for c in store.list_clips(character_slug=slug):
+        hook = c.features.get("hook_text") or c.hook
+        if isinstance(hook, str) and hook.strip() and (exclude_pick_id is None or c.features.get("fav_id") != exclude_pick_id):
+            found.append((c.created_at.timestamp() if c.created_at else 0.0, hook))
+    found.sort(key=lambda x: x[0], reverse=True)
+    out: list[str] = []
+    seen: set[str] = set()
+    for _, hook in found:
+        line = " ".join(hook.split())
+        if line.casefold() not in seen:
+            seen.add(line.casefold())
+            out.append(line)
+    return out[:USED_HOOKS]
 
 
 # ---- the window ----------------------------------------------------------------------------------------------------------------
@@ -547,15 +640,17 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any], *, lead_s: float = 0.0
     return out
 
 
-def effective(drop: Mapping[str, Any], *, lead_s: float = 0.0) -> dict[str, Any]:
-    """What the make job uses: the process job's choices with the owner's Adjust on top (``lead_s``: see ``validate_adjust``)."""
+def effective(drop: Mapping[str, Any], *, lead_s: float = 0.0, swap_part: str | None = None) -> dict[str, Any]:
+    """What the make job uses: the process job's choices with the owner's Adjust on top (``lead_s``: see ``validate_adjust``).
+    His part: the owner's Adjust, else the character's own (refs.json ``swap_part``, read at Make it: Franz performs as the star),
+    else the check's suggestion, else featured."""
     adjust = validate_adjust(drop.get("adjust"), drop, lead_s=lead_s)
     window = drop.get("window") or {}
     star = drop.get("star") or {}
     return {
         "star": adjust.get("star", star.get("description")),
         "body": star.get("body"),
-        "part": adjust.get("part", drop.get("part", "featured")),
+        "part": adjust.get("part") or swap_part or drop.get("part") or "featured",
         "gadgets": adjust.get("gadgets", drop.get("gadgets", [])),
         "hook": adjust.get("hook", drop.get("hook")),
         "start_s": adjust.get("start_s", float(window.get("start_s", 0.0))),
@@ -564,8 +659,9 @@ def effective(drop: Mapping[str, Any], *, lead_s: float = 0.0) -> dict[str, Any]
     }
 
 
-def swap_prompt(star: str, noun: str, part: str, gadgets: list[str]) -> str:
-    """The SHORT Object swap prompt (Higgsfield's own form): who is replaced, by whom, his part, his gadgets."""
+def swap_prompt(star: str, noun: str, part: str, gadgets: list[str], performance: str | None = None) -> str:
+    """The SHORT Object swap prompt (Higgsfield's own form): who is replaced, by whom, his part, his gadgets, and the character's
+    one performance line when his refs.json has one (``swap_performance``: how he performs the moves); without it, as before."""
     lines = [f"Replace {star.strip().rstrip('.')} with the {noun} from the reference images."]
     lines.append({
         "cameo": "Keep his motion minimal and natural; the scene stays the same.",
@@ -574,6 +670,8 @@ def swap_prompt(star: str, noun: str, part: str, gadgets: list[str]) -> str:
     }[part])
     if gadgets:
         lines.append(f"He wears or holds: {', '.join(gadgets)} (no brand logos).")
+    if performance and performance.strip():
+        lines.append(f"Performance: {' '.join(performance.split()).rstrip('.')}.")
     return " ".join(lines)
 
 
@@ -731,6 +829,73 @@ def request_recheck(store: Store, pick_id: str, now: datetime | None = None) -> 
     return _update(store, pick, now, state="checking", reason=None, at=now.isoformat(), requested=requested, score=None)
 
 
+def copy_drop(
+    store: Store, pick_id: str, character_slug: str, now: datetime | None = None, *,
+    characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
+) -> Favorite:
+    """Use a checked clip for another character (terminal v3, spec section 4; free): file a **version**, a new pick that shares
+    the root's full clip (nothing is uploaded again) and gets its own free check, in his voice and at his price.
+
+    ``pick_id`` is the root drop or any version of it: the version always points at the ROOT (``drop.copy_of``). It is a file
+    drop keyed ``owner-drop:<new id>`` (platform ``drop``, origin ``owner``, ``approved``, the root's ``source_id`` and creator
+    handle, and the root's ``fetched`` marker when it has one, so ``source purge`` deletes the shared clip only once the last
+    member is done) at ``checking`` with ``character_by`` owner, ``copy_of``, the root's ``kind`` and ``own_footage``, and
+    ``requested.process`` stamped: the cloud sweep (or the RPC's dispatch) checks it.
+
+    Refused (``DropError``, one plain line, nothing written), in this order: the root's check has not finished (``ready``,
+    ``making`` or ``made``, with a source) "the clip is not checked yet"; its file was deleted after posting; an unknown
+    character; he is in the family already "<Name> already has a version of this clip"; the family has ``MAX_FAMILY`` members
+    "a clip goes to at most 3 characters" (skipped picks do not count); he is paused "<Name> is paused"; like for like with the
+    root's star fails (``like_for_like``'s own line, from his refs.json). ``KeyError`` for an unknown pick. SQL
+    ``studio.copy_drop`` (migration 0015) applies the same rules."""
+    now = now or now_london()
+    pick = _load(store, pick_id)
+    root_id = family_root_id(pick)
+    root = pick if root_id == pick.id else store.get_favorite(root_id)
+    if root is None or not is_drop(root.proposal):
+        raise DropError(f"the original clip {root_id} is gone")
+    d = drop_of(root)
+    source_id = root.source_id or d.get("source_id")
+    if d.get("state") not in CHECKED_STATES or not source_id:
+        raise DropError("the clip is not checked yet")
+    src = next(iter(store.list_sources(id=source_id)), None)
+    if src is None or not src.storage_path:
+        raise DropError("the clip's file is gone (deleted after posting): drop it again")
+    target = next((c for c in store.characters() if c.slug == character_slug), None)
+    if target is None:
+        raise DropError(f"unknown character {character_slug!r}")
+    ref, _ = character(character_slug, characters_dir)
+    name = ref["name"]
+    members = family(store, root)
+    if any(m.character_slug == character_slug for m in members):
+        raise DropError(f"{name} already has a version of this clip")
+    if len(members) >= MAX_FAMILY:
+        raise DropError(f"a clip goes to at most {MAX_FAMILY} characters")
+    if target.status == "paused":
+        raise DropError(f"{name} is paused")
+    wrong = like_for_like(d.get("star") or {}, ref, name)
+    if wrong is not None:
+        raise DropError(wrong)
+    at = now.isoformat()
+    proposal: dict[str, Any] = {
+        "decision": {"decision": "approve", "by": "owner", "reason": "owner's own video", "at": at},
+        "drop": {
+            "state": "checking", "kind": d.get("kind", "file"), "at": at, "reason": None,
+            "own_footage": bool(d.get("own_footage", False)), "character_by": "owner", "copy_of": root.id,
+            "requested": {"process": at},
+        },
+    }
+    marker = root.proposal.get("fetched")
+    if isinstance(marker, Mapping):  # one download, shared like the "Both" pick of a video (studio.fetch)
+        proposal["fetched"] = {k: v for k, v in marker.items() if k != "purged_at"}
+    version_id = str(uuid.uuid4())
+    return store.add_favorite(Favorite(
+        id=version_id, url=f"{DROP_URL_PREFIX}{version_id}", platform=DROP_PLATFORM, origin="owner",
+        character_slug=character_slug, creator_handle=root.creator_handle, proposal=proposal, status="approved",
+        source_id=source_id,
+    ))  # fmt: skip
+
+
 def set_own_footage(store: Store, pick_id: str, own_footage: bool) -> Favorite:
     """The owner's toggle (``studio.set_drop_footage``, migration 0012): ``drop['own_footage']``, for reporting; any state."""
     pick = _load(store, pick_id)
@@ -813,10 +978,26 @@ def _blocked_reason(answer: Mapping[str, Any], ref: Mapping[str, Any], name: str
 
 
 def _unclean_reason(avoid: list[Mapping[str, Any]], link: bool) -> str:
+    """The blocked line when no clean section is left: only text and watermark spans speak; another family member's section
+    (``what: version``) is never a reason (``_section`` drops those before it gives up)."""
     base = "text or a watermark is on screen in every usable section"
     if any(x["what"] == "watermark" for x in avoid):
         return f"{base}: {'we cannot use this clip' if link else 'paste the link instead'}"
     return f"{base}: Genjutsu would keep it, drop a clean copy"
+
+
+def _section(
+    free: Mapping[str, Any], *, classic: bool, duration: float, avoid: list[Mapping[str, Any]], others: list[Mapping[str, Any]],
+    lead_s: float,
+) -> dict[str, float]:
+    """``drop_window``, first clear of the family's other sections too (``family_spans``: a version takes a different part of
+    the clip when it has one), else the best section as usual. ``NoCleanSection`` only when text or a watermark leaves none."""
+    if others:
+        try:
+            return drop_window(free, classic=classic, duration=duration, avoid=[*avoid, *others], lead_s=lead_s)
+        except NoCleanSection:
+            pass
+    return drop_window(free, classic=classic, duration=duration, avoid=avoid, lead_s=lead_s)
 
 
 def _recommended_slug(answer: Mapping[str, Any], crew: list[gemini.Character]) -> str | None:
@@ -894,6 +1075,7 @@ def _process(
     ref, who = character(slug, characters_dir)
     crew = roster(store, characters_dir)
     by_studio = drop_of(pick).get("character_by") == "studio"
+    in_family = {m.character_slug for m in family(store, pick) if m.id != pick.id}  # the studio never moves it to one of them
     got = _get_source(store, storage, pick, now, runner)
     if isinstance(got, Outcome):
         return got
@@ -925,6 +1107,7 @@ def _process(
         if answer is not None:
             # by hand: written for the character it recommends when the choice is the studio's (the skill says so)
             target = (_recommended_slug(answer, crew) if by_studio else None) or slug
+            target = slug if target in in_family else target
             ref_t, who_t = (ref, who) if target == slug else character(target, characters_dir)
             problems = gemini.deconstruct_problems(answer, who_t, crew)
             if problems:
@@ -941,13 +1124,13 @@ def _process(
         else:
             proxy = clipwork.proxy_clip(local, work / "proxy.mp4")
             try:
-                look = gemini.deconstruct(client, proxy, who, crew)
+                look = gemini.deconstruct(client, proxy, who, crew, used_hooks(store, slug, pick.id))
                 recommended = look["recommended"]  # the one the card shows (the second look is asked in his voice only)
-                if by_studio and recommended["slug"] != slug:
+                if by_studio and recommended["slug"] != slug and recommended["slug"] not in in_family:
                     _switch(store, pick.id, slug, recommended["slug"])
                     slug = recommended["slug"]
                     ref, who = character(slug, characters_dir)
-                    look = gemini.deconstruct(client, proxy, who, crew)  # once more, his hooks and caption (free)
+                    look = gemini.deconstruct(client, proxy, who, crew, used_hooks(store, slug, pick.id))  # once more, his voice
             except gemini.GeminiBlocked as e:
                 reason = f"Gemini would not look at this clip ({e}): we cannot use it"
                 _unready(store, _still(store, pick.id, slug), now, state="blocked", reason=reason, **basics)
@@ -968,11 +1151,12 @@ def _process(
         blocked = _blocked_reason(look, ref, who.name)
         if blocked is None:
             try:
-                window = drop_window(
-                    free, classic=look["classic"], duration=report.duration_s, avoid=avoid, lead_s=style_lead_s(ref.get("style")),
+                window = _section(
+                    free, classic=look["classic"], duration=report.duration_s, avoid=avoid, others=family_spans(store, pick),
+                    lead_s=style_lead_s(ref.get("style")),
                 )
             except NoCleanSection:
-                blocked = _unclean_reason(avoid, pick.platform != DROP_PLATFORM)
+                blocked = _unclean_reason(avoid, drop_of(pick).get("kind") == "link")
         if blocked is not None:
             _unready(store, pick, now, state="blocked", reason=blocked, **basics, star=look["star"], recommended=recommended, avoid=avoid)
             return Outcome(pick.id, "blocked", blocked, detail={"character": slug, "recommended": recommended})
@@ -988,7 +1172,8 @@ def _process(
         "drop": {
             **drop_of(pick), **basics, "state": "ready", "reason": None, "at": now.isoformat(),
             "window": window, "crop_x": crop_x, "star": look["star"], "classic": look["classic"],
-            "part": look["suggested_part"], "gadgets": look["gadgets"], "hooks": look["hooks"], "hook": hook,
+            # his own part when his refs.json has one (Make it reads it again): the Adjust sheet's default is what is made
+            "part": ref.get("swap_part") or look["suggested_part"], "gadgets": look["gadgets"], "hooks": look["hooks"], "hook": hook,
             "deconstruct": look, "music": MUSIC, "seconds": window["length_s"], "credits": credits, "preview_path": preview,
             "recommended": recommended, "avoid": avoid,
             # the longest section Make it takes for him (validate_adjust's cap): the terminal's Adjust checks it before Make it
@@ -1128,14 +1313,14 @@ def _stopped(store: Store, pick_id: str, now: datetime, error: Exception) -> Out
     return Outcome(pick_id, "making", reason, ok=False)
 
 
-def _new_or_current_clip(store: Store, pick: Favorite, now: datetime) -> Clip:
+def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part: str | None = None) -> Clip:
     drop = drop_of(pick)
     clip_id = (drop.get("make") or {}).get("clip_id")
     if clip_id:
         clip = store.get_clip(clip_id)
         if clip is not None:
             return clip
-    eff = effective(drop)
+    eff = effective(drop, swap_part=swap_part)
     kind = next_engagement(store, pick.character_slug)
     clip = clips.new_clip(store, pick.character_slug, None, Mode.dropin, _features(pick, drop, eff, kind))
     pick = _record_make(store, pick, now, clip_id=clip.id, attempt=0)
@@ -1157,7 +1342,7 @@ def _make(
             reason = "waiting for the Higgsfield key: the next daily run makes it by hand"
             _update(store, pick, now, reason=reason)
             return Outcome(pick_id, "making", reason)
-    clip = _new_or_current_clip(store, pick, now)
+    clip = _new_or_current_clip(store, pick, now, ref.get("swap_part"))
     with tempfile.TemporaryDirectory(prefix="studio-drop-make-") as tmp:
         work = Path(tmp)
         for _ in range(12):  # each pass moves the clip one state on; a finished or waiting make returns
@@ -1221,11 +1406,13 @@ def _submit(store: Store, storage: Storage, pick: Favorite, clip: Clip, child: S
     """POST the Object swap once, with the key and the body stored first; an uncertain answer is looked up with them."""
     make = drop_of(pick).get("make") or {}
     if not make.get("idempotency_key"):
-        eff = effective(drop_of(pick))
+        eff = effective(drop_of(pick), swap_part=ref.get("swap_part"))
         body = {
             "video_url": sources.signed_source_url(store, storage, child.id, SIGNED_URL_S),
             "image_urls": seed.reference_images(ref, eff["body"] or ref["bodies"][0]),
-            "prompt": swap_prompt(eff["star"] or "the main performer", who.noun, eff["part"], eff["gadgets"]),
+            "prompt": swap_prompt(
+                eff["star"] or "the main performer", who.noun, eff["part"], eff["gadgets"], ref.get("swap_performance"),
+            ),
             "resolution": "1080p",
         }
         attempt = int(make.get("attempt") or 0) + 1
@@ -1376,12 +1563,14 @@ def _step(
 
 def _prepared(store: Store, storage: Storage, pick: Favorite, clip: Clip, child: Source, ref: Mapping[str, Any],
               who: gemini.Character, now: datetime) -> Outcome:
-    eff = effective(drop_of(pick))
+    eff = effective(drop_of(pick), swap_part=ref.get("swap_part"))
     inputs = {
         "clip_id": clip.id, "source_id": child.id, "seconds": child.duration_s,
         "video_url": sources.signed_source_url(store, storage, child.id, SIGNED_URL_S),
         "image_urls": seed.reference_images(ref, eff["body"] or ref["bodies"][0]),
-        "prompt": swap_prompt(eff["star"] or "the main performer", who.noun, eff["part"], eff["gadgets"]),
+        "prompt": swap_prompt(
+            eff["star"] or "the main performer", who.noun, eff["part"], eff["gadgets"], ref.get("swap_performance"),
+        ),
         "resolution": "1080p", "reserved": store.get_clip(clip.id).credits_reserved,
     }
     reason = "prepared for the MCP Object swap: run it, then drop make --generated-file F --credits N"
@@ -1623,6 +1812,27 @@ def recheck_command(
     emit({"rechecked": rechecked, "refused": refused})
     if pick is not None and refused:
         raise typer.Exit(EXIT_USAGE)
+
+
+@app.command("copy")
+def copy_command(
+    pick: Annotated[str, typer.Argument(help="A checked drop's pick id: the clip, or any version of it.")],
+    character_slug: Annotated[
+        str, typer.Option("--character", help="Who the version is for: a character slug (the folder name in characters/, e.g. lenny).")
+    ],
+) -> None:
+    """Use a checked clip for another character (free): a version that shares the clip and gets its own check, in his voice, at
+    his price. At most 3 characters per clip, like for like, not a paused one. Prints {"pick_id", "copy_of", "character",
+    "drop"}; the cloud sweep checks it (nothing is dispatched here). Exit 2 with one line when it is refused."""
+    store = open_store()
+    try:
+        version = copy_drop(store, pick, character_slug)
+    except KeyError:
+        fail(f"unknown pick {pick}")
+    except (DropError, ValueError) as e:
+        fail(str(e))
+    d = version.proposal["drop"]
+    emit({"pick_id": version.id, "copy_of": d["copy_of"], "character": version.character_slug, "drop": d})
 
 
 @app.command("make")

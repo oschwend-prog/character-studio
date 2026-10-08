@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from studio import budget, drop
+from studio import budget, drop, sources
 from studio.cli import app
 from studio.config import now_london
 from studio.drop import DropError, add_drop, attach_file, drop_window, make_drop, pending, process_drop, validate_adjust
@@ -26,7 +26,7 @@ from studio.favorites import next_favorites
 from studio.gemini import GeminiBlocked, GeminiError
 from studio.higgsfield_api import PollTimeout, RequestStatus, Submitted, SubmitUncertain
 from studio.media.qa import probe
-from studio.models import Body, Character, ClipState, Settings
+from studio.models import Body, Character, Clip, ClipState, Favorite, Mode, Settings
 from studio.storage import LocalStorage
 from studio.store import MemoryStore
 
@@ -1325,3 +1325,322 @@ def test_a_person_star_is_like_for_like_for_franz(world, portrait):
     pid = ready_drop(store, storage, portrait, slug="franz")  # the owner's choice: a man doing the shimmy, Franz upright
     d = store.get_favorite(pid).proposal["drop"]
     assert d["state"] == "ready" and d["star"]["body"] == "biped" and store.get_favorite(pid).character_slug == "franz"
+
+
+# ---- reuse: one clip, up to three characters (terminal v3, spec section 4) ------------------------------------------------------
+
+
+def with_lenny_and_franz(store, franz_status="live"):
+    store.add_character(Character(slug="lenny", name="Lenny Gold", status="live", bodies=[Body.biped]))
+    store.add_character(Character(slug="franz", name="Franz", status=franz_status, bodies=[Body.biped, Body.quadruped]))
+    return store
+
+
+def checked(store, slug="reginald", state="ready", star=None, own_footage=True, **drop_over):
+    """A drop whose check ended ``state`` without a video (the copy rules only read the card): its full-clip source in Storage,
+    the star, the section."""
+    pick, _ = add_drop(store, slug, None, NOW, own_footage=own_footage)
+    src = sources.add_source(store, "owner_inbox", None, "biped", 1, 20.0, storage_path=f"owner/{pick.id}/1.mp4")
+    d = {
+        **pick.proposal["drop"], "state": state, "star": star or deconstruct()["star"], "source_id": src.id,
+        "window": {"start_s": 0.0, "length_s": 9.0}, "score": {"total": 78, "potential": 7, "swap": 9, "reason": "x"}, **drop_over,
+    }
+    return store.update_favorite(pick.id, source_id=src.id, proposal={**pick.proposal, "drop": d})
+
+
+def test_copy_creates_version(world):
+    store, _ = world
+    with_lenny_and_franz(store)
+    root = checked(store)
+    store.update_favorite(root.id, creator_handle="@dancer.one")  # the original creator is credited on every version
+    later = NOW + timedelta(minutes=5)
+    v = drop.copy_drop(store, root.id, "lenny", now=later)
+    assert v.id != root.id and v.url == f"owner-drop:{v.id}" and v.platform == "drop" and v.origin == "owner"
+    assert v.status == "approved" and v.character_slug == "lenny" and v.source_id == root.source_id
+    assert v.creator_handle == "@dancer.one" and v.proposal["decision"]["by"] == "owner"
+    d = v.proposal["drop"]
+    assert d == {
+        "state": "checking", "kind": "file", "at": later.isoformat(), "reason": None, "own_footage": True,
+        "character_by": "owner", "copy_of": root.id, "requested": {"process": later.isoformat()},
+    }  # no score, window or hooks of the root's: the version's own free check gives it its own, in Lenny's voice
+    assert store.get_favorite(v.id) == v and len(store.list_favorites()) == 2
+    assert {"pick_id": v.id, "job": "process", "state": "checking"} in pending(store, now=later)  # the sweep takes it
+    assert [m.id for m in drop.family(store, store.get_favorite(root.id))] == [root.id, v.id]
+    assert [m.id for m in drop.family(store, v)] == [root.id, v.id]
+    assert store.get_favorite(root.id).proposal["drop"] == root.proposal["drop"]  # the root is left as it was
+    own = checked(store, own_footage=False)
+    assert drop.copy_drop(store, own.id, "franz", now=later).proposal["drop"]["own_footage"] is False
+
+
+def test_copy_of_copy_points_at_root(world):
+    store, _ = world
+    with_lenny_and_franz(store)
+    root = checked(store, state="made")
+    v1 = drop.copy_drop(store, root.id, "lenny", now=NOW)
+    v2 = drop.copy_drop(store, v1.id, "franz", now=NOW)  # from the version's card: still the root's family
+    assert v2.proposal["drop"]["copy_of"] == root.id and v2.source_id == root.source_id
+    assert [m.id for m in drop.family(store, v2)] == [root.id, v1.id, v2.id] == [m.id for m in drop.family(store, v1)]
+
+
+def refused(store, pick_id, slug, line):
+    before = len(store.list_favorites())
+    with pytest.raises(DropError) as e:
+        drop.copy_drop(store, pick_id, slug, now=NOW)
+    assert str(e.value) == line
+    assert len(store.list_favorites()) == before  # nothing is filed
+
+
+def test_copy_refusals(world):
+    store, _ = world
+    with_lenny_and_franz(store)
+    for state in ("uploading", "checking", "waiting", "blocked", "failed"):
+        refused(store, checked(store, state=state).id, "lenny", "the clip is not checked yet")
+    no_source = checked(store)
+    store.update_favorite(no_source.id, source_id=None, proposal={**no_source.proposal, "drop": {
+        k: v for k, v in no_source.proposal["drop"].items() if k != "source_id"}})
+    refused(store, no_source.id, "lenny", "the clip is not checked yet")
+    dog = checked(store, slug="franz", star=DOG_STAR)
+    refused(store, dog.id, "lenny", "the wrong star: Lenny Gold replaces a person, this clip's star is a dog")  # like_for_like's line
+    root = checked(store)
+    refused(store, root.id, "reginald", "Reginald already has a version of this clip")
+    lenny = drop.copy_drop(store, root.id, "lenny", now=NOW)
+    refused(store, lenny.id, "lenny", "Lenny Gold already has a version of this clip")
+    franz = drop.copy_drop(store, root.id, "franz", now=NOW)
+    refused(store, franz.id, "biscuit", "a clip goes to at most 3 characters")  # the 4th, from a version's card too
+    store.update_favorite(lenny.id, status="skipped")  # a skipped version is no member: Lenny may have a new one
+    again = drop.copy_drop(store, root.id, "lenny", now=NOW)
+    assert [m.id for m in drop.family(store, root)] == [root.id, franz.id, again.id]
+    refused(store, root.id, "biscuit", "a clip goes to at most 3 characters")
+    paused = with_lenny_and_franz(make_store(), franz_status="paused")
+    refused(paused, checked(paused).id, "franz", "Franz is paused")
+    with pytest.raises(DropError, match="unknown character 'nobody'"):
+        drop.copy_drop(store, checked(store).id, "nobody", now=NOW)
+    with pytest.raises(KeyError):
+        drop.copy_drop(store, "nope", "lenny", now=NOW)
+
+
+def test_copy_refuses_a_clip_whose_file_is_gone(world):
+    """The root's full clip was deleted after posting (``source purge``): a version could never be checked, so none is filed."""
+    store, _ = world
+    with_lenny_and_franz(store)
+    root = checked(store, state="made")
+    store.update_source(root.source_id, storage_path=None)
+    refused(store, root.id, "lenny", "the clip's file is gone (deleted after posting): drop it again")
+
+
+def test_cli_drop_copy(monkeypatch, world):
+    store, _ = world
+    with_lenny_and_franz(store)
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    root = checked(store)
+    r = CliRunner().invoke(app, ["drop", "copy", root.id, "--character", "lenny"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["copy_of"] == root.id and out["character"] == "lenny" and out["drop"]["state"] == "checking"
+    assert store.get_favorite(out["pick_id"]).proposal["drop"]["copy_of"] == root.id
+    r = CliRunner().invoke(app, ["drop", "copy", root.id, "--character", "lenny"])
+    assert r.exit_code == 2 and "Lenny Gold already has a version of this clip" in r.output
+    r = CliRunner().invoke(app, ["drop", "copy", "nope", "--character", "lenny"])
+    assert r.exit_code == 2 and "unknown pick nope" in r.output
+
+
+def two_halves(seconds: int, first: float = 5.0, second: float = 4.0) -> dict:
+    """A free analysis of a clip of ``seconds`` whose first 10 s move more than the rest (0.5 s steps, no cuts, no beats)."""
+    return {**analysis([first] * 20 + [second] * (2 * seconds - 20)), "best_window": {"start_s": 0.0, "end_s": 10.0}}
+
+
+def test_version_prefers_other_window(world, synth_video, monkeypatch):
+    store, storage = world
+    with_lenny_and_franz(store)
+    monkeypatch.setattr(drop, "analyze_clip", lambda clip, sheet: two_halves(21))
+    root = ready_drop(store, storage, synth_video(w=320, h=568, dur=21))
+    assert store.get_favorite(root).proposal["drop"]["window"] == {"start_s": 0.0, "length_s": 10.0}  # the liveliest part
+    v = drop.copy_drop(store, root, "lenny", now=NOW)
+    out = process_drop(store, storage, v.id, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
+    d = store.get_favorite(v.id).proposal["drop"]
+    assert out.state == "ready" and d["window"] == {"start_s": 10.0, "length_s": 10.0}  # a different section of the clip
+    assert d["avoid"] == [] and d["source_id"] == store.get_favorite(root).source_id  # the root's spans are no text to avoid
+    assert len(store.list_sources()) == 1  # nothing was uploaded again
+    w = drop.copy_drop(store, root, "franz", now=NOW)  # the third keeps clear of both when it can, else the best one
+    assert process_drop(store, storage, w.id, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t").state == "ready"
+    assert store.get_favorite(w.id).proposal["drop"]["window"] == {"start_s": 0.0, "length_s": 10.0}
+
+
+def test_version_falls_back_to_best_window(world, synth_video, monkeypatch):
+    store, storage = world
+    with_lenny_and_franz(store)
+    monkeypatch.setattr(drop, "analyze_clip", lambda clip, sheet: two_halves(12, second=5.0))
+    root = ready_drop(store, storage, synth_video(w=320, h=568, dur=12))
+    window = store.get_favorite(root).proposal["drop"]["window"]
+    v = drop.copy_drop(store, root, "lenny", now=NOW)
+    out = process_drop(store, storage, v.id, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
+    d = store.get_favorite(v.id).proposal["drop"]
+    assert out.state == "ready" and d["window"] == window  # no 6 s clear of the root's section: the best one, as usual
+    assert d["avoid"] == [] and "score" in d
+
+
+def test_unclean_reason_ignores_version_spans():
+    version = {"start_s": 0.0, "end_s": 9.0, "what": "version"}
+    text = {"start_s": 9.0, "end_s": 12.0, "what": "text"}
+    assert drop._unclean_reason([version, text], False) == drop._unclean_reason([text], False)
+
+
+def test_the_studio_never_moves_a_family_member_to_a_character_the_family_has(world, portrait):
+    """A root filed with Recommend and checked again: the studio may not move it to a character who already has a version."""
+    store, storage = world
+    with_lenny_and_franz(store)
+    pid = studio_drop(store, storage, portrait)  # waits under Franz, then the studio moves it to Reginald (two looks)
+    assert process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(), deconstruct()), now=NOW, job="t").state == "ready"
+    assert store.get_favorite(pid).character_slug == "reginald"
+    drop.copy_drop(store, pid, "lenny", now=NOW)
+    drop.request_recheck(store, pid, now=NOW)
+    look = deconstruct(recommended={"slug": "lenny", "reason": "office shimmy: Lenny's deal energy"})
+    g = FakeGemini(look)
+    out = process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    f = store.get_favorite(pid)
+    assert out.state == "ready" and f.character_slug == "reginald" and len(g.calls) == 1  # no move, no second look
+    assert f.proposal["drop"]["recommended"]["slug"] == "lenny"  # the card still says who would fit best
+
+
+# ---- Franz performs as the star (owner 2026-10-08: refs.json swap_part and swap_performance) -----------------------------------
+
+
+def test_the_swap_prompt_adds_the_characters_performance_line():
+    base = drop.swap_prompt("the man in the grey suit", "butler", "featured", ["black umbrella"])
+    assert drop.swap_prompt("the man in the grey suit", "butler", "featured", ["black umbrella"], performance=None) == base
+    ref, _ = drop.character("franz")
+    prompt = drop.swap_prompt("the man in the grey suit", "dachshund", "star", [], performance=ref["swap_performance"])
+    assert prompt == (
+        "Replace the man in the grey suit with the dachshund from the reference images. He performs every beat with full "
+        f"energy; the scene stays the same. Performance: {ref['swap_performance']}."
+    )
+    assert len(prompt) < 400
+
+
+def test_franz_is_made_as_the_star_with_his_performance_line(world, portrait, gen_out, fast_master):
+    store, storage = world
+    store.add_character(Character(slug="franz", name="Franz", bodies=[Body.biped, Body.quadruped]))
+    ref, _ = drop.character("franz")
+    pid = ready_drop(store, storage, portrait, slug="franz")  # the check suggests featured; his refs.json says star
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["deconstruct"]["suggested_part"] == "featured" and d["part"] == "star"  # the Adjust sheet's default is his
+    tap_make(store, pid)
+    hf = FakeHF(gen_out)
+    assert make(store, storage, pid, hf, FakeGemini(QA_PASS)).state == "made"
+    (sub,) = hf.submits
+    assert "full energy" in sub["prompt"] and sub["prompt"].endswith(f"Performance: {ref['swap_performance']}.")
+    assert store.get_clip(store.get_favorite(pid).clip_id).features["presence"] == "star"
+
+
+def test_the_owners_part_wins_over_the_characters(world, portrait, gen_out, fast_master):
+    store, storage = world
+    store.add_character(Character(slug="franz", name="Franz", bodies=[Body.biped, Body.quadruped]))
+    pid = ready_drop(store, storage, portrait, slug="franz")
+    tap_make(store, pid, adjust={"part": "cameo"})
+    hf = FakeHF(gen_out)
+    assert make(store, storage, pid, hf, FakeGemini(QA_PASS)).state == "made"
+    assert "motion minimal" in hf.submits[0]["prompt"] and "Performance:" in hf.submits[0]["prompt"]
+    assert store.get_clip(store.get_favorite(pid).clip_id).features["presence"] == "cameo"
+
+
+def test_a_check_made_before_the_characters_part_is_made_with_it(world, portrait, gen_out, fast_master):
+    """A Franz drop checked before refs.json had swap_part keeps the suggested part on its card; Make it reads refs.json."""
+    store, storage = world
+    store.add_character(Character(slug="franz", name="Franz", bodies=[Body.biped, Body.quadruped]))
+    pid = ready_drop(store, storage, portrait, slug="franz")
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "part": "featured"}})
+    tap_make(store, pid)
+    hf = FakeHF(gen_out)
+    assert make(store, storage, pid, hf, FakeGemini(QA_PASS)).state == "made"
+    assert "full energy" in hf.submits[0]["prompt"]
+
+
+def test_a_character_without_a_part_or_performance_is_made_as_before(world, portrait, gen_out, fast_master):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)  # Reginald: neither in his refs.json
+    assert store.get_favorite(pid).proposal["drop"]["part"] == "featured"  # the check's suggestion
+    tap_make(store, pid)
+    hf = FakeHF(gen_out)
+    assert make(store, storage, pid, hf, FakeGemini(QA_PASS)).state == "made"
+    assert hf.submits[0]["prompt"] == drop.swap_prompt("the man in the grey suit", "butler", "featured", ["black umbrella"])
+
+
+def test_the_prepared_mcp_inputs_carry_the_performance_line_too(world, portrait):
+    store, storage = world
+    store.add_character(Character(slug="franz", name="Franz", bodies=[Body.biped, Body.quadruped]))
+    ref, _ = drop.character("franz")
+    pid = ready_drop(store, storage, portrait, slug="franz")
+    tap_make(store, pid)
+    out = make_drop(store, storage, pid, hf=None, gemini_client=None, prepare=True, now=NOW, job="t")
+    assert out.detail["inputs"]["prompt"].endswith(f"Performance: {ref['swap_performance']}.")
+
+
+# ---- the balance of suggestions and fresh hooks (controller 2026-10-08) ---------------------------------------------------------
+
+
+def a_drop(store, slug, state, status="approved", hook=None, at=None):
+    pick, _ = add_drop(store, slug, None, NOW)
+    d = {**pick.proposal["drop"], "state": state, **({"hook": hook} if hook else {})}
+    return store.update_favorite(pick.id, status=status, created_at=at or NOW, proposal={**pick.proposal, "drop": d})
+
+
+def test_the_roster_counts_each_characters_ready_clips(world):
+    store, _ = world
+    with_lenny_and_franz(store)
+    for _ in range(2):
+        a_drop(store, "lenny", "ready")
+    a_drop(store, "reginald", "ready")
+    a_drop(store, "reginald", "ready", status="skipped")  # skipped: no clip to make
+    a_drop(store, "reginald", "blocked")
+    a_drop(store, "reginald", "made", status="made")
+    crew = {c.slug: c.ready_clips for c in drop.roster(store)}
+    assert crew == {"biscuit": 0, "franz": 0, "lenny": 2, "reginald": 1}
+
+
+def test_the_check_tells_gemini_how_many_ready_clips_each_character_has(world, portrait):
+    store, storage = world
+    with_lenny_and_franz(store)
+    for _ in range(3):
+        a_drop(store, "lenny", "ready")
+    pid = drop_file(store, storage, portrait)
+    g = FakeGemini(deconstruct())
+    process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    prompt = g.calls[0]["prompt"]
+    assert "- lenny: Lenny Gold, the Hollywood agent; replaces a person." in prompt and "Ready clips: 3." in prompt
+    assert "prefer the one with fewer ready clips" in prompt
+
+
+def test_the_check_lists_the_characters_latest_hooks(world, portrait):
+    store, storage = world
+    with_lenny_and_franz(store)
+    for i in range(8):  # oldest first: hook 0 .. hook 7
+        a_drop(store, "reginald", "ready", hook=f"Reginald hook {i}", at=NOW - timedelta(days=30 - i))
+    for i in range(8, 12):
+        store.add_clip(Clip(character_slug="reginald", mode=Mode.dropin, features={"hook_text": f"Reginald hook {i}"},
+                            created_at=NOW - timedelta(days=30 - i)))
+    store.add_clip(Clip(character_slug="reginald", mode=Mode.dropin, features={"hook_text": "reginald HOOK 11 "},
+                        created_at=NOW - timedelta(days=1)))  # the same hook again, newest: once, in its newest place
+    a_drop(store, "lenny", "ready", hook="Lenny closes the deal")  # another character's: not his
+    pid = drop_file(store, storage, portrait)
+    g = FakeGemini(deconstruct())
+    process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    prompt = g.calls[0]["prompt"]
+    assert "Angles already used: take a different one" in prompt and "closes the deal" not in prompt
+    listed = prompt.split("Angles already used: take a different one", 1)[1].split("\n\n", 1)[0]
+    assert [line[2:] for line in listed.strip().splitlines()[1:]] == [
+        "reginald HOOK 11", *(f"Reginald hook {i}" for i in range(10, 1, -1)),
+    ]  # at most 10, newest first
+
+
+def test_no_used_hooks_no_list(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    g = FakeGemini(deconstruct())
+    process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    assert "Angles already used" not in g.calls[0]["prompt"]
+    # a recheck does not count the drop's own old hook as used
+    drop.request_recheck(store, pid, now=NOW)
+    g = FakeGemini(deconstruct())
+    process_drop(store, storage, pid, gemini_client=g, now=NOW, job="t")
+    assert "Angles already used" not in g.calls[0]["prompt"]

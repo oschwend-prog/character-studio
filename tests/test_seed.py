@@ -343,6 +343,48 @@ def test_bad_refs_are_refused_before_anything_is_written(tmp_path, over, message
     assert store.characters() == []  # reginald was fine, but the run is all or nothing
 
 
+SWAP = {"noun": "dog", "stars": ["dog", "animal"]}
+
+
+def test_seed_writes_stars(tmp_path):
+    """characters.setup.stars = refs.json swap.stars: the database and the terminal know who replaces what (copy_drop's like
+    for like, the "Use for another character" menu); a character without a swap rule has none."""
+    store = MemoryStore()
+    seed.seed_characters(store, write_refs(tmp_path, refs(BISCUIT, swap=SWAP), REGINALD))
+    by = {c.slug: c for c in store.characters()}
+    assert by["biscuit"].setup["stars"] == ["dog", "animal"] and "stars" not in by["reginald"].setup
+    shipped = MemoryStore()
+    seed.seed_characters(shipped, seed.DEFAULT_CHARACTERS_DIR)
+    stars = {c.slug: c.setup["stars"] for c in shipped.characters()}
+    assert stars == {"biscuit": ["dog", "animal"], "franz": ["dog", "person"], "lenny": ["person"], "reginald": ["person"]}
+
+
+def test_the_swap_part_and_performance_line_load():
+    franz = {r["slug"]: r for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}["franz"]
+    assert franz["swap_part"] == "star" and 0 < len(franz["swap_performance"]) <= seed.SWAP_PERFORMANCE_MAX
+    assert "\n" not in franz["swap_performance"]
+
+
+@pytest.mark.parametrize(
+    ("over", "message"),
+    [
+        ({"swap_part": "lead"}, "swap_part must be one of cameo, featured, star"),
+        ({"swap_part": ""}, "swap_part must be one of cameo, featured, star"),
+        ({"swap_performance": ""}, "swap_performance must be one line of 1-200 characters"),
+        ({"swap_performance": "x" * 201}, "swap_performance must be one line of 1-200 characters"),
+        ({"swap_performance": "big grin\nthen a spin"}, "swap_performance must be one line of 1-200 characters"),
+        ({"swap_performance": ["grin"]}, "swap_performance must be one line of 1-200 characters"),
+    ],
+)
+def test_a_bad_swap_part_or_performance_line_is_refused(tmp_path, over, message):
+    store = MemoryStore()
+    with pytest.raises(ValueError, match=message):
+        seed.seed_characters(store, write_refs(tmp_path, refs(BISCUIT, swap=SWAP, **over)))
+    assert store.characters() == []
+    ok = refs(BISCUIT, swap=SWAP, swap_part="featured", swap_performance="x" * 200)
+    assert seed.load_refs(write_refs(tmp_path / "ok", ok))[0]["swap_part"] == "featured"
+
+
 FRANZ_KIT = {  # owner 2026-10-07: the happy show-off's "cream card, bold and bouncy"
     "pill": {"fill": "#F4EBDD", "fill_alpha": 255, "text": "#1F2A44", "font": "Figtree-Variable.ttf", "weight": "ExtraBold", "radius": 34},
     "entrance": "slam",

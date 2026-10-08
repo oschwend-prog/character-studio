@@ -49,6 +49,10 @@ and changes it (``apply_cadence``): ``--slot franz=19:00`` sets or adds a charac
 ``LAUNCH_DAYS``, the weeks 1-2 days), ``--days`` sets the days of those characters (or of every character: the week-3 switch is
 ``--days mon,tue,wed,thu,fri``), ``--drop`` removes a retired character's entry (its slot functions then refuse to schedule).
 
+**A clip's family** (terminal v3): one clip the owner dropped may be used by up to 3 characters (a drop and its versions,
+``drop.copy_of``). ``family_days`` gives the London days within 13 days either side of a post of another clip of the family, on
+any account; ``schedule_clip`` treats them as taken, so the family's posts are at least ``FAMILY_GAP_DAYS`` (14) apart.
+
 CLI (``studio plan today``) prints JSON on stdout; exit 0 even when nothing is due (the caller
 reads ``due`` and ``kill_switch``), exit 2 for a cadence the caller must fix.
 """
@@ -67,6 +71,7 @@ import typer
 from studio.budget import committed, month_key
 from studio.cli_support import emit, fail, open_store
 from studio.config import LONDON, now_london
+from studio.favorites import family_picks
 from studio.models import (
     DEFAULT_CADENCE,
     MUSIC_ARMS,
@@ -223,6 +228,47 @@ def taken_days(
         for post in store.list_posts(account_id=account_id):
             if post.status in TAKEN_STATUSES and post.clip_id != exclude_clip_id:
                 days.add((post.claimed_at or post.scheduled_for).astimezone(LONDON).date())
+    return days
+
+
+FAMILY_GAP_DAYS = 14  # terminal v3: the posts of one clip's family (a drop and its versions) are at least 14 days apart
+
+
+def family_days(store: Store, clip_id: str) -> set[date]:
+    """The London days the clip may not be posted on because of its family (terminal v3, spec section 4).
+
+    A drop's family is its root and the versions of it (``favorites.family_picks``: ``drop.copy_of``). Every post of another
+    clip of the family (a member's ``clip_id``, or a clip whose ``features.fav_id`` is a member) that holds a day
+    (``TAKEN_STATUSES``, dated like ``taken_days``: ``claimed_at``, else ``scheduled_for``, in London), on ANY account, takes
+    that day and the 13 days either side of it, so no two of the family's posts are less than ``FAMILY_GAP_DAYS`` apart. The
+    clip itself is left out (its own posts are ``taken_days``' business), and a skipped member's posts still count. A clip of
+    no family (or an unknown one) has none. ``schedule_clip`` adds them to its taken days; SQL ``studio.free_slot`` mirrors it.
+    """
+    clip = store.get_clip(clip_id)
+    if clip is None:
+        return set()
+    pick = None
+    fav_id = clip.features.get("fav_id")
+    if isinstance(fav_id, str) and fav_id:
+        pick = store.get_favorite(fav_id)
+    if pick is None:
+        pick = next(iter(store.list_favorites(clip_id=clip_id)), None)
+    if pick is None:
+        return set()
+    members = family_picks(store, pick)
+    if len(members) < 2:
+        return set()
+    member_ids = {m.id for m in members}
+    clip_ids = {m.clip_id for m in members if m.clip_id}
+    clip_ids |= {c.id for c in store.list_clips() if c.features.get("fav_id") in member_ids}
+    clip_ids.discard(clip_id)
+    near = range(-(FAMILY_GAP_DAYS - 1), FAMILY_GAP_DAYS)
+    days: set[date] = set()
+    for other in clip_ids:
+        for post in store.list_posts(clip_id=other):
+            if post.status in TAKEN_STATUSES:
+                day = (post.claimed_at or post.scheduled_for).astimezone(LONDON).date()
+                days.update(day + timedelta(days=k) for k in near)
     return days
 
 

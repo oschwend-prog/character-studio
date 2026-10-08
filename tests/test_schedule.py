@@ -22,13 +22,14 @@ from studio.models import (
     Character,
     Clip,
     ClipState,
+    Favorite,
     Mode,
     Platform,
     Post,
     PostStatus,
     Settings,
 )
-from studio.planning import free_slot, taken_days, upcoming_slot
+from studio.planning import FAMILY_GAP_DAYS, family_days, free_slot, taken_days, upcoming_slot
 from studio.store import MemoryStore
 
 S = ClipState
@@ -190,6 +191,77 @@ def test_taken_days_dates_a_post_by_claimed_at_else_its_slot_in_london():
     late = datetime(2026, 10, 7, 23, 30, tzinfo=timezone.utc)  # 00:30 BST on the 8th
     _post(store, tiktok, other, slot(6), PostStatus.posted, claimed_at=late)
     assert taken_days(store, [tiktok.id]) == {d(8)}
+
+
+# ---- the family of a clip (terminal v3): one clip used by up to 3 characters, their posts 14 days apart -----------------
+
+
+def family(store, *slugs, skipped=()):
+    """A root drop and its versions (``drop.copy_of``), one clip each: ``{slug: clip}``, the first slug the root's."""
+    root = store.add_favorite(Favorite(url=f"owner-drop:root-{slugs[0]}", platform="drop", origin="owner", status="made",
+                                       character_slug=slugs[0], proposal={"drop": {"state": "made"}}))
+    out = {}
+    for slug in slugs:
+        pick = root if slug == slugs[0] else store.add_favorite(Favorite(
+            url=f"owner-drop:{slugs[0]}-{slug}", platform="drop", origin="owner", status="skipped" if slug in skipped else "made",
+            character_slug=slug, proposal={"drop": {"state": "made", "copy_of": root.id}}))
+        clip = store.add_clip(Clip(character_slug=slug, mode=Mode.dropin, state=S.mastered, master_path=f"{slug}/m.mp4",
+                                   features={"fav_id": pick.id}))
+        store.update_favorite(pick.id, clip_id=clip.id)
+        out[slug] = clip
+    return out
+
+
+def test_family_days_block_13_days_either_side():
+    assert FAMILY_GAP_DAYS == 14
+    store = make_store()
+    reginald_tt = store.add_account(Account(character_slug="reginald", platform=Platform.tiktok, handle="@reg", postiz_integration_id="pz-r"))
+    clips_ = family(store, "reginald", "biscuit", "lenny")
+    _post(store, reginald_tt, clips_["reginald"], slot(20), PostStatus.posted)  # on another character's account: it counts
+    reginald_ig = store.add_account(Account(character_slug="reginald", platform=Platform.instagram, handle="@reg.ig"))
+    _post(store, reginald_ig, clips_["reginald"], slot(6), PostStatus.failed)  # a failed post never took a day
+    window = {d(20) + timedelta(days=k) for k in range(-13, 14)}
+    assert family_days(store, clips_["biscuit"].id) == window and len(window) == 27
+    assert d(20) - timedelta(days=14) not in window and d(20) + timedelta(days=14) not in window
+    assert family_days(store, clips_["reginald"].id) == set()  # the clip being scheduled: its own posts are no family
+    late = datetime(2026, 10, 8, 23, 30, tzinfo=timezone.utc)  # claimed 00:30 BST on the 9th: dated by claimed_at in London
+    _post(store, reginald_tt, clips_["lenny"], slot(8), PostStatus.posted, claimed_at=late)
+    assert family_days(store, clips_["biscuit"].id) == window | {d(9) + timedelta(days=k) for k in range(-13, 14)}
+    assert family_days(store, add_clip(store).id) == set()  # a clip of no family
+    assert family_days(store, "nope") == set()
+
+
+def test_family_days_count_a_skipped_members_posts_too():
+    """Skipped picks do not count towards the 3 characters, but a post is a post: its days stay taken for the family."""
+    store = make_store()
+    clips_ = family(store, "reginald", "biscuit", "lenny", skipped=("biscuit",))
+    tiktok = next(a for a in store.accounts("biscuit") if a.platform is Platform.tiktok)
+    other = family(store, "franz", "dj")  # another family: nothing to do with this one
+    _post(store, tiktok, other["franz"], slot(27), PostStatus.scheduled)
+    _post(store, tiktok, clips_["biscuit"], slot(13), PostStatus.scheduled)
+    assert family_days(store, clips_["lenny"].id) == {d(13) + timedelta(days=k) for k in range(-13, 14)}
+
+
+def test_schedule_skips_family_days():
+    store = make_store()
+    reginald_tt = store.add_account(Account(character_slug="reginald", platform=Platform.tiktok, handle="@reg", postiz_integration_id="pz-r"))
+    clips_ = family(store, "reginald", "biscuit")
+    _post(store, reginald_tt, clips_["reginald"], slot(6), PostStatus.scheduled)  # the root goes out on Tue 6 Oct
+    _, posts = schedule_clip(store, clips_["biscuit"].id, now=TUE)
+    assert {p.scheduled_for for p in posts} == {slot(20)}  # Tue 20 Oct: the first cadence day 14 days on
+    plain = add_clip(store)  # a clip of no family is not held back by them
+    _, posts = schedule_clip(store, plain.id, now=TUE)
+    assert {p.scheduled_for for p in posts} == {slot(6)}
+
+
+def test_an_explicit_at_may_land_inside_the_familys_two_weeks():
+    """The owner's own time is his choice, as on a taken day."""
+    store = make_store()
+    reginald_tt = store.add_account(Account(character_slug="reginald", platform=Platform.tiktok, handle="@reg", postiz_integration_id="pz-r"))
+    clips_ = family(store, "reginald", "biscuit")
+    _post(store, reginald_tt, clips_["reginald"], slot(6), PostStatus.scheduled)
+    _, posts = schedule_clip(store, clips_["biscuit"].id, at=slot(8), now=TUE)
+    assert {p.scheduled_for for p in posts} == {slot(8)}
 
 
 # ---- schedule_clip ---------------------------------------------------------------------------------

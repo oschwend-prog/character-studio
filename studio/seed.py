@@ -33,7 +33,12 @@
   picks the set for a swap: the master and the sheet of the star's body, then the close-up.
 * ``swap`` (optional) is the like-for-like rule of the Object swap: ``noun`` (what the prompt calls him: "butler", "dog") and
   ``stars`` (the kinds of star he may replace: ``person``, ``dog``, ``animal``). A person replaces a person and a dog a dog
-  (or a small animal), never a dog for a person (Genjutsu then inserts the dog and keeps the people).
+  (or a small animal), never a dog for a person (Genjutsu then inserts the dog and keeps the people). The seed copies ``stars``
+  into ``characters.setup.stars`` (terminal v3): the database's ``copy_drop`` and the terminal's "Use for another character"
+  menu read who replaces what there.
+* ``swap_part`` and ``swap_performance`` (optional, owner 2026-10-08, read by ``studio.drop`` from the file at Make it, not
+  seeded): his default part in an Object swap (``cameo``, ``featured`` or ``star``; the owner's Adjust still wins) and one line of
+  at most 200 characters on how he performs the moves, added to the SHORT swap prompt.
 * ``style`` (optional, Terminal v2 part C) is the character's kit: the caption ``pill`` (``studio.media.overlays.PillStyle``: colours,
   font from ``assets/fonts/``, case, tracking, border, tilt, shear, block), how it comes in (``entrance``), the edit on the hook
   (``hook_edit``) and the colour ``tone``. ``validate_style`` checks it (a bad hex, an unknown name or a missing font refuses the file);
@@ -105,6 +110,8 @@ TRAIT_PROPS_MAX = 12
 REFERENCE_URL_MAX = 2048
 SWAP_STARS = ("person", "dog", "animal")  # the kinds of star a drop can name (studio.drop reads the clip's star into one)
 SWAP_NOUN_MAX = 40
+SWAP_PARTS = ("cameo", "featured", "star")  # studio.drop.PARTS: how big his part in an Object swap is
+SWAP_PERFORMANCE_MAX = 200  # the Object swap prompt's one performance sentence (the prompt stays SHORT)
 # a character's style kit (Terminal v2, part C): how his caption pill comes in, the edit on the hook, the colour tone
 STYLE_KEYS = ("pill", "entrance", "hook_edit", "tone")
 STYLE_ENTRANCES = ("none", "fade_rise", "slam", "word_pop")
@@ -277,6 +284,16 @@ def _validate_ref(ref: Any, path: Path) -> dict[str, Any]:
             ok, path,
             f"swap must be {{noun: 1-{SWAP_NOUN_MAX} characters, stars: a list from {', '.join(SWAP_STARS)}}}, got {swap!r:.80}",
         )
+    perf = ref.get("swap_performance")
+    if perf is not None:
+        _require(
+            _is_str(perf) and len(perf.strip()) <= SWAP_PERFORMANCE_MAX and "\n" not in perf.strip(), path,
+            f"swap_performance must be one line of 1-{SWAP_PERFORMANCE_MAX} characters, got {perf!r:.60}",
+        )
+    if ref.get("swap_part") is not None:
+        _require(
+            ref["swap_part"] in SWAP_PARTS, path, f"swap_part must be one of {', '.join(SWAP_PARTS)}, got {ref['swap_part']!r:.40}"
+        )
     if "style" in ref:
         ref["style"] = validate_style(ref["style"], path)
 
@@ -332,6 +349,8 @@ def character_setup(ref: dict[str, Any]) -> dict[str, Any]:
         setup["traits"] = {k: ref["traits"][k] for k in (*TRAIT_TEXT_KEYS, *TRAIT_LIST_KEYS)}
     if ref.get("sheets") is not None:
         setup["sheets"] = dict(ref["sheets"])
+    if ref.get("swap"):
+        setup["stars"] = list(ref["swap"]["stars"])  # who he replaces: copy_drop's like for like in SQL, the terminal's menu
     return setup
 
 

@@ -8,6 +8,7 @@ block or a malformed answer fails loudly; a big file goes through the Files API 
 from __future__ import annotations
 
 import base64
+import dataclasses
 import json
 from pathlib import Path
 
@@ -580,3 +581,39 @@ def test_the_deconstruct_asks_when_text_or_a_watermark_is_on_screen():
     spans = {**GOOD, "burned_in_text": True, "burned_in_text_spans": [{"start_s": 4, "end_s": 6.123}, {"start_s": 0, "end_s": 2.5}]}
     assert deconstruct_problems(spans, REGINALD) == []
     assert gemini.tidy_deconstruct(spans, REGINALD)["burned_in_text_spans"] == [{"start_s": 0.0, "end_s": 2.5}, {"start_s": 4.0, "end_s": 6.12}]
+
+
+# ---- the balance of suggestions and fresh hooks (controller 2026-10-08: 17 of 19 suggested for Lenny, his hooks alike) ----------
+
+
+def test_the_roster_card_carries_the_ready_clips_and_the_rule_prefers_the_one_with_fewer():
+    crew = tuple(dataclasses.replace(c, ready_clips=n) for c, n in zip(CREW, (0, 2, 17)))
+    assert gemini.roster_card(crew[2]).endswith(" Ready clips: 17.")
+    assert gemini.roster_card(crew[0]).endswith("Gadgets: cool cap. Ready clips: 0.")
+    prompt = gemini.deconstruct_prompt(LENNY, crew)
+    assert "Ready clips: 17." in prompt and "Ready clips: 2." in prompt
+    assert "When two characters fit about as well, prefer the one with fewer ready clips." in prompt
+    plain = gemini.deconstruct_prompt(LENNY, CREW)  # not counted (no roster from the database): no count, no rule
+    assert "Ready clips" not in plain and "fewer ready clips" not in plain
+    assert gemini.roster_card(LENNY) == "- lenny: Lenny Gold, the Hollywood agent; replaces a person. Energy: . Comedy: . " \
+        "Settings: glass-walled corner office. Gadgets: ."
+
+
+def test_the_prompt_lists_the_angles_already_used():
+    used = [f"hook {i}" for i in range(12)]
+    prompt = gemini.deconstruct_prompt(REGINALD, used_hooks=used)
+    head = "Angles already used: take a different one (the latest hooks of Reginald's clips, newest first):"
+    assert head in prompt
+    block = prompt.split(head, 1)[1].split("\n\n", 1)[0].strip().splitlines()
+    assert block == [f"- hook {i}" for i in range(10)]  # at most 10, in the order given (newest first)
+    assert "Angles already used" not in gemini.deconstruct_prompt(REGINALD)
+    assert "Angles already used" not in gemini.deconstruct_prompt(REGINALD, used_hooks=["  ", ""])
+    messy = gemini.deconstruct_prompt(REGINALD, used_hooks=["  two\nlines  "])
+    assert "- two lines\n" in messy
+
+
+def test_the_deconstruct_sends_the_used_hooks(clip):
+    fake = Fake((200, answer(GOOD)))
+    deconstruct(client(fake), clip, REGINALD, used_hooks=["Breakfast is at eight."])
+    sent = json.loads(fake.requests[0].content)["contents"][0]["parts"][1]["text"]
+    assert "Angles already used" in sent and "- Breakfast is at eight." in sent

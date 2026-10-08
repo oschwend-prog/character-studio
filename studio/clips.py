@@ -42,7 +42,8 @@ those under their own share), and the clip moves to ``scheduled`` through ``tran
 transaction. The time is ``--at`` (the owner's choice, taken as given) or the **free slot**
 (``planning.free_slot``): the first cadence slot, from the character's ``upcoming_slot``, on a London day
 on which none of those accounts has a post in ``scheduled`` / ``posting`` / ``posted`` / ``needs_check``,
-so two clips for the same accounts never share a day. It refuses, writing nothing, for any other state,
+so two clips for the same accounts never share a day, and (terminal v3) none within 13 days of a post of another clip of the
+same family (``planning.family_days``: a drop and its versions, on any account). It refuses, writing nothing, for any other state,
 for a clip with no master file, for a character with no connected account, for a Drop-in no account may
 take, for a character with no slot or free day when no ``--at`` is given. A post that already exists for a
 (clip, account) is kept as it is, never duplicated, so a call that was cut short can simply be repeated.
@@ -85,7 +86,7 @@ from studio.captions import caption_length, compose_content
 from studio.cli_support import emit, fail, open_store, parse_when, text_option
 from studio.config import now_london
 from studio.models import MUSIC_ARMS, Clip, ClipState, Mode, Post, PostStatus
-from studio.planning import accounts_for_clip, free_slot, taken_days
+from studio.planning import accounts_for_clip, family_days, free_slot, taken_days
 from studio.store import DuplicatePost, Store, require_aware
 
 S = ClipState
@@ -348,7 +349,7 @@ def schedule_clip(
             )
         when = at if at is not None else free_slot(
             slug, now, store.get_settings().cadence,
-            taken_days(store, [a.id for a in accounts], exclude_clip_id=clip.id),
+            taken_days(store, [a.id for a in accounts], exclude_clip_id=clip.id) | family_days(store, clip.id),
         )  # fmt: skip
         posts: list[Post] = []
         for account in accounts:

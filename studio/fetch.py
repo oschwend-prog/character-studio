@@ -19,7 +19,8 @@ A Drop-in needs the actual video file. The owner allowed ``yt-dlp`` for it, with
   no usable source. The CLI exits 1 with that in its JSON. A failure of OUR Storage is not that: it is a ``StorageError``
   (exit 2) and the pick is left alone.
 * **Idempotent and shared**: a pick that already carries a live fetched source is not downloaded again, and the other
-  character's pick of the same video (the terminal's "Both") reuses the one download.
+  character's pick of the same video (the terminal's "Both") reuses the one download, as does a version of a drop (terminal
+  v3, ``studio.drop.copy_drop``: it shares the root's source and carries its fetched marker).
 
 ``purge_clip`` (``studio source purge --clip <id>``) deletes what was fetched once the clip's master is approved, scheduled
 or posted (or the clip was dropped): the local file, the Storage object of the fetched source and of the trimmed one made

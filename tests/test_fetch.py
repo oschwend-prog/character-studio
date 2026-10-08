@@ -507,3 +507,37 @@ def test_cli_purge_pending_and_the_one_of_rule(cli, clip_file):
     assert json.loads(run("purge", "--pending").stdout)["already"] is True
     assert run("purge").exit_code == 2  # neither
     assert run("purge", "--pending", "--clip", clip.id).exit_code == 2  # both
+
+
+# ---- a version of a drop (terminal v3): one clip, up to three characters, one download -------------------------------------------
+
+
+def test_source_kept_for_unmade_version(world, clip_file):
+    """A version shares its root's full clip (no second download): the clip stays while the version is still to be made, and
+    goes once the version is done too (the version carries the root's fetched marker, as the "Both" pick of a video does)."""
+    from studio import drop
+
+    store, storage, out_dir = world
+    store.add_character(Character(slug="lenny", name="Lenny Gold", status="live", bodies=[Body.biped]))
+    star = {"kind": "person", "body": "biped", "description": "the man in the grey suit", "x_center": 0.5, "full_body": True, "child": False}
+    root = approved_pick(store, slug="reginald", proposal={"drop": {"state": "checking", "kind": "link", "character_by": "owner"}})
+    fetch_pick_clip(store, storage, root.id, runner=FakeYtDlp(clip_file), out_dir=out_dir)
+    parent = store.list_sources()[-1]
+    child = sources.trim_source(store, storage, parent.id, 0.0, 4.0, file=out_dir / f"{root.id}.mp4")
+    root_clip = store.add_clip(Clip(character_slug="reginald", mode=Mode.dropin, state="posted", source_id=child.id))
+    root = store.get_favorite(root.id)
+    made = {**root.proposal["drop"], "state": "made", "star": star, "source_id": parent.id}
+    store.update_favorite(root.id, status="made", clip_id=root_clip.id, proposal={**root.proposal, "drop": made})
+
+    version = drop.copy_drop(store, root.id, "lenny")
+    assert version.source_id == parent.id and version.proposal["fetched"]["source_id"] == parent.id
+    assert fetch._still_needed(store, parent.id, store.get_favorite(root.id), root_clip.id) is True
+    first = purge_clip(store, storage, root_clip.id, fetched_dir=out_dir)
+    assert first["storage_kept"] == [parent.storage_path] and parent.storage_path in objects(storage)
+
+    v_child = sources.trim_source(store, storage, parent.id, 0.0, 4.0)
+    v_clip = store.add_clip(Clip(character_slug="lenny", mode=Mode.dropin, state="posted", source_id=v_child.id))
+    store.update_favorite(version.id, status="made", clip_id=v_clip.id)
+    assert fetch._still_needed(store, parent.id, store.get_favorite(version.id), v_clip.id) is False
+    second = purge_clip(store, storage, v_clip.id, fetched_dir=out_dir)
+    assert parent.storage_path in second["storage_deleted"] and objects(storage) == set()

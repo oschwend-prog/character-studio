@@ -927,6 +927,23 @@ def is_drop(proposal: Mapping[str, Any]) -> bool:
     return isinstance(proposal.get("drop"), Mapping)
 
 
+def family_root_id(pick: Favorite) -> str:
+    """The pick id of a drop's family root (terminal v3): ``drop.copy_of`` for a version of a drop, else the pick itself."""
+    d = pick.proposal.get("drop")
+    root = d.get("copy_of") if isinstance(d, Mapping) else None
+    return root if isinstance(root, str) and root else str(pick.id)
+
+
+def family_picks(store: Store, pick: Favorite) -> list[Favorite]:
+    """The root of ``pick``'s family and every version of it (``drop.copy_of`` = the root's id), whatever their status: the root
+    first, then the versions oldest first. A pick that is no family's is a family of one. ``studio.drop.family`` leaves the
+    skipped ones out (they never count towards the 3 characters); ``planning.family_days`` keeps them (a post is a post)."""
+    root = family_root_id(pick)
+    members = [f for f in store.list_favorites() if family_root_id(f) == root]
+    members.sort(key=lambda f: (f.id != root, f.created_at.timestamp() if f.created_at else 0.0, str(f.id)))
+    return members
+
+
 def next_favorites(store: Store, limit: int, character: str | None = None) -> list[Favorite]:
     """Up to ``limit`` picks ready to produce: ``approved`` or ``analysed``, oldest first.
 
