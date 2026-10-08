@@ -1173,6 +1173,62 @@ def test_blocked_drop_has_no_score(world, portrait):
     assert out.state == "failed" and "score" not in store.get_favorite(pid).proposal["drop"]
 
 
+def to_checking_keeping_the_score(store, pid, slug=None):
+    """What set_drop_character (migration 0013) writes: the owner's character, back to checking; it does not know the score."""
+    f = store.get_favorite(pid)
+    assert "score" in f.proposal["drop"]
+    store.update_favorite(pid, character_slug=slug or f.character_slug,
+                          proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": "checking", "character_by": "owner"}})
+
+
+def test_a_check_that_does_not_end_ready_leaves_no_old_score(world, portrait):
+    """A scored drop the owner moved to another character is checked again: blocked, failed or waiting for the key, it keeps
+    no score of the old look (only a check that ends ready has one)."""
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    to_checking_keeping_the_score(store, pid)
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(star=DOG_STAR)), now=NOW, job="t")
+    assert out.state == "blocked" and "score" not in store.get_favorite(pid).proposal["drop"]
+    pid = ready_drop(store, storage, portrait)
+    to_checking_keeping_the_score(store, pid)
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(GeminiError("HTTP 503")), now=NOW, job="t")
+    assert out.state == "failed" and "score" not in store.get_favorite(pid).proposal["drop"]
+    pid = ready_drop(store, storage, portrait)
+    to_checking_keeping_the_score(store, pid)
+    out = process_drop(store, storage, pid, gemini_client=None, now=NOW, job="t")
+    assert out.state == "checking" and "Gemini key" in out.reason and "score" not in store.get_favorite(pid).proposal["drop"]
+    pid = ready_drop(store, storage, portrait)
+    to_checking_keeping_the_score(store, pid)
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(RuntimeError("boom")), now=NOW, job="t")
+    assert out.state == "failed" and "the check stopped" in out.reason and "score" not in store.get_favorite(pid).proposal["drop"]
+
+
+def test_the_character_changing_on_every_look_leaves_no_old_score(world, portrait):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    to_checking_keeping_the_score(store, pid)
+
+    class OwnerKeepsTapping(FakeGemini):
+        def generate_json(self, *a, **kw):  # every look, the owner picks the other one (what set_drop_character writes)
+            f = store.get_favorite(pid)
+            other = "biscuit" if f.character_slug == "reginald" else "reginald"
+            store.update_favorite(pid, character_slug=other, proposal={**f.proposal, "drop": {**f.proposal["drop"], "character_by": "owner"}})
+            return super().generate_json(*a, **kw)
+
+    look = deconstruct(**BISCUIT_LOOK)
+    out = process_drop(store, storage, pid, gemini_client=OwnerKeepsTapping(*[look] * (drop.CHANGE_RESTARTS + 1)), now=NOW, job="t")
+    assert not out.ok and "the character changed during every look" in out.reason
+    assert "score" not in store.get_favorite(pid).proposal["drop"]
+
+
+def test_a_failed_make_keeps_its_score_for_try_again(world, portrait, gen_out):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)
+    out = make(store, storage, pid, FakeHF(gen_out, RequestStatus(status="nsfw", error="moderation")), FakeGemini())
+    assert out.state == "failed" and store.get_favorite(pid).proposal["drop"]["score"]["total"] == 78
+
+
 # ---- recheck: a ready drop checked again (free), never one the owner sent with Make it ------------------------------------------
 
 
@@ -1251,6 +1307,8 @@ def test_cli_drop_recheck_one_or_every_ready_drop(monkeypatch, tmp_path, portrai
     for args in ([], [a, "--all-ready"]):
         r = CliRunner().invoke(app, ["drop", "recheck", *args])
         assert r.exit_code == 2 and "a pick or --all-ready" in r.output
+    r = CliRunner().invoke(app, ["drop", "recheck", "--help"], env={"COLUMNS": "200"})
+    assert "scored or not" in r.output and "checked before the score" not in r.output  # it takes every ready drop without Make it
 
 
 # ---- Franz takes a person too (owner 2026-10-07: "franz not only replaces dogs") ------------------------------------------------

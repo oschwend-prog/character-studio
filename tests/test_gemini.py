@@ -215,6 +215,20 @@ def test_prompt_carries_hit_rules(tmp_path, monkeypatch):
     assert "What gets views now" not in gemini.deconstruct_prompt(REGINALD)
 
 
+def test_the_hit_rules_are_capped_at_20_lines_and_2000_characters(tmp_path, monkeypatch):
+    rules = tmp_path / "hit_rules.md"
+    monkeypatch.setattr(gemini, "HIT_RULES_PATH", rules)
+    rules.write_text("\n\n".join(f"- rule {n}" for n in range(1, 26)) + "\n", encoding="utf-8")  # 25 rules, blank lines between
+    got = gemini.hit_rules()
+    assert got.splitlines() == [f"- rule {n}" for n in range(1, 21)]  # the first 20 non-empty lines
+    rules.write_text("\n".join(f"- {n:02d} " + "x" * 196 for n in range(15)), encoding="utf-8")  # 15 lines of 200 characters
+    got = gemini.hit_rules()
+    assert len(got) <= gemini.HIT_RULES_MAX_CHARS and got.splitlines() == [f"- {n:02d} " + "x" * 196 for n in range(9)]  # whole lines
+    rules.write_text("y" * 3000, encoding="utf-8")  # one endless line: cut at the cap
+    assert gemini.hit_rules() == "y" * gemini.HIT_RULES_MAX_CHARS
+    assert (gemini.HIT_RULES_MAX_LINES, gemini.HIT_RULES_MAX_CHARS) == (20, 2000)
+
+
 def test_the_studios_hit_rules_file_is_short_and_seeded():
     text = gemini.HIT_RULES_PATH.read_text(encoding="utf-8")
     assert gemini.HIT_RULES_PATH == ROOT / "config" / "hit_rules.md"
@@ -223,15 +237,27 @@ def test_the_studios_hit_rules_file_is_short_and_seeded():
         assert part in text, part
 
 
-def test_the_prompt_asks_for_the_potential_and_steers_hooks_and_first_comment_by_the_hit_rules():
+RUBRIC = (
+    "the star moves in the first second and pays off by second 3", "a recognisable moment or a trend many people do",
+    "a hook that lands in one glance", "the clip's own sound is a rising trend sound", "not another creator's own character skit",
+)
+
+
+def potential_line(prompt: str) -> str:
+    return prompt.split("- potential:", 1)[1].split("\n\n", 1)[0]
+
+
+def test_the_prompt_asks_for_the_potential_and_steers_hooks_and_first_comment_by_the_hit_rules(tmp_path, monkeypatch):
     prompt = gemini.deconstruct_prompt(REGINALD)
-    assert "- potential: score = a whole number 0-10" in prompt
-    for part in (
-        "the star moves in the first second and pays off by second 3", "a recognisable moment or a trend many people do",
-        "a hook that lands in one glance", "the clip's own sound is a rising trend sound", "not another creator's own character skit",
-    ):
-        assert part in prompt, part
-    assert f"reason = the one thing that decides it, one line of at most {gemini.REASON_MAX} characters" in prompt
+    line = potential_line(prompt)
+    assert line.startswith(" score = a whole number 0-10")
+    assert 'judged by the rules under "What gets views now" below' in line  # one rubric: the owner's file
+    assert not any(part in line for part in RUBRIC) and "What gets views now (" in prompt
+    assert f"reason = the one thing that decides it, one line of at most {gemini.REASON_MAX} characters" in line
+    monkeypatch.setattr(gemini, "HIT_RULES_PATH", tmp_path / "missing.md")  # no rules file: the built-in rubric
+    line = potential_line(gemini.deconstruct_prompt(REGINALD))
+    assert "What gets views now" not in line and all(part in line for part in RUBRIC)
+    monkeypatch.undo()
     hooks = prompt.split("- hooks:", 1)[1].split("\n- caption:", 1)[0]
     assert "at most 7 words" in hooks and "ONE claim the clip proves within its first 3 seconds" in hooks
     assert "one of the three names it" in hooks and "TRUE to what happens in this clip" in hooks  # the old rules stay

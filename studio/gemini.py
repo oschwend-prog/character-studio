@@ -25,9 +25,10 @@ person, whenever the roster has one), the reason is one concrete line of at most
 
 **What gets views now** (terminal v3, spec section 3). The deconstruct also rates the clip's ``potential`` (a whole score 0-10
 and a one-line reason of at most ``REASON_MAX`` characters: how likely this clip, with our character swapped in, gets views),
-by a rubric in the prompt. The studio's current hit rules (``config/hit_rules.md``, owner-editable, at most 20 lines;
-``hit_rules``) go into the prompt under "What gets views now" and steer that score, the hooks and the first comment; without
-the file there is no such block. ``studio.drop.drop_score`` turns the potential into the clip's score.
+judged by the studio's current hit rules (``config/hit_rules.md``, owner-editable; ``hit_rules`` reads its first 20 non-empty
+lines, at most 2,000 characters), which go into the prompt under "What gets views now" and steer that score, the hooks and the
+first comment. Without the file there is no such block and the potential is judged by ``POTENTIAL_RUBRIC`` instead.
+``studio.drop.drop_score`` turns the potential into the clip's score.
 
 **One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 42, a hashtag list that is
 not 3-5 tags), the same request is made once more with the problems appended to the prompt; a second miss raises
@@ -92,6 +93,14 @@ SPANS_MAX = 12  # moments with text or a watermark on screen (owner 2026-10-06: 
 SPAN_KEYS = ("watermark_spans", "burned_in_text_spans")
 POTENTIAL_MAX = 10  # the clip's potential, a whole score 0-10 (terminal v3)
 HIT_RULES_PATH = Path(__file__).resolve().parents[1] / "config" / "hit_rules.md"  # the owner's "What gets views now"
+HIT_RULES_MAX_LINES = 20  # what of the file goes into the prompt: its first 20 non-empty lines, at most 2,000 characters
+HIT_RULES_MAX_CHARS = 2000
+# the potential's rubric when there is no rules file (spec section 3); with one, the prompt points at its rules instead
+POTENTIAL_RUBRIC = (
+    "the star moves in the first second and pays off by second 3; a recognisable moment or a trend many people do; a hook that "
+    "lands in one glance; the clip's own sound is a rising trend sound; not another creator's own character skit (that one "
+    "scores low whatever else it has)"
+)
 
 
 class GeminiError(RuntimeError):
@@ -487,11 +496,18 @@ DECONSTRUCT_SCHEMA: dict[str, Any] = {
 
 
 def hit_rules() -> str:
-    """The studio's current hit rules (``HIT_RULES_PATH``, the owner's file), trimmed; "" when there is no such file."""
+    """The studio's current hit rules (``HIT_RULES_PATH``, the owner's file): its first ``HIT_RULES_MAX_LINES`` non-empty lines,
+    cut to whole lines within ``HIT_RULES_MAX_CHARS`` characters (one longer line is cut at the cap); "" when there is no file."""
     try:
-        return HIT_RULES_PATH.read_text(encoding="utf-8").strip()
+        text = HIT_RULES_PATH.read_text(encoding="utf-8")
     except FileNotFoundError:
         return ""
+    out = "\n".join(line.rstrip() for line in text.splitlines() if line.strip())
+    out = "\n".join(out.splitlines()[:HIT_RULES_MAX_LINES])
+    if len(out) > HIT_RULES_MAX_CHARS:
+        cut = out[:HIT_RULES_MAX_CHARS]
+        out = cut[: cut.rfind("\n")] if "\n" in cut else cut
+    return out.strip()
 
 
 def crew_of(c: Character, roster: Sequence[Character] = ()) -> tuple[Character, ...]:
@@ -520,8 +536,9 @@ def deconstruct_prompt(c: Character, roster: Sequence[Character] = ()) -> str:
     """Our prompt for the deconstruct of a dropped clip (see the module doc); ``roster`` = the characters it may recommend."""
     crew = crew_of(c, roster)
     stars = " or ".join(STAR_WORDS[s] for s in c.stars)
-    rules = hit_rules()  # no file, no heading
+    rules = hit_rules()  # no file, no heading (and the built-in rubric for the potential)
     views = f"What gets views now (the studio's hit rules: they steer potential, hooks and first_comment):\n{rules}\n\n" if rules else ""
+    rubric = 'judged by the rules under "What gets views now" below' if rules else f"judged by these: {POTENTIAL_RUBRIC}"
     return f"""You are the analyst of ODD EYES, a studio of AI characters. The owner dropped this clip to be remade with {c.name}, \
 the {c.noun} of our reference images: Higgsfield's Object swap keeps the clip's setting, camera, timing and sound and replaces its \
 star with {c.name}. The swap is like for like: {c.name} replaces {stars}, nothing else.
@@ -560,10 +577,8 @@ word, one line of at most {FIRST_COMMENT_MAX} characters.
 {", ".join(r.slug for r in crew)}; reason = why him, one concrete line of at most {REASON_MAX} characters naming what in the clip \
 fits him ("gym setting: Reginald's sweatband gag"). Like for like is a hard rule: a dog star goes to a character who replaces a \
 dog, a person to one who replaces a person; among those, the one whose energy, comedy, settings and gadgets fit this clip best.
-- potential: score = a whole number 0-10, how likely this clip, with our character swapped in, gets views: the star moves in \
-the first second and pays off by second 3; a recognisable moment or a trend many people do; a hook that lands in one glance; \
-the clip's own sound is a rising trend sound; not another creator's own character skit (that one scores low whatever else it \
-has). 0 = none of these, 10 = all of them, strongly. reason = the one thing that decides it, one line of at most {REASON_MAX} \
+- potential: score = a whole number 0-10, how likely this clip, with our character swapped in, gets views, {rubric}. 0 = it \
+meets none of them, 10 = all of them, strongly. reason = the one thing that decides it, one line of at most {REASON_MAX} \
 characters ("a classic everyone knows, moving from frame one").
 
 {views}Our characters (for recommended):

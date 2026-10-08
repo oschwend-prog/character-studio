@@ -215,6 +215,13 @@ def _update(store: Store, pick: Favorite, now: datetime, *, status: str | None =
     return mark_favorite(store, pick.id, status or current.status, proposal={**current.proposal, "drop": drop})
 
 
+def _unready(store: Store, pick: Favorite, now: datetime, **drop_changes: Any) -> Favorite:
+    """``_update`` for a check that does not end ``ready`` (blocked, failed, waiting, still checking): the drop keeps no
+    ``score`` (an older check's, or another character's: the owner's menu moves a scored drop back to checking with it). A
+    failed MAKE goes through ``_update`` and keeps its score for Try again."""
+    return _update(store, pick, now, score=None, **drop_changes)
+
+
 # ---- one run per pick ------------------------------------------------------------------------------------------------------
 
 
@@ -770,7 +777,7 @@ def _get_source(store: Store, storage: Storage, pick: Favorite, now: datetime, r
         try:
             return sources.ingest_owner_clip(store, storage, pick.id)
         except ValueError as e:
-            pick = _update(store, pick, now, state="blocked", reason=str(e))
+            pick = _unready(store, pick, now, state="blocked", reason=str(e))
             return Outcome(pick.id, "blocked", str(e))
     if pick.platform == DROP_PLATFORM:
         return Outcome(pick.id, drop_of(pick)["state"], "the upload has not finished", detail={"waiting_for": "upload"})
@@ -778,7 +785,7 @@ def _get_source(store: Store, storage: Storage, pick: Favorite, now: datetime, r
         result = fetch.fetch_pick_clip(store, storage, pick.id, runner=runner, fall_back=False)
     except fetch.FetchFailed as e:
         reason = f"the link could not be fetched in the cloud ({str(e)[:120]}): the Mac's daily run tries again"
-        _update(store, pick, now, state="waiting", reason=reason)
+        _unready(store, pick, now, state="waiting", reason=reason)
         return Outcome(pick.id, "waiting", reason)
     return _source(store, result["source_id"])
 
@@ -867,13 +874,13 @@ def process_drop(
                 if deconstruct_answer is not None:
                     raise DropError("the owner chose another character during the check: write the deconstruct for him") from None
         reason = "the character changed during every look: the next run checks it again"
-        fresh = _update(store, store.get_favorite(pick_id), now, reason=reason)
+        fresh = _unready(store, store.get_favorite(pick_id), now, reason=reason)
         return Outcome(pick_id, drop_of(fresh)["state"], reason, ok=False)
     except (DropError, StorageError):
         raise
     except Exception as e:
         reason = f"the check stopped: {type(e).__name__}: {str(e)[:160]}"
-        _update(store, store.get_favorite(pick_id), now, state="failed", reason=reason)
+        _unready(store, store.get_favorite(pick_id), now, state="failed", reason=reason)
         return Outcome(pick_id, "failed", reason, ok=False)
     finally:
         release(store, pick_id, job)
@@ -899,17 +906,17 @@ def _process(
             report = probe(local, loudness=False)
         except QAError as e:
             reason = f"not a readable video: {str(e)[:120]}"
-            _update(store, pick, now, state="blocked", reason=reason, source_id=src.id)
+            _unready(store, pick, now, state="blocked", reason=reason, source_id=src.id)
             return Outcome(pick.id, "blocked", reason)
         if report.duration_s < MASTER_MIN_S - SLACK_S:
             reason = f"the video is {report.duration_s:.1f} s: a video needs at least {MASTER_MIN_S:g} s"
-            _update(store, pick, now, state="blocked", reason=reason, source_id=src.id)
+            _unready(store, pick, now, state="blocked", reason=reason, source_id=src.id)
             return Outcome(pick.id, "blocked", reason)
         try:
             free = analyze_clip(local, work / "analysis.png")
         except AnalysisError as e:
             reason = f"the video could not be analysed: {e}"
-            _update(store, pick, now, state="blocked", reason=reason, source_id=src.id)
+            _unready(store, pick, now, state="blocked", reason=reason, source_id=src.id)
             return Outcome(pick.id, "blocked", reason)
         basics = {
             "source_id": src.id, "duration_s": round(report.duration_s, 3), "width": report.width, "height": report.height,
@@ -929,7 +936,7 @@ def _process(
                 slug, ref, who = target, ref_t, who_t
         elif client is None:
             reason = "waiting for the Gemini key: the next daily run looks at it by hand"
-            _update(store, pick, now, state="checking", reason=reason, **basics)
+            _unready(store, pick, now, state="checking", reason=reason, **basics)
             return Outcome(pick.id, "checking", reason, detail={**basics, "best_window": free["best_window"]})
         else:
             proxy = clipwork.proxy_clip(local, work / "proxy.mp4")
@@ -943,11 +950,11 @@ def _process(
                     look = gemini.deconstruct(client, proxy, who, crew)  # once more, his hooks and caption (free)
             except gemini.GeminiBlocked as e:
                 reason = f"Gemini would not look at this clip ({e}): we cannot use it"
-                _update(store, _still(store, pick.id, slug), now, state="blocked", reason=reason, **basics)
+                _unready(store, _still(store, pick.id, slug), now, state="blocked", reason=reason, **basics)
                 return Outcome(pick.id, "blocked", reason)
             except gemini.GeminiError as e:
                 reason = f"the look at the clip failed ({str(e)[:140]}): tap Try again"
-                _update(store, _still(store, pick.id, slug), now, state="failed", reason=reason, **basics)
+                _unready(store, _still(store, pick.id, slug), now, state="failed", reason=reason, **basics)
                 return Outcome(pick.id, "failed", reason, ok=False)
         pick = _still(store, pick.id, slug)
         sources.record_checks(  # anywhere in the clip: the section's own flags are set when it is cut (_child)
@@ -967,7 +974,7 @@ def _process(
             except NoCleanSection:
                 blocked = _unclean_reason(avoid, pick.platform != DROP_PLATFORM)
         if blocked is not None:
-            _update(store, pick, now, state="blocked", reason=blocked, **basics, star=look["star"], recommended=recommended, avoid=avoid)
+            _unready(store, pick, now, state="blocked", reason=blocked, **basics, star=look["star"], recommended=recommended, avoid=avoid)
             return Outcome(pick.id, "blocked", blocked, detail={"character": slug, "recommended": recommended})
         crop_x = crop_for(report.width, report.height, look["star"]["x_center"])
         credits = estimate_credits(Mode.dropin, window["length_s"], MUSIC)
@@ -1588,7 +1595,7 @@ def process_command(
 def recheck_command(
     pick: Annotated[str | None, typer.Argument(help="A ready drop's pick id.")] = None,
     all_ready: Annotated[
-        bool, typer.Option("--all-ready", help="Every ready drop without the owner's Make it (the ones checked before the score).")
+        bool, typer.Option("--all-ready", help="Every ready drop without the owner's Make it, scored or not.")
     ] = False,
 ) -> None:
     """Check ready drops again for free (the score, the current hit rules): each goes back to checking for the cloud sweep. Prints
