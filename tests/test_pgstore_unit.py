@@ -355,7 +355,7 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
     proto_methods = [
         n for n, v in inspect.getmembers(Store, inspect.isfunction) if not n.startswith("_")
     ]
-    assert len(proto_methods) == 32  # 31 data methods + transaction()
+    assert len(proto_methods) == 36  # 35 data methods (4 for the hits of migration 0016) + transaction()
     for name in proto_methods:
         expected = inspect.signature(getattr(Store, name))
         for impl in (MemoryStore, PostgresStore):
@@ -533,3 +533,49 @@ def test_list_reviews_orders_by_week_then_character(db):
     assert '"character_slug" = %s' in query and params == ["biscuit"]
     assert query.endswith('order by "week", "character_slug", "id"')
     assert got[0].week == WEEK and isinstance(got[0].id, str)
+
+
+# ---- hits (migration 0016) ----------------------------------------------------------------------------------------------------
+
+
+def hit_row(**over):
+    row = {
+        "id": uuid.uuid4(), "platform": "tiktok", "url": "https://www.tiktok.com/@a/video/1", "creator_handle": "@a",
+        "followers": 50, "views": 900, "likes": 10, "comments": None, "shares": None, "saves": None, "posted_at": NOW,
+        "caption": "c", "sound": None, "duration_s": 12.5, "thumbnail_url": None, "keyword": "dog dance", "character_slug": "franz",
+        "reach": 18.0, "score": 70, "status": "new", "created_at": NOW, "last_seen": NOW,
+    }  # fmt: skip
+    return row | over
+
+
+def test_upsert_hit_is_one_insert_on_conflict_on_the_url_that_never_touches_status_or_first_seen(db):
+    from studio.models import Hit
+
+    db.queue([{**hit_row(), "inserted": False}])
+    got, created = PostgresStore(DSN).upsert_hit(Hit(platform="tiktok", url="https://www.tiktok.com/@a/video/1", views=900, score=70,
+                                                     created_at=NOW, last_seen=NOW))  # fmt: skip
+    assert len(db.statements) == 1
+    query, params = db.statements[0]
+    assert query.startswith('insert into "studio"."hits" as h (')
+    assert 'on conflict ("url") do update set' in query and "returning" in query and "(xmax = 0) as inserted" in query
+    for col in ("followers", "views", "likes", "comments", "shares", "saves", "posted_at", "caption", "sound", "duration_s", "thumbnail_url"):
+        assert f'"{col}" = coalesce(excluded."{col}", h."{col}")' in query, col  # a number the API left out is kept
+    for col in ("character_slug", "keyword"):
+        assert f'"{col}" = coalesce(h."{col}", excluded."{col}")' in query, col  # who found it first stays
+    for col in ("reach", "score", "last_seen"):
+        assert f'"{col}" = excluded."{col}"' in query, col
+    sets = query.split("do update set", 1)[1].split(" returning ", 1)[0]
+    assert '"status"' not in sets and '"created_at"' not in sets and '"id"' not in sets
+    assert "tiktok" in params and 900 in params  # bound, never pasted
+    assert created is False and isinstance(got, Hit) and got.id and got.platform.value == "tiktok" and got.reach == 18.0
+
+
+def test_list_and_update_hits_bind_their_values(db):
+    db.queue([hit_row()], [hit_row(status="dismissed")])
+    store = PostgresStore(DSN)
+    assert [h.url for h in store.list_hits(status="new")] == ["https://www.tiktok.com/@a/video/1"]
+    query, params = db.statements[0]
+    assert '"status" = %s' in query and params == ["new"] and 'order by "created_at", "id"' in query
+    hid = str(uuid.uuid4())
+    assert store.update_hit(hid, status="dismissed").status == "dismissed"
+    assert db.statements[1][0].startswith('update "studio"."hits" set "status" = %s where id = %s')

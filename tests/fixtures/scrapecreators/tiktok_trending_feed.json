@@ -1,0 +1,66 @@
+{
+  "success": true,
+  "credits_remaining": 1000000,
+  "credits_charged": 1,
+  "aweme_list": [
+    {
+      "aweme_id": "7540000301621841183",
+      "desc": "#hudsonvalley #fallgetaway #farm #upstateny #resort ",
+      "region": "US",
+      "statistics": {
+        "aweme_id": "7540000301621841183",
+        "comment_count": 646,
+        "digg_count": 71423,
+        "download_count": 130,
+        "play_count": 1443873,
+        "share_count": 8440,
+        "forward_count": 0,
+        "lose_count": 0,
+        "lose_comment_count": 0,
+        "whatsapp_share_count": 37,
+        "collect_count": 21957,
+        "repost_count": 0
+      },
+      "video": {
+        "cover": {
+          "url_list": [
+            "https://p19-pu-sign-useast8.tiktokcdn-us.com/tos-useast8-i-photomode-tx2/3a1c4f9217414c3c95dd8d25c2dd8d13~tplv-photomode-image-cover:640:0:q70.webp?dr=12229&refresh_token=df32aa50&x-expires=1757545200&x-signature=zurwCGa5E9ieLV%2FaQHxx19%2FvpJY%3D&t=5897f7ec&ps=d5b8ac02&shp=d05b14bd&shcp=1a816805&idc=useast5&s=FEED&biz_tag=tt_photomode&sc=cover"
+          ],
+          "height": 853,
+          "width": 640,
+          "uri": "tos-useast8-i-photomode-tx2/3a1c4f9217414c3c95dd8d25c2dd8d13"
+        },
+        "play_addr": {
+          "url_list": [
+            "https://v16m.tiktokcdn-us.com/55f0fa91eb07f93e6cc97b69cf44bd28/68b782c0/video/tos/useast5/tos-useast5-ve-27dcd7c799-tx/ocTKSt6SBoLEzYiMEvPhB7Ak7g1fI9ZDxCOqp8/?a=1233&bti=OHYpOTY0Zik3OjlmOm01MzE6ZDQ0MDo%3D&ch=0&cr=0&dr=0&er=0&lr=default&cd=0%7C0%7C0%7C0&br=124&bt=62&ft=arR-Iq4fmbdPD1250i5T3wUk~i~AMeF~O5&mime_type=audio_mpeg&qs=3&rc=NTQ3O2hnOzo1NjU6NGRoaUBpMzV2M2k6ZnduaDMzNzU8M0AvMy8yMzVeNjIxNC9hYjQvYSM2L3FpcjRvYmtgLS1kMTZzcw%3D%3D&vvpl=1&l=20250826234818FC500F9F5A67BF1C488E&btag=e00088000&shp=d05b14bd&shcp=-"
+          ],
+          "height": 720,
+          "width": 720,
+          "uri": "https://v16m.tiktokcdn-us.com/55f0fa91eb07f93e6cc97b69cf44bd28/68b782c0/video/tos/useast5/tos-useast5-ve-27dcd7c799-tx/ocTKSt6SBoLEzYiMEvPhB7Ak7g1fI9ZDxCOqp8/?a=1233&bti=OHYpOTY0Zik3OjlmOm01MzE6ZDQ0MDo%3D&ch=0&cr=0&dr=0&er=0&lr=default&cd=0%7C0%7C0%7C0&br=124&bt=62&ft=arR-Iq4fmbdPD1250i5T3wUk~i~AMeF~O5&mime_type=audio_mpeg&qs=3&rc=NTQ3O2hnOzo1NjU6NGRoaUBpMzV2M2k6ZnduaDMzNzU8M0AvMy8yMzVeNjIxNC9hYjQvYSM2L3FpcjRvYmtgLS1kMTZzcw%3D%3D&vvpl=1&l=20250826234818FC500F9F5A67BF1C488E&btag=e00088000&shp=d05b14bd&shcp=-"
+        }
+      },
+      "image_post_info": {
+        "images": [
+          {
+            "display_image": {
+              "url_list": [
+                "https://p19-pu-sign-useast8.tiktokcdn-us.com/tos-useast8-i-photomode-tx2/3a1c4f9217414c3c95dd8d25c2dd8d13~tplv-photomode-sr-vqe2:1080:0:1080:0:q75.webp?dr=10952&refresh_token=0efd0e37&x-expires=1757545200&x-signature=uEKcmDy5CeI9%2BCTYKvVleyhFFfc%3D&t=5897f7ec&ps=28cf8ac7&shp=d05b14bd&shcp=1a816805&idc=useast5&s=FEED&biz_tag=tt_photomode&sc=image"
+              ],
+              "width": 1080,
+              "height": 1440
+            }
+          }
+        ],
+        "title": "The most perfect fall getaway for the day or the night! 🍂"
+      },
+      "author": {
+        "uid": "6754760670083138566",
+        "nickname": "Bre 🤍"
+      },
+      "create_time": 1755543133,
+      "create_time_utc": "2025-08-18T18:52:13.000Z",
+      "is_ad": false,
+      "url": "https://www.tiktok.com/@breannafriedman0/photo/7540000301621841183"
+    }
+  ]
+}

@@ -20,6 +20,22 @@
     "watches_per_character": 0,
     "_note": "One Instagram + TikTok outlier search each weekday (5 credits a call) = 25 a week, about 108 a month of the 150-credit plan. No watches: `breakdowns_per_week` and `watches_per_character` are 0 because the free local `bin/studio source analyze` of an approved pick's clip replaces the vidIQ breakdown. The search is skipped when vidiq_balance is under `balance_floor` (the run logs `vidiq: skipped, balance N, refills <date>`)."
   },
+  "hits": {
+    "_doc": "The cloud hits job (terminal v3 spec section 10; .github/workflows/studio-hits.yml, daily 06:30 London): `studio hits pull` asks ScrapeCreators' API (metadata only: no Mac, no browser, no download) for each live character's `keywords` (at most 3) on TikTok (this week, most liked) and Instagram (last week), plus the general lane: TikTok's trending feed in `general.tiktok_regions`, Instagram's trending reels, and the broad `general.keywords` on TikTok by likes this week (no character filter: any character may take a general hit). The run stops when the credits charged reach `daily_credit_cap` (each call usually costs 1). Then the best new hits are filed as drops: at most `auto_file_per_character` a day per live character and `auto_file_general` from the general lane. studio/hits.py reads this block.",
+    "daily_credit_cap": 25,
+    "auto_file_per_character": 3,
+    "auto_file_general": 3,
+    "keywords": {
+      "franz": ["dog dance", "dachshund", "dog trend"],
+      "reginald": ["dance trend", "deadpan dance", "butler"],
+      "lenny": ["boss on the phone", "office dance", "dance challenge"]
+    },
+    "general": {
+      "keywords": ["viral dance", "dance trend", "trend challenge", "funny dance"],
+      "tiktok_regions": ["GB", "US"],
+      "instagram_trending": true
+    }
+  },
   "tier_rules": {
     "_doc": "The category (tier) of a pick the analyst did not tier, in this order; the first rule that holds wins. A pick with an explicit proposal.tier keeps it. studio/favorites.py TIER_RULES and terminal/src/lib/scanConfig.ts must equal these numbers (tests pin both). age = days since posted_at (or the scan's age_days); velocity = views per day since posting (the stored proposal.velocity, else views / max(age, velocity_min_age_days)). An unknown age is viral_now.",
     "iconic_min_age_days": 180,

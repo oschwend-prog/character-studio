@@ -1866,3 +1866,107 @@ def test_a_resumed_make_tags_the_hook_it_renders(world, portrait, gen_out, fast_
     assert (f["hook_text"], f["hook_pattern"], f["hook_index"], f["hook_by"]) == (
         "Breakfast is at eight.", "false-premise", 2, "owner")
     assert clips.learn_problems(f) == [] and f["length_bucket"] == "under_8"  # the rest of the tags kept
+
+
+# ---- a link the cloud cannot fetch: ScrapeCreators' single-post copy (owner 2026-10-07; plan Task 6) --------------------------------
+
+
+class FakeMedia:
+    """``studio.hits.ScrapeCreators.download_post`` stand-in (no network): the clip for the ONE post, or an error."""
+
+    def __init__(self, clip=None, error=None):
+        self.clip, self.error, self.calls = clip, error, []
+
+    def download_post(self, url, platform, dest):
+        self.calls.append((url, platform))
+        if self.error is not None:
+            raise self.error
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self.clip, dest)
+        return {"credits": 10, "media_url": "https://media.example/clip.mp4", "bytes": Path(dest).stat().st_size}
+
+
+def blocked_ytdlp(cmd):
+    return subprocess.CompletedProcess(cmd, 1, "", "ERROR: [TikTok] login required")
+
+
+def test_a_link_yt_dlp_cannot_fetch_is_checked_from_scrapecreators_copy(world, portrait):
+    store, storage = world
+    pick, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    media = FakeMedia(portrait)
+    out = process_drop(store, storage, pick.id, gemini_client=FakeGemini(deconstruct()), runner=blocked_ytdlp, now=NOW, job="t",
+                       media_fallback=media)  # fmt: skip
+    assert out.state == "ready", out
+    assert media.calls == [(TIKTOK, "tiktok")]
+    f = store.get_favorite(pick.id)
+    assert f.proposal["fetched"]["via"] == "scrapecreators" and f.source_id == f.proposal["drop"]["source_id"]
+    (Path(drop.fetch.FETCHED_DIR) / f"{pick.id}.mp4").unlink(missing_ok=True)
+
+
+def test_without_the_key_a_link_waits_as_before_and_when_both_fail_it_waits_with_both_reasons(world):
+    from studio.hits import ScrapeCreatorsError
+
+    store, storage = world
+    pick, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    out = process_drop(store, storage, pick.id, gemini_client=FakeGemini(), runner=blocked_ytdlp, now=NOW, job="t")
+    assert out.state == "waiting" and "login required" in out.reason and "ScrapeCreators" not in out.reason
+    media = FakeMedia(error=ScrapeCreatorsError("ScrapeCreators answered HTTP 404: post not found", 404))
+    out = process_drop(store, storage, pick.id, gemini_client=FakeGemini(), runner=blocked_ytdlp, now=NOW, job="t", media_fallback=media)
+    f = store.get_favorite(pick.id)
+    assert out.state == f.proposal["drop"]["state"] == "waiting" and media.calls == [(TIKTOK, "tiktok")]
+    assert "login required" in out.reason and "ScrapeCreators" in out.reason and "404" in out.reason
+    assert out.reason.endswith("the Mac's daily run tries again") and f.proposal.get("mode") != "recreate"
+
+
+def test_the_cloud_jobs_hand_the_check_the_scrapecreators_key_from_the_environment(monkeypatch, tmp_path):
+    from studio import hits
+
+    store, storage = make_store(), LocalStorage(tmp_path / "s")
+    pick, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: storage)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: None))
+    monkeypatch.setattr(drop.HiggsfieldClient, "from_env", classmethod(lambda cls, env=None, **kw: None))
+    seen = []
+    sentinel = FakeMedia(error=hits.ScrapeCreatorsError("no", 404))
+    monkeypatch.setattr(hits.ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: sentinel))
+
+    def fake_process(store_, storage_, pick_id, **kw):
+        seen.append(kw.get("media_fallback"))
+        return drop.Outcome(pick_id, "waiting", "x")
+
+    monkeypatch.setattr(drop, "process_drop", fake_process)
+    assert CliRunner().invoke(app, ["drop", "process", pick.id]).exit_code == 0
+    assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 0
+    assert seen == [sentinel, sentinel]
+
+
+# ---- the hits job's tag and the owner's Keep (plan Task 6) ------------------------------------------------------------------------------
+
+
+def test_a_version_of_an_auto_filed_clip_carries_the_tag(world):
+    store, _ = world
+    with_lenny_and_franz(store)
+    root = checked(store, auto_filed=True)
+    v = drop.copy_drop(store, root.id, "lenny", now=NOW)
+    assert v.proposal["drop"]["auto_filed"] is True
+    plain = checked(store)
+    assert "auto_filed" not in drop.copy_drop(store, plain.id, "lenny", now=NOW).proposal["drop"]
+
+
+def test_keep_is_the_owners_toggle_on_any_drop(world, monkeypatch):
+    store, _ = world
+    pick = checked(store)
+    assert drop.set_keep(store, pick.id, True).proposal["drop"]["keep"] is True
+    assert drop.set_keep(store, pick.id, False).proposal["drop"]["keep"] is False
+    plain = store.add_favorite(Favorite(url="https://www.tiktok.com/@x/video/1", platform="tiktok", character_slug="reginald"))
+    with pytest.raises(DropError):
+        drop.set_keep(store, plain.id, True)
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    r = CliRunner().invoke(app, ["drop", "keep", pick.id])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == {"pick_id": pick.id, "keep": True} and store.get_favorite(pick.id).proposal["drop"]["keep"] is True
+    r = CliRunner().invoke(app, ["drop", "keep", pick.id, "--off"])
+    assert r.exit_code == 0 and store.get_favorite(pick.id).proposal["drop"]["keep"] is False
+    assert CliRunner().invoke(app, ["drop", "keep", plain.id]).exit_code == 2
+    assert CliRunner().invoke(app, ["drop", "keep", "nope"]).exit_code == 2

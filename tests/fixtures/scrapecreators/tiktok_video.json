@@ -1,0 +1,65 @@
+{
+  "success": true,
+  "credits_remaining": 1000000,
+  "credits_charged": 1,
+  "aweme_detail": {
+    "aweme_id": "7517114944362499342",
+    "desc": "You can say whatever you want about the WNBA is but it’s never boring",
+    "region": "US",
+    "statistics": {
+      "aweme_id": "7517114944362499342",
+      "collect_count": 1633,
+      "comment_count": 618,
+      "digg_count": 62522,
+      "download_count": 190,
+      "forward_count": 0,
+      "lose_comment_count": 0,
+      "lose_count": 0,
+      "play_count": 589745,
+      "repost_count": 0,
+      "share_count": 3585,
+      "whatsapp_share_count": 8
+    },
+    "video": {
+      "cover": {
+        "url_list": [
+          "https://p16-sign.tiktokcdn-us.com/tos-useast5-p-0068-tx/oUKFS4HhaMvXICUEIc1AgN7HEs9nivBIBC4iI~tplv-tiktokx-cropcenter-q:300:400:q72.heic?dr=9232&refresh_token=df2ee5c4&x-expires=1750374000&x-signature=F1wskCOFUKVbHMDT%2BjC%2F4ioi3Vw%3D&t=bacd0480&ps=933b5bde&shp=d05b14bd&shcp=1d1a97fc&idc=no1a&sc=cover&biz_tag=tt_video&s=AWEME_DETAIL"
+        ],
+        "height": 720,
+        "width": 720,
+        "uri": "tos-useast5-p-0068-tx/oUKFS4HhaMvXICUEIc1AgN7HEs9nivBIBC4iI"
+      },
+      "duration": 173675,
+      "has_watermark": true,
+      "height": 1024,
+      "width": 576,
+      "download_no_watermark_addr": {
+        "url_list": [
+          "https://v45.tiktokcdn-eu.com/c0fb0c4c63ed4f5076758092137da3f5/68549d47/video/tos/maliva/tos-maliva-ve-0068c799-us/o4u9CaIEvIMFiAHihBB4ng4sXQUWSFK1E1PvI/?a=1233&bti=OUBzOTg7QGo6OjZAL3AjLTAzYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=2096&bt=1048&cs=0&ds=6&ft=pfEtGMvt8Zmo0Ym-qI4jVVPF461rKsd.&mime_type=video_mp4&qs=0&rc=Zmk5aDg8NzxkZTZoZ2QzOkBpM2lub3I5cmY1NDMzZzczNEBfNjY0Yy9jXjMxYF4yYTYwYSMzMnJyMmRrYzZhLS1kMS9zcw%3D%3D&vvpl=1&l=202506182326187F8DDAF6E643528715CE&btag=e00095000"
+        ],
+        "height": 1024,
+        "width": 576,
+        "uri": "v12044gd0000d192fcnog65ouluk5f60"
+      },
+      "play_addr": {
+        "url_list": [
+          "https://v45.tiktokcdn-eu.com/c0fb0c4c63ed4f5076758092137da3f5/68549d47/video/tos/maliva/tos-maliva-ve-0068c799-us/o4u9CaIEvIMFiAHihBB4ng4sXQUWSFK1E1PvI/?a=1233&bti=OUBzOTg7QGo6OjZAL3AjLTAzYCMxNDNg&ch=0&cr=13&dr=0&er=0&lr=all&net=0&cd=0%7C0%7C0%7C&cv=1&br=2096&bt=1048&cs=0&ds=6&ft=pfEtGMvt8Zmo0Ym-qI4jVVPF461rKsd.&mime_type=video_mp4&qs=0&rc=Zmk5aDg8NzxkZTZoZ2QzOkBpM2lub3I5cmY1NDMzZzczNEBfNjY0Yy9jXjMxYF4yYTYwYSMzMnJyMmRrYzZhLS1kMS9zcw%3D%3D&vvpl=1&l=202506182326187F8DDAF6E643528715CE&btag=e00095000"
+        ],
+        "height": 1024,
+        "width": 576,
+        "uri": "v12044gd0000d192fcnog65ouluk5f60"
+      }
+    },
+    "author": {
+      "uid": "6659752019493208069",
+      "unique_id": "stoolpresidente",
+      "nickname": "Dave Portnoy",
+      "follower_count": 0
+    },
+    "create_time": 1750214725,
+    "create_time_utc": "2025-09-03T18:37:38.000Z",
+    "is_ad": false,
+    "is_paid_partnership": false,
+    "url": "https://www.tiktok.com/@branttakes/video/7545933721589910798"
+  }
+}

@@ -17,6 +17,13 @@ import pytest
 # the help text. Typer reads this once at import, so it must be set before ``studio.cli`` loads.
 os.environ["_TYPER_FORCE_DISABLE_TERMINAL"] = "1"
 
+@pytest.fixture(autouse=True)
+def _no_scrapecreators_key(monkeypatch):
+    """No test may reach ScrapeCreators (the free account has about 100 credits): its key never reaches a test, so every code
+    path that reads it from the environment (``studio.hits.ScrapeCreators.from_env``) finds none; tests inject a fake client."""
+    monkeypatch.delenv("SCRAPECREATORS_API_KEY", raising=False)
+
+
 # lavfi ``sine`` peaks at 1/8 (-18 dBFS) before any gain.
 _SINE_PEAK = 0.125
 

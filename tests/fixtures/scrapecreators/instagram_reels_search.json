@@ -1,0 +1,35 @@
+{
+  "success": true,
+  "credits_remaining": 33929349,
+  "credits_charged": 1,
+  "reels": [
+    {
+      "id": "3723045213787686915",
+      "__typename": "XDTGraphVideo",
+      "shortcode": "DOq6eV6iIgD",
+      "url": "https://www.instagram.com/reel/DOq6eV6iIgD/",
+      "caption": "Dogs are family 💙\n\nI met Rocco, a little rescue Chihuahua all the way from Mexico 🇲🇽🐾 \n\nHe’s looked after by a lovely lady who’s always had dogs, but when she lost her last one, she thought that was it, the loss is too painful to go through again. But babysitting Rocco gives her her “dog fix” and keeps her connected to the love only dogs can bring 🥰\n\nShe’s originally from Los Angeles, but now a New Yorker, and knows Central Park inside out from years of walking dogs there 🌳🐕 \n\nShe told me how dogs are family, and people who don’t love animals will never fully understand it, and I completely agree! ❤️\n\n#dogphotography #rescuedog #chihuahua #dogportrait #dogphotographer",
+      "thumbnail_src": "https://scontent-sjc3-1.cdninstagram.com/v/t51.2885-15/550186015_17890754136343371_4563383710172988045_n.jpg?stp=c0.280.720.720a_dst-jpg_e15_s640x640_tt6&_nc_ht=scontent-sjc3-1.cdninstagram.com&_nc_cat=103&_nc_oc=Q6cZ2QEgFUe8Hj_UR-Af4n8brIqO2O_yZfoRHnHjM_VSEqFgfOpJoZ-_uIv8BVvGuSnLWQw&_nc_ohc=d5Wmai9i7L0Q7kNvwH6u4n-&_nc_gid=rIrCBBTCedpkbi2BFdOeJA&edm=ANTKIIoBAAAA&ccb=7-5&oh=00_AfkaB2Nw4i5OiJscl0BtYIQRdenm5DyobWgTmjiq98BkcQ&oe=695A1764&_nc_sid=d885a2",
+      "has_audio": false,
+      "product_type": "clips",
+      "video_duration": 75.7,
+      "clips_music_attribution_info": {
+        "artist_name": "Oliver Max",
+        "song_name": "Smiling Heart",
+        "uses_original_audio": false
+      },
+      "is_video": true,
+      "owner": {
+        "id": "70127159370",
+        "username": "fetchmycamera_",
+        "follower_count": 188406,
+        "is_private": false
+      },
+      "taken_at": "2025-09-16T16:56:45.000Z",
+      "is_ad": false,
+      "like_count": 3487,
+      "is_paid_partnership": false,
+      "comment_count": 90
+    }
+  ]
+}

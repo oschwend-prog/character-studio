@@ -93,6 +93,9 @@ HOOK_PATTERNS: tuple[str, ...] = get_args(HookPattern)
 LedgerKind = Literal["reserve", "settle", "release"]
 FavoriteOrigin = Literal["scan", "owner"]
 FavoriteStatus = Literal["new", "approved", "skipped", "analysed", "queued", "made"]
+# A hit of the cloud hits job (migration 0016, terminal v3 spec section 10): new, filed as a drop, or "Not for us".
+HitStatus = Literal["new", "dropped", "dismissed"]
+HIT_CAPTION_MAX = 300
 
 # Drop-in targets per platform (plan Global Constraints); used when an Account sets none.
 DEFAULT_DROPIN_SHARE: dict[Platform, float] = {Platform.tiktok: 0.70, Platform.instagram: 0.40}
@@ -275,6 +278,48 @@ class Favorite:
     def __post_init__(self) -> None:
         _one_of(self.origin, FavoriteOrigin, "Favorite.origin")
         _one_of(self.status, FavoriteStatus, "Favorite.status")
+
+
+@dataclass(kw_only=True)
+class Hit:
+    """One post the cloud hits job found (``studio hits pull``, ScrapeCreators metadata only: nothing is downloaded).
+
+    ``url`` is the canonical TikTok / Instagram Reel link (unique). ``character_slug`` is the character whose keywords found it,
+    None for the general lane (trending feeds and broad searches: any character may take it). ``reach`` = views / followers
+    (None without both); ``score`` 0-100 (``studio.hits.hit_score``). ``created_at`` is when it was first seen, ``last_seen``
+    the latest pull that saw it again (its numbers are refreshed then). Any number the API did not give stays None, never 0.
+    """
+
+    id: str | None = None
+    platform: Platform
+    url: str
+    creator_handle: str | None = None
+    followers: int | None = None
+    views: int | None = None
+    likes: int | None = None
+    comments: int | None = None
+    shares: int | None = None
+    saves: int | None = None
+    posted_at: datetime | None = None
+    caption: str | None = None
+    sound: str | None = None
+    duration_s: float | None = None
+    thumbnail_url: str | None = None  # stored, never fetched
+    keyword: str | None = None
+    character_slug: str | None = None
+    reach: float | None = None
+    score: int = 0
+    status: HitStatus = "new"
+    created_at: datetime | None = None
+    last_seen: datetime | None = None
+
+    def __post_init__(self) -> None:
+        self.platform = Platform(self.platform)
+        _one_of(self.status, HitStatus, "Hit.status")
+        if isinstance(self.score, bool) or not isinstance(self.score, int) or not 0 <= self.score <= 100:
+            raise ValueError(f"Hit.score must be an integer 0-100, got {self.score!r}")
+        if self.caption is not None and len(self.caption) > HIT_CAPTION_MAX:
+            raise ValueError(f"Hit.caption is at most {HIT_CAPTION_MAX} characters")
 
 
 @dataclass(kw_only=True)

@@ -157,7 +157,10 @@ def test_go_live_documents_the_pinned_version_and_the_monthly_minutes():
 
 # ---- studio-drop: the cloud jobs of "Drop a video" (plan 2026-10-06) ------------------------------------------------------
 
-DROP_SECRETS = ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "HF_KEY", "HF_API_KEY_ID", "HF_API_KEY_SECRET", "GEMINI_API_KEY")
+DROP_SECRETS = (
+    "DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "HF_KEY", "HF_API_KEY_ID", "HF_API_KEY_SECRET", "GEMINI_API_KEY",
+    "SCRAPECREATORS_API_KEY",  # the one-post fallback of a dropped link yt-dlp cannot fetch (plan Task 6)
+)
 
 
 def test_drop_runs_on_the_two_dispatch_types_a_two_hourly_sweep_and_by_hand():
@@ -252,3 +255,64 @@ def test_publish_is_started_by_the_database_timers_dispatch_and_keeps_the_schedu
     assert "jsonb_build_object('event_type', 'publish')" in migration
     # a dispatch carries no payload the job needs: the command is the same for every trigger and nothing reads client_payload
     assert "client_payload" not in "\n".join(line for line in t.splitlines() if not line.lstrip().startswith("#"))
+
+
+# ---- studio-hits: the cloud hits job (terminal v3 spec section 10, plan Task 6) ------------------------------------------------------
+
+HITS_SECRETS = {"DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SCRAPECREATORS_API_KEY"}
+
+
+def hits_step(name: str) -> str:
+    return next(b for b in steps("studio-hits") if b.startswith(f"name: {name}"))
+
+
+def test_hits_runs_daily_at_0530_utc_and_by_hand_one_run_at_a_time():
+    t = text("studio-hits")
+    assert re.search(r"(?m)^name: studio-hits$", t)
+    assert re.findall(r"- cron: '([^']+)'", t) == ["30 5 * * *"]  # 06:30 London in BST, 05:30 in GMT
+    assert "06:30 London" in t and "GMT" in t  # the winter shift is written down
+    assert re.search(r"(?m)^  workflow_dispatch:$", t) and "repository_dispatch" not in t
+    assert re.search(r"(?m)^concurrency:\n  group: studio-hits\n  cancel-in-progress: false$", t)
+    assert re.search(r"(?m)^permissions:\n  contents: read\n  actions: write$", t)  # actions: write only to wake the drop sweep
+    assert re.search(r"(?m)^    runs-on: ubuntu-24\.04$", t) and "astral-sh/setup-uv@" in t
+
+
+def test_hits_is_gated_on_the_database_secret_like_the_other_workflows():
+    blocks = steps("studio-hits")
+    gate, rest = blocks[0], blocks[1:]
+    assert "id: gate" in gate and '[ -z "${DATABASE_URL:-}" ]' in gate and "exit 1" not in gate
+    assert 'echo "secrets not configured — skipping"' in gate
+    assert rest and all("steps.gate.outputs.configured == 'true'" in b for b in rest)
+
+
+def test_hits_pulls_files_then_deletes_unused_clips_then_wakes_the_drop_sweep():
+    pull = hits_step("Pull the hits")
+    assert "id: pull" in pull and "uv run studio hits pull" in pull
+    assert "SCRAPECREATORS_API_KEY" in pull and "::notice::" in pull  # a missing key is a notice, never a failure
+    assert "echo \"filed=$(jq '.filed | length'" in pull
+    purge = hits_step("Delete the clips nobody used")
+    assert "run: uv run studio source purge --stale" in purge
+    assert "!cancelled()" in purge  # retention runs even when the pull failed
+    wake = hits_step("Wake the drop sweep")
+    assert "run: gh workflow run studio-drop.yml -f job=sweep" in wake
+    assert "steps.pull.outputs.filed != '0'" in wake and "steps.pull.outputs.filed != ''" in wake
+    assert "GH_TOKEN: ${{ github.token }}" in wake and "GH_REPO: ${{ github.repository }}" in wake
+    names = [b.split("\n", 1)[0] for b in steps("studio-hits") if b.startswith("name: ")]
+    assert names == ["name: Check secrets", "name: Pull the hits and file the best", "name: Delete the clips nobody used",
+                     "name: Wake the drop sweep"]  # fmt: skip
+    for block in steps("studio-hits"):
+        run = block.split("run:", 1)[1] if "run:" in block else ""
+        assert "${{" not in run, block[:60]  # nothing reaches a script but through env
+
+
+def test_hits_secrets_reach_only_the_steps_that_need_them():
+    t = text("studio-hits")
+    assert set(re.findall(r"secrets\.([A-Z_]+)", t)) == HITS_SECRETS and "POSTIZ" not in t and "HF_" not in t and "GEMINI" not in t
+    assert "env:" not in t.split("    steps:")[0].split("jobs:")[1]  # no job-level env
+    pull, purge, wake = hits_step("Pull the hits"), hits_step("Delete the clips nobody used"), hits_step("Wake the drop sweep")
+    assert set(re.findall(r"secrets\.([A-Z_]+)", pull)) == {"DATABASE_URL", "SCRAPECREATORS_API_KEY"}
+    assert set(re.findall(r"secrets\.([A-Z_]+)", purge)) == {"DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"}
+    assert "secrets." not in wake
+    for block in steps("studio-hits")[1:]:
+        if block.startswith(("uses:", "- uses:")) or "uses: " in block.split("\n", 1)[0]:
+            assert "secrets." not in block

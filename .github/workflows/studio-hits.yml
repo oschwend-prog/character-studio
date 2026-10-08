@@ -1,0 +1,87 @@
+# The cloud hits job (terminal v3 spec section 10; plan docs/superpowers/plans/2026-10-07-terminal-v3.md, task 6): once a day
+# the top TikTok and Instagram posts of our niches come from ScrapeCreators' API (metadata only: no Mac, no browser, no
+# cookies, no download), the best new ones are filed as drops, the clips nobody used are deleted, and the drop job is woken.
+#
+# Schedule: 05:30 UTC every day = 06:30 London in British Summer Time; in winter (GMT, from the last Sunday of October) the same
+# cron runs at 05:30 London. GitHub's schedule is best-effort (a run can start late or be skipped): the next day catches up, and
+# the daily credit cap is per run. A manual run: `gh workflow run studio-hits.yml`.
+#
+# Steps:
+# 1. `studio hits pull`: the searches of config/scan.json `hits` (each live character's keywords on TikTok and Instagram, the
+#    general lane's trending feeds and broad searches), at most `hits.daily_credit_cap` credits (25), then the auto-filing (at
+#    most 3 new drops a live character and 3 from the general lane a day). Without SCRAPECREATORS_API_KEY: a notice, nothing is
+#    pulled, the step passes. Its JSON says how many drops were filed (the step's output `filed`).
+# 2. `studio source purge --stale`: retention (a drop never made: its clip goes 30 days after filing when it came from a hit, 60
+#    days for the owner's own; never one he marked Keep, one being made, or a family member still to be made). It runs even when
+#    the pull failed.
+# 3. When the pull filed something: `gh workflow run studio-drop.yml -f job=sweep` with this run's own token (permission
+#    `actions: write`, the only write this workflow has) wakes the drop job, which fetches each filed link one at a time and checks
+#    it for free, instead of waiting for its 2-hourly sweep.
+#
+# Secrets (repo secrets): DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY (as the other workflows) and SCRAPECREATORS_API_KEY
+# (`gh secret set SCRAPECREATORS_API_KEY`: the owner pastes it, it is never written to a file). Until DATABASE_URL exists the job
+# prints a notice and every later step is skipped. Each secret reaches only the step that needs it; nothing reaches a script but
+# through its environment.
+name: studio-hits
+
+on:
+  schedule:
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: studio-hits
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  hits:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check secrets
+        id: gate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "secrets not configured — skipping"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.configured == 'true'
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.configured == 'true'
+      - name: Pull the hits and file the best
+        id: pull
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+        run: |
+          if [ -z "${SCRAPECREATORS_API_KEY:-}" ]; then
+            echo "::notice::SCRAPECREATORS_API_KEY is not set: no hits are pulled (gh secret set SCRAPECREATORS_API_KEY)"
+          fi
+          status=0
+          uv run studio hits pull > "$RUNNER_TEMP/hits.json" || status=$?
+          cat "$RUNNER_TEMP/hits.json"
+          echo "filed=$(jq '.filed | length' "$RUNNER_TEMP/hits.json" 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
+          exit "$status"
+      - name: Delete the clips nobody used
+        if: ${{ !cancelled() && steps.gate.outputs.configured == 'true' }}
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: uv run studio source purge --stale
+      - name: Wake the drop sweep
+        if: ${{ !cancelled() && steps.gate.outputs.configured == 'true' && steps.pull.outputs.filed != '' && steps.pull.outputs.filed != '0' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh workflow run studio-drop.yml -f job=sweep

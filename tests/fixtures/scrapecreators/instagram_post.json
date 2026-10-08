@@ -1,0 +1,27 @@
+{
+  "success": true,
+  "credits_remaining": 1000000,
+  "credits_charged": 1,
+  "data": {
+    "xdt_shortcode_media": {
+      "id": "3657869083548472514",
+      "shortcode": "DLDXI0fylTC",
+      "__typename": "XDTGraphVideo",
+      "thumbnail_src": "https://scontent-iad3-1.cdninstagram.com/v/t51.2885-15/509601086_18503874985017172_8563682873145552176_n.jpg?stp=c0.469.1206.1206a_dst-jpg_e35_s640x640_sh0.08_tt6&_nc_ht=scontent-iad3-1.cdninstagram.com&_nc_cat=104&_nc_oc=Q6cZ2QE_dnPQQ4wu9mDyMWXNHRAYOB8jcOQ_TxJE9VRReZUTgEUIXch0-khNb8H5VcwinCc&_nc_ohc=3V4jFXtydQsQ7kNvwHQ3Qp8&_nc_gid=aG9nPhpAiGuGUrkmWPrm6Q&edm=ANTKIIoBAAAA&ccb=7-5&oh=00_AfOjs7er3gUbnHBBBBsi_iqeOOKHtqNfw1AFLrOYfXTVDQ&oe=685A2AED&_nc_sid=d885a2",
+      "video_url": "https://scontent-iad3-2.cdninstagram.com/o1/v/t16/f2/m86/AQPIiBLJBqG6YM9FzeabZmQkGTo94LpWkFoXGZJKZzy1TmBaeQneYOCvLLIE9oatPQwWEFvodXRGHTKQmyBOxJfo3UbjavdoyajuoZA.mp4?stp=dst-mp4&efg=eyJxZV9ncm91cHMiOiJbXCJpZ193ZWJfZGVsaXZlcnlfdnRzX290ZlwiXSIsInZlbmNvZGVfdGFnIjoidnRzX3ZvZF91cmxnZW4uY2xpcHMuYzIuNzIwLmJhc2VsaW5lIn0&_nc_cat=103&vs=1061284792789338_358197508&_nc_vs=HBksFQIYUmlnX3hwdl9yZWVsc19wZXJtYW5lbnRfc3JfcHJvZC84NTQxMUYyMDM1NDdDN0E4ODc4N0FDRUIyMUUyRDQ4OV92aWRlb19kYXNoaW5pdC5tcDQVAALIARIAFQIYOnBhc3N0aHJvdWdoX2V2ZXJzdG9yZS9HTk1hVGg1M1FKWnRBWG9FQUF3Y2JiN3gyZkVSYnFfRUFBQUYVAgLIARIAKAAYABsAFQAAJuzxz6DikvE%2FFQIoAkMzLBdAVSqfvnbItBgSZGFzaF9iYXNlbGluZV8xX3YxEQB1%2Fgdl5p0BAA%3D%3D&_nc_rid=b32127cffa&ccb=9-4&oh=00_AfMDvtWEdtNwN65iaFnkXOOEtR-W6ttellTLNCr3L_dovA&oe=68562DB4&_nc_sid=d885a2",
+      "has_audio": true,
+      "video_play_count": 425901,
+      "product_type": "clips",
+      "video_duration": 84.666,
+      "is_video": true,
+      "owner": {
+        "id": "21393171",
+        "username": "jane",
+        "edge_followed_by": {
+          "count": 1565363
+        }
+      },
+      "taken_at_timestamp": 1750272151
+    }
+  }
+}

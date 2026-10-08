@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -18,7 +20,8 @@ from typer.testing import CliRunner
 from studio import fetch, sources
 from studio.cli import app
 from studio.fetch import FETCH_MAX_SECONDS, fetch_pick_clip, purge_clip, purge_pending, ytdlp_command
-from studio.models import Body, Character, Clip, Favorite, Mode, SourceKind
+from studio.config import LONDON
+from studio.models import Body, Character, Clip, Favorite, Hit, Mode, SourceKind
 from studio.storage import LocalStorage, StorageError
 from studio.store import MemoryStore
 
@@ -541,3 +544,203 @@ def test_source_kept_for_unmade_version(world, clip_file):
     assert fetch._still_needed(store, parent.id, store.get_favorite(version.id), v_clip.id) is False
     second = purge_clip(store, storage, v_clip.id, fetched_dir=out_dir)
     assert parent.storage_path in second["storage_deleted"] and objects(storage) == set()
+
+
+# ---- the ScrapeCreators fallback of a dropped link (owner 2026-10-07: "could we download these ... and add them to our clips") ----
+
+
+class FakeFallback:
+    """``studio.hits.ScrapeCreators.download_post`` stand-in: writes ``clip`` to ``dest`` (or raises ``error``) and records the call."""
+
+    def __init__(self, clip: Path | None = None, *, error: Exception | None = None, credits: int = 10):
+        self.clip, self.error, self.credits = clip, error, credits
+        self.calls: list[tuple[str, str, Path]] = []
+
+    def download_post(self, url, platform, dest):
+        self.calls.append((url, platform, Path(dest)))
+        if self.error is not None:
+            raise self.error
+        Path(dest).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self.clip, dest)
+        return {"credits": self.credits, "media_url": "https://media.example/clip.mp4", "bytes": Path(dest).stat().st_size}
+
+
+def dropped_link(store, url=TIKTOK, platform="tiktok", **drop_over):
+    """A link the owner dropped (or the hits job filed): an approved pick carrying proposal.drop, as studio.drop.add_drop files it."""
+    return approved_pick(store, url=url, platform=platform, slug="reginald", proposal={
+        "drop": {"state": "checking", "kind": "link", "character_by": "owner", **drop_over},
+    })  # fmt: skip
+
+
+def test_a_dropped_link_yt_dlp_cannot_fetch_comes_through_scrapecreators(world, clip_file):
+    store, storage, out_dir = world
+    pick = dropped_link(store, auto_filed=True)
+    fallback = FakeFallback(clip_file)
+    result = fetch_pick_clip(
+        store, storage, pick.id, runner=FakeYtDlp(None, returncode=1, stderr="ERROR: [TikTok] login required"), out_dir=out_dir,
+        fall_back=False, media_fallback=fallback,
+    )
+    assert fallback.calls == [(TIKTOK, "tiktok", out_dir / f"{pick.id}.mp4")]  # the ONE post, by its canonical link
+    assert result["fetched"] is True and result["via"] == "scrapecreators" and result["already"] is False
+    source = store.list_sources()[0]
+    assert source.storage_path.startswith("owner_inbox/") and source.credit_handle == "@tillandsialover"
+    marker = store.get_favorite(pick.id).proposal["fetched"]
+    assert marker["via"] == "scrapecreators" and marker["credits"] == 10 and marker["source_id"] == source.id
+    assert storage.download("sources", source.storage_path, out_dir / "back.mp4").read_bytes() == clip_file.read_bytes()
+
+
+def test_yt_dlp_first_and_the_fallback_only_when_it_fails(world, clip_file):
+    store, storage, out_dir = world
+    pick = dropped_link(store)
+    fallback = FakeFallback(clip_file)
+    result = fetch_pick_clip(store, storage, pick.id, runner=FakeYtDlp(clip_file), out_dir=out_dir, fall_back=False, media_fallback=fallback)
+    assert result["via"] == "yt-dlp" and fallback.calls == [] and "via" not in store.get_favorite(pick.id).proposal["fetched"]
+
+
+def test_the_fallback_is_only_for_a_dropped_or_filed_pick_and_never_for_youtube(world, clip_file):
+    store, storage, out_dir = world
+    fallback = FakeFallback(clip_file)
+    scan_pick = approved_pick(store)  # an approved scan pick of the daily run: the Recreate rule as before
+    result = fetch_pick_clip(store, storage, scan_pick.id, runner=FakeYtDlp(None, returncode=1, stderr="nope"), out_dir=out_dir,
+                             media_fallback=fallback)  # fmt: skip
+    assert result["pick_marked"] == "recreate" and fallback.calls == []
+    yt = dropped_link(store, url="https://www.youtube.com/shorts/abcdefghijk", platform="youtube")
+    with pytest.raises(fetch.FetchFailed, match="nope"):
+        fetch_pick_clip(store, storage, yt.id, runner=FakeYtDlp(None, returncode=1, stderr="nope"), out_dir=out_dir, fall_back=False,
+                        media_fallback=fallback)  # fmt: skip
+    assert fallback.calls == []
+
+
+def test_when_the_fallback_fails_too_both_reasons_are_given_and_nothing_is_kept(world, clip_file, tmp_path):
+    from studio.hits import ScrapeCreatorsError
+
+    store, storage, out_dir = world
+    pick = dropped_link(store)
+    fallback = FakeFallback(error=ScrapeCreatorsError("ScrapeCreators answered HTTP 404: post not found", 404))
+    with pytest.raises(fetch.FetchFailed) as e:
+        fetch_pick_clip(store, storage, pick.id, runner=FakeYtDlp(None, returncode=1, stderr="ERROR: login required"), out_dir=out_dir,
+                        fall_back=False, media_fallback=fallback)  # fmt: skip
+    assert "login required" in str(e.value) and "ScrapeCreators" in str(e.value) and "404" in str(e.value)
+    junk = tmp_path / "junk.mp4"
+    junk.write_text("<html>not a video</html>")
+    with pytest.raises(fetch.FetchFailed, match="not a readable video"):
+        fetch_pick_clip(store, storage, pick.id, runner=FakeYtDlp(None, returncode=1, stderr="x"), out_dir=out_dir, fall_back=False,
+                        media_fallback=FakeFallback(junk))  # fmt: skip
+    assert store.list_sources() == [] and store.get_favorite(pick.id).proposal == pick.proposal
+    assert not list(out_dir.glob("*")) if out_dir.exists() else True
+
+
+# ---- retention (owner 2026-10-07): a drop never made goes after 30 days (from a hit) or 60 days (the owner's own upload) ----------
+
+
+def all_objects(storage) -> set[str]:
+    root = Path(storage.root) / "sources"
+    return {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()} if root.exists() else set()
+
+
+def stale(store, storage, clip_file, *, days, auto_filed=False, link=None, state="ready", status="approved", **drop_over):
+    """A drop filed ``days`` ago and never made: its full clip (an owner upload, or a fetched link) and its preview in Storage."""
+    from studio import drop
+
+    filed = NOW_FETCH - timedelta(days=days)
+    pick, _ = drop.add_drop(store, "reginald", link, filed)
+    if link is None:
+        key = f"owner/{pick.id}/1759700000000.mp4"
+        extra = {"owner_clip_path": key}
+    else:
+        key = f"owner_inbox/{uuid.uuid4()}.mp4"
+        extra = {}
+    storage.upload("sources", key, clip_file)
+    src = sources.add_source(store, "owner_inbox", key, "biped", 1, 5.0, storage_path=key)
+    preview = f"owner/{pick.id}/preview.jpg"
+    storage.upload("sources", preview, clip_file)
+    if link is not None:
+        extra["fetched"] = {"source_id": src.id, "storage_path": key, "at": filed.isoformat()}
+    d = {**pick.proposal["drop"], "state": state, "source_id": src.id, "preview_path": preview, **drop_over}
+    if auto_filed:
+        d["auto_filed"] = True
+    return store.update_favorite(pick.id, status=status, source_id=src.id, proposal={**pick.proposal, **extra, "drop": d})
+
+
+NOW_FETCH = datetime(2026, 12, 1, 6, 30, tzinfo=LONDON)
+
+
+def test_an_unused_clip_from_a_hit_goes_after_30_days_the_owners_upload_after_60(world, clip_file):
+    store, storage, out_dir = world
+    hit_old = stale(store, storage, clip_file, days=31, auto_filed=True, link="https://www.tiktok.com/@a/video/1")
+    hit_young = stale(store, storage, clip_file, days=29, auto_filed=True, link="https://www.tiktok.com/@a/video/2")
+    used = stale(store, storage, clip_file, days=31, link="https://www.tiktok.com/@a/video/3")  # "Use this clip" on a hit
+    store.upsert_hit(Hit(platform="tiktok", url=used.url, status="dropped", created_at=NOW_FETCH, last_seen=NOW_FETCH))
+    own_old = stale(store, storage, clip_file, days=61)
+    own_mid = stale(store, storage, clip_file, days=45)  # the owner's own upload: 60 days, not 30
+    own_link = stale(store, storage, clip_file, days=45, link="https://www.tiktok.com/@a/video/4")  # a link he pasted himself
+    before = all_objects(storage)
+    out = fetch.purge_stale(store, storage, NOW_FETCH)
+    expired = {e["pick_id"]: e for e in out["expired"]}
+    assert set(expired) == {hit_old.id, used.id, own_old.id} and out["already"] is False
+    assert expired[hit_old.id]["days"] == 31 and expired[own_old.id]["days"] == 61
+    for pick in (hit_old, used, own_old):
+        after = store.get_favorite(pick.id)
+        d = after.proposal["drop"]
+        days = expired[pick.id]["days"]
+        assert after.status == "skipped" and d["reason"] == f"expired: unused for {days} days, the clip was deleted"
+        assert d["expired"]["days"] == days and "preview_path" not in d
+        src = store.list_sources(id=pick.source_id)[0]
+        assert src.storage_path is None and set(expired[pick.id]["deleted"]) == {pick.proposal["drop"]["preview_path"], *(
+            [pick.proposal["owner_clip_path"]] if "owner_clip_path" in pick.proposal else [pick.proposal["fetched"]["storage_path"]])}
+        if "fetched" in pick.proposal:
+            assert "purged_at" in after.proposal["fetched"]
+    gone = {k for e in out["expired"] for k in e["deleted"]}
+    assert set(out["storage_deleted"]) == gone and all_objects(storage) == before - gone
+    for pick in (hit_young, own_mid, own_link):
+        assert store.get_favorite(pick.id) == pick  # untouched
+    assert fetch.purge_stale(store, storage, NOW_FETCH) == {"expired": [], "storage_deleted": [], "already": True}  # idempotent
+
+
+def test_retention_never_touches_a_clip_being_made_a_kept_one_or_a_family_member_still_to_be_made(world, clip_file):
+    from studio import drop
+
+    store, storage, out_dir = world
+    store.add_character(Character(slug="lenny", name="Lenny Gold", status="live", bodies=[Body.biped]))
+    star = {"kind": "person", "body": "biped", "description": "a man", "x_center": 0.5, "full_body": True, "child": False}
+    asked = stale(store, storage, clip_file, days=90, auto_filed=True)
+    store.update_favorite(asked.id, proposal={**asked.proposal, "make_requested": {"at": NOW_FETCH.isoformat(), "by": "owner"}})
+    making = stale(store, storage, clip_file, days=90, auto_filed=True, state="making")
+    made = stale(store, storage, clip_file, days=90, auto_filed=True, state="made", status="made")
+    queued = stale(store, storage, clip_file, days=90, auto_filed=True, status="queued")
+    kept = stale(store, storage, clip_file, days=90, auto_filed=True, keep=True)
+    root = stale(store, storage, clip_file, days=90, auto_filed=True, star=star)
+    version = drop.copy_drop(store, root.id, "lenny", now=NOW_FETCH - timedelta(days=2))  # filed 2 days ago, still to be made
+    before = all_objects(storage)
+    out = fetch.purge_stale(store, storage, NOW_FETCH)
+    assert out == {"expired": [], "storage_deleted": [], "already": True} and all_objects(storage) == before
+    for pick in (asked, making, made, queued, kept, root):
+        assert store.get_favorite(pick.id).status == pick.status
+    assert version.proposal["drop"]["auto_filed"] is True  # the version carries the tag (learning and retention alike)
+    later = fetch.purge_stale(store, storage, NOW_FETCH + timedelta(days=29))  # the version's 30 days are up too: the family goes
+    assert {e["pick_id"] for e in later["expired"]} == {root.id, version.id}
+    assert root.proposal["drop"]["source_id"] not in [s.id for s in store.list_sources() if s.storage_path]
+
+
+def test_retention_deletes_the_trimmed_section_of_a_make_that_was_refused(world, clip_file):
+    """The budget refused Make it: the clip was dropped, the pick went back to ready without the owner's Make it, the cut stays."""
+    store, storage, out_dir = world
+    pick = stale(store, storage, clip_file, days=61)
+    child = sources.trim_source(store, storage, pick.source_id, 0.0, 2.0)
+    clip = store.add_clip(Clip(character_slug="reginald", mode=Mode.dropin, state="dropped", source_id=child.id,
+                               features={"fav_id": pick.id}))  # fmt: skip
+    out = fetch.purge_stale(store, storage, NOW_FETCH)
+    (e,) = out["expired"]
+    assert child.storage_path in e["deleted"] and store.list_sources(id=child.id)[0].storage_path is None
+    assert store.get_clip(clip.id).state.value == "dropped"  # data rows stay
+
+
+def test_cli_purge_stale_and_the_one_of_rule(cli, clip_file, monkeypatch):
+    store, storage, out_dir, runner = cli
+    monkeypatch.setattr(fetch, "now_london", lambda: NOW_FETCH)
+    old = stale(store, storage, clip_file, days=61)
+    r = run("purge", "--stale")
+    assert r.exit_code == 0, r.output
+    assert [e["pick_id"] for e in json.loads(r.stdout)["expired"]] == [old.id]
+    assert json.loads(run("purge", "--stale").stdout)["already"] is True
+    assert run("purge", "--stale", "--pending").exit_code == 2 and run("purge", "--stale", "--clip", "x").exit_code == 2

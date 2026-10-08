@@ -1,0 +1,32 @@
+{
+  "success": true,
+  "credits_remaining": 100,
+  "credits_charged": 1,
+  "data": {
+    "reels": [
+      {
+        "id": "3659267353687104516",
+        "pk": "3659267353687104516",
+        "shortcode": "DYt13O8gLoE",
+        "url": "https://www.instagram.com/reel/DYt13O8gLoE/",
+        "caption": "Funny clip from today",
+        "taken_at": "2026-01-02T18:32:11.000Z",
+        "media_type": 2,
+        "product_type": "clips",
+        "image_url": "https://scontent.cdninstagram.com/v/t51.2885-15/example.jpg",
+        "original_width": 720,
+        "original_height": 1280,
+        "has_audio": true,
+        "like_count": 12345,
+        "comment_count": 123,
+        "play_count": 456789,
+        "ig_play_count": 456789,
+        "user": {
+          "id": "123456789",
+          "username": "creator",
+          "is_private": false
+        }
+      }
+    ]
+  }
+}

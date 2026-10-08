@@ -26,6 +26,11 @@ talks to a ``Store``. ``studio.pgstore.PostgresStore`` is the production impleme
 * One post per ``(clip_id, account_id)``: a second ``add_post`` raises ``DuplicatePost``.
 * ``claim_due_posts(now)`` atomically flips due ``scheduled`` posts to ``posting``; a
   post is handed out at most once. ``now`` must be timezone-aware.
+* ``upsert_hit(h)`` (the cloud hits job, migration 0016) matches a hit on its ``url`` and returns ``(hit, created)``. A new
+  one is inserted as given. An existing one keeps its ``id``, ``status`` (a dismissed hit stays dismissed) and ``created_at``
+  (first seen); its numbers and details (``HIT_REFRESHED``) take the new value when one is given, else stay; who found it
+  (``HIT_FIRST_FOUND``: the character and the keyword) is filled in only while it is empty; ``reach``, ``score`` and
+  ``last_seen`` are always the new ones. ``list_hits`` is ordered by ``created_at``.
 """
 
 from __future__ import annotations
@@ -44,6 +49,7 @@ from studio.models import (
     Character,
     Clip,
     Favorite,
+    Hit,
     LedgerEntry,
     Post,
     PostStatus,
@@ -53,6 +59,15 @@ from studio.models import (
     Snapshot,
     Source,
 )
+
+# upsert_hit's rules (MemoryStore and PostgresStore alike): refreshed when the new value is given, filled in only while empty,
+# always replaced.
+HIT_REFRESHED = (
+    "followers", "views", "likes", "comments", "shares", "saves", "posted_at", "caption", "sound", "duration_s", "thumbnail_url",
+)
+HIT_FIRST_FOUND = ("character_slug", "keyword")
+HIT_RECOMPUTED = ("reach", "score", "last_seen")
+
 
 class DuplicatePost(ValueError):
     """A post for this (clip, account) pair already exists."""
@@ -125,6 +140,12 @@ class Store(Protocol):
     def update_favorite(self, id: str, /, **kw: Any) -> Favorite: ...
     def list_favorites(self, **filters: Any) -> list[Favorite]: ...
 
+    # hits (the cloud hits job, migration 0016)
+    def upsert_hit(self, h: Hit) -> tuple[Hit, bool]: ...
+    def get_hit(self, id: str) -> Hit | None: ...
+    def update_hit(self, id: str, /, **kw: Any) -> Hit: ...
+    def list_hits(self, **filters: Any) -> list[Hit]: ...
+
     # scheduled-run log and weekly reviews
     def add_run(self, r: Run) -> Run: ...
     def list_runs(self, **filters: Any) -> list[Run]: ...
@@ -156,6 +177,7 @@ class MemoryStore:
         self._clips: dict[str, Clip] = {}
         self._posts: dict[str, Post] = {}
         self._favorites: dict[str, Favorite] = {}
+        self._hits: dict[str, Hit] = {}
         self._runs: dict[str, Run] = {}
         self._reviews: dict[str, Review] = {}
         self._ledger: list[LedgerEntry] = []
@@ -383,6 +405,33 @@ class MemoryStore:
             return self._select(
                 self._favorites.values(), filters, Favorite, lambda f: f.created_at
             )
+
+    # ---- hits ----------------------------------------------------------------
+
+    def upsert_hit(self, h: Hit) -> tuple[Hit, bool]:
+        with self._lock:
+            old = next((x for x in self._hits.values() if x.url == h.url), None)
+            if old is None:
+                stored = copy.deepcopy(h)
+                stored.last_seen = stored.last_seen or _now()
+                return self._insert(self._hits, stored), True
+            changes = {c: getattr(h, c) for c in HIT_REFRESHED if getattr(h, c) is not None}
+            changes |= {c: getattr(h, c) for c in HIT_FIRST_FOUND if getattr(old, c) is None and getattr(h, c) is not None}
+            changes |= {"reach": h.reach, "score": h.score, "last_seen": h.last_seen or _now()}
+            return self._update(self._hits, old.id, changes), False
+
+    def get_hit(self, id: str) -> Hit | None:
+        with self._lock:
+            h = self._hits.get(id)
+            return copy.deepcopy(h) if h else None
+
+    def update_hit(self, id: str, /, **kw: Any) -> Hit:
+        with self._lock:
+            return self._update(self._hits, id, kw)
+
+    def list_hits(self, **filters: Any) -> list[Hit]:
+        with self._lock:
+            return self._select(self._hits.values(), filters, Hit, lambda h: h.created_at)
 
     # ---- runs and reviews --------------------------------------------------
 

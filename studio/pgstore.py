@@ -39,6 +39,7 @@ from studio.models import (
     Character,
     Clip,
     Favorite,
+    Hit,
     LedgerEntry,
     Post,
     Review,
@@ -47,7 +48,15 @@ from studio.models import (
     Snapshot,
     Source,
 )
-from studio.store import DuplicatePost, check_fields, require_aware, require_aware_values
+from studio.store import (
+    HIT_FIRST_FOUND,
+    HIT_RECOMPUTED,
+    HIT_REFRESHED,
+    DuplicatePost,
+    check_fields,
+    require_aware,
+    require_aware_values,
+)
 
 _IDENT = re.compile(r"[a-z_][a-z0-9_]*")
 
@@ -76,6 +85,7 @@ _LEDGER = _Table("ledger", LedgerEntry)
 _FAVORITES = _Table("favorites", Favorite, json_cols=frozenset({"proposal", "scores"}))
 _RUNS = _Table("runs", Run, json_cols=frozenset({"details"}), db_default=frozenset({"id", "started_at"}))
 _REVIEWS = _Table("reviews", Review)
+_HITS = _Table("hits", Hit, db_default=frozenset({"id", "created_at", "last_seen"}))
 
 
 def _as_uuid(value: str) -> uuid.UUID | None:
@@ -426,6 +436,44 @@ class PostgresStore:
 
     def list_favorites(self, **filters: Any) -> list[Favorite]:
         return self._list(_FAVORITES, filters, ["created_at", "id"])
+
+    # ---- hits (migration 0016) ---------------------------------------------
+
+    def upsert_hit(self, h: Hit) -> tuple[Hit, bool]:
+        """One ``insert ... on conflict (url) do update`` with the rules of ``studio.store`` (``HIT_REFRESHED``,
+        ``HIT_FIRST_FOUND``, ``HIT_RECOMPUTED``); ``status``, ``id`` and ``created_at`` are never touched on a conflict.
+        ``(xmax = 0)`` tells an inserted row from an updated one."""
+        cols = [c for c in _HITS.columns if not (c in _HITS.db_default and getattr(h, c) is None)]
+        require_aware_values({c: getattr(h, c) for c in cols})
+        sets = [sql.SQL("{c} = coalesce(excluded.{c}, h.{c})").format(c=sql.Identifier(c)) for c in HIT_REFRESHED]
+        sets += [sql.SQL("{c} = coalesce(h.{c}, excluded.{c})").format(c=sql.Identifier(c)) for c in HIT_FIRST_FOUND]
+        sets += [sql.SQL("{c} = excluded.{c}").format(c=sql.Identifier(c)) for c in HIT_RECOMPUTED]
+        query = sql.SQL(
+            "insert into {t} as h ({cols}) values ({vals}) on conflict ({url}) do update set {sets} "
+            "returning {ret}, (xmax = 0) as inserted"
+        ).format(
+            t=self._tbl(_HITS),
+            cols=self._cols(cols),
+            vals=sql.SQL(", ").join([sql.Placeholder()] * len(cols)),
+            url=sql.Identifier("url"),
+            sets=sql.SQL(", ").join(sets),
+            ret=sql.SQL(", ").join(sql.SQL("h.{}").format(sql.Identifier(c)) for c in _HITS.columns),
+        )
+        params = [self._to_db(_HITS, c, getattr(h, c)) for c in cols]
+        try:
+            rows = self._execute(query, params)
+        except (CheckViolation, ForeignKeyViolation) as e:  # a value the table refuses, or an unknown character
+            raise ValueError(str(e)) from e
+        return self._from_row(_HITS, rows[0]), bool(rows[0]["inserted"])
+
+    def get_hit(self, id: str) -> Hit | None:
+        return self._get(_HITS, id)
+
+    def update_hit(self, id: str, /, **kw: Any) -> Hit:
+        return self._update(_HITS, id, kw)
+
+    def list_hits(self, **filters: Any) -> list[Hit]:
+        return self._list(_HITS, filters, ["created_at", "id"])
 
     # ---- scheduled-run log and weekly reviews ------------------------------
 

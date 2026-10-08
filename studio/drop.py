@@ -112,6 +112,14 @@ for free and prints ``{"higgsfield": "ok|invalid: ..|error: ..|missing: ..", "ge
 Drive folder into a file drop (no character: the studio recommends) and moves it to ``Added/``; after a run that added clips it
 wakes this workflow's sweep with ``gh workflow run`` (a failure of that is only reported: the 2-hourly sweep catches the drops).
 
+**From the hits job, and Keep** (plan Task 6). ``studio hits pull`` files its best new hits as link drops (``add_drop`` with
+``auto_filed`` and ``hit``, the hit's character as the provisional one): ``drop['auto_filed']`` is the learning tag
+``source_kind`` and goes into every version (``copy_drop``; SQL ``studio.copy_drop`` of migration 0016). A link yt-dlp cannot
+fetch from the cloud is taken from ScrapeCreators' copy of that one post (``media_fallback``: the cloud jobs pass the client when
+``SCRAPECREATORS_API_KEY`` is set); without the key, or when both fail, the drop waits as before, with both reasons. The owner's
+Keep (``set_keep``, ``studio drop keep <pick> [--off]``, RPC ``studio.set_drop_keep``) sets ``drop['keep']``: retention
+(``studio source purge --stale``) never deletes a kept drop's clip.
+
 CLI (``studio drop ...``) prints JSON. Exit 0 when the step was recorded (whatever the drop's state), 1 when a job stopped on a
 failure it recorded (the JSON says), 2 for anything the caller must fix, 3 when the budget refused the reservation.
 """
@@ -720,7 +728,8 @@ def next_engagement(store: Store, slug: str, clip_id: str | None = None) -> str:
 
 def add_drop(
     store: Store, character_slug: str | None, link: str | None, now: datetime | None = None, *, own_footage: bool = False,
-    characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
+    characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR, provisional_slug: str | None = None, auto_filed: bool = False,
+    hit: Mapping[str, Any] | None = None,
 ) -> tuple[Favorite, bool]:
     """File a drop: ``(pick, duplicate)``. A file (``link`` None) is a new pick keyed ``owner-drop:<id>`` at ``uploading``; a link
     is its canonical URL at ``checking``, and a link already a pick of this character becomes that pick's drop (a pick already
@@ -729,20 +738,30 @@ def add_drop(
 
     ``character_slug`` None (owner 2026-10-06, the Drop box's "Recommend"): the studio chooses after the check
     (``character_by`` studio); the drop waits under ``provisional``, and a link is matched against every pick of that URL (the
-    oldest), keeping that pick's character while he is not paused. With a character it is the owner's (``character_by`` owner)."""
+    oldest), keeping that pick's character while he is not paused. With a character it is the owner's (``character_by`` owner).
+
+    The cloud hits job (``studio.hits.auto_file``, plan Task 6) files a hit's link with no character and ``provisional_slug`` = the
+    character whose keywords found it (used while he is in the live roster, else the studio's ``provisional``), ``auto_filed``
+    (``drop['auto_filed']``: the learning tag ``source_kind``, retention's 30 days) and ``hit`` (``drop['hit']``: the hit's id and
+    lane)."""
     now = now or now_london()
     if character_slug is None:
-        character_slug, by = provisional(store, characters_dir), "studio"
+        crew = {c.slug for c in roster(store, characters_dir)} if provisional_slug else set()
+        character_slug = provisional_slug if provisional_slug in crew else provisional(store, characters_dir)
+        by = "studio"
     elif character_slug not in {c.slug for c in store.characters()}:
         raise ValueError(f"unknown character {character_slug!r}")
     else:
         by = "owner"
     record = {"decision": "approve", "by": "owner", "reason": "owner's own video", "at": now.isoformat()}
+    tags: dict[str, Any] = {"auto_filed": True} if auto_filed else {}
+    if hit is not None:
+        tags["hit"] = dict(hit)
     if link is None:
         pick_id = str(uuid.uuid4())
         drop = {
             "state": "uploading", "kind": "file", "at": now.isoformat(), "reason": None, "own_footage": bool(own_footage),
-            "character_by": by,
+            "character_by": by, **tags,
         }
         return store.add_favorite(Favorite(
             id=pick_id, url=f"{DROP_URL_PREFIX}{pick_id}", platform=DROP_PLATFORM, origin="owner", character_slug=character_slug,
@@ -751,7 +770,7 @@ def add_drop(
     platform, canonical = parse_video_url(link)
     drop = {
         "state": "checking", "kind": "link", "at": now.isoformat(), "reason": None, "own_footage": bool(own_footage),
-        "character_by": by,
+        "character_by": by, **tags,
     }
     handle = canonical.split("/@", 1)[1].split("/", 1)[0] if platform == "tiktok" else None
     found = store.list_favorites(url=canonical) if by == "studio" else store.list_favorites(url=canonical, character_slug=character_slug)
@@ -850,8 +869,9 @@ def copy_drop(
     ``pick_id`` is the root drop or any version of it: the version always points at the ROOT (``drop.copy_of``). It is a file
     drop keyed ``owner-drop:<new id>`` (platform ``drop``, origin ``owner``, ``approved``, the root's ``source_id`` and creator
     handle, and the root's ``fetched`` marker when it has one, so ``source purge`` deletes the shared clip only once the last
-    member is done) at ``checking`` with ``character_by`` owner, ``copy_of``, the root's ``kind`` and ``own_footage``, and
-    ``requested.process`` stamped: the cloud sweep (or the RPC's dispatch) checks it.
+    member is done) at ``checking`` with ``character_by`` owner, ``copy_of``, the root's ``kind`` and ``own_footage`` (and its
+    ``auto_filed`` tag when the hits job filed it, migration 0016), and ``requested.process`` stamped: the cloud sweep (or the
+    RPC's dispatch) checks it.
 
     Refused (``DropError``, one plain line, nothing written), in this order: the root's check has not finished (``ready``,
     ``making`` or ``made``, with a source) "the clip is not checked yet" (asked from a version's card: "the original clip is being
@@ -905,6 +925,8 @@ def copy_drop(
     marker = root.proposal.get("fetched")
     if isinstance(marker, Mapping):  # one download, shared like the "Both" pick of a video (studio.fetch)
         proposal["fetched"] = {k: v for k, v in marker.items() if k != "purged_at"}
+    if d.get("auto_filed") is True:  # the hits job's tag (learning's source_kind, retention's 30 days) goes into the version too
+        proposal["drop"]["auto_filed"] = True
     version_id = str(uuid.uuid4())
     return store.add_favorite(Favorite(
         id=version_id, url=f"{DROP_URL_PREFIX}{version_id}", platform=DROP_PLATFORM, origin="owner",
@@ -919,6 +941,17 @@ def set_own_footage(store: Store, pick_id: str, own_footage: bool) -> Favorite:
     if not isinstance(own_footage, bool):
         raise ValueError("own_footage must be true or false")
     return store.update_favorite(pick.id, proposal={**pick.proposal, "drop": {**drop_of(pick), "own_footage": own_footage}})
+
+
+def set_keep(store: Store, pick_id: str, keep: bool) -> Favorite:
+    """The owner's Keep (``studio.set_drop_keep``, migration 0016): ``drop['keep']``; a kept drop's clip is never deleted by
+    retention (``studio.fetch.purge_stale``). Any state. ``DropError`` for a pick that is not a drop, ``KeyError`` for none."""
+    pick = store.get_favorite(pick_id)
+    if pick is None:
+        raise KeyError(pick_id)
+    if not isinstance(keep, bool):
+        raise ValueError("keep must be true or false")
+    return store.update_favorite(pick.id, proposal={**pick.proposal, "drop": {**drop_of(pick), "keep": keep}})
 
 
 # ---- process -------------------------------------------------------------------------------------------------------------------
@@ -949,8 +982,10 @@ def _fetch_local(storage: Storage, src: Source, folder: Path, name: str) -> Path
     return storage.download(SOURCES_BUCKET, src.storage_path, folder / f"{name}{Path(src.storage_path).suffix or '.mp4'}")
 
 
-def _get_source(store: Store, storage: Storage, pick: Favorite, now: datetime, runner: Any) -> Source | Outcome:
-    """The pick's full clip as a source: the owner's upload, or the pasted link fetched once (a failure: ``waiting``)."""
+def _get_source(store: Store, storage: Storage, pick: Favorite, now: datetime, runner: Any, media_fallback: Any = None) -> Source | Outcome:
+    """The pick's full clip as a source: the owner's upload, or the pasted link fetched once: yt-dlp, else (with
+    ``media_fallback``, the ScrapeCreators client of the cloud jobs) that one post's copy (a failure of both: ``waiting``, with
+    both reasons)."""
     if pick.source_id:
         found = next(iter(store.list_sources(id=pick.source_id)), None)
         if found is not None and found.storage_path:
@@ -964,9 +999,9 @@ def _get_source(store: Store, storage: Storage, pick: Favorite, now: datetime, r
     if pick.platform == DROP_PLATFORM:
         return Outcome(pick.id, drop_of(pick)["state"], "the upload has not finished", detail={"waiting_for": "upload"})
     try:
-        result = fetch.fetch_pick_clip(store, storage, pick.id, runner=runner, fall_back=False)
+        result = fetch.fetch_pick_clip(store, storage, pick.id, runner=runner, fall_back=False, media_fallback=media_fallback)
     except fetch.FetchFailed as e:
-        reason = f"the link could not be fetched in the cloud ({str(e)[:120]}): the Mac's daily run tries again"
+        reason = f"the link could not be fetched in the cloud ({str(e)[:260]}): the Mac's daily run tries again"
         _unready(store, pick, now, state="waiting", reason=reason)
         return Outcome(pick.id, "waiting", reason)
     return _source(store, result["source_id"])
@@ -1056,10 +1091,13 @@ def process_drop(
     now: datetime | None = None,
     job: str | None = None,
     characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
+    media_fallback: Any = None,
 ) -> Outcome:
     """Check a dropped video (free) and make it ``ready`` (see the module doc). ``KeyError`` for an unknown pick, ``DropError``
     for a pick that is not a drop or not at a step a check runs from; ``StorageError`` when our own Storage fails. When the
-    owner chooses another character during the check, it starts again for him (up to ``CHANGE_RESTARTS`` times)."""
+    owner chooses another character during the check, it starts again for him (up to ``CHANGE_RESTARTS`` times).
+    ``media_fallback`` (``studio.hits.ScrapeCreators``, the cloud jobs pass it when the key is set): a link yt-dlp cannot fetch
+    is taken from ScrapeCreators' copy of that one post (``studio.fetch.fetch_pick_clip``)."""
     now = now or now_london()
     job = job or job_id()
     pick = _load(store, pick_id)
@@ -1073,6 +1111,7 @@ def process_drop(
             try:
                 return _process(
                     store, storage, store.get_favorite(pick_id), gemini_client, deconstruct_answer, runner, now, characters_dir,
+                    media_fallback=media_fallback,
                 )
             except _CharacterChanged:
                 if deconstruct_answer is not None:
@@ -1092,7 +1131,7 @@ def process_drop(
 
 def _process(
     store: Store, storage: Storage, pick: Favorite, client: gemini.GeminiClient | None,
-    answer: Mapping[str, Any] | None, runner: Any, now: datetime, characters_dir: Path | str,
+    answer: Mapping[str, Any] | None, runner: Any, now: datetime, characters_dir: Path | str, *, media_fallback: Any = None,
 ) -> Outcome:
     slug = pick.character_slug
     ref, who = character(slug, characters_dir)
@@ -1100,7 +1139,7 @@ def _process(
     rules_version = gemini.hit_rules_version()  # the hit rules this look is judged by (the clip's hit_rules_version tag)
     by_studio = drop_of(pick).get("character_by") == "studio"
     in_family = {m.character_slug for m in family(store, pick) if m.id != pick.id}  # the studio never moves it to one of them
-    got = _get_source(store, storage, pick, now, runner)
+    got = _get_source(store, storage, pick, now, runner, media_fallback)
     if isinstance(got, Outcome):
         return got
     src = got
@@ -1848,6 +1887,13 @@ def _finish(outcome: Outcome) -> None:
         raise typer.Exit(EXIT_FAILED)
 
 
+def _media() -> Any:
+    """The ScrapeCreators client for a dropped link yt-dlp cannot fetch (``SCRAPECREATORS_API_KEY``), else None."""
+    from studio import hits  # here, not at the top: studio.hits imports this module
+
+    return hits.ScrapeCreators.from_env()
+
+
 @app.command("add")
 def add_command(
     character_slug: Annotated[
@@ -1896,7 +1942,9 @@ def process_command(
     answer = _json_file(deconstruct_file, "deconstruct")
     store, storage = open_store(), open_storage()
     try:
-        outcome = process_drop(store, storage, pick, gemini_client=gemini.GeminiClient.from_env(), deconstruct_answer=answer)
+        outcome = process_drop(
+            store, storage, pick, gemini_client=gemini.GeminiClient.from_env(), deconstruct_answer=answer, media_fallback=_media(),
+        )
     except KeyError:
         fail(f"unknown pick {pick}")
     except (DropError, StorageError) as e:
@@ -1957,6 +2005,22 @@ def copy_command(
         fail(str(e))
     d = version.proposal["drop"]
     emit({"pick_id": version.id, "copy_of": d["copy_of"], "character": version.character_slug, "drop": d})
+
+
+@app.command("keep")
+def keep_command(
+    pick: Annotated[str, typer.Argument(help="A drop's pick id.")],
+    off: Annotated[bool, typer.Option("--off", help="Take the Keep off again (retention may then delete an unused clip).")] = False,
+) -> None:
+    """Keep a drop's clip: retention (``source purge --stale``) never deletes it. Prints {"pick_id", "keep"}."""
+    store = open_store()
+    try:
+        kept = set_keep(store, pick, not off)
+    except KeyError:
+        fail(f"unknown pick {pick}")
+    except (DropError, ValueError) as e:
+        fail(str(e))
+    emit({"pick_id": kept.id, "keep": kept.proposal["drop"]["keep"]})
 
 
 @app.command("make")
@@ -2027,13 +2091,13 @@ def sweep_command(
 ) -> None:
     """Run every pending drop job, one after another (the 2-hourly safety net). Exit 1 when one of them stopped on a failure."""
     store, storage = open_store(), open_storage()
-    hf, client = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env()
+    hf, client, media = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env(), _media()
     results: list[dict[str, Any]] = []
     failed = False
     for row in pending(store, include_waiting=include_waiting):
         try:
             if row["job"] == "process":
-                outcome = process_drop(store, storage, row["pick_id"], gemini_client=client)
+                outcome = process_drop(store, storage, row["pick_id"], gemini_client=client, media_fallback=media)
             else:
                 outcome = make_drop(store, storage, row["pick_id"], hf=hf, gemini_client=client)
             results.append({"job": row["job"], **outcome.json()})

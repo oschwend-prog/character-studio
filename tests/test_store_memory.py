@@ -482,3 +482,53 @@ def test_review_week_must_be_a_date_and_bar_status_is_optional():
         Review(week=datetime(2026, 10, 5, 12, 0, tzinfo=LONDON), character_slug="biscuit", report_md="x")
     with pytest.raises(ValueError, match="week"):
         Review(week="2026-10-05", character_slug="biscuit", report_md="x")
+
+
+# ---- hits (the cloud hits job, migration 0016) ---------------------------------------------------------------------------------
+
+
+def test_upsert_hit_inserts_then_refreshes_numbers_and_keeps_status_first_seen_and_who_found_it():
+    from studio.models import Hit
+
+    store = MemoryStore()
+    url = "https://www.tiktok.com/@a/video/1"
+    first, created = store.upsert_hit(Hit(platform="tiktok", url=url, views=100, likes=10, followers=50, keyword="dog dance",
+                                          character_slug="franz", score=40, created_at=NOW, last_seen=NOW))  # fmt: skip
+    assert created is True and first.id and first.platform is Platform.tiktok and first.status == "new"
+    store.update_hit(first.id, status="dismissed")
+    later = NOW + timedelta(days=1)
+    again, created = store.upsert_hit(Hit(platform="tiktok", url=url, views=900, likes=None, keyword="trending", character_slug=None,
+                                          score=70, created_at=later, last_seen=later))  # fmt: skip
+    assert created is False and again.id == first.id
+    assert (again.views, again.likes, again.score, again.last_seen) == (900, 10, 70, later)  # a number not given stays as it was
+    assert (again.status, again.created_at, again.keyword, again.character_slug) == ("dismissed", NOW, "dog dance", "franz")
+    assert store.get_hit(first.id) == again and store.get_hit("nope") is None
+    assert [h.url for h in store.list_hits(status="dismissed")] == [url] and store.list_hits(status="new") == []
+    general, _ = store.upsert_hit(Hit(platform="instagram", url="https://www.instagram.com/reel/X/", created_at=later, last_seen=later))
+    assert general.character_slug is None
+    filled, _ = store.upsert_hit(Hit(platform="instagram", url=general.url, character_slug="lenny", keyword="office dance",
+                                     created_at=later, last_seen=later))  # fmt: skip
+    assert (filled.character_slug, filled.keyword) == ("lenny", "office dance")  # a general hit learns who found it
+    assert [h.url for h in store.list_hits()] == [url, general.url]  # oldest first
+    with pytest.raises(KeyError):
+        store.update_hit("nope", status="new")
+    with pytest.raises(ValueError):
+        store.update_hit(first.id, status="maybe")
+    with pytest.raises(TypeError):
+        store.list_hits(colour="red")
+
+
+def test_a_hit_validates_its_platform_status_score_and_caption():
+    from studio.models import Hit
+
+    with pytest.raises(ValueError):
+        Hit(platform="youtube", url="u")
+    with pytest.raises(ValueError):
+        Hit(platform="tiktok", url="u", status="filed")
+    for bad in (-1, 101, 5.5, True):
+        with pytest.raises(ValueError):
+            Hit(platform="tiktok", url="u", score=bad)
+    with pytest.raises(ValueError):
+        Hit(platform="tiktok", url="u", caption="x" * 301)
+    with pytest.raises(ValueError):
+        MemoryStore().upsert_hit(Hit(platform="tiktok", url="u", last_seen=datetime(2026, 10, 8, 6, 30)))  # never naive

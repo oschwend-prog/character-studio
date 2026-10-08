@@ -18,6 +18,12 @@ A Drop-in needs the actual video file. The owner allowed ``yt-dlp`` for it, with
   What the owner chose (``owner_mode``) is kept as chosen: the run's effective-mode rule makes it a Recreate because there is
   no usable source. The CLI exits 1 with that in its JSON. A failure of OUR Storage is not that: it is a ``StorageError``
   (exit 2) and the pick is left alone.
+* **When yt-dlp cannot do it for a dropped link** (owner 2026-10-07, plan Task 6: Instagram and TikTok often block the cloud's
+  addresses): a pick the owner dropped or tapped "Use this clip" on, or the hits job filed (``proposal.drop``), is taken from
+  ScrapeCreators' copy of that ONE post (``media_fallback``: ``studio.hits.ScrapeCreators.download_post``, ``download_media=true``,
+  10 credits when the media is found), checked and ingested exactly like a yt-dlp result; its marker says
+  ``via: scrapecreators`` and the credits. TikTok and Instagram only, never a batch, never a third-party downloader site. When
+  that fails too, the one ``FetchFailed`` names both reasons.
 * **Idempotent and shared**: a pick that already carries a live fetched source is not downloaded again, and the other
   character's pick of the same video (the terminal's "Both") reuses the one download, as does a version of a drop (terminal
   v3, ``studio.drop.copy_drop``: it shares the root's source and carries its fetched marker).
@@ -29,22 +35,33 @@ until that one is done. It only ever touches what carries a ``fetched`` marker: 
 A pick that is itself still to be made (returned to ``approved`` after its clip was dropped) keeps its fetched clip for the
 next attempt. ``studio source purge --pending`` is the daily tidy-up: every clip that is done and every skipped pick that
 fetched one, in one sweep. Idempotent: a second run finds nothing to do.
+
+``purge_stale`` (``studio source purge --stale``, run daily by the hits workflow; owner 2026-10-07: "delete them after a while")
+is retention for clips nobody used: a drop never made whose clip came from a hit (the hits job filed it, ``drop.auto_filed``, or
+the owner tapped "Use this clip": its link is a hit marked ``dropped``) and was filed more than ``hit_days`` (30) ago, or the
+owner's own upload or link filed more than ``owner_days`` (60) ago, has its Storage objects deleted (the full clip, the trimmed
+sections of a make the budget refused, the preview strip) and the pick is skipped: "expired: unused for N days, the clip was
+deleted". Never touched: a pick with the owner's Make it, a drop making or made, a pick queued or made, one marked Keep
+(``drop.keep``), and a whole family while one of its members is still to be made and not itself expired (a version shares its
+root's clip). A source another pick or an unfinished clip still uses stays. Finished masters and every data row stay; the
+owner's Mac folder is never touched. Idempotent.
 """
 
 from __future__ import annotations
 
 import subprocess
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Protocol
 
 import typer
 
 from studio import sources as sources_module
 from studio.cli_support import emit, fail, open_storage, open_store
 from studio.config import now_london
-from studio.favorites import GALLERY_PLATFORM, is_gallery, parse_video_url
+from studio.favorites import GALLERY_PLATFORM, family_picks, family_root_id, is_drop, is_gallery, parse_video_url
 from studio.media.qa import QAError, probe
 from studio.models import Body, Favorite, Source
 from studio.sources import INBOX_PREFIX, SOURCES_BUCKET, _source_json, add_source
@@ -67,6 +84,16 @@ Runner = Callable[[Sequence[str]], "subprocess.CompletedProcess[str]"]
 
 class FetchFailed(RuntimeError):
     """yt-dlp could not produce a usable clip: the pick falls back to a Recreate."""
+
+
+class MediaFallback(Protocol):
+    """``studio.hits.ScrapeCreators``: the ONE post's hosted copy saved to ``dest``; raises when there is none."""
+
+    def download_post(self, url: str, platform: str, dest: Path) -> dict[str, Any]: ...
+
+
+FALLBACK_PLATFORMS = frozenset({"tiktok", "instagram"})
+FALLBACK_ERRORS = (RuntimeError, OSError, ValueError)  # ScrapeCreatorsError is a RuntimeError
 
 
 def ytdlp_command(url: str, template: str) -> list[str]:
@@ -106,11 +133,27 @@ def _live_fetched_source(store: Store, pick: Favorite) -> Source | None:
     return source if source is not None and source.storage_path else None
 
 
-def _result(pick: Favorite, source: Source, file: Path | None, *, already: bool) -> dict[str, Any]:
-    return {
+def _result(pick: Favorite, source: Source, file: Path | None, *, already: bool, via: str | None = None) -> dict[str, Any]:
+    out = {
         **_source_json(source), "fetched": True, "already": already, "pick_id": pick.id, "source_id": source.id,
         "file": str(file) if file is not None and file.is_file() else None,
     }  # fmt: skip
+    if via is not None:
+        out["via"] = via
+    return out
+
+
+def _usable_seconds(dest: Path) -> float:
+    """The downloaded clip's length, or ``FetchFailed`` when it is not a readable video of at most ``FETCH_MAX_SECONDS``."""
+    try:
+        seconds = probe(dest, loudness=False).duration_s
+    except QAError as e:
+        raise FetchFailed(f"the download is not a readable video: {e}") from None
+    if not seconds > 0:
+        raise FetchFailed("the download has no readable duration")
+    if seconds > FETCH_MAX_SECONDS:
+        raise FetchFailed(f"the clip is {seconds:.0f} s long: at most {FETCH_MAX_SECONDS:.0f} s are fetched")
+    return seconds
 
 
 def _fall_back_to_recreate(store: Store, pick: Favorite, reason: str) -> dict[str, Any]:
@@ -129,11 +172,15 @@ def fetch_pick_clip(
     body: Body | str = Body.biped,
     bodies: int = 1,
     fall_back: bool = True,
+    media_fallback: MediaFallback | None = None,
 ) -> dict[str, Any]:
     """Fetch the clip of one approved pick (see the module doc); the JSON-ready result.
 
     ``fall_back=False`` (a dropped link, ``studio drop process``): a yt-dlp failure raises ``FetchFailed`` instead and the pick
     is left as it is (the drop waits and the daily run on the Mac tries again; a dropped video is never made as a Recreate).
+
+    ``media_fallback`` (the cloud drop job's ScrapeCreators client): for a drop on TikTok or Instagram, a yt-dlp failure is
+    followed by that one post's hosted copy (see the module doc); ``via`` in the result says which one fetched it.
 
     ``KeyError`` for an unknown pick; ``ValueError`` for a pick that may not be fetched (status, gallery, owner choices, a
     URL that is not TikTok / Instagram / YouTube); ``StorageError`` when our own Storage refuses the upload. A yt-dlp
@@ -175,26 +222,31 @@ def fetch_pick_clip(
         for leftover in folder.glob(f"{pick.id}.*"):  # the clip, a .part, a .ytdl: nothing half-done stays
             leftover.unlink(missing_ok=True)
 
+    via, fallback_credits = "yt-dlp", None
     try:
         try:
-            template = f"{str(folder).replace('%', '%%')}/{pick.id}.%(ext)s"  # a % in the path is not a template field
-            done = run(ytdlp_command(canonical, template))
-        except FileNotFoundError:
-            raise FetchFailed("yt-dlp is not installed") from None
-        except subprocess.TimeoutExpired:
-            raise FetchFailed(f"yt-dlp timed out after {FETCH_TIMEOUT_S:.0f} s") from None
-        if done.returncode != 0:
-            raise FetchFailed(f"yt-dlp failed ({done.returncode}): {_tail(done.stderr)}")
-        if not dest.is_file():
-            raise FetchFailed("yt-dlp produced no video (a private, removed or too long clip, or a login wall)")
-        try:
-            seconds = probe(dest, loudness=False).duration_s
-        except QAError as e:
-            raise FetchFailed(f"the download is not a readable video: {e}") from None
-        if not seconds > 0:
-            raise FetchFailed("the download has no readable duration")
-        if seconds > FETCH_MAX_SECONDS:
-            raise FetchFailed(f"the clip is {seconds:.0f} s long: at most {FETCH_MAX_SECONDS:.0f} s are fetched")
+            try:
+                template = f"{str(folder).replace('%', '%%')}/{pick.id}.%(ext)s"  # a % in the path is not a template field
+                done = run(ytdlp_command(canonical, template))
+            except FileNotFoundError:
+                raise FetchFailed("yt-dlp is not installed") from None
+            except subprocess.TimeoutExpired:
+                raise FetchFailed(f"yt-dlp timed out after {FETCH_TIMEOUT_S:.0f} s") from None
+            if done.returncode != 0:
+                raise FetchFailed(f"yt-dlp failed ({done.returncode}): {_tail(done.stderr)}")
+            if not dest.is_file():
+                raise FetchFailed("yt-dlp produced no video (a private, removed or too long clip, or a login wall)")
+            seconds = _usable_seconds(dest)
+        except FetchFailed as first:
+            clear()
+            if media_fallback is None or not is_drop(pick.proposal) or platform not in FALLBACK_PLATFORMS:
+                raise
+            try:  # the ONE post's hosted copy (ScrapeCreators), ingested exactly like a yt-dlp result
+                got = media_fallback.download_post(canonical, platform, dest)
+                seconds = _usable_seconds(dest)
+            except FALLBACK_ERRORS as second:
+                raise FetchFailed(f"{str(first)[:110]}; and ScrapeCreators could not either: {str(second)[:110]}") from None
+            via, fallback_credits = "scrapecreators", got.get("credits") if isinstance(got, Mapping) else None
     except FetchFailed as e:
         clear()
         if not fall_back:
@@ -210,9 +262,11 @@ def fetch_pick_clip(
     source = add_source(
         store, "owner_inbox", key, body, bodies, seconds, credit_handle=pick.creator_handle, storage_path=key
     )
-    marker = {"source_id": source.id, "storage_path": key, "at": now_london().isoformat()}
+    marker: dict[str, Any] = {"source_id": source.id, "storage_path": key, "at": now_london().isoformat()}
+    if via != "yt-dlp":
+        marker.update(via=via, credits=fallback_credits)
     store.update_favorite(pick.id, source_id=source.id, proposal={**pick.proposal, "fetched": marker})
-    return _result(pick, source, dest, already=False)
+    return _result(pick, source, dest, already=False, via=via)
 
 
 # ---- purge ----------------------------------------------------------------------------------------------------------------
@@ -356,6 +410,140 @@ def purge_pending(
     return {"clips": results, "skipped_picks": picks_done, "already": not results and not picks_done}
 
 
+# ---- retention: the clips nobody used (owner 2026-10-07) ----------------------------------------------------------------------
+
+HIT_DAYS = 30  # a clip from a hit (auto-filed, or "Use this clip")
+OWNER_DAYS = 60  # the owner's own upload or link
+NOT_YET_MADE = frozenset({"new", "approved", "analysed"})  # a pick in one of these was never made
+BUSY_STATES = frozenset({"making", "made"})  # a drop being made, or made: never expired
+
+
+def filed_at(pick: Favorite) -> datetime | None:
+    """When the drop was filed: its ``decision.at`` (add_drop / copy_drop stamp it), else the pick's ``created_at``."""
+    decision = pick.proposal.get("decision")
+    raw = decision.get("at") if isinstance(decision, Mapping) else None
+    if isinstance(raw, str):
+        try:
+            at = datetime.fromisoformat(raw)
+        except ValueError:
+            at = None
+        if at is not None and at.tzinfo is not None:
+            return at
+    return pick.created_at
+
+
+def _expiry_days(pick: Favorite, from_hit: bool, now: datetime, hit_days: int, owner_days: int) -> int | None:
+    """The days a never-made drop has gone unused when its time is up (``from_hit``: 30, the owner's own: 60), else None."""
+    d = pick.proposal.get("drop")
+    if not isinstance(d, Mapping) or pick.status not in NOT_YET_MADE:
+        return None
+    if pick.proposal.get("make_requested") is not None or d.get("state") in BUSY_STATES or d.get("keep") is True:
+        return None
+    filed = filed_at(pick)
+    if filed is None:
+        return None
+    age = now - filed
+    return age.days if age > timedelta(days=hit_days if from_hit else owner_days) else None
+
+
+def _objects(store: Store, pick: Favorite) -> list[tuple[str | None, str]]:
+    """What a drop holds in the ``sources`` bucket, as ``(source id or None, key)``: its full clip (its source, or the owner's
+    upload before a check catalogued it), the trimmed sections of its clips (a make the budget refused), its preview strip."""
+    d = pick.proposal["drop"]
+    out: list[tuple[str | None, str]] = []
+    full_id = pick.source_id or d.get("source_id")
+    full = next(iter(store.list_sources(id=full_id)), None) if isinstance(full_id, str) and full_id else None
+    if full is not None and full.storage_path:
+        out.append((full.id, full.storage_path))
+    owner_path = pick.proposal.get("owner_clip_path")
+    if full is None and isinstance(owner_path, str) and owner_path:  # an upload no check has catalogued yet
+        out.append((None, owner_path))
+    clip_ids = {pick.clip_id} if pick.clip_id else set()
+    clip_ids |= {c.id for c in store.list_clips() if c.features.get("fav_id") == pick.id}
+    for clip_id in sorted(clip_ids):
+        clip = store.get_clip(clip_id)
+        child = next(iter(store.list_sources(id=clip.source_id)), None) if clip is not None and clip.source_id else None
+        if child is not None and child.storage_path and child.id != (full.id if full is not None else None):
+            out.append((child.id, child.storage_path))
+    preview = d.get("preview_path")
+    if isinstance(preview, str) and preview:
+        out.append((None, preview))
+    return out
+
+
+def _needed_elsewhere(store: Store, source_id: str, expiring: set[str]) -> bool:
+    """Does a pick that is not expiring now (and not done) or an unfinished clip still use this source?"""
+    for other in store.list_favorites():
+        if other.id in expiring:
+            continue
+        marker = other.proposal.get("fetched")
+        uses = other.source_id == source_id or (isinstance(marker, Mapping) and marker.get("source_id") == source_id)
+        if uses and not _done_pick(store, other):
+            return True
+    return any(c.state.value not in PURGE_CLIP_STATES for c in store.list_clips(source_id=source_id))
+
+
+def purge_stale(
+    store: Store, storage: Storage, now: datetime, hit_days: int = HIT_DAYS, owner_days: int = OWNER_DAYS,
+) -> dict[str, Any]:
+    """Retention (see the module doc): ``{"expired": [{"pick_id", "days", "deleted": [keys], "kept": [keys]}], "storage_deleted":
+    [keys], "already": bool}``. Every object is deleted before anything is recorded, so a ``StorageError`` half way leaves the
+    picks as they were and the next run finishes the job (a delete of an object already gone is no error)."""
+    with store.transaction():  # one connection for every read
+        hit_urls = {h.url for h in store.list_hits(status="dropped")}
+        drops = [p for p in store.list_favorites() if is_drop(p.proposal)]
+        by_id = {p.id: p for p in drops}
+
+        def from_hit(pick: Favorite) -> bool:
+            root = by_id.get(family_root_id(pick), pick)
+            return any(p.proposal["drop"].get("auto_filed") is True or p.url in hit_urls for p in (pick, root))
+
+        days = {p.id: n for p in drops if (n := _expiry_days(p, from_hit(p), now, hit_days, owner_days)) is not None}
+        expiring: dict[str, Favorite] = {}
+        plans: dict[str, list[tuple[str | None, str]]] = {}
+        for pick_id in days:
+            pick = by_id[pick_id]
+            members = [m for m in family_picks(store, pick) if m.status != "skipped"]
+            if any(m.id not in days and not _done_pick(store, m) for m in members):
+                continue  # a member still to be made keeps the whole family (they share one clip)
+            if objects := _objects(store, pick):  # nothing in Storage: nothing to expire
+                expiring[pick_id], plans[pick_id] = pick, objects
+        delete: dict[str, str | None] = {}
+        kept: set[str] = set()
+        for objects in plans.values():
+            for source_id, key in objects:
+                if source_id is not None and _needed_elsewhere(store, source_id, set(expiring)):
+                    kept.add(key)
+                else:
+                    delete.setdefault(key, source_id)
+    for key in delete:
+        storage.delete(SOURCES_BUCKET, key)
+    at = now.isoformat()
+    expired: list[dict[str, Any]] = []
+    with store.transaction():  # every record at once
+        for key, source_id in delete.items():
+            if source_id is not None:
+                store.update_source(source_id, storage_path=None)
+            for src in store.list_sources(storage_path=key):  # an owner upload catalogued under its own key
+                store.update_source(src.id, storage_path=None)
+        for pick_id, pick in expiring.items():
+            gone = [k for _, k in plans[pick_id] if k in delete]
+            n = days[pick_id]
+            fresh = store.get_favorite(pick_id) or pick
+            d = {k: v for k, v in fresh.proposal["drop"].items() if k != "preview_path"}
+            d.update(
+                reason=f"expired: unused for {n} days" + (", the clip was deleted" if gone else ""),
+                expired={"at": at, "days": n, "deleted": gone}, at=at,
+            )
+            proposal = {**fresh.proposal, "drop": d}
+            marker = proposal.get("fetched")
+            if isinstance(marker, Mapping) and "purged_at" not in marker and marker.get("storage_path") in delete:
+                proposal["fetched"] = {**marker, "purged_at": at}
+            store.update_favorite(pick_id, status="skipped", proposal=proposal)
+            expired.append({"pick_id": pick_id, "days": n, "deleted": gone, "kept": [k for _, k in plans[pick_id] if k in kept]})
+    return {"expired": expired, "storage_deleted": list(delete), "already": not expired}
+
+
 # ---- CLI (registered on the `source` group by studio.cli) -------------------------------------------------------------
 
 
@@ -396,13 +584,21 @@ def purge_command(
         bool,
         typer.Option("--pending", help="Sweep every clip that is done (approved, scheduled, posted, dropped) and every skipped pick."),
     ] = False,
+    stale: Annotated[
+        bool,
+        typer.Option("--stale", help="Retention: the clips of drops never made, 30 days after filing from a hit, 60 for the owner's own (never a kept one)."),
+    ] = False,
 ) -> None:
-    """Delete fetched clips, their Storage objects and contact sheets once the clip is approved or posted (idempotent)."""
-    if (clip is None) == (not pending):
-        fail("give one of --clip <id> or --pending")
+    """Delete fetched clips, their Storage objects and contact sheets once the clip is approved or posted, or (--stale) the clips
+    of drops nobody made (idempotent)."""
+    if sum((clip is not None, pending, stale)) != 1:
+        fail("give one of --clip <id>, --pending or --stale")
     store = open_store()
     storage = open_storage()
     try:
+        if stale:
+            emit(purge_stale(store, storage, now_london()))
+            return
         emit(purge_pending(store, storage) if pending else purge_clip(store, storage, clip or ""))
     except KeyError:
         fail(f"unknown clip {clip}")
