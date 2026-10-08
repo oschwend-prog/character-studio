@@ -594,6 +594,7 @@ export class DemoBackend implements Backend {
       window: { start_s: o.start, length_s: o.seconds }, crop_x: o.landscape ? o.star?.x_center ?? 0.5 : null, star: o.star, classic: o.seconds >= 12,
       part: o.part ?? 'featured', gadgets: o.gadgets, hooks: o.hooks, hook: o.hooks[0], music: 'original', seconds: o.seconds,
       credits: estimateCredits('dropin', o.seconds, 'original'), preview_path: `owner/${id}/preview.jpg`,
+      cover_path: `owner/${id}/cover.jpg`, preview_video_path: `owner/${id}/preview.mp4`, // Task 11: no file behind either here
       max_length_s: Number((16 - (PAUSE_LEAD_S[o.slug] ?? 0)).toFixed(3)),
     });
     const person = (description: string, x = 0.5): DropCard['star'] => ({ kind: 'person', body: 'biped', description, x_center: x, full_body: true });
@@ -942,7 +943,8 @@ export class DemoBackend implements Backend {
           drop: {
             ...d, state: 'ready', reason: null, at: new Date(now).toISOString(), source_id: (d.source_id as string) ?? uid('sd'), duration_s: duration, width, height,
             window: { start_s: start, length_s: seconds }, crop_x: width > (height * 9) / 16 + 1 ? star!.x_center : null, star, classic: false, part: 'featured', gadgets: [], hooks, hook: hooks[0],
-            music: 'original', seconds, credits: estimateCredits('dropin', seconds, 'original'), preview_path: `owner/${f.id}/preview.jpg`, recommended,
+            music: 'original', seconds, credits: estimateCredits('dropin', seconds, 'original'), preview_path: `owner/${f.id}/preview.jpg`,
+            cover_path: `owner/${f.id}/cover.jpg`, preview_video_path: `owner/${f.id}/preview.mp4`, recommended,
             max_length_s: Number((16 - (PAUSE_LEAD_S[slug] ?? 0)).toFixed(3)),
             score: demoScore(5 + (h % 5), 6 + (h % 5), DEMO_POTENTIAL[slug] ?? 'a clip people share'), // every check that ends ready scores it
           },
@@ -1548,7 +1550,10 @@ export class DemoBackend implements Backend {
   }
 
   async previewUrl(path: string) {
-    // the demo stores no media: a labelled stand-in strip of five frames
+    // the demo stores no media (no media files in git): a labelled stand-in picture for a card's cover, a stand-in strip of five
+    // frames, and no video at all (the player sheet shows its "no preview yet" state)
+    if (/\.(mp4|mov|m4v|webm)$/i.test(path)) return null;
+    if (/\/cover\.jpg$/i.test(path)) return demoThumb('DEMO COVER', (hashOf(path) * 137) % 360);
     const frames = Array.from({ length: 5 }, (_, i) =>
       `<rect x="${i * 36}" y="0" width="35" height="64" fill="hsl(${(path.length * 7 + i * 23) % 360} 45% ${28 + i * 4}%)"/>` +
       `<circle cx="${i * 36 + 17.5}" cy="26" r="8" fill="#fff" fill-opacity=".55"/>`).join('');

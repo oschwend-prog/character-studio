@@ -426,6 +426,12 @@ export interface DropCard {
   credits?: number;
   /** sources/owner/<pick id>/preview.jpg: five frames of the section (signed for the owner's browser). */
   preview_path?: string | null;
+  /** sources/owner/<pick id>/cover.jpg: the clip card's picture, the middle frame of the section at 540x960 (terminal v3 Task 11).
+   * Absent on a clip checked before it, or when the check could not make it (the card shows the strip, then the tile). */
+  cover_path?: string | null;
+  /** sources/owner/<pick id>/preview.mp4: the section with its own sound, 540x960, what the card's play button plays (Task 11).
+   * Absent like cover_path (the card then plays the owner's upload from the section, or opens the original post). */
+  preview_video_path?: string | null;
   adjust?: DropAdjust;
   requested?: { process?: string; make?: string };
   /** Owner 2026-10-06: his own recording or footage used with permission (true) or a downloaded clip (false, the default). For
@@ -717,7 +723,8 @@ export interface Backend {
   setHitStatus(hitId: string, status: HitStatus): Promise<void>;
   /** The clip card's Keep (set_drop_keep, migration 0016): retention never deletes a kept clip. */
   setDropKeep(pickId: string, keep: boolean): Promise<void>;
-  /** A signed URL of a drop's preview strip in the sources bucket (owner/<pick id>/preview.jpg), or null. */
+  /** A signed URL of a file of a drop the owner may read in the sources bucket (owner/<pick id>/: the strip preview.jpg, the
+   * card's cover.jpg, the watch copy preview.mp4, his own upload), or null. */
   previewUrl(path: string): Promise<string | null>;
   signedUrl(path: string): Promise<string | null>;
   /** Live updates; returns an unsubscribe. `onStatus` reports whether the live channel is up. */

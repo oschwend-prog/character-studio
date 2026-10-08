@@ -9,6 +9,7 @@
 // hit used or not for us, set_drop_keep is the clip card's Keep.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { isOwnerMediaPath } from './clipcard';
 import { HOT_LIMIT, WORTH_LIMIT, hitFromRow, hitLaneSlugs, mergeHitLanes } from './hits';
 import { orderRoster } from './roster';
 import { checkClipBasics, ownerClipPath } from './rules';
@@ -279,8 +280,9 @@ export class LiveBackend implements Backend {
     await this.rpc('set_drop_keep', { pick_id: pickId, keep });
   }
   async previewUrl(path: string) {
-    // a drop's preview strip lives under sources/owner/<pick id>/ (the owner may read there: storage policy of 0008)
-    if (!/^owner\/[0-9a-f-]{36}\/[^/\s]+$/i.test(path)) return null;
+    // a drop's strip, cover and watch copy (preview.jpg, cover.jpg, preview.mp4) and the owner's own upload live under
+    // sources/owner/<pick id>/ (the owner may read there: storage policy of 0008)
+    if (!isOwnerMediaPath(path)) return null;
     const { data, error } = await this.sb.storage.from('sources').createSignedUrl(path, 3600);
     if (error) return null;
     return data.signedUrl;
