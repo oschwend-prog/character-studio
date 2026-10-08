@@ -3,31 +3,24 @@
 *Written overnight while you slept. Updated as the work finished; the last section is what needs you.*
 
 ## 1. Your decisions this morning (2 minutes each)
-1. **GitHub Actions is blocked: fix billing first** (github.com → profile menu → Settings → Billing and licensing).
-   - The account used up its 2,000 free Actions minutes for October, and since 04:35 London GitHub refuses every cloud job:
-     the clip checks, the publish job and the hits job.
-   - About 1,800 of those minutes went on the automatic test run after every push. The tests now run in the cloud only
-     when code changes, one run at a time (they also run on the Mac before every commit).
-   - Fix a failed payment if there is one, then set an Actions budget of about **$15 a month**. My estimate of the real
-     need is under $10 a month above the free minutes.
-   - Until then nothing posts (Franz 19:00, Reginald 19:30), the 15 clips waiting for their free check stay "checking",
-     and the first Hot right now list cannot come in.
-2. **A posting backup on the Mac, yes or no.** It runs the same publish step from the Mac every 5 minutes. It posts only
-   what you approved, at its slot, and never while the kill switch is on. It cannot post twice: the database claims each
-   post once. Not installed: it needs your yes.
-3. **Approve Franz's first video** (Videos, or the approval list on Today). Tall Franz in the night street dance, 6 s, the
-   "Sausage coming through." pill, a zoom hit on his big move, the pinned-comment vote. Slot: **19:00 today** (needs 1 or 2).
-4. **Reginald's Reel shows 0 views** (Instagram's own count, 3 h after posting; 1 follower). On your phone: Reginald →
+1. ~~GitHub Actions is blocked~~ **Solved 10:05: the repo is public** (your choice; public repos get unlimited free cloud
+   minutes). The free minutes for October had run out at 04:35, so all cloud jobs were refused. About 1,800 of those
+   minutes went on the automatic test run after every push, which now runs only when code changes. Your Gmail stays
+   visible in the code's database rules (no access risk: the login needs your inbox). The clip check and the first hits
+   run started at 10:05.
+2. **Approve Franz's first video** (Videos, or the approval list on Today). Tall Franz in the night street dance, 6 s, the
+   "Sausage coming through." pill, a zoom hit on his big move, the pinned-comment vote. Slot: **19:00 today**.
+3. **Reginald's Reel shows 0 views** (Instagram's own count, 3 h after posting; 1 follower). On your phone: Reginald →
    Settings → **Account Status**. If anything says his content can't be recommended, that is the cause; tell me what it says.
-5. **Log back in to Instagram in Chrome** (my account switch last night logged it out; I won't switch accounts again).
-6. **Meta developer app for Instagram's own API** (about 10 minutes, I guide you): it gives us the per-post AI label, the
+4. **Log back in to Instagram in Chrome** (my account switch last night logged it out; I won't switch accounts again).
+5. **Meta developer app for Instagram's own API** (about 10 minutes, I guide you): it gives us the per-post AI label, the
    cover frame and real stats from the cloud. Build step 9 starts as soon as it exists.
-7. **Turn on billing for the Gemini key** (Google AI Studio → your key's project → Billing). Last night the free tier hit
+6. **Turn on billing for the Gemini key** (Google AI Studio → your key's project → Billing). Last night the free tier hit
    its daily limit after about 50 video checks; 11 checks failed on it. Paid, one check costs well under 1p.
-8. **ScrapeCreators credits:** the daily hits job is capped at 45 credits a day. The 100 free credits last about 2 days; the
+7. **ScrapeCreators credits:** the daily hits job is capped at 45 credits a day. The 100 free credits last about 2 days; the
    $47 pack (25,000 credits, they never expire) lasts well over a year. Buy it when you are happy with the first lists.
-9. **Trial Reels**, yes or no (Instagram shows a new Reel to non-followers first; it stays off the grid until it graduates).
-10. **Higgsfield's Creator Partnership Program**: apply (a free monthly plan for tagging Higgsfield, no quotas, no
+8. **Trial Reels**, yes or no (Instagram shows a new Reel to non-followers first; it stays off the grid until it graduates).
+9. **Higgsfield's Creator Partnership Program**: apply (a free monthly plan for tagging Higgsfield, no quotas, no
     exclusivity). Credits are our tightest limit, so this is worth more than Earn. Details in section 8.
 
 ## 2. What is done (overnight, every step reviewed, about 2,700 tests green)
@@ -49,7 +42,7 @@
 - Marketing skills wired in, a measurement and learning plan, an independent system review.
 
 ## 3. Your clips, ranked per character
-**Not ranked yet: the free check runs in the cloud, and the cloud is blocked (decision 1).** State at 09:45:
+**Not ranked yet: the free check runs in the cloud, and the cloud is blocked (decision 1, now solved).** State at 09:45:
 - **20 clips wait for their check** ("checking" in the terminal). Of these:
   - 15 are the 11 that hit Gemini's free limit last night plus 4 that were ready with a score. I sent those 4 back this
     morning so they get the new hit rules and the character spread.
@@ -66,10 +59,17 @@ Once billing is fixed, the 2-hourly sweep checks all 20 within about 2 hours (fr
 Make these on Today, with the top picks per character.
 
 ## 4. Hot right now and Worth saving
-**Not filled yet.** The hits job (`studio-hits.yml`, daily 06:30 London) has not had its first run: it is in the cloud
-too. After the billing fix I run it once by hand. It searches per character plus the general lane, scores what it finds,
-files the best 3 a day per character plus 3 general as clips (free check), and shows the rest under Hot right now on the
-Clips page.
+**The first hits run (10:50, 24 ScrapeCreators credits, about 74 of the 100 free ones left):**
+- **367 viral clips found** from this week: 102 for Franz, 100 for Reginald, 93 for Lenny, 59 general. Instagram's trending
+  feed was down at ScrapeCreators (no charge), so today's list is TikTok only.
+- **12 filed as clips automatically**, the best 3 per character plus 3 general. Each is fetched and checked for free in
+  the cloud. The best:
+  - **General, 91:** a dachshund doing the Beyoncé moves (27.4M views).
+  - **Franz, 94 / 92 / 91:** three dog clips with 3-6M views each.
+  - **Reginald, 90 / 87 / 86:** this week's trend dances (0.9-1.8M), one of them a two-person "Giddy up".
+  - **Lenny, 83:** "Unc talks to Titi's MANAGER" (0.57M). A talent-manager skit, made for Lenny.
+- **The rest are under Clips → Hot right now** (the best 10 general plus each character's top 5), each with "Use this
+  clip" and "Not for us". The job runs again every morning at 06:30.
 
 ## 5. The independent review: the 5 changes that matter most
 Full text: `docs/research/2026-10-07-system-review.md`.
@@ -143,8 +143,8 @@ Never copy: their meme coins, posing as real people, or a culture's dress as the
 - **Higgsfield Earn is real, but the guide's "$1 per 1,000 views" is not Higgsfield's figure.** It pays per approved
   campaign video at confidential rates, on Instagram, YouTube and X (not TikTok). Drop-ins on other people's clips should
   never be submitted, only Recreates and own footage.
-- **Higgsfield's Creator Partnership Program** (a free monthly plan for tagging Higgsfield) is worth more to us: decision 10.
+- **Higgsfield's Creator Partnership Program** (a free monthly plan for tagging Higgsfield) is worth more to us: decision 9.
 
-**Your prompt kit** is saved word for word in `docs/influencers/prompt-kit.md`, with our rules added (odd eyes in every
+**Your prompt kit** is in `docs/influencers/prompt-kit.md`, rewritten in our own words for the public repo, with our rules added (odd eyes in every
 prompt plus a "matching eye colours" negative, no brands, Franz's dog version). The swap prompt gets the guide's two
 lines in the final review.
