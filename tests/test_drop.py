@@ -1985,3 +1985,98 @@ def test_over_the_days_download_cap_the_link_waits_and_scrapecreators_is_not_ask
     assert out.state == store.get_favorite(pick.id).proposal["drop"]["state"] == "waiting" and media.calls == []
     assert "login required" in out.reason and "download_cap_per_day" in out.reason and out.reason.endswith("tries again")
     assert store.get_hit_spend(NOW.date()).downloads == 2  # nothing more was spent
+
+
+# ---- review fix round 1: an auto-filed link is only ever fetched in the cloud (controller ruling 2026-10-08) -----------------------
+
+
+def auto_link(store, filed, *, state="waiting", tried=(), hit_id=None, url=TIKTOK):
+    """A link the hits job filed ``filed`` (London), at ``state``, its failed fetches on the London days ``tried``."""
+    pick, _ = add_drop(store, None, url, filed, auto_filed=True, hit={"id": hit_id or "no-such-hit", "lane": "general"})
+    d = {**pick.proposal["drop"], "state": state, "reason": "x" if state == "waiting" else None}
+    if tried:
+        d["fetch_days"] = list(tried)
+    return store.update_favorite(pick.id, proposal={**pick.proposal, "drop": d})
+
+
+def test_an_auto_filed_link_is_never_offered_to_the_mac(world):
+    store, _ = world
+    waiting = auto_link(store, NOW, tried=[NOW.date().isoformat()])
+    checking = auto_link(store, NOW, state="checking", url="https://www.tiktok.com/@dancer.two/video/2")
+    asked = auto_link(store, NOW, state="making", url="https://www.tiktok.com/@dancer.three/video/3")
+    store.update_favorite(asked.id, proposal={**asked.proposal, "make_requested": {"at": NOW.isoformat(), "by": "owner"}})
+    own, _ = add_drop(store, "reginald", "https://www.tiktok.com/@owner.pasted/video/4", NOW)
+    store.update_favorite(own.id, proposal={**own.proposal, "drop": {**own.proposal["drop"], "state": "waiting"}})
+    mac = pending(store, include_waiting=True, now=NOW)
+    assert {(p["pick_id"], p["job"]) for p in mac} == {(own.id, "process"), (asked.id, "make")}  # its make stays the owner's
+    assert waiting.id not in {p["pick_id"] for p in mac} and checking.id not in {p["pick_id"] for p in mac}
+    cloud = pending(store, now=NOW, auto_retry=True)
+    assert {(p["pick_id"], p["job"]) for p in cloud} == {(checking.id, "process"), (asked.id, "make")}  # tried today already
+
+
+def test_the_cloud_tries_a_waiting_auto_filed_link_on_later_days_while_downloads_allow_then_drops_it(world):
+    store, _ = world
+    pick = auto_link(store, NOW, tried=[NOW.date().isoformat()])
+    jobs = lambda at, retry=True: [(p["pick_id"], p["job"]) for p in pending(store, now=at, auto_retry=retry)]  # noqa: E731
+    assert jobs(NOW + timedelta(hours=3)) == []  # the same London day: not again
+    assert jobs(NOW + timedelta(days=1)) == [(pick.id, "process")]
+    assert jobs(NOW + timedelta(days=1), retry=False) == []  # today's one-post downloads are used: it waits for another day
+    assert jobs(NOW + timedelta(days=2)) == [(pick.id, "process")]
+    assert jobs(NOW + timedelta(days=3)) == jobs(NOW + timedelta(days=3), retry=False) == [(pick.id, "expire")]
+
+
+def test_an_auto_filed_link_that_fails_waits_for_the_cloud_not_the_mac_and_counts_its_days(world):
+    store, storage = world
+    pick, _ = add_drop(store, None, TIKTOK, NOW, auto_filed=True, hit={"id": "h", "lane": "reginald"})
+    out = process_drop(store, storage, pick.id, gemini_client=FakeGemini(), runner=blocked_ytdlp, now=NOW, job="t")
+    d = store.get_favorite(pick.id).proposal["drop"]
+    assert out.state == d["state"] == "waiting" and "Mac" not in out.reason and "the cloud tries again on a later day" in out.reason
+    assert "dropped after 3 days" in out.reason and d["fetch_days"] == [NOW.date().isoformat()]
+    later = NOW + timedelta(days=1)
+    process_drop(store, storage, pick.id, gemini_client=FakeGemini(), runner=blocked_ytdlp, now=later, job="t")
+    assert store.get_favorite(pick.id).proposal["drop"]["fetch_days"] == [NOW.date().isoformat(), later.date().isoformat()]
+
+
+def test_after_three_london_days_an_unfetched_auto_filed_link_is_dropped_and_its_hit_dismissed(world):
+    from studio.models import Hit
+
+    store, _ = world
+    hit, _ = store.upsert_hit(Hit(platform="tiktok", url=TIKTOK, status="dropped", created_at=NOW, last_seen=NOW))
+    pick = auto_link(store, NOW, tried=[NOW.date().isoformat()], hit_id=hit.id)
+    with pytest.raises(DropError):
+        drop.expire_unfetched(store, pick.id, NOW + timedelta(days=2))  # still within its 3 days
+    out = drop.expire_unfetched(store, pick.id, NOW + timedelta(days=3))
+    after = store.get_favorite(pick.id)
+    assert after.status == "skipped" and after.proposal["drop"]["reason"] == "couldn't be fetched in the cloud: dropped after 3 days"
+    assert out["hit_id"] == hit.id and store.get_hit(hit.id).status == "dismissed"
+    own, _ = add_drop(store, "reginald", "https://www.tiktok.com/@owner.pasted/video/4", NOW)
+    with pytest.raises(DropError):
+        drop.expire_unfetched(store, own.id, NOW + timedelta(days=9))  # the owner's own link is never dropped this way
+
+
+def test_the_cloud_sweep_drops_the_stale_and_retries_the_due_only_while_downloads_allow(monkeypatch, tmp_path):
+    store, storage = make_store(), LocalStorage(tmp_path / "s")
+    old = auto_link(store, NOW - timedelta(days=3), tried=[(NOW - timedelta(days=3)).date().isoformat()])
+    due = auto_link(store, NOW - timedelta(days=1), tried=[(NOW - timedelta(days=1)).date().isoformat()],
+                    url="https://www.tiktok.com/@dancer.two/video/2")  # fmt: skip
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: storage)
+    monkeypatch.setattr(drop, "now_london", lambda: NOW)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: None))
+    monkeypatch.setattr(drop.HiggsfieldClient, "from_env", classmethod(lambda cls, env=None, **kw: None))
+
+    class Spent:
+        def refusal(self):
+            return "today's 2 one-post downloads are used (hits.download_cap_per_day)"
+
+    monkeypatch.setattr(drop, "_media", lambda store_: Spent())
+    seen = []
+    monkeypatch.setattr(drop, "process_drop", lambda *a, **kw: seen.append(a[2]) or drop.Outcome(a[2], "waiting", "x"))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    assert [x["pick_id"] for x in json.loads(r.output)["results"]] == [old.id] and seen == []  # no retry today: downloads used
+    assert store.get_favorite(old.id).status == "skipped"
+    assert CliRunner().invoke(app, ["drop", "pending", "--count"]).output.strip() == "0"
+    monkeypatch.setattr(drop, "_media", lambda store_: None)  # no key: yt-dlp alone may try again (free)
+    assert CliRunner().invoke(app, ["drop", "pending", "--count"]).output.strip() == "1"
+    assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 0 and seen == [due.id]

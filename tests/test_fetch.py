@@ -670,7 +670,8 @@ def test_an_unused_clip_from_a_hit_goes_after_30_days_the_owners_upload_after_60
     hit_old = stale(store, storage, clip_file, days=31, auto_filed=True, link="https://www.tiktok.com/@a/video/1")
     hit_young = stale(store, storage, clip_file, days=29, auto_filed=True, link="https://www.tiktok.com/@a/video/2")
     used = stale(store, storage, clip_file, days=31, link="https://www.tiktok.com/@a/video/3")  # "Use this clip" on a hit
-    store.upsert_hit(Hit(platform="tiktok", url=used.url, status="dropped", created_at=NOW_FETCH, last_seen=NOW_FETCH))
+    seen = NOW_FETCH - timedelta(days=32)  # the pull found it a day before the owner tapped "Use this clip"
+    store.upsert_hit(Hit(platform="tiktok", url=used.url, status="dropped", created_at=seen, last_seen=seen))
     own_old = stale(store, storage, clip_file, days=61)
     own_mid = stale(store, storage, clip_file, days=45)  # the owner's own upload: 60 days, not 30
     own_link = stale(store, storage, clip_file, days=45, link="https://www.tiktok.com/@a/video/4")  # a link he pasted himself
@@ -744,3 +745,15 @@ def test_cli_purge_stale_and_the_one_of_rule(cli, clip_file, monkeypatch):
     assert [e["pick_id"] for e in json.loads(r.stdout)["expired"]] == [old.id]
     assert json.loads(run("purge", "--stale").stdout)["already"] is True
     assert run("purge", "--stale", "--pending").exit_code == 2 and run("purge", "--stale", "--clip", "x").exit_code == 2
+
+
+
+def test_an_owners_own_link_keeps_its_60_days_when_a_pull_finds_the_same_post_later(world, clip_file):
+    """Review fix: a hit marked dropped counts only when it was first seen at or before the drop was filed."""
+    store, storage, out_dir = world
+    own = stale(store, storage, clip_file, days=45, link="https://www.tiktok.com/@a/video/9")  # pasted by the owner 45 days ago
+    later = NOW_FETCH - timedelta(days=10)
+    store.upsert_hit(Hit(platform="tiktok", url=own.url, status="dropped", created_at=later, last_seen=later))
+    assert fetch.purge_stale(store, storage, NOW_FETCH)["expired"] == [] and store.get_favorite(own.id) == own
+    out = fetch.purge_stale(store, storage, NOW_FETCH + timedelta(days=16))  # past its own 60 days: it goes as the owner's
+    assert [e["days"] for e in out["expired"]] == [61]

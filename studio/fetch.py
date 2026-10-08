@@ -39,7 +39,8 @@ fetched one, in one sweep. Idempotent: a second run finds nothing to do.
 
 ``purge_stale`` (``studio source purge --stale``, run daily by the hits workflow; owner 2026-10-07: "delete them after a while")
 is retention for clips nobody used: a drop never made whose clip came from a hit (the hits job filed it, ``drop.auto_filed``, or
-the owner tapped "Use this clip": its link is a hit marked ``dropped``) and was filed more than ``hit_days`` (30) ago, or the
+the owner tapped "Use this clip": its link is a hit marked ``dropped`` that was first seen at or before the drop was filed; a link
+he pasted himself stays his own even when a pull finds the same post later) and was filed more than ``hit_days`` (30) ago, or the
 owner's own upload or link filed more than ``owner_days`` (60) ago, has its Storage objects deleted (the full clip, the trimmed
 sections of a make the budget refused, the preview strip) and the pick is skipped: "expired: unused for N days, the clip was
 deleted". Never touched: a pick with the owner's Make it, a drop making or made, a pick queued or made, one marked Keep
@@ -491,13 +492,20 @@ def purge_stale(
     [keys], "already": bool}``. Every object is deleted before anything is recorded, so a ``StorageError`` half way leaves the
     picks as they were and the next run finishes the job (a delete of an object already gone is no error)."""
     with store.transaction():  # one connection for every read
-        hit_urls = {h.url for h in store.list_hits(status="dropped")}
+        hit_seen: dict[str, datetime] = {}  # a hit marked dropped ("Use this clip"): its url -> when it was first seen
+        for h in store.list_hits(status="dropped"):
+            if h.created_at is not None and (h.url not in hit_seen or h.created_at < hit_seen[h.url]):
+                hit_seen[h.url] = h.created_at
         drops = [p for p in store.list_favorites() if is_drop(p.proposal)]
         by_id = {p.id: p for p in drops}
 
+        def tapped(p: Favorite) -> bool:  # the hit existed when the drop was filed: the drop came from it
+            seen, filed = hit_seen.get(p.url), filed_at(p)
+            return seen is not None and filed is not None and seen <= filed
+
         def from_hit(pick: Favorite) -> bool:
             root = by_id.get(family_root_id(pick), pick)
-            return any(p.proposal["drop"].get("auto_filed") is True or p.url in hit_urls for p in (pick, root))
+            return any(p.proposal["drop"].get("auto_filed") is True or tapped(p) for p in (pick, root))
 
         days = {p.id: n for p in drops if (n := _expiry_days(p, from_hit(p), now, hit_days, owner_days)) is not None}
         expiring: dict[str, Favorite] = {}

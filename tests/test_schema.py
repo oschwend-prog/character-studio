@@ -1662,6 +1662,8 @@ def test_0016_is_the_hits_table_its_view_three_functions_and_their_grants_only()
     code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
     statements = [" ".join(s.split()) for s in code.split(";") if s.strip()]
     assert statements == [
+        "create index if not exists hits_platform_creator_idx on studio.hits (platform, creator_handle, created_at)",
+        "create index if not exists hits_status_score_idx on studio.hits (status, score desc)",
         "alter table studio.hits enable row level security",
         "alter table studio.hits_spend enable row level security",
         "revoke all on studio.hits from public",
@@ -1676,20 +1678,23 @@ def test_0016_is_the_hits_table_its_view_three_functions_and_their_grants_only()
         "revoke all on function studio.copy_drop(uuid, text) from public",
         "grant execute on function studio.copy_drop(uuid, text) to authenticated",
         "revoke all on studio.hits_spend from public",
-        "revoke all on studio.hits_spend from authenticated",
     ]
     blocks = re.findall(r"do \$\$.*?\n\$\$;", HITS_CODE, re.S)
-    assert len(blocks) == 2
-    policy, anon = blocks
+    assert len(blocks) == 3
+    policy, anon, spend = blocks
     assert "create policy owner_all on studio.hits for all to authenticated" in policy and "pg_policies" in policy
     assert policy.count("auth.jwt()->>'email' = 'o.schwend@gmail.com'") == 2  # USING and WITH CHECK, as every table of 0001
     assert "rolname = 'anon'" in anon
-    for what in ("studio.hits", "studio.hits_spend", "studio.v_hits", "function studio.set_hit_status(uuid, text)",
+    for what in ("studio.hits", "studio.v_hits", "function studio.set_hit_status(uuid, text)",
                  "function studio.set_drop_keep(uuid, boolean)", "function studio.copy_drop(uuid, text)"):  # fmt: skip
         assert f"execute 'revoke all on {what} from anon';" in anon, what
-    assert "to anon" not in HITS_CODE and "service_role" not in HITS_CODE
+    # the day's spend: revoked from every API role that exists, as 0014 revokes timer_state
+    assert "foreach r in array array['anon', 'authenticated', 'service_role'] loop" in spend
+    assert "execute format('revoke all on studio.hits_spend from %I', r);" in spend and "rolname = r" in spend
+    assert "to anon" not in HITS_CODE and "to service_role" not in HITS_CODE
     words = re.sub(r"'(?:[^']|'')*'", "''", HITS_CODE)  # a string literal is data ('{drop,keep}'), not a statement
-    assert not re.search(r"\b(truncate|delete|drop|alter column|rename|create index)\b", words, re.I)
+    assert not re.search(r"\b(truncate|delete|drop|alter column|rename)\b", words, re.I)
+    assert re.findall(r"create index if not exists (\w+) on studio\.hits", HITS_CODE) == ["hits_platform_creator_idx", "hits_status_score_idx"]
     outside = set(re.findall(r"\b(?:public|auth|storage|extensions|vault|net|cron)\.[a-z_]+", HITS_CODE))
     assert outside == {"auth.jwt"}
     for said in ("WHY.", "studio_0016_hits", "AFTER 0015", "TO UNDO", "Re-run safe", "hkcafvzjwkeibbmvskko"):
@@ -1730,6 +1735,10 @@ def test_0016_v_hits_is_the_new_hits_best_first_with_the_characters_name():
     ]
     assert "left join studio.characters ch on ch.slug = h.character_slug" in view  # the general lane has no character
     assert "where h.status = 'new'" in view and "order by h.score desc, h.last_seen desc, h.id" in view
+    # a hit weeks old is never offered, whatever its stored score (studio.hits.MAX_AGE_DAYS)
+    from studio import hits
+
+    assert "and (h.posted_at is null or h.posted_at > now() - interval '14 days')" in view and hits.MAX_AGE_DAYS == 14
 
 
 def test_0016_set_hit_status_is_a_definer_with_the_owner_check_first():
@@ -1790,7 +1799,7 @@ def test_0016_hits_spend_is_one_row_per_london_day_that_no_api_role_can_touch():
     assert re.search(r"updated_at\s+timestamptz not null default now\(\)", body)
     # like 0014's timer_state: RLS on, no policy, no grant (only the jobs, through the CLI's table-owner connection, write it)
     assert "create policy owner_all on studio.hits_spend" not in HITS_CODE and "on studio.hits_spend to" not in HITS_CODE
-    assert "revoke all on studio.hits_spend from authenticated;" in HITS_CODE
+    assert "revoke all on studio.hits_spend from %I" in HITS_CODE
     from studio import pgstore
 
     src = Path(pgstore.__file__).read_text(encoding="utf-8")

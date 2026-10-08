@@ -148,7 +148,7 @@ from studio import budget, clips, fetch, gemini, seed, sources
 from studio.budget import BudgetRefused
 from studio.captions import compose_content
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
-from studio.config import now_london
+from studio.config import LONDON, now_london
 from studio.favorites import (
     DROP_PLATFORM,
     DROP_URL_PREFIX,
@@ -204,6 +204,8 @@ SCORE_CLEAR_S = 1.0  # the score's "clear" point: the section keeps this far fro
 MAX_FAMILY = 3  # terminal v3: one clip goes to at most 3 characters (the root drop and 2 versions; skipped picks do not count)
 CHECKED_STATES = ("ready", "making", "made")  # a drop whose check finished: its clip may be used for another character
 USED_HOOKS = gemini.USED_HOOKS_MAX  # "Angles already used": the character's latest hooks the check shows Gemini
+AUTO_FETCH_DAYS = 3  # an auto-filed link the cloud cannot fetch is tried on its first 3 London days, then dropped
+UNFETCHED_REASON = "couldn't be fetched in the cloud: dropped after 3 days"
 
 EXIT_FAILED = 1
 EXIT_REFUSED = 3
@@ -1003,8 +1005,17 @@ def _get_source(store: Store, storage: Storage, pick: Favorite, now: datetime, r
     try:
         result = fetch.fetch_pick_clip(store, storage, pick.id, runner=runner, fall_back=False, media_fallback=media_fallback)
     except fetch.FetchFailed as e:
-        reason = f"the link could not be fetched in the cloud ({str(e)[:260]}): the Mac's daily run tries again"
-        _unready(store, pick, now, state="waiting", reason=reason)
+        d = drop_of(pick)
+        if d.get("auto_filed") is True:  # never the Mac's (controller ruling 2026-10-08): the cloud tries again on a later day
+            reason = (
+                f"the link could not be fetched in the cloud ({str(e)[:260]}): the cloud tries again on a later day "
+                f"(dropped after {AUTO_FETCH_DAYS} days)"
+            )
+            tried = sorted({*[x for x in d.get("fetch_days") or [] if isinstance(x, str)], now.astimezone(LONDON).date().isoformat()})
+            _unready(store, pick, now, state="waiting", reason=reason, fetch_days=tried)
+        else:
+            reason = f"the link could not be fetched in the cloud ({str(e)[:260]}): the Mac's daily run tries again"
+            _unready(store, pick, now, state="waiting", reason=reason)
         return Outcome(pick.id, "waiting", reason)
     return _source(store, result["source_id"])
 
@@ -1837,11 +1848,27 @@ def _master(store: Store, storage: Storage, pick: Favorite, clip: Clip, ref: Map
 # ---- what is pending (the sweep) ------------------------------------------------------------------------------------------
 
 
-def pending(store: Store, *, include_waiting: bool = False, now: datetime | None = None) -> list[dict[str, str]]:
+def _fetch_age(pick: Favorite, now: datetime) -> tuple[int, str | None]:
+    """An auto-filed drop's London days since it was filed, and the London day of its last failed fetch (``drop.fetch_days``)."""
+    filed = fetch.filed_at(pick) or now
+    days = (now.astimezone(LONDON).date() - filed.astimezone(LONDON).date()).days
+    tried = [x for x in drop_of(pick).get("fetch_days") or [] if isinstance(x, str)]
+    return days, max(tried) if tried else None
+
+
+def pending(
+    store: Store, *, include_waiting: bool = False, now: datetime | None = None, auto_retry: bool = False,
+) -> list[dict[str, str]]:
     """The drops a run should take, oldest first: ``checking`` (and an ``uploading`` one whose file is attached) -> process,
     ``making`` with the owner's Make it -> make; ``waiting`` links only with ``include_waiting`` (the Mac: the cloud could not
-    fetch them). A pick another run holds (a live lease) is left out."""
+    fetch them). A pick another run holds (a live lease) is left out.
+
+    An auto-filed drop (``drop.auto_filed``, the hits job's) is never the Mac's: with ``include_waiting`` it is left out of the
+    checks (its make, after the owner's Make it, stays). For the cloud (no ``include_waiting``) a WAITING one is ``expire`` from
+    its ``AUTO_FETCH_DAYS``th London day after filing on (``expire_unfetched``), and before that ``process`` again when
+    ``auto_retry`` (the sweep: the day's one-post downloads allow) and its last failed fetch was on an earlier London day."""
     now = now or now_london()
+    today = now.astimezone(LONDON).date().isoformat()
     out: list[tuple[datetime | None, dict[str, str]]] = []
     for f in store.list_favorites():
         if not is_drop(f.proposal) or f.status not in ("approved", "queued"):
@@ -1851,12 +1878,52 @@ def pending(store: Store, *, include_waiting: bool = False, now: datetime | None
         if isinstance(held, Mapping) and (since := _moment(held.get("at"))) is not None and now - since < timedelta(minutes=LEASE_MINUTES):
             continue
         state = d.get("state")
+        auto = d.get("auto_filed") is True
+        if state == "waiting" and auto:
+            if include_waiting or f.status != "approved":
+                continue
+            age, last = _fetch_age(f, now)
+            if age >= AUTO_FETCH_DAYS:
+                out.append((f.created_at, {"pick_id": f.id, "job": "expire", "state": state}))
+            elif auto_retry and (last is None or last < today):
+                out.append((f.created_at, {"pick_id": f.id, "job": "process", "state": state}))
+            continue
+        if auto and include_waiting and state != "making":
+            continue  # the cloud checks it; the Mac never fetches an auto-filed link
         if state == "checking" or (state == "uploading" and f.proposal.get("owner_clip_path")) or (state == "waiting" and include_waiting):
             out.append((f.created_at, {"pick_id": f.id, "job": "process", "state": state}))
         elif state == "making" and owner_requested_make(f):
             out.append((f.created_at, {"pick_id": f.id, "job": "make", "state": state}))
     out.sort(key=lambda p: p[0].timestamp() if p[0] else 0.0)
     return [p for _, p in out]
+
+
+def expire_unfetched(store: Store, pick_id: str, now: datetime | None = None) -> dict[str, Any]:
+    """Skip an auto-filed drop the cloud could not fetch on its first ``AUTO_FETCH_DAYS`` London days (``pending`` lists it as
+    ``expire``): the pick is ``skipped`` with ``UNFETCHED_REASON`` and its hit becomes ``dismissed`` (it is not offered again).
+    ``DropError`` for any other drop (not auto-filed, not waiting, not that old)."""
+    now = now or now_london()
+    pick = _load(store, pick_id)
+    d = drop_of(pick)
+    if d.get("auto_filed") is not True or d.get("state") != "waiting" or pick.status != "approved":
+        raise DropError(f"pick {pick.id} is not an auto-filed link waiting for its fetch")
+    age, _ = _fetch_age(pick, now)
+    if age < AUTO_FETCH_DAYS:
+        raise DropError(f"pick {pick.id} was filed {age} London days ago: it is tried for {AUTO_FETCH_DAYS}")
+    mark_favorite(store, pick.id, "skipped", proposal={
+        **pick.proposal, "drop": {**d, "reason": UNFETCHED_REASON, "at": now.isoformat()},
+    })  # fmt: skip
+    hit = d.get("hit") if isinstance(d.get("hit"), Mapping) else {}
+    hit_id = hit.get("id") if isinstance(hit.get("id"), str) else None
+    if hit_id is not None and store.get_hit(hit_id) is not None:
+        store.update_hit(hit_id, status="dismissed")
+    return {"pick_id": pick.id, "state": "waiting", "reason": UNFETCHED_REASON, "ok": True, "hit_id": hit_id, "skipped": True}
+
+
+def _auto_retry(media: Any) -> bool:
+    """Whether the cloud tries a waiting auto-filed link again now: with the ScrapeCreators key, while the day's one-post
+    downloads allow (yt-dlp first, then the copy); without it, with yt-dlp alone (free)."""
+    return media is None or media.refusal() is None
 
 
 # ---- CLI --------------------------------------------------------------------------------------------------------------------------
@@ -2083,8 +2150,10 @@ def pending_command(
     ] = False,
     count: Annotated[bool, typer.Option("--count", help="Print only how many.")] = False,
 ) -> None:
-    """The drops a run should take now: process or make, oldest first."""
-    rows = pending(open_store(), include_waiting=include_waiting)
+    """The drops a run should take now: process, make or expire (an auto-filed link the cloud could not fetch in 3 days), oldest
+    first."""
+    store = open_store()
+    rows = pending(store, include_waiting=include_waiting, auto_retry=not include_waiting and _auto_retry(_media(store)))
     if count:
         typer.echo(str(len(rows)))
         return
@@ -2100,8 +2169,11 @@ def sweep_command(
     hf, client, media = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env(), _media(store)
     results: list[dict[str, Any]] = []
     failed = False
-    for row in pending(store, include_waiting=include_waiting):
+    for row in pending(store, include_waiting=include_waiting, auto_retry=not include_waiting and _auto_retry(media)):
         try:
+            if row["job"] == "expire":
+                results.append({"job": "expire", **expire_unfetched(store, row["pick_id"])})
+                continue
             if row["job"] == "process":
                 outcome = process_drop(store, storage, row["pick_id"], gemini_client=client, media_fallback=media)
             else:

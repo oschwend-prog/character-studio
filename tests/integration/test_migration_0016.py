@@ -121,8 +121,10 @@ def test_v_hits_lists_the_new_hits_best_first_with_the_characters_name(db):
     top = hit(db, url="https://www.tiktok.com/@a/video/2", score=90, character=None)
     hit(db, url="https://www.tiktok.com/@a/video/3", score=99, status="dismissed")
     hit(db, url="https://www.tiktok.com/@a/video/4", score=95, status="dropped")
+    hit(db, url="https://www.tiktok.com/@a/video/5", score=100, posted_at=datetime.now(timezone.utc) - timedelta(days=20))  # weeks old
+    recent = hit(db, url="https://www.tiktok.com/@a/video/6", score=50, posted_at=datetime.now(timezone.utc) - timedelta(days=13))
     rows = db.execute(f"select * from {SCHEMA}.v_hits").fetchall()
-    assert [str(r["hit_id"]) for r in rows] == [top, low]
+    assert [str(r["hit_id"]) for r in rows] == [top, recent, low]  # never the weeks-old one, whatever its score
     assert rows[0]["character_name"] is None and rows[1]["character_name"] == "Reginald" and "status" not in rows[0]
 
 
@@ -148,7 +150,10 @@ def test_the_terminal_reads_hits_and_changes_them_only_through_the_owners_rpcs(d
 
 
 def test_the_days_spend_is_for_the_jobs_alone(db):
-    roles = {r["rolname"] for r in db.execute("select rolname from pg_roles where rolname in ('authenticated', 'anon')").fetchall()}
+    roles = {
+        r["rolname"] for r in db.execute("select rolname from pg_roles where rolname in ('authenticated', 'anon', 'service_role')").fetchall()
+    }
+    assert roles  # Supabase has all three; the test means nothing without them
     for role in roles:
         for priv in ("select", "insert", "update", "delete"):
             assert not db.execute("select has_table_privilege(%s, %s, %s) as ok", [role, f"{SCHEMA}.hits_spend", priv]).fetchone()["ok"]
@@ -160,6 +165,14 @@ def test_the_days_spend_is_for_the_jobs_alone(db):
     assert db.execute("select count(*) as n from pg_policies where schemaname = %s and tablename = 'hits_spend'", [SCHEMA]).fetchone()["n"] == 0
     with pytest.raises(psycopg.errors.CheckViolation):
         db.execute(f"insert into {SCHEMA}.hits_spend (day, downloads) values ('2026-10-08', -1)")
+
+
+def test_the_two_indexes_exist(db):
+    names = {r["indexname"] for r in db.execute("select indexname from pg_indexes where schemaname = %s and tablename = 'hits'", [SCHEMA])}
+    assert {"hits_platform_creator_idx", "hits_status_score_idx"} <= names
+    defs = {r["indexname"]: r["indexdef"] for r in db.execute("select indexname, indexdef from pg_indexes where schemaname = %s", [SCHEMA])}
+    assert "(platform, creator_handle, created_at)" in defs["hits_platform_creator_idx"]
+    assert "(status, score DESC)" in defs["hits_status_score_idx"]
 
 
 def test_postgres_store_adds_to_the_days_spend(db):

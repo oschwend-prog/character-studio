@@ -88,6 +88,7 @@ class FakeAPI:
         self.queues: dict[str, list] = {}
         self.media = b""
         self.charge = 1
+        self.media_routes: dict[str, object] = {}  # a media URL -> its own answer (a redirect, an error)
 
     def answer(self, path: str, *bodies) -> None:
         self.queues.setdefault(path, []).extend(bodies)
@@ -107,6 +108,9 @@ class FakeAPI:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if request.url.host != "api.scrapecreators.com":
+            routed = self.media_routes.get(str(request.url))
+            if routed is not None:
+                return routed(request) if callable(routed) else routed
             return httpx.Response(200, content=self.media, headers={"content-type": "video/mp4"})
         queue = self.queues.get(request.url.path)
         body = queue.pop(0) if queue else self.default(request.url.path)
@@ -118,8 +122,8 @@ class FakeAPI:
             return httpx.Response(body, json={"success": False, "message": "nope"})
         return httpx.Response(200, json=body)
 
-    def client(self, key: str = KEY) -> ScrapeCreators:
-        return ScrapeCreators(key, http=httpx.Client(transport=httpx.MockTransport(self)))
+    def client(self, key: str = KEY, **kw) -> ScrapeCreators:
+        return ScrapeCreators(key, http=httpx.Client(transport=httpx.MockTransport(self)), **kw)
 
     def paths(self) -> list[str]:
         return [r.url.path for r in self.requests if r.url.host == "api.scrapecreators.com"]
@@ -389,10 +393,14 @@ def test_a_refused_key_stops_the_run_and_other_errors_are_listed():
 # ---- auto-filing ------------------------------------------------------------------------------------------------------------------
 
 
-def stored(store, n: int, character: str | None, score: int, *, platform="tiktok", status="new") -> Hit:
+def stored(store, n: int, character: str | None, score: int, *, platform="tiktok", status="new", posted_days=1.0, seen_days=0.0) -> Hit:
+    """A stored hit whose score today follows ``score`` (its views grow with it: auto_file ranks by the score of today)."""
     url = f"https://www.tiktok.com/@maker{n}/video/{900 + n}" if platform == "tiktok" else f"https://www.instagram.com/reel/DAuto{n:03d}/"
-    return store.upsert_hit(Hit(platform=platform, url=url, creator_handle=f"@maker{n}", character_slug=character, score=score,
-                                status=status, created_at=NOW, last_seen=NOW))[0]  # fmt: skip
+    return store.upsert_hit(Hit(
+        platform=platform, url=url, creator_handle=f"@maker{n}", character_slug=character, score=score, status=status,
+        views=int(10 ** (4 + 3 * score / 100)), posted_at=NOW - timedelta(days=posted_days), created_at=NOW,
+        last_seen=NOW - timedelta(days=seen_days),
+    ))[0]  # fmt: skip
 
 
 def test_auto_file_takes_each_live_characters_best_new_hits_up_to_the_cap():
@@ -634,3 +642,84 @@ def test_the_drop_job_gets_the_budget_only_with_the_key(monkeypatch):
     monkeypatch.setenv("SCRAPECREATORS_API_KEY", KEY)
     budget = hits.download_budget(store, CONFIG)
     assert isinstance(budget, hits.DownloadBudget) and isinstance(budget.client, ScrapeCreators) and budget.store is store
+
+
+
+# ---- review fix round 1 -------------------------------------------------------------------------------------------------------------
+
+
+def test_a_weeks_old_or_long_unseen_hit_is_never_filed_whatever_its_stored_score():
+    store = roster_store()
+    old = stored(store, 1, "reginald", 99, posted_days=20)  # a hit of three weeks ago: its stored score is from then
+    unseen = stored(store, 2, "reginald", 98, seen_days=4)  # no pull has seen it for 4 days
+    store.update_hit(old.id, score=100)
+    fresh = stored(store, 3, "reginald", 30)
+    undated = stored(store, 4, "reginald", 20)
+    store.update_hit(undated.id, posted_at=None)
+    filed = hits.auto_file(store, {"hits": {**CONFIG["hits"], "auto_file_general": 0}}, NOW)
+    assert [f["hit_id"] for f in filed] == [fresh.id, undated.id]
+    assert store.get_hit(old.id).status == store.get_hit(unseen.id).status == "new"
+    assert hits.fileable(stored(store, 5, None, 50, posted_days=13.9, seen_days=2.9), NOW) is True
+
+
+def test_an_account_out_of_credits_stops_the_pull():
+    api = FakeAPI()
+    api.answer(TT_TREND, page(TT_TREND, [tt_item(1)]), 402)
+    out = hits.pull(roster_store(), api.client(), CONFIG, NOW)
+    assert out["stopped"] == "out_of_credits" and out["calls"] == 1 and len(api.paths()) == 2 and out["kept"] == 1
+    assert "402" in out["errors"][0]["error"]
+
+
+def test_the_hosted_copy_is_never_taken_from_what_the_creator_writes_nor_from_a_private_address():
+    answer = fixture("tiktok_video")
+    planted = "https://evil.supabase.co/storage/v1/object/public/x/planted.mp4"
+    for key in ("author", "caption", "desc"):
+        doc = copy.deepcopy(answer)
+        doc["aweme_detail"][key] = {"bio": planted, "avatar": planted} if key == "author" else planted
+        doc[key] = {"nested": {"link": planted}}
+        assert hits.media_url(doc, "tiktok") != planted  # the documented no-watermark address instead
+    post = fixture("instagram_post")
+    for bad in ("https://127.0.0.1/v.mp4", "https://[::1]/v.mp4", "https://localhost/v.mp4", "https://cdn.localhost/v.mp4",
+                "https://10.0.0.5/v.mp4", "https://intranet/v.mp4"):  # fmt: skip
+        doc = copy.deepcopy(post)
+        doc["data"]["xdt_shortcode_media"]["video_url"] = bad
+        with pytest.raises(ScrapeCreatorsError, match="no video"):
+            hits.media_url(doc, "instagram")
+    owner = copy.deepcopy(post)
+    owner["data"]["xdt_shortcode_media"]["owner"]["profile"] = "https://x.supabase.co/a/b.mp4"
+    assert hits.media_url(owner, "instagram") == post["data"]["xdt_shortcode_media"]["video_url"]
+
+
+def test_redirects_are_followed_by_hand_three_at_most_each_a_public_https_hop(tmp_path):
+    api = FakeAPI()
+    api.media = b"the video"
+    start = fixture("instagram_post")["data"]["xdt_shortcode_media"]["video_url"]
+    hops = ["https://cdn-a.example.com/1.mp4", "https://cdn-b.example.com/2.mp4", "https://cdn-c.example.com/3.mp4"]
+    api.media_routes[start] = httpx.Response(302, headers={"location": hops[0]})
+    api.media_routes[hops[0]] = httpx.Response(301, headers={"location": hops[1]})
+    api.media_routes[hops[1]] = httpx.Response(307, headers={"location": hops[2]})
+    api.answer(IG_POST, fixture("instagram_post"))
+    got = api.client().download_post("https://www.instagram.com/reel/DLDXI0fylTC/", "instagram", tmp_path / "a.mp4")
+    assert got["bytes"] == len(api.media) and (tmp_path / "a.mp4").read_bytes() == api.media
+    assert [str(r.url) for r in api.requests[1:]] == [start, *hops] and all("x-api-key" not in r.headers for r in api.requests[1:])
+    api.media_routes[hops[2]] = httpx.Response(302, headers={"location": "https://cdn-d.example.com/4.mp4"})  # a 4th redirect
+    for bad_hop, why in ((None, "redirects more than 3"), ("http://cdn-e.example.com/5.mp4", "not a public https"),
+                         ("https://169.254.169.254/latest", "not a public https")):  # fmt: skip
+        if bad_hop is not None:  # the third redirect goes somewhere it may not
+            api.media_routes[hops[1]] = httpx.Response(302, headers={"location": bad_hop})
+        api.answer(IG_POST, fixture("instagram_post"))
+        with pytest.raises(ScrapeCreatorsError, match=why):
+            api.client().download_post("https://www.instagram.com/reel/DLDXI0fylTC/", "instagram", tmp_path / "b.mp4")
+        assert not (tmp_path / "b.mp4").exists() and not list(tmp_path.glob(".*.part"))
+    assert not any(r.url.host in ("cdn-e.example.com", "169.254.169.254") for r in api.requests)  # never even asked
+
+
+def test_the_hosted_copys_download_has_a_total_deadline(tmp_path):
+    api = FakeAPI()
+    api.media = b"x" * (3 * 1024 * 1024)  # three chunks
+    api.answer(IG_POST, fixture("instagram_post"))
+    ticks = iter([0.0, 100.0, 200.0, 301.0, 400.0])
+    client = api.client(clock=lambda: next(ticks))
+    with pytest.raises(ScrapeCreatorsError, match="took over 300 s"):
+        client.download_post("https://www.instagram.com/reel/DLDXI0fylTC/", "instagram", tmp_path / "a.mp4")
+    assert not (tmp_path / "a.mp4").exists() and not list(tmp_path.glob(".*.part"))

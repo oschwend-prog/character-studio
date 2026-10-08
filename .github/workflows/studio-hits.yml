@@ -15,9 +15,10 @@
 # 2. `studio source purge --stale`: retention (a drop never made: its clip goes 30 days after filing when it came from a hit, 60
 #    days for the owner's own; never one he marked Keep, one being made, or a family member still to be made). It runs even when
 #    the pull failed.
-# 3. When the pull filed something: `gh workflow run studio-drop.yml -f job=sweep` with this run's own token (permission
-#    `actions: write`, the only write this workflow has) wakes the drop job, which fetches each filed link one at a time and checks
-#    it for free, instead of waiting for its 2-hourly sweep.
+# 3. When the pull filed something, a second job (`wake`, the only one with `actions: write`, no checkout, no secret) runs
+#    `gh workflow run studio-drop.yml -f job=sweep` with this run's own token: the drop job fetches each filed link one at a time
+#    and checks it for free, instead of waiting for its 2-hourly sweep. The checkout keeps no credentials (persist-credentials:
+#    false).
 #
 # Secrets (repo secrets): DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY (as the other workflows) and SCRAPECREATORS_API_KEY
 # (`gh secret set SCRAPECREATORS_API_KEY`: the owner pastes it, it is never written to a file). Until DATABASE_URL exists the job
@@ -36,12 +37,13 @@ concurrency:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   hits:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    outputs:
+      filed: ${{ steps.pull.outputs.filed }}
     steps:
       - name: Check secrets
         id: gate
@@ -56,6 +58,8 @@ jobs:
           fi
       - uses: actions/checkout@v4
         if: steps.gate.outputs.configured == 'true'
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@v6
         if: steps.gate.outputs.configured == 'true'
       - name: Pull the hits and file the best
@@ -80,8 +84,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: uv run studio source purge --stale
+
+  wake:
+    needs: hits
+    if: ${{ !cancelled() && needs.hits.outputs.filed != '' && needs.hits.outputs.filed != '0' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
       - name: Wake the drop sweep
-        if: ${{ !cancelled() && steps.gate.outputs.configured == 'true' && steps.pull.outputs.filed != '' && steps.pull.outputs.filed != '0' }}
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}

@@ -39,12 +39,15 @@ unknown date: half). Instagram's search gives no play count: the score alone rea
 in its place; ``views`` and ``reach`` stay None in the record (never guessed).
 
 **Auto-filing** (``auto_file``, owner 2026-10-07: "set our system up with tons of clips as we will need them"): after the pull
-the best new hits become drops, best score first: at most ``hits.auto_file_per_character`` (3) a London day per live character
-(his own hits, waiting under him as the provisional character) and ``hits.auto_file_general`` (3) from the general lane (no
-character: the studio's provisional one, the check recommends), each through ``studio.drop.add_drop`` exactly as a pasted link
-(``character_by`` studio, so the check may move it), tagged ``drop.auto_filed`` (the learning tag ``source_kind``; retention's
-30 days) and ``drop.hit`` ``{id, lane}``. A link that is already a pick (any status) is never filed again: the hit is marked
-``dropped`` and the day's room is kept for another. A paused character's hits wait. The cloud drop job fetches each filed link
+the best new hits become drops, best score TODAY first (``hit_score(h, now)``: a stored score ages with its post; a hit posted
+over 14 days ago, or not seen by a pull for 3 days, is not filed): at most ``hits.auto_file_per_character`` (3) a London day
+per live character (his own hits, waiting under him as the provisional character) and ``hits.auto_file_general`` (3) from the
+general lane (no character: the studio's provisional one, the check recommends), each through ``studio.drop.add_drop`` exactly
+as a pasted link (``character_by`` studio, so the check may move it), tagged ``drop.auto_filed`` (the learning tag
+``source_kind``; retention's 30 days) and ``drop.hit`` ``{id, lane}``. An auto-filed link is only ever fetched in the cloud
+(controller ruling 2026-10-08), never by the Mac: a waiting one is tried again on a later London day while the day's downloads
+allow, and dropped after 3 days (``studio.drop``). A link that is already a pick (any status) is never filed again: the hit is
+marked ``dropped`` and the day's room is kept for another. A paused character's hits wait. The cloud drop job fetches each filed link
 one at a time (yt-dlp, else ``ScrapeCreators.download_post`` for that ONE post).
 
 **The one-post download** (``download_post``, used only by ``studio.fetch.fetch_pick_clip`` for a link the owner dropped or this
@@ -57,6 +60,8 @@ daily run tries yt-dlp again). The budget is a read, then the call, then an incr
 is what the drop job's concurrency gives (one run per pick, the sweeps in one group), so at worst two jobs at the same instant
 each take the last download.
 
+An account out of credits (HTTP 402) stops the pull (``stopped: "out_of_credits"``).
+
 CLI: ``studio hits pull [--dry-run] [--no-file]`` prints ``{"calls", "credits", "day_credits", "kept", "updated", "skipped":
 {reason: n}, "stopped": "cap" | null, "errors": [...], "filed": [{"hit_id", "pick_id", "character", "provisional"}]}``; without the key it
 prints a ``::notice::`` and exits 0; ``--dry-run`` prints the plan of calls and calls nothing. ``studio hits list`` prints the
@@ -65,16 +70,18 @@ stored hits. Exit 1 only when not one call worked.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import math
 import os
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 import typer
@@ -98,7 +105,15 @@ MAX_SECONDS = 60.0  # skipped: videos over 60 s
 MAX_AGE_DAYS = 14  # skipped: posts older than 14 days
 CREATOR_LIMIT, CREATOR_DAYS = 3, 30  # skipped: a creator already kept 3 times in 30 days
 LIKES_TO_VIEWS = 10  # the score's stand-in for a missing play count (a 10% like rate); never stored as views
+STALE_SEEN_DAYS = 3  # auto_file: a hit no pull has seen for 3 days is not filed (it fell out of the searches)
 MEDIA_MAX_BYTES = 200 * 1024 * 1024  # as yt-dlp's --max-filesize 200M
+MEDIA_DEADLINE_S = 300.0  # the hosted copy's whole download, as studio.fetch's FETCH_TIMEOUT_S for yt-dlp
+MAX_REDIRECTS = 3  # followed by hand, each hop a public https address
+# Subtrees of an answer the post's creator writes (names, bios, captions, comments): never searched for the hosted copy.
+CREATOR_KEYS = frozenset({
+    "author", "owner", "user", "caption", "desc", "bio", "biography", "signature", "nickname", "comments", "edge_media_to_caption",
+    "edge_media_to_parent_comment", "edge_media_preview_comment",
+})  # fmt: skip
 VIDEO_SUFFIXES = (".mp4", ".mov", ".m4v", ".webm")
 _TIMEOUT = httpx.Timeout(60.0, connect=15.0)
 _MEDIA_TIMEOUT = httpx.Timeout(60.0, connect=15.0, read=120.0)
@@ -120,6 +135,20 @@ def _https(url: Any) -> str | None:
     return url if parts.scheme == "https" and parts.hostname else None
 
 
+def _public_https(url: Any) -> str | None:
+    """``url`` when it is https to a public host name: never an IP literal, ``localhost`` or a one-label name."""
+    if _https(url) is None:
+        return None
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost") or "." not in host:
+        return None
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return url
+    return None
+
+
 def credits_of(data: Mapping[str, Any]) -> int:
     """What a call cost: its ``credits_charged`` (a whole number), else 1 (the usual price of a call)."""
     value = data.get("credits_charged")
@@ -130,12 +159,15 @@ class ScrapeCreators:
     """ScrapeCreators' REST API with one key. ``http`` is for tests (an ``httpx.Client`` on a ``MockTransport``): nothing here
     is ever called without the owner's key, and the key is only ever sent to ``API_ROOT``'s host."""
 
-    def __init__(self, api_key: str, http: httpx.Client | None = None, *, base_url: str = API_ROOT) -> None:
+    def __init__(
+        self, api_key: str, http: httpx.Client | None = None, *, base_url: str = API_ROOT, clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         if not (api_key or "").strip():
             raise ValueError(f"ScrapeCreators needs {KEY_ENV}")
         self._key = api_key.strip()
         self._root = base_url.rstrip("/")
         self._http = http if http is not None else httpx.Client(timeout=_TIMEOUT, follow_redirects=False)
+        self._clock = clock
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None, **kw: Any) -> ScrapeCreators | None:
@@ -211,37 +243,52 @@ class ScrapeCreators:
         return {"credits": credits_of(data), "media_url": media, "bytes": size}
 
     def _download(self, url: str, dest: Path) -> int:
+        """The hosted copy to ``dest``: no key, no cookies; at most ``MAX_REDIRECTS`` redirects, followed by hand, every hop a
+        public https address (``_public_https``); at most ``MEDIA_MAX_BYTES`` and ``MEDIA_DEADLINE_S`` seconds in all."""
         dest.parent.mkdir(parents=True, exist_ok=True)
         part = dest.with_name(f".{dest.name}.part")
-        size = 0
+        deadline = self._clock() + MEDIA_DEADLINE_S
+        current = url
         try:
-            # no key, no cookies: the hosted copy is a plain https file (redirects followed, https only)
-            with self._http.stream("GET", url, timeout=_MEDIA_TIMEOUT, follow_redirects=True) as response:
-                if not response.is_success:
-                    raise ScrapeCreatorsError(f"the copy's download answered HTTP {response.status_code}", response.status_code)
-                if response.url.scheme != "https":
-                    raise ScrapeCreatorsError("the copy's download left https")
-                with part.open("wb") as out:
-                    for chunk in response.iter_bytes(1024 * 1024):
-                        size += len(chunk)
-                        if size > MEDIA_MAX_BYTES:
-                            raise ScrapeCreatorsError(f"the copy is over {MEDIA_MAX_BYTES // (1024 * 1024)} MB")
-                        out.write(chunk)
-            if size == 0:
-                raise ScrapeCreatorsError("the copy is empty")
-            os.replace(part, dest)
+            for hop in range(MAX_REDIRECTS + 1):
+                if _public_https(current) is None:
+                    raise ScrapeCreatorsError("the copy's address is not a public https link")
+                with self._http.stream("GET", current, timeout=_MEDIA_TIMEOUT, follow_redirects=False) as response:
+                    if response.is_redirect:
+                        location = response.headers.get("location")
+                        if not location or hop == MAX_REDIRECTS:
+                            raise ScrapeCreatorsError(f"the copy's download redirects more than {MAX_REDIRECTS} times, or nowhere")
+                        current = urljoin(current, location)
+                        continue
+                    if not response.is_success:
+                        raise ScrapeCreatorsError(f"the copy's download answered HTTP {response.status_code}", response.status_code)
+                    size = 0
+                    with part.open("wb") as out:
+                        for chunk in response.iter_bytes(1024 * 1024):
+                            size += len(chunk)
+                            if size > MEDIA_MAX_BYTES:
+                                raise ScrapeCreatorsError(f"the copy is over {MEDIA_MAX_BYTES // (1024 * 1024)} MB")
+                            if self._clock() > deadline:
+                                raise ScrapeCreatorsError(f"the copy's download took over {MEDIA_DEADLINE_S:.0f} s")
+                            out.write(chunk)
+                if size == 0:
+                    raise ScrapeCreatorsError("the copy is empty")
+                os.replace(part, dest)
+                return size
         except httpx.HTTPError as e:
             raise ScrapeCreatorsError(f"the copy's download failed ({type(e).__name__})") from None
         finally:
             part.unlink(missing_ok=True)
-        return size
+        raise ScrapeCreatorsError("the copy's download never answered")  # pragma: no cover - the loop returns or raises
 
 
 def _walk_urls(data: Any) -> list[str]:
+    """Every https string of an answer, the subtrees its creator writes (``CREATOR_KEYS``) left out."""
     out: list[str] = []
     if isinstance(data, Mapping):
-        for value in data.values():
-            out.extend(_walk_urls(value))
+        for key, value in data.items():
+            if key not in CREATOR_KEYS:
+                out.extend(_walk_urls(value))
     elif isinstance(data, list):
         for value in data:
             out.extend(_walk_urls(value))
@@ -254,32 +301,38 @@ def _first(urls: Any) -> str | None:
     return _https(urls[0]) if isinstance(urls, list) and urls else None
 
 
+def _first_public(urls: Any) -> str | None:
+    return _public_https(urls[0]) if isinstance(urls, list) and urls else None
+
+
 def media_url(data: Mapping[str, Any], platform: str) -> str:
     """The video of a single-post answer: the permanent copy ``download_media=true`` hosts (an https video file on a
     ``*.supabase.co`` host, wherever the answer carries it), else the documented fields: TikTok
     ``aweme_detail.video.download_no_watermark_addr.url_list[0]``, or ``play_addr`` when TikTok says the video has no watermark
-    (never a watermarked copy); Instagram ``data.xdt_shortcode_media.video_url``. ``ScrapeCreatorsError`` when there is none.
+    (never a watermarked copy); Instagram ``data.xdt_shortcode_media.video_url``. ``ScrapeCreatorsError`` when there is none. Only
+    a public https address counts (``_public_https``: no IP literal, no localhost), and the subtrees the post's creator writes
+    (``CREATOR_KEYS``: author, owner, user, caption, desc, bio...) are never searched.
 
     NOT YET VERIFIED: ScrapeCreators' documentation names no field for the copy ``download_media=true`` hosts (its examples show
     none), so the ``*.supabase.co`` rule is an informed guess. One supervised live call (1-10 credits) must confirm where the
     copy is before this path is relied on."""
     for url in _walk_urls(data):
         parts = urlsplit(url)
-        if (parts.hostname or "").endswith(".supabase.co") and parts.path.lower().endswith(VIDEO_SUFFIXES):
+        if _public_https(url) and (parts.hostname or "").lower().endswith(".supabase.co") and parts.path.lower().endswith(VIDEO_SUFFIXES):
             return url
     if platform == "tiktok":
         detail = data.get("aweme_detail") if isinstance(data.get("aweme_detail"), Mapping) else {}
         video = detail.get("video") if isinstance(detail.get("video"), Mapping) else {}
         clean = video.get("download_no_watermark_addr") if isinstance(video.get("download_no_watermark_addr"), Mapping) else {}
-        if (found := _first(clean.get("url_list"))) is not None:
+        if (found := _first_public(clean.get("url_list"))) is not None:
             return found
         play = video.get("play_addr") if isinstance(video.get("play_addr"), Mapping) else {}
-        if video.get("has_watermark") is False and (found := _first(play.get("url_list"))) is not None:
+        if video.get("has_watermark") is False and (found := _first_public(play.get("url_list"))) is not None:
             return found
         raise ScrapeCreatorsError("ScrapeCreators gave no copy of this TikTok without its watermark")
     inner = data.get("data") if isinstance(data.get("data"), Mapping) else {}
     media = inner.get("xdt_shortcode_media") if isinstance(inner.get("xdt_shortcode_media"), Mapping) else {}
-    if media.get("is_video") is not False and (found := _https(media.get("video_url"))) is not None:
+    if media.get("is_video") is not False and (found := _public_https(media.get("video_url"))) is not None:
         return found
     raise ScrapeCreatorsError("ScrapeCreators gave no video for this Instagram post")
 
@@ -492,6 +545,10 @@ class DownloadBudget:
         self.client, self.store, self.cfg = client, store, hits_config(scan_config)
         self._clock = clock or now_london
 
+    def refusal(self) -> str | None:
+        """Why today has no one-post download left, else None."""
+        return download_refusal(self.store.get_hit_spend(london_day(self._clock())), self.cfg)
+
     def download_post(self, url: str, platform: str, dest: Path | str) -> dict[str, Any]:
         day = london_day(self._clock())
         refused = download_refusal(self.store.get_hit_spend(day), self.cfg)
@@ -608,8 +665,9 @@ def pull(store: Store, client: ScrapeCreators, scan_config: Mapping[str, Any], n
     """Run the day's calls (see the module doc) and keep what they found. Returns ``{"calls", "credits", "day_credits", "kept",
     "updated", "skipped": {reason: n}, "stopped": "cap" | None, "errors": [{"call", "error"}]}``: ``calls`` are the calls that
     answered, ``credits`` what this run spent, ``day_credits`` the London day's whole spend (searches and downloads) after it.
-    The searches stop at ``search_limit`` of the day's record, read once at the start. A refused key (401/403) stops the run;
-    any other failed call is listed and the run goes on."""
+    The searches stop at ``search_limit`` of the day's record, read once at the start (``stopped: "cap"``). An account out of
+    credits (HTTP 402) stops the run (``stopped: "out_of_credits"``), a refused key (401/403) too; any other failed call is
+    listed and the run goes on."""
     cfg = hits_config(scan_config)
     day = london_day(now)
     start = store.get_hit_spend(day)
@@ -628,6 +686,9 @@ def pull(store: Store, client: ScrapeCreators, scan_config: Mapping[str, Any], n
             data = call.run(client)
         except ScrapeCreatorsError as e:
             errors.append({"call": call.label, "error": str(e)[:300]})
+            if e.status == 402:
+                stopped = "out_of_credits"  # the account has no credits left: no other call would work today
+                break
             if e.status in (401, 403):
                 break  # the key is refused: no other call would work
             continue
@@ -687,16 +748,27 @@ def filed_today(store: Store, now: datetime) -> Counter[str]:
     return out
 
 
+def fileable(hit: Hit, now: datetime) -> bool:
+    """A new hit still worth filing today: posted at most ``MAX_AGE_DAYS`` ago (when known) and seen by a pull in the last
+    ``STALE_SEEN_DAYS`` days (a hit that fell out of the searches is no longer hot)."""
+    if hit.posted_at is not None and now - hit.posted_at > timedelta(days=MAX_AGE_DAYS):
+        return False
+    return hit.last_seen is None or now - hit.last_seen <= timedelta(days=STALE_SEEN_DAYS)
+
+
 def auto_file(
     store: Store, scan_config: Mapping[str, Any], now: datetime, *, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
 ) -> list[dict[str, Any]]:
     """File the best new hits as drops (see the module doc); ``[{"hit_id", "pick_id", "character", "provisional"}]`` in the
-    order they were filed (``character`` None for the general lane; ``provisional`` is who the drop waits under)."""
+    order they were filed (``character`` None for the general lane; ``provisional`` is who the drop waits under). Only the
+    ``fileable`` ones, ranked by their score today (``hit_score(h, now)``), never the score stored when they were found."""
     cfg = hits_config(scan_config)
     live = live_characters(store)
     takers = {c.slug for c in drop.roster(store, characters_dir)}
     used = filed_today(store, now)
-    fresh = sorted(store.list_hits(status="new"), key=lambda h: (-h.score, -(h.views or 0), h.url))
+    fresh = [h for h in store.list_hits(status="new") if fileable(h, now)]
+    scores = {h.id: hit_score(h, now) for h in fresh}  # scored again today: a stored score ages with its post
+    fresh.sort(key=lambda h: (-scores[h.id], -(h.views or 0), h.url))
     filed: list[dict[str, Any]] = []
     for lane in [*live, "general"]:
         room = (cfg["auto_file_general"] if lane == "general" else cfg["auto_file_per_character"]) - used[lane]

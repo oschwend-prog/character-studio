@@ -314,6 +314,8 @@ def test_a_missing_table_fails_the_schema_check_naming_it(world):
         (("view", "v_views_daily"), "0015"),
         (("table", "hits"), "0016"),
         (("table", "hits_spend"), "0016"),
+        (("index", "hits_platform_creator_idx"), "0016"),
+        (("index", "hits_status_score_idx"), "0016"),
         (("view", "v_hits"), "0016"),
         (("function", "set_hit_status"), "0016"),
         (("function", "set_drop_keep"), "0016"),

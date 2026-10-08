@@ -28,6 +28,8 @@
 --    saves, each NULL when the API did not give it, never 0; posted_at; caption, at most 300 characters; sound; duration_s;
 --    thumbnail_url, stored, never fetched; the keyword and the character it was searched for, character_slug NULL for the
 --    general lane; reach = views / followers; score 0-100; status new, dropped or dismissed; created_at = first seen, last_seen).
+--    Two indexes: (platform, creator_handle, created_at) for the pull's "a creator kept 3 times in 30 days" and (status, score
+--    desc) for v_hits and the auto-filing.
 --    hits_spend(day, search_credits, download_credits, downloads, updated_at): one row per London day, what the searches of
 --    `studio hits pull` and the one-post downloads of the drop job were charged and how many downloads were made (the
 --    dataclass HitSpend). Written only by the jobs through the studio CLI (PostgresStore.add_hit_spend: one insert ... on
@@ -35,9 +37,11 @@
 --    hits.download_cap_per_day its downloads.
 -- 2. Row level security like every table of 0001: the one owner_all policy (the owner's e-mail in USING and WITH CHECK). The CLI
 --    connects as the table owner, which bypasses RLS. The terminal's role may only read it: hits changes through the RPC.
---    hits_spend is like 0014's timer_state: RLS on, no policy and no grant, so no API role can read or write it.
--- 3. v_hits: the new hits, best first (score, then the latest seen), with the character's name, readable by the terminal's role
---    and running as the caller (security_invoker), like v_views_daily.
+--    hits_spend is like 0014's timer_state: RLS on, no policy and no grant, revoked from anon, authenticated and service_role,
+--    so no API role can read or write it.
+-- 3. v_hits: the new hits posted in the last 14 days (or with no known date), best first (score, then the latest seen), with
+--    the character's name, readable by the terminal's role and running as the caller (security_invoker), like v_views_daily. A
+--    hit weeks old is never offered, whatever its stored score.
 -- 4. set_hit_status(hit_id, status): the owner's "Use this clip" (dropped, after add_drop(link)) and "Not for us" (dismissed),
 --    or back to new. SECURITY DEFINER (studio.hits is read-only for the terminal's role), empty search_path, schema-qualified
 --    names, and the owner check of set_drop_character first. Refused: anyone else (insufficient_privilege), a status the table
@@ -48,13 +52,15 @@
 -- 6. copy_drop (0015's, word for word plus one step): a version of a drop the hits job filed (drop.auto_filed true) carries
 --    auto_filed too, as studio.drop.copy_drop does; a root without the tag gives a version without it (0015's version exactly).
 -- 7. Grants: hits revoked from public and from the terminal's role, then select granted back to it; v_hits granted to it; the
---    three functions revoked from public and granted to it; hits_spend revoked from public and the terminal's role; everything
---    revoked from anon where the role exists.
+--    three functions revoked from public and granted to it; everything revoked from anon where the role exists; hits_spend
+--    revoked from public, anon, authenticated and service_role (a role that does not exist is skipped), as 0014 does.
 --
 -- TO UNDO (in this order): re-run the copy_drop section of 0015 (create or replace puts it back), then
 --   drop function studio.set_drop_keep(uuid, boolean);
 --   drop function studio.set_hit_status(uuid, text);
 --   drop view studio.v_hits;
+--   drop index studio.hits_status_score_idx;
+--   drop index studio.hits_platform_creator_idx;
 --   drop table studio.hits_spend;
 --   drop table studio.hits;
 -- The drops already filed stay as ordinary drops (their auto_filed and hit are then only data).
@@ -85,6 +91,9 @@ create table if not exists studio.hits (
   created_at     timestamptz not null default now(),
   last_seen      timestamptz not null default now()
 );
+
+create index if not exists hits_platform_creator_idx on studio.hits (platform, creator_handle, created_at);
+create index if not exists hits_status_score_idx on studio.hits (status, score desc);
 
 create table if not exists studio.hits_spend (
   day              date primary key,
@@ -138,6 +147,7 @@ select
 from studio.hits h
 left join studio.characters ch on ch.slug = h.character_slug
 where h.status = 'new'
+  and (h.posted_at is null or h.posted_at > now() - interval '14 days')
 order by h.score desc, h.last_seen desc, h.id;
 
 -- ---- 4. set_hit_status -------------------------------------------------------------------------------------------------------
@@ -344,17 +354,27 @@ grant execute on function studio.set_drop_keep(uuid, boolean) to authenticated;
 revoke all on function studio.copy_drop(uuid, text) from public;
 grant execute on function studio.copy_drop(uuid, text) to authenticated;
 revoke all on studio.hits_spend from public;
-revoke all on studio.hits_spend from authenticated;
 do $$
 begin
   -- no API role but the signed-in owner may read or call any of it (the owner checks refuse everyone else too)
   if exists (select 1 from pg_catalog.pg_roles where rolname = 'anon') then
     execute 'revoke all on studio.hits from anon';
-    execute 'revoke all on studio.hits_spend from anon';
     execute 'revoke all on studio.v_hits from anon';
     execute 'revoke all on function studio.set_hit_status(uuid, text) from anon';
     execute 'revoke all on function studio.set_drop_keep(uuid, boolean) from anon';
     execute 'revoke all on function studio.copy_drop(uuid, text) from anon';
   end if;
+end
+$$;
+do $$
+declare
+  r text;
+begin
+  -- the day's spend is the jobs' alone (they connect as the table owner): no API role may read or write it
+  foreach r in array array['anon', 'authenticated', 'service_role'] loop
+    if exists (select 1 from pg_catalog.pg_roles where rolname = r) then
+      execute format('revoke all on studio.hits_spend from %I', r);
+    end if;
+  end loop;
 end
 $$;

@@ -156,7 +156,7 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
     # functions tell 0016 from 0015.
     "0016": (
         ("table", "hits"), ("table", "hits_spend"), ("view", "v_hits"), ("function", "set_hit_status"), ("function", "set_drop_keep"),
-        ("function", "copy_drop"),
+        ("function", "copy_drop"), ("index", "hits_platform_creator_idx"), ("index", "hits_status_score_idx"),
     ),
 }
 
