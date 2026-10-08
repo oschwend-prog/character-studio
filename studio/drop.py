@@ -56,6 +56,13 @@ reason}``, the potential from the deconstruct, the swap points from the check); 
 drop without the owner's Make it can be checked again for free (``request_recheck``, ``studio drop recheck <pick>`` or
 ``--all-ready``): it goes back to ``checking`` for the sweep, so a drop checked before the score gets one.
 
+**What the owner sees and watches** (terminal v3 Task 11, owner 2026-10-08: "make them larger so I can actually see them ... Even
+better if I could click and watch them"). Next to the strip the check writes the clip card's picture, ``cover.jpg`` (the middle
+frame of the section, 540x960), and a watch copy of the section, ``preview.mp4`` (540x960, small H.264 with the clip's own sound,
+faststart), as ``drop['cover_path']`` and ``drop['preview_video_path']`` (``_watch_files``). Neither is ever a reason to fail a
+check: an error is a warning and the field stays empty (the card shows the strip, then the tile). ``studio drop previews --missing``
+(or ``--pick <id>``) makes both, for free, for the clips checked before them; retention deletes them with the strip.
+
 **The balance of suggestions and fresh hooks** (controller 2026-10-08). ``roster`` counts each character's drops ``ready`` to
 make (``ready_clips``): the prompt shows the counts and, when two characters fit about as well, prefers the one with fewer. The
 check shows Gemini the character's latest hooks (``used_hooks``: his drops' ``hook`` and his clips' ``hook_text``, newest first,
@@ -139,6 +146,7 @@ failure it recorded (the JSON says), 2 for anything the caller must fix, 3 when 
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
 import re
@@ -186,6 +194,7 @@ from studio.planning import estimate_credits
 from studio.storage import Storage, StorageError
 from studio.store import Store
 
+log = logging.getLogger("studio.drop")
 S = ClipState
 DROP_STATES = ("uploading", "checking", "waiting", "ready", "blocked", "making", "made", "failed")
 PROCESS_FROM = frozenset({"uploading", "checking", "waiting"})
@@ -209,6 +218,8 @@ MUSIC = "original"  # the clip keeps its own sound (owner decision 2026-10-05)
 MASTER_PRESET = "slow"
 SOURCES_BUCKET = sources.SOURCES_BUCKET
 PREVIEW_NAME = "preview.jpg"
+COVER_NAME = "cover.jpg"  # terminal v3 Task 11: the clip card's picture, next to the strip
+PREVIEW_VIDEO_NAME = "preview.mp4"  # ... and the owner's watch copy of the section
 ENGAGEMENT_ORDER = gemini.ENGAGEMENT_KINDS  # send -> question -> tease -> send ...
 STAR_WORDS = gemini.STAR_WORDS
 CHARACTER_BY = ("owner", "studio")  # who chose the drop's character: the owner's choice is never overridden
@@ -1283,6 +1294,7 @@ def _process(
         crop_x = crop_for(report.width, report.height, look["star"]["x_center"])
         credits = estimate_credits(Mode.dropin, window["length_s"], MUSIC)
         preview = _preview(storage, local, work, pick.id, window, crop_x)
+        watch, _ = _watch_files(storage, local, work, pick.id, window, crop_x)  # never a reason to fail the check
     card = _analysis_card(look, free, window)
     hook = look["hooks"][0]
     pick = _still(store, pick.id, slug)  # read again: the owner's toggles during the look are kept
@@ -1295,6 +1307,7 @@ def _process(
             # his own part when his refs.json has one (Make it reads it again): the Adjust sheet's default is what is made
             "part": ref.get("swap_part") or look["suggested_part"], "gadgets": look["gadgets"], "hooks": look["hooks"], "hook": hook,
             "deconstruct": look, "music": MUSIC, "seconds": window["length_s"], "credits": credits, "preview_path": preview,
+            **watch,  # cover_path and preview_video_path: absent (null) when one could not be made, never an older check's
             "recommended": recommended, "avoid": avoid,
             # the longest section Make it takes for him (validate_adjust's cap): the terminal's Adjust checks it before Make it
             "max_length_s": round(MASTER_MAX_S - style_lead_s(ref.get("style")), 3),
@@ -1320,6 +1333,81 @@ def _preview(storage: Storage, local: Path, work: Path, pick_id: str, window: Ma
     key = f"owner/{pick_id}/{PREVIEW_NAME}"
     storage.upload(SOURCES_BUCKET, key, sheet)
     return key
+
+
+def _watch_files(
+    storage: Storage, local: Path, work: Path, pick_id: str, window: Mapping[str, float], crop_x: float | None,
+) -> tuple[dict[str, str | None], list[str]]:
+    """The clip card's picture and the owner's watch copy of the section (terminal v3 Task 11), next to the strip in
+    ``sources/owner/<pick id>/``: ``cover.jpg`` (the middle frame of the section) and ``preview.mp4`` (the section with its own
+    sound, 540x960; ``clipwork.cover_frame`` / ``preview_video``, cropped like the master when ``crop_x``). Returns
+    ``({"cover_path": key | None, "preview_video_path": key | None}, problems)``. Never a reason to fail a check: any error (ffmpeg,
+    the disk, our own Storage) is a warning and leaves that field None (the card then shows the strip, or the tile)."""
+    start, length = float(window["start_s"]), float(window["length_s"])
+    jobs = (
+        ("cover_path", COVER_NAME, "the cover", lambda out: clipwork.cover_frame(local, out, start + length / 2, crop_x=crop_x)),
+        ("preview_video_path", PREVIEW_VIDEO_NAME, "the watch copy", lambda out: clipwork.preview_video(local, out, start, length, crop_x=crop_x)),
+    )
+    paths: dict[str, str | None] = {}
+    problems: list[str] = []
+    for field, name, what, make in jobs:
+        key = f"owner/{pick_id}/{name}"
+        try:
+            storage.upload(SOURCES_BUCKET, key, make(work / name))
+        except Exception as e:  # noqa: BLE001: whatever it is, the check carries on without this file
+            line = f"{what}: {type(e).__name__}: {' '.join(str(e).split())[:200]}"
+            log.warning("drop %s: %s could not be made (%s): the card shows the strip instead", pick_id, what, line)
+            problems.append(line)
+            paths[field] = None
+        else:
+            paths[field] = key
+    return paths, problems
+
+
+def make_previews(store: Store, storage: Storage, pick_id: str) -> dict[str, Any]:
+    """``studio drop previews``: the cover and watch copy (``_watch_files``) of a drop checked before they existed, from its clip
+    in Storage, its section (``drop['window']``) and its crop: free (no Gemini, no Higgsfield), whatever the drop's state. Each
+    one made is recorded on the card at once (any other key is left as it is). Returns ``{"pick_id", "cover_path",
+    "preview_video_path"}``; ``KeyError`` for an unknown pick, ``DropError`` (one line) for a pick that is not a drop, has no
+    section yet or whose clip is not in Storage, or when the watch copy could not be made; ``StorageError`` when the download
+    fails."""
+    pick = store.get_favorite(pick_id)
+    if pick is None:
+        raise KeyError(pick_id)
+    d = drop_of(pick)
+    window = d.get("window")
+    if not isinstance(window, Mapping) or not all(isinstance(window.get(k), (int, float)) for k in ("start_s", "length_s")):
+        raise DropError("no section yet: the check makes the cover and the watch copy")
+    source_id = pick.source_id or d.get("source_id")
+    src = next(iter(store.list_sources(id=source_id)), None) if isinstance(source_id, str) and source_id else None
+    if src is None or not src.storage_path:
+        raise DropError("the clip is not in Storage any more (deleted after posting, or by retention)")
+    crop_x = d.get("crop_x") if isinstance(d.get("crop_x"), (int, float)) else None
+    with tempfile.TemporaryDirectory(prefix="studio-previews-") as tmp:
+        work = Path(tmp)
+        local = _fetch_local(storage, src, work, "clip")
+        paths, problems = _watch_files(storage, local, work, pick.id, window, crop_x)
+    made = {k: v for k, v in paths.items() if v is not None}
+    if made:
+        fresh = store.get_favorite(pick.id) or pick  # read again: only these two keys change
+        store.update_favorite(pick.id, proposal={**fresh.proposal, "drop": {**drop_of(fresh), **made}})
+    if paths["preview_video_path"] is None:
+        raise DropError("the watch copy could not be made: " + "; ".join(problems))
+    return {"pick_id": pick.id, **paths}
+
+
+def missing_previews(store: Store) -> list[str]:
+    """``drop previews --missing``: the drops with a section and their clip in Storage but no watch copy (checked before Task 11),
+    oldest first. A skipped pick is left out: it has no card, and retention never sweeps its files."""
+    stored = {s.id for s in store.list_sources() if s.storage_path}
+    out: list[str] = []
+    for f in store.list_favorites():  # oldest first (both stores order by created_at)
+        if not is_drop(f.proposal) or f.status == "skipped":
+            continue
+        d = f.proposal["drop"]
+        if isinstance(d.get("window"), Mapping) and not d.get("preview_video_path") and (f.source_id or d.get("source_id")) in stored:
+            out.append(f.id)
+    return out
 
 
 # ---- make --------------------------------------------------------------------------------------------------------------------
@@ -2207,6 +2295,38 @@ def keep_command(
     except (DropError, ValueError) as e:
         fail(str(e))
     emit({"pick_id": kept.id, "keep": kept.proposal["drop"]["keep"]})
+
+
+@app.command("previews")
+def previews_command(
+    pick: Annotated[
+        str | None, typer.Option("--pick", help="One drop's pick id: its cover and watch copy, made (again) from its clip in Storage.")
+    ] = None,
+    missing: Annotated[
+        bool,
+        typer.Option("--missing", help="Every drop with a section and its clip in Storage but no watch copy yet (checked before them)."),
+    ] = False,
+) -> None:
+    """The clip card's cover and watch copy (540x960, the section with its own sound) for clips checked before the check wrote
+    them. Free: no Gemini, no Higgsfield. Prints {"made": [ids], "skipped": [{"pick_id", "reason"}]}; exit 2 when the one pick
+    named was skipped."""
+    if (pick is None) == (not missing):
+        fail("give --pick <id> or --missing (not both)")
+    store, storage = open_store(), open_storage()
+    ids = [pick] if pick is not None else missing_previews(store)
+    made: list[str] = []
+    skipped: list[dict[str, str]] = []
+    for pick_id in ids:
+        try:
+            make_previews(store, storage, pick_id)
+            made.append(pick_id)
+        except KeyError:
+            skipped.append({"pick_id": pick_id, "reason": f"unknown pick {pick_id}"})
+        except (DropError, StorageError, ValueError) as e:
+            skipped.append({"pick_id": pick_id, "reason": str(e)})
+    emit({"made": made, "skipped": skipped})
+    if pick is not None and skipped:
+        raise typer.Exit(EXIT_USAGE)
 
 
 @app.command("make")

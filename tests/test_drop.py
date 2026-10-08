@@ -28,7 +28,7 @@ from studio.gemini import GeminiBlocked, GeminiError
 from studio.higgsfield_api import PollTimeout, RequestStatus, Submitted, SubmitUncertain
 from studio.media.qa import probe
 from studio.models import Body, Character, Clip, ClipState, Favorite, Mode, Settings
-from studio.storage import LocalStorage
+from studio.storage import LocalStorage, StorageError
 from studio.store import MemoryStore
 
 NOW = now_london()
@@ -225,7 +225,153 @@ def test_a_classic_gets_the_longer_section(world, synth_video):
 def test_a_landscape_clip_is_cropped_around_the_star(world, synth_video):
     store, storage = world
     pid = ready_drop(store, storage, synth_video(w=960, h=540, dur=10), star={**deconstruct()["star"], "x_center": 0.3})
-    assert store.get_favorite(pid).proposal["drop"]["crop_x"] == 0.3
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["crop_x"] == 0.3
+    # the card's cover and watch copy are the same 9:16 crop around the star
+    assert probe(Path(storage.root) / "sources" / d["preview_video_path"], loudness=False).width == 540
+
+
+# ---- what the owner sees on a clip card (terminal v3 Task 11): a cover and a short watch copy of the section, never a reason to fail
+
+
+def moov_first(path: Path) -> bool:
+    """faststart: the MP4's ``moov`` box comes before its ``mdat`` (a phone starts playing before the whole file is in)."""
+    data, i, names = Path(path).read_bytes(), 0, []
+    while i + 8 <= len(data):
+        size = int.from_bytes(data[i : i + 4], "big")
+        names.append(data[i + 4 : i + 8])
+        size = int.from_bytes(data[i + 8 : i + 16], "big") if size == 1 else (len(data) - i if size == 0 else size)
+        if size < 8:
+            break
+        i += size
+    return b"moov" in names and b"mdat" in names and names.index(b"moov") < names.index(b"mdat")
+
+
+def test_the_check_writes_the_cards_cover_and_a_short_watch_copy_of_the_section(world, synth_video):
+    from PIL import Image
+
+    store, storage = world
+    pid = ready_drop(store, storage, synth_video(w=540, h=960, dur=10))
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["cover_path"] == f"owner/{pid}/cover.jpg" and d["preview_video_path"] == f"owner/{pid}/preview.mp4"  # next to the strip
+    assert d["preview_path"] == f"owner/{pid}/preview.jpg"
+    root = Path(storage.root) / "sources"
+    with Image.open(root / d["cover_path"]) as img:
+        assert img.format == "JPEG" and img.size == (540, 960)
+    r = probe(root / d["preview_video_path"], loudness=False)
+    assert (r.width, r.height) == (540, 960) and r.video_codec == "h264"
+    assert r.duration_s == pytest.approx(d["window"]["length_s"], abs=0.1)  # the section only
+    assert r.has_audio and r.audio_codec == "aac"  # the clip's own sound
+    assert moov_first(root / d["preview_video_path"])
+
+
+def test_the_watch_copy_of_a_silent_clip_is_silent(world, synth_video):
+    store, storage = world
+    pid = ready_drop(store, storage, synth_video(w=540, h=960, dur=7, audio=False))
+    d = store.get_favorite(pid).proposal["drop"]
+    assert not probe(Path(storage.root) / "sources" / d["preview_video_path"], loudness=False).has_audio
+
+
+class FlakyStorage(LocalStorage):
+    """Our own Storage refusing the card's cover and watch copy (and nothing else)."""
+
+    def upload(self, bucket, path, file):
+        if path.endswith(("/cover.jpg", "/preview.mp4")):
+            raise StorageError(f"storage POST {bucket}/{path} failed: 503", 503)
+        return super().upload(bucket, path, file)
+
+
+def test_a_cover_or_watch_copy_that_fails_never_fails_the_check(world, portrait, monkeypatch, caplog, tmp_path):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)  # a first check made both
+    assert store.get_favorite(pid).proposal["drop"]["preview_video_path"]
+
+    def boom(*a, **k):
+        raise drop.clipwork.ClipworkError("ffmpeg failed (1): no")
+
+    def full(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(drop.clipwork, "preview_video", boom)
+    monkeypatch.setattr(drop.clipwork, "cover_frame", full)
+    drop.request_recheck(store, pid, NOW)
+    with caplog.at_level("WARNING", logger="studio.drop"):
+        out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
+    d = store.get_favorite(pid).proposal["drop"]
+    assert out.ok and out.state == d["state"] == "ready" and d["reason"] is None
+    assert d.get("cover_path") is None and d.get("preview_video_path") is None  # null: never the last check's paths
+    assert d["preview_path"] == f"owner/{pid}/preview.jpg" and d["credits"] > 0  # the rest of the check is as always
+    assert "the watch copy" in caplog.text and "the cover" in caplog.text and "ffmpeg failed" in caplog.text
+    # our Storage refusing them is no reason either
+    monkeypatch.undo()
+    flaky = FlakyStorage(tmp_path / "flaky")
+    other = drop_file(store, flaky, portrait)
+    out = process_drop(store, flaky, other, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
+    d = store.get_favorite(other).proposal["drop"]
+    assert out.state == "ready" and d.get("cover_path") is None and d.get("preview_video_path") is None and d["preview_path"]
+
+
+def strip_watch(store, storage, pick_id):
+    """A drop checked before Task 11: no cover, no watch copy (on the card or in Storage)."""
+    f = store.get_favorite(pick_id)
+    d = {k: v for k, v in f.proposal["drop"].items() if k not in ("cover_path", "preview_video_path")}
+    store.update_favorite(pick_id, proposal={**f.proposal, "drop": d})
+    for name in ("cover.jpg", "preview.mp4"):
+        storage.delete("sources", f"owner/{pick_id}/{name}")
+
+
+def test_drop_previews_backfills_the_clips_checked_before_and_only_those(monkeypatch, tmp_path, portrait):
+    store, storage = make_store(), LocalStorage(tmp_path / "s")
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: storage)
+
+    def paid(*a, **k):
+        pytest.fail("drop previews is free: no Gemini, no Higgsfield")
+
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", paid)
+    monkeypatch.setattr(drop.HiggsfieldClient, "from_env", paid)
+    old = ready_drop(store, storage, portrait)
+    strip_watch(store, storage, old)
+    made = ready_drop(store, storage, portrait)
+    tap_make(store, made)  # making: its card still shows, so it gets them too
+    strip_watch(store, storage, made)
+    has_them = ready_drop(store, storage, portrait)
+    untouched = store.get_favorite(has_them)
+    checking = drop_file(store, storage, portrait)  # no section yet: the check makes them
+    gone = ready_drop(store, storage, portrait)
+    strip_watch(store, storage, gone)
+    store.update_source(store.get_favorite(gone).source_id, storage_path=None)  # its clip was deleted
+    removed = ready_drop(store, storage, portrait)
+    strip_watch(store, storage, removed)
+    store.update_favorite(removed, status="skipped")  # removed by the owner: no card, and retention never sweeps it
+    r = CliRunner().invoke(app, ["drop", "previews", "--missing"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == {"made": [old, made], "skipped": []}
+    root = Path(storage.root) / "sources"
+    for pid in (old, made):
+        d = store.get_favorite(pid).proposal["drop"]
+        assert d["cover_path"] == f"owner/{pid}/cover.jpg" and d["preview_video_path"] == f"owner/{pid}/preview.mp4"
+        assert (root / d["cover_path"]).is_file() and (root / d["preview_video_path"]).is_file()
+        rep = probe(root / d["preview_video_path"], loudness=False)
+        assert (rep.width, rep.height) == (540, 960) and rep.duration_s == pytest.approx(d["window"]["length_s"], abs=0.1)
+    assert store.get_favorite(made).proposal["drop"]["state"] == "making" and store.get_favorite(made).proposal["make_requested"]
+    assert store.get_favorite(has_them) == untouched
+    for pid in (gone, removed):
+        assert "preview_video_path" not in store.get_favorite(pid).proposal["drop"]
+    assert "cover_path" not in store.get_favorite(checking).proposal["drop"]
+    r = CliRunner().invoke(app, ["drop", "previews", "--missing"])
+    assert json.loads(r.output) == {"made": [], "skipped": []}  # nothing missing any more
+    # one named pick: made again when it has them; a reason when it cannot, exit 2
+    r = CliRunner().invoke(app, ["drop", "previews", "--pick", has_them])
+    assert r.exit_code == 0 and json.loads(r.output) == {"made": [has_them], "skipped": []}
+    for pid, reason in ((checking, "no section"), (gone, "not in Storage"), ("nope", "unknown pick nope")):
+        r = CliRunner().invoke(app, ["drop", "previews", "--pick", pid])
+        assert r.exit_code == 2, r.output
+        (skip,) = json.loads(r.output)["skipped"]
+        assert skip["pick_id"] == pid and reason in skip["reason"]
+    for args in ([], ["--pick", old, "--missing"]):
+        r = CliRunner().invoke(app, ["drop", "previews", *args])
+        assert r.exit_code == 2 and "--pick" in r.output and "--missing" in r.output
 
 
 @pytest.mark.parametrize(

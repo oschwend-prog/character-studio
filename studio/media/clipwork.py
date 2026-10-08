@@ -15,6 +15,11 @@ pixels a frame. ``trim_clip(..., min_pixels=N)`` scales a window that is smaller
 404x720) up, keeping its shape, to the smallest even size of at least N pixels. ``proxy_clip`` makes the small copy of a clip
 (the longer side 640 px, 15 fps, mono AAC) that is sent to Gemini for the deconstruct: the same picture and sound, smaller.
 
+**What the owner sees on a clip card** (terminal v3 Task 11, owner 2026-10-08: "make them larger so I can actually see them ...
+Even better if I could click and watch them"): ``preview_video`` is the watch copy of the section (540x960, small H.264 with the
+clip's own sound, faststart) and ``cover_frame`` one JPEG frame of it, both framed the same way (the 9:16 crop around the star of
+a landscape clip, else the frame fitted and padded).
+
 CLI: ``studio master mux-audio VIDEO SOURCE --start S --out OUT`` (and ``studio source trim`` for the trim of a
 catalogued source). Exit 2 for anything the caller must fix.
 """
@@ -32,6 +37,8 @@ from studio.media.qa import QAError, probe
 TRIM_MAX_SECONDS = 16.0  # the hard maximum of a master
 OBJECT_SWAP_MIN_PIXELS = 409_600  # Higgsfield's Object swap: at least this many pixels a frame
 PROXY_LONG_SIDE = 640
+PREVIEW_SIZE = (540, 960)  # the owner's watch copy and cover of a section: 9:16, small enough for a phone (Task 11)
+COVER_QUALITY = 82
 _SLACK = 0.15  # a window may overshoot the end of the file by a frame or two of container rounding
 _FFMPEG = "ffmpeg"
 
@@ -170,6 +177,85 @@ def proxy_clip(src: Path | str, out: Path | str, *, long_side: int = PROXY_LONG_
         return _finish(work, out)
 
 
+def _watch_framing(width: int, height: int, crop_x: float | None, size: tuple[int, int]) -> str:
+    """The filters of the owner's watch copy and cover: the 9:16 crop around the star when ``crop_x`` (the master's
+    ``crop_window``), then the frame fitted into ``size`` and padded, centred (a frame already 9:16 is only scaled)."""
+    w, h = size
+    filters: list[str] = []
+    if crop_x is not None:
+        crop_w, crop_h, x = crop_window(width, height, crop_x)
+        filters.append(f"crop={crop_w}:{crop_h}:{x}:0")
+    filters += [
+        f"scale={w}:{h}:force_original_aspect_ratio=decrease:force_divisible_by=2:flags=bicubic",
+        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black", "setsar=1", "format=yuv420p",
+    ]
+    return ",".join(filters)
+
+
+def _inside(report_duration: float, start: float, length: float) -> None:
+    if start < 0:
+        raise ValueError(f"start must be 0 or more seconds, got {start:g}")
+    if length <= 0:
+        raise ValueError(f"duration must be positive, got {length:g}")
+    if start + length > report_duration + _SLACK:
+        raise ValueError(f"the source ends at {report_duration:.2f} s, before the window {start:g}-{start + length:g} s does")
+
+
+def preview_video(
+    src: Path | str, out: Path | str, start_s: float, duration_s: float, *, crop_x: float | None = None,
+    size: tuple[int, int] = PREVIEW_SIZE,
+) -> Path:
+    """The owner's watch copy of a section (terminal v3 Task 11: tap a clip card to watch it): ``duration_s`` seconds from
+    ``start_s`` (at most ``TRIM_MAX_SECONDS``), framed like ``_watch_framing`` at ``size`` (540x960), H.264 CRF 28 veryfast
+    yuv420p, the clip's own sound as AAC 96k 48 kHz when it has any, ``+faststart`` (a phone starts playing before the whole
+    file is in): typically 1-3 MB. ``ValueError`` for a window that makes no sense or ends after the clip, ``QAError`` for an
+    unreadable file, ``ClipworkError`` when ffmpeg fails."""
+    src, out = Path(src), Path(out)
+    start = _number(start_s, "start")
+    length = min(_number(duration_s, "duration"), TRIM_MAX_SECONDS)
+    if crop_x is not None:
+        _number(crop_x, "crop_x")
+    report = probe(src, loudness=False)
+    _inside(report.duration_s, start, length)
+    framing = _watch_framing(report.width, report.height, crop_x, size)
+    with tempfile.TemporaryDirectory(prefix="studio-watch-") as tmp:
+        work = Path(tmp) / "preview.mp4"
+        _ffmpeg(
+            "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", src, "-vf", framing,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
+            *(["-c:a", "aac", "-b:a", "96k", "-ar", "48000"] if report.has_audio else ["-an"]),
+            "-movflags", "+faststart", work,
+        )  # fmt: skip
+        return _finish(work, out)
+
+
+def cover_frame(
+    src: Path | str, out: Path | str, at_s: float, *, crop_x: float | None = None, size: tuple[int, int] = PREVIEW_SIZE,
+    quality: int = COVER_QUALITY,
+) -> Path:
+    """One frame of ``src`` at ``at_s`` (the middle of the section: the clip card's picture), framed like the watch copy, as a
+    JPEG of ``quality``. ``ValueError`` for a moment outside the clip, ``QAError`` for an unreadable file, ``ClipworkError`` when
+    ffmpeg fails."""
+    from PIL import Image  # only the cover needs it
+
+    src, out = Path(src), Path(out)
+    at = _number(at_s, "at")
+    if crop_x is not None:
+        _number(crop_x, "crop_x")
+    report = probe(src, loudness=False)
+    _inside(report.duration_s, at, 1e-3)
+    framing = _watch_framing(report.width, report.height, crop_x, size)
+    with tempfile.TemporaryDirectory(prefix="studio-cover-") as tmp:
+        frame = Path(tmp) / "frame.png"
+        _ffmpeg("-ss", f"{min(at, max(0.0, report.duration_s - 0.1)):.3f}", "-i", src, "-vf", framing, "-frames:v", "1", frame)
+        if not frame.is_file():
+            raise ClipworkError(f"ffmpeg wrote no frame at {at:g} s")
+        work = Path(tmp) / "cover.jpg"
+        with Image.open(frame) as img:
+            img.convert("RGB").save(work, "JPEG", quality=quality, optimize=True, progressive=True)
+        return _finish(work, out)
+
+
 def mux_source_audio(video: Path | str, source: Path | str, out: Path | str, start_s: float) -> Path:
     """Put the audio of ``source`` from ``start_s`` (for as long as ``video`` runs) under ``video``'s picture.
 
@@ -199,6 +285,6 @@ def mux_source_audio(video: Path | str, source: Path | str, out: Path | str, sta
 
 
 __all__ = [
-    "ClipworkError", "OBJECT_SWAP_MIN_PIXELS", "QAError", "TRIM_MAX_SECONDS", "mux_source_audio", "proxy_clip", "trim_clip",
-    "upscaled_size",
+    "COVER_QUALITY", "ClipworkError", "OBJECT_SWAP_MIN_PIXELS", "PREVIEW_SIZE", "QAError", "TRIM_MAX_SECONDS", "cover_frame",
+    "mux_source_audio", "preview_video", "proxy_clip", "trim_clip", "upscaled_size",
 ]

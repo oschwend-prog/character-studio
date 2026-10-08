@@ -42,8 +42,8 @@ is retention for clips nobody used: a drop never made whose clip came from a hit
 the owner tapped "Use this clip": its link is a hit marked ``dropped`` that was first seen at or before the drop was filed; a link
 he pasted himself stays his own even when a pull finds the same post later) and was filed more than ``hit_days`` (30) ago, or the
 owner's own upload or link filed more than ``owner_days`` (60) ago, has its Storage objects deleted (the full clip, the trimmed
-sections of a make the budget refused, the preview strip) and the pick is skipped: "expired: unused for N days, the clip was
-deleted". Never touched: a pick with the owner's Make it, a drop making or made, a pick queued or made, one marked Keep
+sections of a make the budget refused, the preview strip, the card's cover and watch copy) and the pick is skipped: "expired:
+unused for N days, the clip was deleted". Never touched: a pick with the owner's Make it, a drop making or made, a pick queued or made, one marked Keep
 (``drop.keep``), and a whole family while one of its members is still to be made and not itself expired (a version shares its
 root's clip). A source another pick or an unfinished clip still uses stays. Finished masters and every data row stay; the
 owner's Mac folder is never touched. Idempotent.
@@ -418,6 +418,7 @@ HIT_DAYS = 30  # a clip from a hit (auto-filed, or "Use this clip")
 OWNER_DAYS = 60  # the owner's own upload or link
 NOT_YET_MADE = frozenset({"new", "approved", "analysed"})  # a pick in one of these was never made
 BUSY_STATES = frozenset({"making", "made"})  # a drop being made, or made: never expired
+PREVIEW_KEYS = ("preview_path", "cover_path", "preview_video_path")  # what the check writes for the owner's eyes only
 
 
 def filed_at(pick: Favorite) -> datetime | None:
@@ -450,7 +451,8 @@ def _expiry_days(pick: Favorite, from_hit: bool, now: datetime, hit_days: int, o
 
 def _objects(store: Store, pick: Favorite) -> list[tuple[str | None, str]]:
     """What a drop holds in the ``sources`` bucket, as ``(source id or None, key)``: its full clip (its source, or the owner's
-    upload before a check catalogued it), the trimmed sections of its clips (a make the budget refused), its preview strip."""
+    upload before a check catalogued it), the trimmed sections of its clips (a make the budget refused), its preview strip, cover and
+    watch copy (``PREVIEW_KEYS``)."""
     d = pick.proposal["drop"]
     out: list[tuple[str | None, str]] = []
     full_id = pick.source_id or d.get("source_id")
@@ -467,9 +469,10 @@ def _objects(store: Store, pick: Favorite) -> list[tuple[str | None, str]]:
         child = next(iter(store.list_sources(id=clip.source_id)), None) if clip is not None and clip.source_id else None
         if child is not None and child.storage_path and child.id != (full.id if full is not None else None):
             out.append((child.id, child.storage_path))
-    preview = d.get("preview_path")
-    if isinstance(preview, str) and preview:
-        out.append((None, preview))
+    for key in PREVIEW_KEYS:  # the strip, the card's cover and the watch copy (terminal v3 Task 11)
+        preview = d.get(key)
+        if isinstance(preview, str) and preview:
+            out.append((None, preview))
     return out
 
 
@@ -539,7 +542,7 @@ def purge_stale(
             gone = [k for _, k in plans[pick_id] if k in delete]
             n = days[pick_id]
             fresh = store.get_favorite(pick_id) or pick
-            d = {k: v for k, v in fresh.proposal["drop"].items() if k != "preview_path"}
+            d = {k: v for k, v in fresh.proposal["drop"].items() if k not in PREVIEW_KEYS}
             d.update(
                 reason=f"expired: unused for {n} days" + (", the clip was deleted" if gone else ""),
                 expired={"at": at, "days": n, "deleted": gone}, at=at,

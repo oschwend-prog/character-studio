@@ -698,6 +698,27 @@ def test_an_unused_clip_from_a_hit_goes_after_30_days_the_owners_upload_after_60
     assert fetch.purge_stale(store, storage, NOW_FETCH) == {"expired": [], "storage_deleted": [], "already": True}  # idempotent
 
 
+def test_retention_deletes_and_strips_the_cards_cover_and_watch_copy_too(world, clip_file):
+    """Terminal v3 Task 11: the check writes a cover and a watch copy next to the strip; an expired drop loses all three."""
+    store, storage, out_dir = world
+    pick = stale(store, storage, clip_file, days=61)
+    cover, video = f"owner/{pick.id}/cover.jpg", f"owner/{pick.id}/preview.mp4"
+    storage.upload("sources", cover, clip_file)
+    storage.upload("sources", video, clip_file)
+    d = {**pick.proposal["drop"], "cover_path": cover, "preview_video_path": video}
+    pick = store.update_favorite(pick.id, proposal={**pick.proposal, "drop": d})
+    young = stale(store, storage, clip_file, days=10)  # not expired: its files stay
+    young_cover = f"owner/{young.id}/cover.jpg"
+    storage.upload("sources", young_cover, clip_file)
+    out = fetch.purge_stale(store, storage, NOW_FETCH)
+    (expired,) = out["expired"]
+    assert expired["pick_id"] == pick.id and {cover, video, d["preview_path"]} <= set(expired["deleted"])
+    left = all_objects(storage)
+    assert not {cover, video, d["preview_path"]} & left and young_cover in left
+    after = store.get_favorite(pick.id).proposal["drop"]
+    assert not {"preview_path", "cover_path", "preview_video_path"} & set(after) and after["expired"]["days"] == 61
+
+
 def test_retention_never_touches_a_clip_being_made_a_kept_one_or_a_family_member_still_to_be_made(world, clip_file):
     from studio import drop
 

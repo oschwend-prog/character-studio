@@ -246,3 +246,66 @@ def test_the_proxy_is_small_keeps_the_sound_and_never_enlarges(tmp_path, source,
     assert not probe(clipwork.proxy_clip(silent_source, tmp_path / "s.mp4"), loudness=False).has_audio
     small = clipwork.proxy_clip(source, tmp_path / "q.mp4", long_side=240)
     assert probe(small, loudness=False).height == 240
+
+
+# ---- the owner's watch copy and cover of a section (terminal v3 Task 11: clip cards you can see and watch) -------------------
+
+
+def top_level_boxes(path: Path) -> list[str]:
+    """The MP4's top-level box names in file order (``moov`` before ``mdat`` = faststart: a phone starts playing at once)."""
+    data = Path(path).read_bytes()
+    names: list[str] = []
+    i = 0
+    while i + 8 <= len(data):
+        size = int.from_bytes(data[i : i + 4], "big")
+        names.append(data[i + 4 : i + 8].decode("latin-1"))
+        if size == 1:
+            size = int.from_bytes(data[i + 8 : i + 16], "big")
+        elif size == 0:
+            size = len(data) - i
+        if size < 8:
+            break
+        i += size
+    return names
+
+
+def test_the_watch_copy_is_540x960_the_section_only_with_its_sound_and_faststart(tmp_path, source):
+    out = clipwork.preview_video(source, tmp_path / "preview.mp4", 2.0, 5.0)
+    r = probe(out, loudness=False)
+    assert (r.width, r.height) == clipwork.PREVIEW_SIZE == (540, 960)
+    assert r.duration_s == pytest.approx(5.0, abs=0.1)  # the section only
+    assert r.has_audio and r.audio_codec == "aac" and r.video_codec == "h264"  # the clip's own sound, with the tap that allows it
+    boxes = top_level_boxes(out)
+    assert boxes.index("moov") < boxes.index("mdat")  # +faststart
+    assert out.stat().st_size < 3_000_000
+
+
+def test_the_watch_copy_of_a_silent_clip_has_no_sound_and_a_landscape_one_is_cropped(tmp_path, silent_source, landscape_source):
+    silent = probe(clipwork.preview_video(silent_source, tmp_path / "s.mp4", 0.0, 4.0), loudness=False)
+    assert not silent.has_audio and (silent.width, silent.height) == (540, 960)
+    wide = probe(clipwork.preview_video(landscape_source, tmp_path / "w.mp4", 1.0, 3.0, crop_x=0.3), loudness=False)
+    assert (wide.width, wide.height) == (540, 960) and wide.has_audio and wide.duration_s == pytest.approx(3.0, abs=0.1)
+
+
+def test_the_watch_copy_is_at_most_16_s_and_refuses_a_window_past_the_clip(tmp_path):
+    long = tmp_path / "long.mp4"
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=size=160x284:rate=10:duration=17", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-an", str(long))
+    r = probe(clipwork.preview_video(long, tmp_path / "p.mp4", 0.0, 17.0), loudness=False)
+    assert r.duration_s == pytest.approx(16.0, abs=0.15)
+    with pytest.raises(ValueError, match="ends at"):
+        clipwork.preview_video(long, tmp_path / "q.mp4", 10.0, 9.0)
+    with pytest.raises(ValueError):
+        clipwork.preview_video(long, tmp_path / "q.mp4", -1.0, 4.0)
+
+
+def test_the_cover_is_one_540x960_jpeg_frame(tmp_path, source, landscape_source):
+    from PIL import Image
+
+    out = clipwork.cover_frame(source, tmp_path / "cover.jpg", 4.5)
+    with Image.open(out) as img:
+        assert img.format == "JPEG" and img.size == (540, 960)
+    wide = clipwork.cover_frame(landscape_source, tmp_path / "wide.jpg", 3.0, crop_x=0.5)
+    with Image.open(wide) as img:
+        assert img.size == (540, 960)
+    with pytest.raises(ValueError, match="ends at"):
+        clipwork.cover_frame(source, tmp_path / "late.jpg", 12.0)
