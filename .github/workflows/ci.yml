@@ -1,12 +1,33 @@
 name: ci
 
+# The full test suite (about 2,700 tests, 15-30 minutes a run). Until 2026-10-08 it ran on every push and pull request
+# and used about 1,800 of the account's 2,000 free Actions minutes in one week; GitHub then refused every job, the
+# publish and drop jobs included. So it now runs only for pushes to the deploy branch that change code or tests, one
+# run per branch at a time (a newer push cancels the older run), and by hand. The suite also runs locally before every
+# commit.
 on:
   push:
-  pull_request:
+    branches: [build/slice1, main]
+    paths:
+      - 'studio/**'
+      - 'tests/**'
+      - 'supabase/**'
+      - 'config/**'
+      - 'characters/**'
+      - 'bin/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
