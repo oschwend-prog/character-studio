@@ -119,111 +119,123 @@
    "slug": "franz",
    "name": "Franz",
    "status": "live",
-   "concept": "the outraged tiny aristocrat. A cream miniature dachshund who believes he is royalty and is permanently unimpressed.",
+   "concept": "the happy show-off. A tall, upright cream dachshund (adult human height, a long sausage torso on comically short legs) in a cool cap and casual-luxury streetwear, sure he is the best dancer in the room, and somehow he is.",
    "edition": "dachshund",
    "images": {
     "spec": "/artists/franz/spec.png",
     "turnaround": "/artists/franz/turnaround.jpg",
     "avatar": "/artists/franz/avatar.png",
-    "turnaround_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082702_a37318e2-e37a-404c-af34-84ff4f5d39dc.png",
-    "master_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082402_806498b8-c9aa-476d-b86c-169acf80ab0b.png"
+    "turnaround_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_224450_5daecb6b-480a-4b34-bac5-b6abb4078bdc.png",
+    "master_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_222151_ea5dc4a3-f827-4b30-aad7-1831dcc11495.png"
    },
    "look": [
     {
-     "text": "**Head:** refined long muzzle, black nose, softly domed skull, chin slightly raised; a smug, effortlessly superior old-money expression."
+     "text": "**Head:** a round, softly domed dachshund head, a medium muzzle, a black nose, a happy open-mouth smile (pink tongue often showing); bright, friendly and proud. Never a human face, never human skin."
     },
     {
-     "text": "**Eyes:** big, with naturally muted catchlights. **ODD EYES:** his right eye (viewer's left) a pale natural ice-blue `#8FD3FF`, his left eye (viewer's right) a warm natural amber `#FFB040`; never glowing. In a 3/4 view or a profile facing the viewer's right, the near eye is his right one (ice-blue). (Dark brown, almost black, until 2026-10-06.)"
+     "text": "**Eyes:** big and bright, with natural catchlights. **ODD EYES:** his right eye (viewer's left) a pale natural ice-blue `#8FD3FF`, his left eye (viewer's right) a warm natural amber `#FFB040`; never glowing. In a 3/4 view or a profile facing the viewer's right, the near eye is his right one (ice-blue). (Dark brown, almost black, until 2026-10-06.)"
     },
     {
-     "text": "**Ears:** long, silky, feathered, hanging below the jaw, a shade warmer (pale honey) than the face."
+     "text": "**Ears:** long, silky, feathered, hanging below the jaw, golden-cream; they fly on every spin."
     },
     {
-     "text": "**Coat:** soft cream to pale honey, long and silky, feathered on the chest, legs, belly and tail; natural, slightly wavy, never blow-dried perfect."
+     "text": "**Fur:** warm golden-cream (about `#DCB08C` on the chest), long and silky, feathered on the chest, the forearms and the tail; natural, slightly wavy, never blow-dried perfect."
     },
     {
-     "text": "**Body (exaggerated canon):** a comically long, low sausage body, about twice a normal dachshund's length, on four short legs, paws on the ground. He is a dog: no human limbs, no hands, never standing like a person."
+     "text": "**Body (tall canon):** adult human height, upright on two legs; a long sausage torso and comically short legs (the hoodie hem sits low, the joggers are short in the leg); chest a little forward, proud."
     },
     {
-     "text": "**Crown:** a tiny polished gold crown with small round finials, worn slightly tilted on top of his head."
+     "text": "**Hands:** furry dog paws with dark paw pads. No human fingers, no nails, nothing human."
     },
     {
-     "text": "**Outfit (base):** a fitted **navy blue ribbed piqué polo shirt**, soft collar, two cream buttons on the placket, a small chest pocket edged in white contrast stitching, short sleeves over the front legs, stretched long to fit him, **no logos**. No collar tag, no shoes, no other gadget in the base look. Full detail in \"Wardrobe\"."
+     "text": "**Tail:** a long, plumed, golden-cream tail out of the back of the joggers: always visible, wagging on the beat."
     },
     {
-     "text": "**World:** warm minimalist interiors, soft natural daylight, cream and beige, a cream wool rug (the master)."
+     "text": "**Cap:** a plain cream baseball cap, curved brim, worn forward, no logo, no text."
+    },
+    {
+     "text": "**Outfit (base):** an oversized cream heavyweight hoodie, an open sage-green overshirt, relaxed charcoal joggers, chunky white sneakers. Full detail in \"Wardrobe\"."
+    },
+    {
+     "text": "**World:** wherever the clip is (a Drop-in keeps the source's setting); his own stills: a soft pale-grey studio seamless."
     }
    ],
    "wardrobe": {
     "signature": [
      {
-      "text": "**Head and neck:** the tiny polished gold crown `#C9A227`, tilted; ears loose over the collar. No dog collar, no tag."
+      "text": "**Cap:** a plain cream (about `#EDE3D6`) six-panel baseball cap, curved brim, worn forward over the ears; no logo, no text."
      },
      {
-      "text": "**Polo shirt:** fine cotton piqué with a visible ribbed knit texture, navy `#16213B`. Slim fit through the chest and back, cut long to cover his extra-long body, short sleeves ending over the front legs. Soft flat-knit collar; a two-button placket with cream `#EFE6D2` buttons, worn buttoned. Detail: a small chest pocket edged with one white running contrast stitch. No logo."
+      "text": "**Hoodie:** an oversized cream (about `#E8DCCF`) heavyweight cotton hoodie, hood down behind the neck, flat drawstrings, ribbed cuffs and hem; cut long for his long torso."
      },
      {
-      "text": "**Legs and paws:** bare natural fur. No shoes, no socks."
+      "text": "**Overshirt:** an open sage-green (about `#7C806A`) washed-cotton overshirt with two button-flap chest pockets and brown buttons, worn open over the hoodie, sleeves pushed up a little."
      },
      {
-      "text": "**Accessories:** the crown only (plus at most one gadget per clip, see \"Gadgets ready\")."
+      "text": "**Joggers:** relaxed charcoal (about `#4A4547`) fleece joggers with elastic cuffs, short in the leg for his short legs; his tail comes out of the back."
+     },
+     {
+      "text": "**Sneakers:** chunky white leather-and-mesh sneakers, thick white soles."
+     },
+     {
+      "text": "**Paws and tail:** bare natural fur. No dog collar, no tag, no jewellery in the base look (at most one gadget per clip, see \"Gadgets ready\")."
      }
     ],
     "capsule": [
      {
-      "text": "**Franz: tech** (ready). The base polo plus ONE gadget: tortoiseshell acetate sunglasses with dark green-grey lenses (`be42f42e`), a silver smartphone (`6012cd3a`), silver-and-tan leather over-ear headphones (`57ab3fed`) or a silver tablet (`ef2aa6b3`). For reaction, music and \"reviewing the staff\" formats."
+      "text": "**Franz: track day.** A cream-and-sage heavyweight tracksuit: a zip track jacket with a stand collar and a thin cream piping down the sleeves, matching relaxed track pants (short in the leg, the tail out), the cap, chunky white sneakers; a cream terry headband for gym trends. For street-dance, sports and gym trends (the test swap `e99aaea9` was a tracksuit street dance)."
      },
      {
-      "text": "**Franz: athleisure** (ready, `8f97e211`). Polo off. A navy terry-cotton headband with white stripes; tiny white canvas low-top sneakers with white rubber soles on all four paws. For gym and workout trends."
+      "text": "**Franz: summer terrace.** An open cream linen camp-collar shirt over a plain white tee, light-wash denim shorts (the tail out), the cap, white sneakers, one multicolour glass-bead bracelet on a forearm, tortoiseshell sunglasses. For summer, holiday and drip-check trends."
      },
      {
-      "text": "**Franz: summer** (ready, `ddb387bf`). Polo off. Dark-wash denim shorts cut for a dachshund; navy-and-white leather court sneakers; one multicolour glass-bead bracelet on a front leg. For summer, holiday and drip-check trends."
-     },
-     {
-      "text": "**Franz: gala** (idea, no asset). A black cotton-velvet smoking jacket cut for a dachshund, `#1A1A1A`, with a black satin shawl collar and frogging-free plain front; a burgundy `#5A1E2B` silk cravat. For weddings, galas, New Year."
-     },
-     {
-      "text": "**Franz: country weekend** (idea, no asset). A quilted olive `#4B5320` nylon gilet with a brown corduroy collar and two tiny brass press studs. For autumn walks, rain and the puddle he refuses to cross."
+      "text": "**Franz: city night.** A cropped charcoal puffer jacket over the cream hoodie, the charcoal joggers, the cap, white sneakers, a small black crossbody bag (no hardware logo). For winter, city-walk and night-out trends."
      }
     ]
    },
    "motion": [
     {
-     "text": "**Default walk:** a stiff, dignified **gala-trot**: chin up, small precise steps, tail level, never rushes. He arrives; he does not walk."
+     "text": "**Default walk:** a proud, bouncy, chest-out strut on his short legs, tail up and wagging, cap forward: he arrives like he owns the floor."
     },
     {
-     "text": "**Posture at rest:** lounging like a duke on a cream sofa or rug, front paws crossed, looking down his nose at the camera."
+     "text": "**Posture at rest:** standing tall, one paw on the hip, the other waving, grinning at the lens."
     },
     {
-     "text": "**How he dances:** he starts above it all (stands still, unimpressed, while the beat plays), then **betrays himself into tiny disco**: a small paw-shuffle and a head-bob in time. He catches himself, freezes, and does the Chin Lift as if nothing happened."
+     "text": "**How he dances:** upright and all-in, the clip's own moves done his way: a huge grin, tongue out on the big hits, ears flying on every spin, tail wagging on the beat, one cheeky look to the lens before the drop, then the Wiggle; a chest-out strut between moves. Funny but cool (owner 2026-10-07): never clumsy, never a fall."
     },
     {
-     "text": "**When provoked** (a doorbell, a cat, a hoover, being picked up): a sudden **frantic little-legged scramble**, ears flying, claws skidding on the floor; then instant composure, a shake-off, the Chin Lift."
+     "text": "**Performance line** (refs.json `swap_performance`, owner 2026-10-07; add it to every swap prompt): \"same moves, all Franz: huge grin, tongue out on the big hits, ears flying on every spin, tail wagging on the beat, one cheeky look to the lens before the drop, chest-out strut between moves\"."
     },
     {
-     "text": "**What he can't do:** stairs. **A single stair defeats him**: he stops, stares at it and waits to be carried. No jumping, no running for long, nothing athletic, no fetch."
+     "text": "**His part:** **star** by default (refs.json `swap_part`): his hook in the first second, every beat his. The studio has no per-character default part yet (`studio.drop` takes the check's suggested part, else featured, and the owner's Adjust; the daily run reads `owner_presence`), so choose Star in Adjust until the code reads `swap_part`."
     },
     {
-     "text": "**Dog-anatomy guard (paste into EVERY motion prompt, Object swap and motion transfer):** \"adapt the movement naturally to a real dog's body: a long low body and short legs, four paws on the ground, no human limbs, no human hands, no standing like a person, no distortion; keep him dog-sized next to people and furniture.\" Without it a dog came out human-sized in Biscuit's Single Ladies."
+     "text": "**What he can't do:** long legs or long human strides; nothing that needs long legs (no splits, no high kicks, no backflips): his short legs bounce, shuffle and stomp."
+    },
+    {
+     "text": "**Upright-body guard (paste into EVERY prompt for the upright body: Object swap, motion transfer, stills):** \"keep his body exactly as in the reference images: a real dachshund's head and golden-cream fur, adult human height, upright on two legs, a long sausage torso and comically short legs, furry dog paws for hands with no human fingers, his long feathered tail out of the back of the joggers; never a human face or human skin; no distortion.\""
+    },
+    {
+     "text": "**Four-legged-body guard (dog-star clips only, the quadruped body; the old \"dog-anatomy guard\"):** \"adapt the movement naturally to a real dog's body: a long low body and short legs, four paws on the ground, no human limbs, no human hands, no standing like a person, no distortion; keep him dog-sized next to people and furniture.\" Without it a dog came out human-sized in Biscuit's Single Ladies."
     }
    ],
    "signature_move": {
-    "text": "**The Chin Lift:** he stops, raises his chin, turns his head a quarter away from the lens and half-closes his eyes. One beat (about 1 s) of total disdain, then he carries on. It closes every provoked scramble. It is a gesture inside the clip, not a required ending: **masters end on the dance, with no eye close-up, glint or sting** (`CLAUDE.md`, owner 2026-10-05).",
+    "text": "**The Wiggle:** a full-body sausage wiggle from nose to tail on the drop. On the upright body: shoulders, long torso, hips and tail in one rolling wave, the short legs bouncing, the ears flying, a huge grin. It is a gesture inside the clip, not a required ending: **masters end on the dance, with no eye close-up, glint or sting** (`CLAUDE.md`, owner 2026-10-05).",
     "notes": [
      {
-      "text": "Alternatives: the slow sunglasses lower; the Refusal Sit (he sits down and will not continue)."
+      "text": "Object swap keeps the clip's own moves, so the Wiggle shows where the clip's drop has a body roll or a shimmy; his performance line (see \"Motion\") pushes it. A separate Wiggle tag would be a 1-2 s image-to-video from a still, at extra cost: decide before adding (same rule as section 4b of `docs/AI_INFLUENCERS.md`)."
      },
      {
-      "text": "Object swap keeps the clip's own moves, so the Chin Lift would be a 1-2 s tag (image-to-video from a still), at extra cost: decide before adding (same rule as section 4b of `docs/AI_INFLUENCERS.md`)."
+      "text": "Superseded: the Chin Lift (locked 2026-10-06 for the posh Franz; see the history section at the end)."
      }
     ]
    },
    "catchphrase": {
-    "line": "That is what people are for.",
-    "text": "**\"That is what people are for.\"** (from his own test line). Use it in the joke line or the first comment.",
+    "line": "Sausage coming through!",
+    "text": "**\"Sausage coming through!\"** Use it in a joke line or a first comment, not in every post.",
     "notes": [
      {
-      "text": "Alternative: \"One does not.\" (short form of \"One does not simply walk. One arrives.\")."
+      "text": "Superseded: \"That is what people are for.\" (locked 2026-10-06 for the posh Franz)."
      }
     ]
    },
@@ -232,6 +244,9 @@
     "voice_id": "d9d5c263-f84e-4752-97b5-3750fcc6fd2f",
     "sample_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_043131_892db83e-6d5e-4b2e-abca-ad998634b223.wav",
     "items": [
+     {
+      "text": "**Status (owner 2026-10-07):** the spoken voice is to confirm or re-choose for the happy show-off (Alistair below was approved on 2026-10-06 for the posh Franz). The tone and the sample lines below are the posh Franz's: history only, never a caption. His captions follow \"Voice (captions)\"."
+     },
      {
       "text": "**Voice:** Higgsfield preset **Alistair**, `voice_id d9d5c263-f84e-4752-97b5-3750fcc6fd2f`, `voice_type preset`. **Approved by the owner 2026-10-06** (test file `hf_20261006_043131_892db83e-6d5e-4b2e-abca-ad998634b223.wav`). The model and `speech_rate` of the test were not recorded: try `seed_audio` with an integer `speech_rate` (Lenny uses 2) and note the winner here."
      },
@@ -271,61 +286,62 @@
    },
    "gadgets": [
     {
+     "name": "Cool cap (plain cream)",
+     "status": "ready, canon (part of the master since 2026-10-07)",
+     "job": "His signature: casual-luxury streetwear, a flash of attitude at thumbnail size"
+    },
+    {
      "name": "Sunglasses (tortoiseshell)",
-     "status": "ready",
-     "job": "Near-signature: lowered slowly on the drop, the cool-aristocrat reveal"
+     "status": "ready (old look)",
+     "job": "Lowered slowly on the drop: the cool reveal before he goes all-in"
     },
     {
      "name": "Smartphone",
-     "status": "ready",
-     "job": "Left-on-read and \"unimpressed by your message\" reaction formats"
+     "status": "ready (old look)",
+     "job": "Filming himself: selfie and \"watch this\" formats"
     },
     {
      "name": "Over-ear headphones (silver/tan)",
-     "status": "ready",
+     "status": "ready (old look)",
      "job": "Music trends: he is listening to something better than your song"
     },
     {
      "name": "Tablet",
-     "status": "ready",
-     "job": "Reviewing the staff: rankings, ratings and \"my day\" formats"
+     "status": "ready (old look)",
+     "job": "Rankings, ratings and \"my day\" formats"
     },
     {
      "name": "Headband + white sneakers",
-     "status": "ready (polo off in this one)",
-     "job": "Gym and workout trends: the aristocrat attempts fitness (one stair still wins)"
+     "status": "ready (old look, polo off)",
+     "job": "Gym and workout trends: he turns the workout into a dance"
     },
     {
      "name": "Shorts + bracelets + sneakers",
-     "status": "ready (polo off in this one)",
+     "status": "ready (old look, polo off)",
      "job": "Summer, holiday and drip-check trends"
     },
     {
+     "name": "Crossbody bag",
+     "status": "idea",
+     "job": "Outfit-reveal and drip-check trends: the casual-luxury flex"
+    },
+    {
+     "name": "Cropped puffer jacket",
+     "status": "idea",
+     "job": "Winter, city-walk and night-out trends"
+    },
+    {
      "name": "Tiny gold crown",
-     "status": "ready, canon (part of the master since 2026-10-06)",
-     "job": "Royalty and main-character captions; the thumbnail flash of gold"
-    },
-    {
-     "name": "Crystal water bowl",
-     "status": "idea",
-     "job": "\"The small bowl. The crystal one.\" running gag"
-    },
-    {
-     "name": "Monocle",
-     "status": "idea",
-     "job": "The scandalised close-up: it drops when he is provoked"
-    },
-    {
-     "name": "Silk cravat",
-     "status": "idea",
-     "job": "Gala and wedding trends"
+     "status": "retired 2026-10-07 (owner: no crown)",
+     "job": "History only: the posh Franz's flash of gold"
     }
    ],
    "swap": {
-    "text": "Like for like: **Franz replaces a dog star** (refs.json `swap`: noun \"dachshund\", stars `dog`). He never replaces a person: a small dog cannot replace a human dancer (Genjutsu inserts him instead, or he comes out human-sized). Always add the dog-anatomy guard.",
+    "text": "Like for like, **Franz replaces a dog or a person** (owner 2026-10-07: \"franz not only replaces dogs\"; refs.json `swap`: noun \"dachshund\", stars `dog` and `person`): a person star with his **upright body** (the tall canon: he takes the person's place at adult human height), a dog star with his **four-legged body** (dog-sized). Genjutsu has answered a dog-for-person swap by inserting the dog and keeping the people, so the frame QA checks that no original person is left; the test swap `e99aaea9` (tall Franz for a tracksuit street dancer) came out clean, eyes right. Always add the guard of the body used and his performance line (see \"Motion\"); his part defaults to **star** (refs.json `swap_part`). (Until 2026-10-07 he replaced a dog star only.)",
     "noun": "dachshund",
     "stars": [
-     "dog"
+     "dog",
+     "person"
     ]
    },
    "accounts": [
@@ -346,15 +362,15 @@
   {
    "slug": "lenny",
    "name": "Lenny Gold",
-   "status": "designing",
+   "status": "live",
    "concept": "the manic Hollywood super-agent. \"Explode in, collapse out.\"",
    "edition": "agent",
    "images": {
     "spec": "/artists/lenny/spec.png",
     "turnaround": "/artists/lenny/turnaround.jpg",
     "avatar": "/artists/lenny/avatar.png",
-    "turnaround_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_082732_88ac10b9-399c-4ea7-8c7a-f2dcf5737d1d.png",
-    "master_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261006_081912_cc6a9f4c-2ff0-484f-a540-b48b0f30b796.png"
+    "turnaround_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_191708_61c020f6-8cd6-4bca-aa6f-be7aaa138242.png",
+    "master_url": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_183419_9613f97a-6358-4b7f-b4fe-38c07dc2c370.png"
    },
    "look": [
     {
@@ -559,9 +575,9 @@
    "accounts": [
     {
      "platform": "instagram",
-     "handle": null,
+     "handle": "lennygold.agent",
      "planned": "lennygold.agent",
-     "connected": false
+     "connected": true
     },
     {
      "platform": "tiktok",

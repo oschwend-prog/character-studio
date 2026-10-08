@@ -131,7 +131,7 @@ describe('the bible parser (scripts/bible.mjs)', () => {
 
   it('reads the real roster bibles (owner 2026-10-06)', () => {
     for (const [slug, phrase, preset, sample] of [
-      ['franz', 'That is what people are for.', 'Alistair', true], ['reginald', 'As you were.', null, false], ['lenny', 'You’re welcome.', 'Emmett', true],
+      ['franz', 'Sausage coming through!', 'Alistair', true], ['reginald', 'As you were.', null, false], ['lenny', 'You’re welcome.', 'Emmett', true],
     ] as const) {
       const refs = JSON.parse(read(`characters/${slug}/refs.json`));
       const a = parseArtist(refs, read(`characters/${slug}/bible.md`), read(`characters/${slug}/social.md`));

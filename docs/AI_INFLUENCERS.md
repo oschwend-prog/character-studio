@@ -43,6 +43,10 @@
 - **Franz also replaces people** (owner 2026-10-07: "franz not only replaces dogs"): refs.json `swap.stars` = dog and
   person (his upright body). A dog star still goes only to Franz. Genjutsu has answered a dog-for-person swap by adding the dog
   and keeping the people, so the frame QA checks no original person is left; test one clip first.
+- **Franz's tall canon** (owner 2026-10-07, option B; no crown): the happy show-off at adult human height, upright, a long
+  sausage torso on comically short legs, paws not fingers, tail out of the joggers; plain cream cap, cream hoodie, open sage
+  overshirt, charcoal joggers, chunky white sneakers, no logos. Master `ea5dc4a3`, sheet `5daecb6b`, close-up `f6444b2e`
+  (refs.json); the four-legged body keeps `87280b84` for now. Test swap clip `e99aaea9` proved it (clean, eyes right).
 - Signature moves locked: Franz the Wiggle (owner 2026-10-07, replaces the Chin Lift), Reginald the Glove Tug, Lenny the Tie Snap.
 - Catchphrases locked: Franz "Sausage coming through!" (owner 2026-10-07), Reginald "As you were.", Lenny "You're welcome."
 - Reginald is mid-40s (not 74). Franz's voice is Alistair (approved).

@@ -1,5 +1,5 @@
 {
-  "_doc": "Identity-lock references for Franz (the one dachshund, owner decision C5 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/franz/bible.md. ODD EYES (owner 2026-10-06, the studio signature): his RIGHT eye ice-blue, his LEFT eye amber, in the master, the sheets and the close-up. Masters end on the dance: closeup is the head-and-shoulders identity reference only (no eye close-up end beat), so closeup_center / blue_eye_xy stay null. masters and sheets are the gpt_image_2_5 canon (owner 2026-10-06, \"yes, do all\"; odd-eyes versions 2026-10-06): the master and the turnaround sheet; the expression sheet id is in the bible (refs.json holds one sheet per body). element_id is the Higgsfield Element (<<<id>>> inside params.prompt, never in medias); voice_id is the Alistair preset (approved by the owner 2026-10-06). accounts: Instagram biscuit.moves was renamed franz.unimpressed on 2026-10-06 (franz.dachshund was taken); it keeps biscuit.moves' Postiz connection.",
+  "_doc": "Identity-lock references for Franz (the one dachshund, owner decision C5 2026-10-06). Same structure as characters/reginald/refs.json; see its _doc and characters/franz/bible.md. CANON from 2026-10-07 (owner, option B): the tall Franz, the happy show-off: adult human height, upright on two legs, a long sausage torso and comically short legs, the dachshund face, furry paws for hands, tail out of the joggers; plain cream cap and casual-luxury streetwear (cream hoodie, open sage overshirt, charcoal joggers, chunky white sneakers), no logos, no crown. masters.biped, sheets.biped, closeup and their reference_urls are that canon (gpt_image_2_5 high 2K; proved by the test swap clip e99aaea9). masters.quadruped 87280b84 (the four-legged body for dog-star clips) and sheets.quadruped still show the older look until one new still in the cap look is made. ODD EYES (owner 2026-10-06, the studio signature): his RIGHT eye ice-blue (viewer's left), his LEFT eye amber, in the master, the sheet and the close-up. Masters end on the dance: closeup is the head-and-shoulders identity reference only, so closeup_center / blue_eye_xy stay null. swap_performance (one line for his swap prompts: same moves, all Franz) and swap_part (his default part, star) sit beside swap, not inside it: the seed admits exactly {noun, stars} in swap, and no code reads them yet (studio.drop.swap_prompt takes the part from the check and the owner's Adjust). element_id is the Higgsfield Element (<<<id>>> inside params.prompt, never in medias); voice_id is the Alistair preset (approved 2026-10-06 for the posh Franz; to re-choose for the show-off). accounts: Instagram biscuit.moves was renamed franz.unimpressed on 2026-10-06 (franz.dachshund was taken); it keeps biscuit.moves' Postiz connection.",
   "slug": "franz",
   "name": "Franz",
   "status": "live",
@@ -8,23 +8,23 @@
     "quadruped"
   ],
   "masters": {
-    "biped": "4d3f3051-6e38-4f08-a88d-f71921fd17c3",
+    "biped": "ea5dc4a3-f827-4b30-aad7-1831dcc11495",
     "quadruped": "87280b84-3a73-40c7-99dd-73d0253c1109"
   },
-  "closeup": "08077378-db99-4c66-bd35-1a061fef1123",
+  "closeup": "f6444b2e-32c5-400c-8fc2-2d58ef6fb421",
   "closeup_center": null,
   "blue_eye_xy": null,
   "avatar": "assets/characters/franz/avatar.png",
   "sheets": {
-    "biped": "79ff13e3-5cc4-43fe-a62b-d87dc0cf3f20",
+    "biped": "5daecb6b-480a-4b34-bac5-b6abb4078bdc",
     "quadruped": "79ff13e3-5cc4-43fe-a62b-d87dc0cf3f20"
   },
   "reference_urls": {
-    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_185742_4d3f3051-6e38-4f08-a88d-f71921fd17c3.png",
+    "master_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_222151_ea5dc4a3-f827-4b30-aad7-1831dcc11495.png",
     "master_quadruped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_191709_87280b84-3a73-40c7-99dd-73d0253c1109.png",
-    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_191709_79ff13e3-5cc4-43fe-a62b-d87dc0cf3f20.png",
+    "sheet_biped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_224450_5daecb6b-480a-4b34-bac5-b6abb4078bdc.png",
     "sheet_quadruped": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_191709_79ff13e3-5cc4-43fe-a62b-d87dc0cf3f20.png",
-    "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_191710_08077378-db99-4c66-bd35-1a061fef1123.png"
+    "closeup": "https://d8j0ntlcm91z4.cloudfront.net/user_3FpDaPTqXIGIuGg9Gh73nLwPXRT/hf_20261007_224455_f6444b2e-32c5-400c-8fc2-2d58ef6fb421.png"
   },
   "element_id": "a28cc772-0227-4ed1-b6a2-1c84fe3b78f2",
   "voice_id": "d9d5c263-f84e-4752-97b5-3750fcc6fd2f",
@@ -35,6 +35,8 @@
       "person"
     ]
   },
+  "swap_performance": "same moves, all Franz: huge grin, tongue out on the big hits, ears flying on every spin, tail wagging on the beat, one cheeky look to the lens before the drop, chest-out strut between moves",
+  "swap_part": "star",
   "style": {
     "pill": {
       "fill": "#F4EBDD",
@@ -50,13 +52,14 @@
   },
   "traits": {
     "energy": "bouncy and proud: struts in like he owns the floor, tail up, then goes all-in on the drop",
-    "comedy": "the happiest show-off: a tiny long dog convinced he is the best dancer in the room, and somehow he is",
+    "comedy": "the happiest show-off: a long sausage dog on two short legs, sure he is the best dancer in the room, and somehow he is",
     "best_formats": [
-      "tiny dog nails the trend better than the humans",
+      "a dachshund nails the trend better than the humans",
       "main-character entrance of a sausage",
       "the crowd goes wild for him",
       "dance-off: Franz vs the room",
-      "proud victory lap after the drop"
+      "proud victory lap after the drop",
+      "street-dance trends, upright in full streetwear"
     ],
     "settings": [
       "warm minimalist living room",
@@ -66,16 +69,17 @@
       "country-club lawn"
     ],
     "moves": [
-      "proud strut, tail up",
+      "proud chest-out strut, tail up",
       "paw raised high, paw on the hip",
       "the Wiggle: full-body sausage wiggle on the drop",
-      "happy hop-spin",
+      "happy hop-spin, ears flying",
+      "one cheeky look to the lens before the drop",
       "tongue-out victory pose"
     ],
     "props": [
       {
         "name": "cool cap",
-        "job": "his signature look: casual-luxury streetwear, a flash of attitude at thumbnail size"
+        "job": "his signature look: the plain cream cap of his casual-luxury streetwear, a flash of attitude at thumbnail size"
       },
       {
         "name": "tortoiseshell sunglasses",
@@ -90,21 +94,30 @@
         "job": "music trends: he is listening to something better than your song"
       },
       {
-        "name": "headband + white sneakers",
+        "name": "terry headband",
         "job": "gym and workout trends: he turns the workout into a dance"
       },
       {
         "name": "denim shorts + bead bracelet",
         "job": "summer, holiday and drip-check trends"
+      },
+      {
+        "name": "crossbody bag",
+        "job": "outfit-reveal and drip-check trends: the casual-luxury flex"
+      },
+      {
+        "name": "cropped puffer jacket",
+        "job": "winter, city-walk and night-out trends"
       }
     ],
     "music": "the clip's original sound for a Drop-in; lounge nu-disco with brass stabs (110-120 BPM) as his own bed; the trend's in-app sound",
     "never": [
-      "human hands or human-sized next to people",
-      "logos or brands on his clothes",
+      "human hands or fingers: furry dog paws only",
+      "a human face, human skin or human ears",
+      "a crown, or logos and brands on his clothes",
+      "long legs, or no tail out of the joggers",
       "sad, grumpy or bored on the drop",
-      "baby talk or slang in captions",
-      "nationality jokes or clichés (he is a dachshund, not a German stereotype)"
+      "baby talk, slang or nationality jokes (a dachshund, not a German stereotype)"
     ]
   },
   "accounts": [

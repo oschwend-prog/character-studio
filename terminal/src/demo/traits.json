@@ -1,13 +1,14 @@
 {
  "franz": {
-  "energy": "dignified and slow: a stiff gala-trot with his chin up, never rushes, until he is provoked into a frantic little-legged scramble",
-  "comedy": "outraged tiny aristocrat: permanently unimpressed and above it all, until the beat drops and he betrays himself into tiny disco",
+  "energy": "bouncy and proud: struts in like he owns the floor, tail up, then goes all-in on the drop",
+  "comedy": "the happiest show-off: a long sausage dog on two short legs, sure he is the best dancer in the room, and somehow he is",
   "best_formats": [
-   "dog refuses, then gives in to the beat",
-   "posh reaction to a mundane moment",
-   "one stair defeats him",
-   "luxury day-in-the-life of a dog",
-   "unimpressed judge of a trend"
+   "a dachshund nails the trend better than the humans",
+   "main-character entrance of a sausage",
+   "the crowd goes wild for him",
+   "dance-off: Franz vs the room",
+   "proud victory lap after the drop",
+   "street-dance trends, upright in full streetwear"
   ],
   "settings": [
    "warm minimalist living room",
@@ -17,53 +18,55 @@
    "country-club lawn"
   ],
   "moves": [
-   "stiff gala-trot, chin up",
-   "the Chin Lift: nose up, eyes half-closed",
-   "frantic little-legged scramble, ears flying",
-   "tiny disco paw-shuffle and head-bob",
-   "the Refusal Sit"
+   "proud chest-out strut, tail up",
+   "paw raised high, paw on the hip",
+   "the Wiggle: full-body sausage wiggle on the drop",
+   "happy hop-spin, ears flying",
+   "one cheeky look to the lens before the drop",
+   "tongue-out victory pose"
   ],
   "props": [
    {
-    "name": "tiny gold crown",
-    "job": "his canon flourish: royalty and main-character captions, a flash of gold at thumbnail size"
+    "name": "cool cap",
+    "job": "his signature look: the plain cream cap of his casual-luxury streetwear, a flash of attitude at thumbnail size"
    },
    {
     "name": "tortoiseshell sunglasses",
-    "job": "near-signature: lowered slowly on the drop, the cool-aristocrat reveal"
+    "job": "lowered slowly on the drop: the cool reveal before he goes all-in"
    },
    {
     "name": "smartphone",
-    "job": "left-on-read and \"unimpressed by your message\" reaction formats"
+    "job": "filming himself, selfie and \"watch this\" formats"
    },
    {
     "name": "over-ear headphones",
     "job": "music trends: he is listening to something better than your song"
    },
    {
-    "name": "tablet",
-    "job": "reviewing the staff: rankings, ratings and \"my day\" formats"
-   },
-   {
-    "name": "headband + white sneakers",
-    "job": "gym and workout trends: the aristocrat attempts fitness, one stair still wins"
+    "name": "terry headband",
+    "job": "gym and workout trends: he turns the workout into a dance"
    },
    {
     "name": "denim shorts + bead bracelet",
     "job": "summer, holiday and drip-check trends"
    },
    {
-    "name": "crystal water bowl",
-    "job": "\"the small bowl, the crystal one\" running gag"
+    "name": "crossbody bag",
+    "job": "outfit-reveal and drip-check trends: the casual-luxury flex"
+   },
+   {
+    "name": "cropped puffer jacket",
+    "job": "winter, city-walk and night-out trends"
    }
   ],
   "music": "the clip's original sound for a Drop-in; lounge nu-disco with brass stabs (110-120 BPM) as his own bed; the trend's in-app sound",
   "never": [
-   "human limbs, hands or standing like a person",
-   "human-sized next to people",
-   "logos or brands on the polo",
-   "barking, baby talk or slang",
-   "climbing a stair successfully"
+   "human hands or fingers: furry dog paws only",
+   "a human face, human skin or human ears",
+   "a crown, or logos and brands on his clothes",
+   "long legs, or no tail out of the joggers",
+   "sad, grumpy or bored on the drop",
+   "baby talk, slang or nationality jokes (a dachshund, not a German stereotype)"
   ]
  },
  "reginald": {
