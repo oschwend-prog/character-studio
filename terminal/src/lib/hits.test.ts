@@ -4,8 +4,8 @@
 // set_drop_keep; no browser.
 import { describe, expect, it } from 'vitest';
 import {
-  HIT_DAYS, KEEP_HINT, fileHit, hitNumbers, hitTakers, hitTitle, hitWhy, hotNow, keepable, laneOf, offeredHits, postLink, postedLabel, reachLabel,
-  worthSaving,
+  HIT_DAYS, HOT_LIMIT, WORTH_LIMIT, fileHit, filedLine, hitFromRow, hitLaneSlugs, hitNumbers, hitTakers, hitTitle, hitWhy, hitsByLane,
+  hotNow, keepHint, keepable, laneOf, mergeHitLanes, offeredHits, postLink, postedLabel, reachLabel, worthSaving, type FiledHit,
 } from './hits';
 import type { Backend, Character, DropCard, DropState, Hit, TrackerRow } from './types';
 
@@ -93,12 +93,12 @@ describe('offeredHits: what v_hits lists', () => {
 
 describe('the lines on a hit card', () => {
   it('reach: views against the creator’s followers, rounded for a glance; nothing without it', () => {
-    expect(reachLabel(12.3)).toBe('12× his followers');
-    expect(reachLabel(2.46)).toBe('2.5× his followers');
-    expect(reachLabel(3)).toBe('3× his followers');
-    expect(reachLabel(0.42)).toBe('0.4× his followers');
-    expect(reachLabel(0.01)).toBe('under 0.1× his followers');
-    expect(reachLabel(1234)).toBe('1,234× his followers');
+    expect(reachLabel(12.3)).toBe('12× the creator’s followers');
+    expect(reachLabel(2.46)).toBe('2.5× the creator’s followers');
+    expect(reachLabel(3)).toBe('3× the creator’s followers');
+    expect(reachLabel(0.42)).toBe('0.4× the creator’s followers');
+    expect(reachLabel(0.01)).toBe('under 0.1× the creator’s followers');
+    expect(reachLabel(1234)).toBe('1,234× the creator’s followers');
     expect(reachLabel(null)).toBeNull();
     expect(reachLabel(Number.NaN)).toBeNull();
     expect(reachLabel(Number.POSITIVE_INFINITY)).toBeNull();
@@ -116,7 +116,7 @@ describe('the lines on a hit card', () => {
   });
 
   it('numbers: views (or likes when the platform gave no play count), reach, posted', () => {
-    expect(hitNumbers(hit({ views: 1_234_567, reach: 12.3, posted_at: ago(2 * DAY) }), NOW)).toEqual(['1.2M views', '12× his followers', '2 days ago']);
+    expect(hitNumbers(hit({ views: 1_234_567, reach: 12.3, posted_at: ago(2 * DAY) }), NOW)).toEqual(['1.2M views', '12× the creator’s followers', '2 days ago']);
     expect(hitNumbers(hit({ views: null, likes: 85_000, reach: null, posted_at: ago(5 * HOUR) }), NOW)).toEqual(['85K likes', '5 hours ago']);
     expect(hitNumbers(hit({ views: null, likes: null, reach: null, posted_at: null }), NOW)).toEqual(['posting date unknown']);
   });
@@ -155,7 +155,11 @@ describe('keepable: where the Keep toggle shows', () => {
   it('on a drop not made yet, the only clips retention may delete (studio.fetch.purge_stale)', () => {
     for (const s of ['uploading', 'checking', 'waiting', 'ready', 'blocked', 'failed'] as const) expect(keepable(row(s))).toBe(true);
     expect(keepable(row('ready', { status: 'analysed' }))).toBe(true);
-    expect(KEEP_HINT).toBe('Kept clips are never deleted');
+  });
+
+  it('says what Keep does, and what happens without it', () => {
+    expect(keepHint(true)).toBe('Kept: never deleted for going unused');
+    expect(keepHint(false)).toBe('Unused clips are deleted after 30 days (60 for your own)');
   });
 
   it('never on a clip being made or made, after Make it, on a pick queued or made, or on a row that is no drop', () => {
@@ -169,49 +173,90 @@ describe('keepable: where the Keep toggle shows', () => {
 });
 
 describe('hitTakers: who may take a general hit', () => {
-  it('every live character in the owner’s order when the hit names no kind of star', () => {
-    expect(hitTakers(hit({ keyword: 'viral dance', character_slug: null }), ROSTER).map((c) => c.slug)).toEqual(['franz', 'reginald', 'lenny']);
-    expect(hitTakers(hit({ keyword: null, character_slug: null }), ROSTER).map((c) => c.name)).toEqual(['Franz', 'Reginald', 'Lenny Gold']);
+  it('every live character in the owner’s order, whatever the hit (the card offers “Let the check choose” before them)', () => {
+    expect(hitTakers(ROSTER).map((c) => c.slug)).toEqual(['franz', 'reginald', 'lenny']);
+    expect(hitTakers(ROSTER).map((c) => c.name)).toEqual(['Franz', 'Reginald', 'Lenny Gold']);
   });
 
-  it('like for like when the hit says it is a dog (its keyword): only those who replace a dog and have the body for it', () => {
-    expect(hitTakers(hit({ keyword: 'Dachshund', character_slug: null }), ROSTER).map((c) => c.slug)).toEqual(['franz']);
-    expect(hitTakers(hit({ keyword: 'puppy trend', character_slug: null }), ROSTER).map((c) => c.slug)).toEqual(['franz']);
-    // a character seeded before the stars list is judged by his body alone, as copy_drop does
-    const old = [character('reginald', { setup: {} }), character('lenny', { setup: {}, bodies: ['biped', 'quadruped'] })];
-    expect(hitTakers(hit({ keyword: 'dog dance', character_slug: null }), old).map((c) => c.slug)).toEqual(['lenny']);
-    // "hotdog" is no dog
-    expect(hitTakers(hit({ keyword: 'hotdog dance', character_slug: null }), ROSTER).map((c) => c.slug)).toEqual(['franz', 'reginald', 'lenny']);
+  it('nobody paused or designing', () => {
+    expect(hitTakers(ROSTER.map((c) => ({ ...c, status: 'paused' })))).toEqual([]);
+    expect(hitTakers([character('lenny', { status: 'designing' })])).toEqual([]);
+  });
+});
+
+describe('loading v_hits per lane', () => {
+  it('asks one lane per live character, in the owner’s order', () => {
+    expect(hitLaneSlugs(ROSTER)).toEqual(['franz', 'reginald', 'lenny']);
+    expect(hitLaneSlugs([character('lenny', { status: 'designing' }), ...ROSTER.filter((c) => c.slug !== 'lenny')])).toEqual(['franz', 'reginald']);
   });
 
-  it('nobody when no character is live', () => {
-    expect(hitTakers(hit({ character_slug: null }), ROSTER.map((c) => ({ ...c, status: 'paused' })))).toEqual([]);
-    expect(hitTakers(hit({ character_slug: null }), [character('lenny', { status: 'designing' })])).toEqual([]);
+  it('reads a row with numbers as strings (PostgREST bigint) and a missing number as null, never 0', () => {
+    const h = hitFromRow({ ...hit(), views: '1200000', followers: '9000', reach: '133.3', likes: null, score: '87', duration_s: '' });
+    expect([h.views, h.followers, h.reach, h.likes, h.score, h.duration_s]).toEqual([1_200_000, 9000, 133.3, null, 87, null]);
+    expect(hitFromRow({ ...hit(), score: null }).score).toBe(0);
+  });
+
+  it('merges the lanes, each hit once, best first', () => {
+    const a = hit({ score: 50, character_slug: null });
+    const b = hit({ score: 90 });
+    const c = hit({ score: 70, character_slug: 'franz' });
+    expect(ids(mergeHitLanes([[a], [b, a], [c]]))).toEqual([b.hit_id, c.hit_id, a.hit_id]);
+    expect(mergeHitLanes([])).toEqual([]);
+  });
+
+  it('keeps the general lane’s top 10 and each live character’s top 5, so a busy lane never crowds out another', () => {
+    const general = Array.from({ length: 14 }, (_, i) => hit({ score: 99 - i, character_slug: null }));
+    const franz = Array.from({ length: 7 }, (_, i) => hit({ score: 40 - i, character_slug: 'franz' }));
+    const lenny = [hit({ score: 5, character_slug: 'lenny' })];
+    const paused = [hit({ score: 98, character_slug: 'biscuit' })];
+    const kept = hitsByLane([...general, ...franz, ...lenny, ...paused], ['franz', 'reginald', 'lenny']);
+    expect(kept.filter((h) => h.character_slug == null)).toHaveLength(HOT_LIMIT);
+    expect(kept.filter((h) => h.character_slug === 'franz').map((h) => h.score)).toEqual([40, 39, 38, 37, 36]);
+    expect(kept.filter((h) => h.character_slug === 'franz')).toHaveLength(WORTH_LIMIT);
+    expect(kept.some((h) => h.character_slug === 'lenny')).toBe(true);
+    expect(kept.some((h) => h.character_slug === 'biscuit')).toBe(false);
   });
 });
 
 describe('fileHit: "Use this clip"', () => {
-  const fake = (over: Partial<Pick<Backend, 'addDrop' | 'setHitStatus'>> = {}) => {
+  type Fake = Pick<Backend, 'addDrop' | 'setHitStatus' | 'requestJob'>;
+  const fake = (over: Partial<Fake> = {}) => {
     const calls: string[] = [];
-    const backend: Pick<Backend, 'addDrop' | 'setHitStatus'> = {
+    const backend: Fake = {
       addDrop: async (slug, link) => {
         calls.push(`add_drop ${slug} ${link}`);
-        return { pickId: 'pick-9', duplicate: false };
+        return { pickId: 'pick-9', duplicate: false, status: 'approved', characterSlug: slug ?? 'reginald' };
       },
       setHitStatus: async (id, status) => {
         calls.push(`set_hit_status ${id} ${status}`);
+      },
+      requestJob: async (pickId, kind) => {
+        calls.push(`request_job ${pickId} ${kind}`);
+        return { dispatched: true };
       },
       ...over,
     };
     return { backend, calls };
   };
+  const base: FiledHit = {
+    pickId: 'pick-9', duplicate: false, onItsWay: false, characterSlug: 'franz', marked: true, markError: null, check: 'now', checkError: null,
+  };
 
-  it('files the canonical link for that character, then marks the hit dropped', async () => {
+  it('files the canonical link for that character, marks the hit dropped, then starts the free check (as the Add clips box does)', async () => {
     const { backend, calls } = fake();
     const h = hit({ hit_id: 'h1', url: 'https://tiktok.com/@Dancer.One/video/7688386199270001953?is_from_webapp=1' });
     const r = await fileHit(backend, h, 'franz');
-    expect(calls).toEqual(['add_drop franz https://www.tiktok.com/@dancer.one/video/7688386199270001953', 'set_hit_status h1 dropped']);
-    expect(r).toEqual({ pickId: 'pick-9', duplicate: false, marked: true, markError: null });
+    expect(calls).toEqual([
+      'add_drop franz https://www.tiktok.com/@dancer.one/video/7688386199270001953', 'set_hit_status h1 dropped', 'request_job pick-9 process',
+    ]);
+    expect(r).toEqual(base);
+  });
+
+  it('with no character the free check chooses (add_drop without one: character_by studio)', async () => {
+    const { backend, calls } = fake();
+    const r = await fileHit(backend, hit({ hit_id: 'h5' }), null);
+    expect(calls[0]).toMatch(/^add_drop null https:\/\/www\.tiktok\.com\//);
+    expect(r.characterSlug).toBe('reginald'); // the provisional character it waits under
   });
 
   it('sends the stored link as it is when it is not one the terminal can tidy (the database judges it)', async () => {
@@ -220,16 +265,63 @@ describe('fileHit: "Use this clip"', () => {
     expect(calls[0]).toBe('add_drop lenny https://example.com/v/1');
   });
 
-  it('a refused add_drop marks nothing and says why', async () => {
+  it('a refused add_drop marks nothing, checks nothing and says why', async () => {
     const { backend, calls } = fake({ addDrop: async () => { throw new Error('unknown character x'); } });
     await expect(fileHit(backend, hit({ hit_id: 'h3' }), 'x')).rejects.toThrow('unknown character x');
     expect(calls).toEqual([]);
   });
 
-  it('a filed clip whose hit could not be marked says so instead of failing (the drop exists)', async () => {
-    const { backend } = fake({ setHitStatus: async () => { throw new Error('only the owner may mark a hit'); } });
-    const r = await fileHit(backend, hit({ hit_id: 'h4' }), 'reginald');
-    expect(r).toEqual({ pickId: 'pick-9', duplicate: false, marked: false, markError: 'only the owner may mark a hit' });
+  it('a filed clip whose hit could not be marked says so instead of failing, and is still checked', async () => {
+    const { backend, calls } = fake({ setHitStatus: async () => { throw new Error('only the owner may mark a hit'); } });
+    const r = await fileHit(backend, hit({ hit_id: 'h4' }), 'franz');
+    expect(r).toEqual({ ...base, marked: false, markError: 'only the owner may mark a hit' });
+    expect(calls.at(-1)).toBe('request_job pick-9 process');
+  });
+
+  it('a refused check request keeps the drop (the sweep checks it within 2 hours) and says why', async () => {
+    const { backend } = fake({ requestJob: async () => { throw new Error('the dispatch failed'); } });
+    const r = await fileHit(backend, hit({ hit_id: 'h6' }), 'franz');
+    expect(r).toEqual({ ...base, check: 'soon', checkError: 'the dispatch failed' });
+    const { backend: quiet } = fake({ requestJob: async () => ({ dispatched: false }) });
+    expect((await fileHit(quiet, hit({ hit_id: 'h7' }), 'franz')).check).toBe('soon');
+  });
+
+  it('a duplicate: the check request’s refusal is ignored; a pick being made or made is not asked to check again', async () => {
+    const { backend } = fake({
+      addDrop: async () => ({ pickId: 'pick-9', duplicate: true, status: 'approved', characterSlug: 'franz' }),
+      requestJob: async () => { throw new Error('a check runs on an uploading, checking, waiting or failed drop'); },
+    });
+    expect(await fileHit(backend, hit({ hit_id: 'h8' }), 'franz')).toEqual({ ...base, duplicate: true, check: 'soon' });
+    const made = fake({ addDrop: async () => ({ pickId: 'pick-9', duplicate: true, status: 'made', characterSlug: 'franz' }) });
+    const r = await fileHit(made.backend, hit({ hit_id: 'h9' }), 'franz');
+    expect(r).toEqual({ ...base, duplicate: true, onItsWay: true, check: 'none' });
+    expect(made.calls).toEqual(['set_hit_status h9 dropped']);
+  });
+});
+
+describe('filedLine: the line after "Use this clip", true to what happened', () => {
+  const base: FiledHit = {
+    pickId: 'p', duplicate: false, onItsWay: false, characterSlug: 'franz', marked: true, markError: null, check: 'now', checkError: null,
+  };
+  const names = (s: string) => ({ franz: 'Franz', reginald: 'Reginald' })[s] ?? s;
+
+  it('a new drop: checked now, or within 2 hours', () => {
+    expect(filedLine(base, 'Franz')).toEqual({ text: 'Filed for Franz: being checked now (free)', kind: 'ok' });
+    expect(filedLine({ ...base, check: 'soon', checkError: 'x' }, 'Franz').text).toBe('Filed for Franz: it is checked within 2 hours (free)');
+    expect(filedLine({ ...base, characterSlug: 'reginald' }, null, names).text).toBe('Filed: the free check chooses who goes in (checking now)');
+  });
+
+  it('a duplicate: already in his clips, checked again, or being made or made', () => {
+    expect(filedLine({ ...base, duplicate: true }, 'Franz').text).toBe('Already in Franz’s clips: checked again now (free)');
+    expect(filedLine({ ...base, duplicate: true, onItsWay: true, check: 'none' }, 'Franz').text).toBe('Already in Franz’s clips (being made or made)');
+    expect(filedLine({ ...base, duplicate: true, onItsWay: true, check: 'none', characterSlug: 'reginald' }, null, names).text)
+      .toBe('Already in Reginald’s clips (being made or made)');
+  });
+
+  it('a refused mark is said, as an error', () => {
+    expect(filedLine({ ...base, marked: false, markError: 'only the owner may mark a hit' }, 'Franz')).toEqual({
+      text: 'Filed for Franz: being checked now (free). The hit is still listed as new: only the owner may mark a hit', kind: 'error',
+    });
   });
 });
 
@@ -244,6 +336,32 @@ describe('the demo backend: v_hits, set_hit_status, set_drop_keep', () => {
     expect(scores).toEqual([...scores].sort((a, b) => b - a));
     expect(snap.hits.some((h) => h.thumbnail_url == null)).toBe(true); // the placeholder is shown too
     expect(snap.hits.some((h) => h.views == null && h.likes != null)).toBe(true); // an Instagram search hit: likes only
+  });
+
+  it('a link filed alone is not checked until it is asked (as live); Use this clip asks, and the check ends ready', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    let now = NOW;
+    const demo = new DemoBackend(() => now);
+    const [h] = hotNow((await demo.load()).hits);
+    const alone = await demo.addDrop('lenny', 'https://www.tiktok.com/@someone.else/video/7699999999999999999');
+    const r = await fileHit(demo, h, null); // "Let the check choose"
+    now += 2_500;
+    const snap = await demo.load();
+    expect(snap.tracker.find((t) => t.pick_id === alone.pickId)!.drop_card?.state).toBe('checking'); // nobody asked
+    const checked = snap.tracker.find((t) => t.pick_id === r.pickId)!;
+    expect(checked.drop_card?.state === 'ready' || checked.drop_card?.state === 'blocked').toBe(true);
+    expect(checked.drop_card?.character_by).toBe('studio');
+    // the same hit again: already in his clips, the check's refusal ignored
+    const again = await fileHit(demo, h, null);
+    expect(again.duplicate).toBe(true);
+    expect(again.checkError).toBeNull();
+  });
+
+  it('shows at most the general lane’s top 10 and each live character’s top 5', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    const snap = await new DemoBackend(() => NOW).load();
+    expect(snap.hits.filter((h) => h.character_slug == null).length).toBeLessThanOrEqual(HOT_LIMIT);
+    for (const slug of ['franz', 'reginald', 'lenny']) expect(snap.hits.filter((h) => h.character_slug === slug).length).toBeLessThanOrEqual(WORTH_LIMIT);
   });
 
   it('keeps an old hit out of v_hits even with the best score', async () => {
@@ -261,13 +379,15 @@ describe('the demo backend: v_hits, set_hit_status, set_drop_keep', () => {
     snap = await demo.load();
     expect(snap.hits.some((h) => h.hit_id === first.hit_id)).toBe(false);
     const r = await fileHit(demo, second, 'franz');
-    expect(r.marked).toBe(true);
+    expect(r).toMatchObject({ marked: true, check: 'now', duplicate: false, characterSlug: 'franz' });
     snap = await demo.load();
     expect(snap.hits.some((h) => h.hit_id === second.hit_id)).toBe(false);
     const filed = snap.tracker.find((t) => t.pick_id === r.pickId)!;
     expect(filed.character_slug).toBe('franz');
     expect(filed.url).toBe(second.url);
     expect(filed.drop_card?.kind).toBe('link');
+    expect(filed.drop_card?.state).toBe('checking');
+    expect(filed.drop_card?.requested?.process).toBe(new Date(NOW).toISOString()); // the check was asked for, as live
     await expect(demo.setHitStatus('nope', 'dismissed')).rejects.toThrow(/unknown hit/);
     await expect(demo.setHitStatus(second.hit_id, 'gone' as never)).rejects.toThrow(/new, dropped or dismissed/);
     await demo.setHitStatus(first.hit_id, 'new'); // back again

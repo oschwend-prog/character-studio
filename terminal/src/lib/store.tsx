@@ -7,6 +7,13 @@ export interface Toast {
   id: number;
   text: string;
   kind: 'ok' | 'error';
+  /** One button on the toast (Undo): it runs once and closes the toast. */
+  action?: ToastAction;
+}
+
+export interface ToastAction {
+  label: string;
+  run(): void;
 }
 
 interface StudioCtx {
@@ -19,7 +26,9 @@ interface StudioCtx {
   refresh(): Promise<void>;
   /** Run an owner action under `key` (disables its controls), toast the result, reload. */
   run(key: string, action: () => Promise<unknown>, done?: string): Promise<boolean>;
-  toast(text: string, kind?: Toast['kind']): void;
+  toast(text: string, kind?: Toast['kind'], action?: ToastAction): void;
+  /** Close a toast now (its action ran). */
+  dismissToast(id: number): void;
 }
 
 const Ctx = createContext<StudioCtx | null>(null);
@@ -63,10 +72,13 @@ export function StudioProvider({ backend, children }: { backend: Backend; childr
     return p;
   }, [backend]);
 
-  const toast = useCallback((text: string, kind: Toast['kind'] = 'ok') => {
+  const dismissToast = useCallback((id: number) => setToasts((t) => t.filter((x) => x.id !== id)), []);
+
+  const toast = useCallback((text: string, kind: Toast['kind'] = 'ok', action?: ToastAction) => {
     const id = Date.now() + Math.random();
-    setToasts((t) => [...t.slice(-2), { id, text, kind }]);
-    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' ? 7000 : 3200);
+    setToasts((t) => [...t.slice(-2), { id, text, kind, ...(action ? { action } : {}) }]);
+    // a toast with a button (Undo) stays long enough to reach it
+    window.setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), kind === 'error' || action ? 7000 : 3200);
   }, []);
 
   const run = useCallback(
@@ -113,8 +125,8 @@ export function StudioProvider({ backend, children }: { backend: Backend; childr
   }, [backend, refresh]);
 
   const value = useMemo(
-    () => ({ backend, data, error, live, busy, toasts, refresh, run, toast }),
-    [backend, data, error, live, busy, toasts, refresh, run, toast],
+    () => ({ backend, data, error, live, busy, toasts, refresh, run, toast, dismissToast }),
+    [backend, data, error, live, busy, toasts, refresh, run, toast, dismissToast],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

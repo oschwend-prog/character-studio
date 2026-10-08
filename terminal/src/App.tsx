@@ -105,7 +105,7 @@ const ICONS: Record<TabRoute, ComponentType<{ 'aria-hidden'?: boolean }>> = {
 const TABS = TAB_SPECS.map((t) => ({ ...t, Icon: ICONS[t.route] }));
 
 function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.ReactNode }) {
-  const { data, live, error, toasts, refresh } = useStudio();
+  const { data, live, error, toasts, refresh, dismissToast } = useStudio();
   const { route, param, query } = useRoute();
   const now = useNow(10_000);
   const counts = data ? todayCounts(data) : null;
@@ -164,8 +164,22 @@ function Shell({ banner, account }: { banner?: React.ReactNode; account?: React.
       </nav>
       <div className="toasts" aria-live="polite" role="status">
         {toasts.map((t) => (
-          <div key={t.id} className={`toast${t.kind === 'error' ? ' error' : ''}`} role={t.kind === 'error' ? 'alert' : undefined}>
-            {t.text}
+          <div
+            key={t.id} className={`toast${t.kind === 'error' ? ' error' : ''}${t.action ? ' has-action' : ''}`}
+            role={t.kind === 'error' ? 'alert' : undefined}
+          >
+            <span>{t.text}</span>
+            {t.action && (
+              <button
+                type="button" className="toast-action"
+                onClick={() => {
+                  dismissToast(t.id);
+                  t.action!.run();
+                }}
+              >
+                {t.action.label}
+              </button>
+            )}
           </div>
         ))}
       </div>

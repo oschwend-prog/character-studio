@@ -450,6 +450,13 @@ a { color: var(--ice); text-underline-offset: 3px; text-decoration-thickness: 1p
 .toasts { position: fixed; z-index: 50; left: var(--gutter); right: var(--gutter); bottom: calc(var(--tabbar-h) + var(--safe-b) + 12px); display: flex; flex-direction: column; gap: 8px; pointer-events: none; }
 .toast { pointer-events: auto; padding: 12px 14px; border-radius: var(--r); background: var(--ink); color: var(--board); font-size: 14px; font-weight: 560; box-shadow: 0 10px 24px rgba(0, 0, 0, 0.5); animation: plate-in 150ms steps(3, end); }
 .toast.error { background: var(--red); color: var(--red-ink); }
+.toast.has-action { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 4px 0 14px; }
+.toast.has-action > span { padding: 12px 0; }
+.toast-action {
+  flex: none; min-height: 44px; padding: 0 12px; border: 0; border-radius: var(--r); background: transparent; color: inherit; cursor: pointer;
+  font-size: 13px; font-weight: 700; font-stretch: 80%; letter-spacing: 0.06em; text-transform: uppercase; text-decoration: underline; text-underline-offset: 3px;
+}
+.toast-action:focus-visible { outline: 2px solid var(--ice); outline-offset: -2px; }
 
 /* ---- login / setup --------------------------------------------------------------------- */
 .gate { min-height: 100dvh; display: grid; place-items: center; padding: 24px var(--gutter); }
@@ -1133,7 +1140,7 @@ a.ll-title:hover { text-decoration: underline; }
 .hit-list:focus { outline: none; }
 .hit-list:focus-visible { outline: 2px solid var(--ice); outline-offset: 2px; }
 .hit-item {
-  display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 6px 10px; align-items: start; padding: 10px 0;
+  display: grid; grid-template-columns: 46px minmax(0, 1fr); gap: 6px 10px; align-items: start; align-content: start; padding: 10px 0;
   border-bottom: 1px solid var(--rule); min-width: 0;
 }
 .hit-item:last-child { border-bottom: 0; }
@@ -1150,7 +1157,8 @@ a.ll-title:hover { text-decoration: underline; }
 .hit-actions .btn { padding: 0 12px; font-size: 13px; }
 .hit-actions .btn.ghost { padding: 0 8px; }
 .hit-actions .btn svg { width: 14px; height: 14px; }
-.hit-note { grid-column: 1 / -1; margin: 0; }
+.hit-error { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
+.worth > summary .pick-group-head { margin: 0; }
 .hit-choice {
   grid-column: 1 / -1; display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: var(--r);
   background: var(--panel-2); box-shadow: inset 0 0 0 1px var(--rule-strong);

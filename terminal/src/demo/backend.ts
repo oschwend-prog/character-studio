@@ -10,7 +10,7 @@ import { velocityPerDay } from '../lib/analyst';
 import { decisionTime, inTracker } from '../lib/tracker';
 import { addDays, londonDayKey, londonWallToIso } from '../lib/format';
 import { orderRoster } from '../lib/roster';
-import { offeredHits } from '../lib/hits';
+import { hitLaneSlugs, hitsByLane, offeredHits } from '../lib/hits';
 import type {
   Backend, Budget, CadenceEntry, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, DropScore, Engagement, HealthRow, Hit, HitStatus, LibraryClip, OwnerMusic,
   Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow, ViewsDay,
@@ -1128,8 +1128,8 @@ export class DemoBackend implements Backend {
     return {
       channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), tracker,
       viewsDaily: this.viewsDaily(now), cadence, loadedAt: now,
-      // v_hits: the new hits of the last 14 days, best first, without the status column
-      hits: offeredHits(this.hits, now).map(({ status: _s, ...h }) => {
+      // v_hits as the live loader asks it: the general lane's top 10 and each live character's top 5, best first, no status column
+      hits: hitsByLane(offeredHits(this.hits, now), hitLaneSlugs(characters)).map(({ status: _s, ...h }) => {
         void _s;
         return { ...h };
       }),
@@ -1368,7 +1368,7 @@ export class DemoBackend implements Backend {
         total_score: null, note: null, status: 'approved', created_at: at, clip_id: null,
       });
       this.emit('favorites');
-      return { pickId: id, duplicate: false };
+      return { pickId: id, duplicate: false, status: 'approved', characterSlug: slug };
     }
     const { platform, url } = canonicalVideoUrl(link);
     const drop = { state: 'checking', kind: 'link', at, reason: null, own_footage: false, character_by: by };
@@ -1383,7 +1383,8 @@ export class DemoBackend implements Backend {
         existing.character_slug = slug;
         this.emit('favorites');
       }
-      return { pickId: existing.id, duplicate: true };
+      // like add_drop: a link filed alone waits at checking until request_job asks for the check (the Add clips box, Use this clip)
+      return { pickId: existing.id, duplicate: true, status: existing.status, characterSlug: existing.character_slug };
     }
     const id = uid('fl');
     const handle = platform === 'tiktok' ? `@${url.split('/@')[1].split('/')[0]}` : null;
@@ -1392,7 +1393,7 @@ export class DemoBackend implements Backend {
       proposal: { decision, drop }, scores: {}, total_score: null, note: null, status: 'approved', created_at: at, clip_id: null,
     });
     this.emit('favorites');
-    return { pickId: id, duplicate: false };
+    return { pickId: id, duplicate: false, status: 'approved', characterSlug: slug };
   }
 
   /** set_drop_character of migration 0013 (the same refusals): his choice, the old character's results cleared, the check again. */

@@ -4,13 +4,15 @@
 // v_tracker (migration 0010) feeds "In the works"; a database without it yet shows that tab empty instead of failing the load.
 // Terminal v3 (migration 0015): v_views_daily feeds the studio at a glance (the same tolerance: no views before it), the cadence
 // of studio.settings gives each character's posts per week, and copy_drop files a version of a clip for another character.
-// The cloud hits job (migration 0016): v_hits feeds "Hot right now" and each character's "Worth saving" (the same tolerance: no
-// hits before it), set_hit_status marks a hit used or not for us, set_drop_keep is the clip card's Keep.
+// The cloud hits job (migration 0016): v_hits feeds "Hot right now" and each character's "Worth saving", asked per lane (the
+// general lane's top 10, then each live character's top 5; the same tolerance: no hits without the view), set_hit_status marks a
+// hit used or not for us, set_drop_keep is the clip card's Keep.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { HOT_LIMIT, WORTH_LIMIT, hitFromRow, hitLaneSlugs, mergeHitLanes } from './hits';
 import { orderRoster } from './roster';
 import { checkClipBasics, ownerClipPath } from './rules';
-import type { Backend, CadenceEntry, ChangeKind, ClipFile, DecideExtras, DropAdjust, HitStatus, Snapshot } from './types';
+import type { Backend, CadenceEntry, ChangeKind, ClipFile, DecideExtras, DropAdjust, Hit, HitStatus, Snapshot } from './types';
 
 const URL_ = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -133,13 +135,20 @@ export class LiveBackend implements Backend {
       // newest first: should the API's row cap ever cut the list, the oldest days go
       sb.from('v_views_daily').select('character_slug,day,views,follows').order('day', { ascending: false }),
       sb.from('settings').select('cadence').eq('id', 1).maybeSingle(),
-      // the view's own order (best first); 100 is far more than the top 10 + 5 per character the screens show
-      sb.from('v_hits').select('*').order('score', { ascending: false }).order('last_seen', { ascending: false }).limit(100),
+      // "Hot right now": the general lane's top 10 (each live character's top 5 is asked below, once the roster is known)
+      this.hitLane(null, HOT_LIMIT),
     ]);
     for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings]) fail(r.error);
     if (!isMissingRelation(tracker.error)) fail(tracker.error);
     if (!isMissingRelation(viewsDaily.error)) fail(viewsDaily.error);
     if (!isMissingRelation(hits.error)) fail(hits.error);
+    // "Worth saving": one query per live character (one global top N would let a busy lane crowd out another's hits)
+    let lanes: Hit[][] = [];
+    if (!hits.error) {
+      const mine = await Promise.all(hitLaneSlugs(characters.data ?? []).map((slug) => this.hitLane(slug, WORTH_LIMIT)));
+      for (const r of mine) if (!isMissingRelation(r.error)) fail(r.error);
+      lanes = [hits.data ?? [], ...mine.map((r) => (r.error ? [] : r.data ?? []))].map((rows) => rows.map(hitFromRow));
+    }
     const num = [
       'views', 'outlier_x', 'total_score', 'virality', 'reach', 'freshness', 'fit', 'feasibility', 'saturation', 'velocity', 'saturation_count',
       'recognisability', 'original_views', 'est_credits',
@@ -164,11 +173,16 @@ export class LiveBackend implements Backend {
         ...r, day: String(r.day).slice(0, 10), views: n(r.views) ?? 0, follows: n(r.follows) ?? 0,
       })),
       cadence: cadenceOf(settings.data?.cadence),
-      hits: (hits.error ? [] : hits.data ?? []).map((r) => ({
-        ...normalise(r, ['followers', 'views', 'likes', 'comments', 'shares', 'saves', 'duration_s', 'reach']), score: n(r.score) ?? 0,
-      })),
+      hits: mergeHitLanes(lanes),
       loadedAt: Date.now(),
     } as Snapshot;
+  }
+
+  /** One lane of v_hits, in the view's own order (best first): the general lane (`slug` null) or one character's. */
+  private hitLane(slug: string | null, limit: number) {
+    const q = this.sb.from('v_hits').select('*');
+    return (slug == null ? q.is('character_slug', null) : q.eq('character_slug', slug))
+      .order('score', { ascending: false }).order('last_seen', { ascending: false }).order('hit_id').limit(limit);
   }
 
   private async rpc(fn: string, args: Record<string, unknown>) {
@@ -232,7 +246,11 @@ export class LiveBackend implements Backend {
     // null = "Recommend" (migration 0013): the database files it under a provisional character, the check chooses
     const r = await this.rpc('add_drop', { character_slug: characterSlug, link });
     if (!r || typeof r.id !== 'string') throw new StudioError('The drop was not filed: try again');
-    return { pickId: r.id, duplicate: Boolean(r.duplicate) };
+    return {
+      pickId: r.id, duplicate: Boolean(r.duplicate),
+      status: typeof r.status === 'string' ? r.status : undefined,
+      characterSlug: typeof r.character_slug === 'string' ? r.character_slug : null,
+    };
   }
   async setDropCharacter(pickId: string, characterSlug: string) {
     const r = await this.rpc('set_drop_character', { pick_id: pickId, character_slug: characterSlug });

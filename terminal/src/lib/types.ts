@@ -635,7 +635,8 @@ export interface Snapshot {
   viewsDaily: ViewsDay[];
   /** The posting days and slot per character (`studio.settings.cadence`); empty when none is set. */
   cadence: Record<string, CadenceEntry>;
-  /** The new hits of the last 14 days, best first (v_hits, migration 0016); empty before it or before the first pull. */
+  /** The new hits of the last 14 days, best first (v_hits, migration 0016): the general lane's top 10 and each live character's top
+   * 5 (one query per lane); empty before the first pull. */
   hits: Hit[];
   loadedAt: number;
 }
@@ -692,7 +693,14 @@ export interface Backend {
    * "Drop a video" (add_drop, migrations 0012 and 0013): a file drop (link null, then attachClip + requestJob process) or a pasted
    * link. `characterSlug` null = "Recommend": the studio chooses after the check.
    */
-  addDrop(characterSlug: string | null, link: string | null): Promise<{ pickId: string; duplicate: boolean }>;
+  addDrop(characterSlug: string | null, link: string | null): Promise<{
+    pickId: string;
+    duplicate: boolean;
+    /** The pick's status after the call (a duplicate already `queued` or `made` was left as it was); absent from an older answer. */
+    status?: string;
+    /** The character it waits under (with no character: the provisional one the check may move). */
+    characterSlug?: string | null;
+  }>;
   /** The drops table's character menu (set_drop_character, migration 0013): his choice, then the free check again in that voice. */
   setDropCharacter(pickId: string, characterSlug: string): Promise<{ dispatched: boolean }>;
   /** The owner's button (request_job): Checking (process) or Make it (make, with the Adjust). `dispatched` = the cloud job started now. */

@@ -3,9 +3,10 @@
 // keeps the top TikTok and Instagram posts of our niches in studio.hits; the terminal reads the new ones of the last 14 days
 // (v_hits, migration 0016) and shows them on Clips › By character: "Hot right now" (the general lane, top 10, any character may
 // take one) above the sections, and in each character's section "Worth saving" (his top 5). Each hit: Open (the post, to watch
-// it), "Use this clip" (add_drop of its link for that character, then set_hit_status dropped: the cloud drop job fetches that one
-// post and checks it for free) and "Not for us" (dismissed). Also here: where the clip card's Keep toggle shows (retention,
-// set_drop_keep). Pure functions; fileHit only calls the backend.
+// it), "Use this clip" (add_drop of its link for that character, or for the free check to choose on a general hit; then
+// set_hit_status dropped and request_job process, so the check starts now: the cloud drop job fetches that one post and checks it for
+// free) and "Not for us" (dismissed). The live loader asks v_hits per lane (the general lane's top 10, each live character's top 5).
+// Also here: where the clip card's Keep toggle shows (retention, set_drop_keep). Pure functions; fileHit only calls the backend.
 import { formatViews } from './format';
 import { canonicalVideoUrl } from './rules';
 import { isPaused, orderRoster, type RosterEntry } from './roster';
@@ -13,6 +14,10 @@ import type { Backend, Character, Hit, HitStatus, TrackerRow } from './types';
 
 /** A hit is offered for this many days after it was posted (v_hits; studio.hits.MAX_AGE_DAYS). */
 export const HIT_DAYS = 14;
+/** "Hot right now" shows the general lane's top this many. */
+export const HOT_LIMIT = 10;
+/** "Worth saving" shows each live character's top this many. */
+export const WORTH_LIMIT = 5;
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
 
@@ -46,27 +51,56 @@ export function offeredHits(hits: ReadonlyArray<Hit>, now: number): Hit[] {
 }
 
 /** "Worth saving" (spec 10): his top `n` new hits, best score first. */
-export function worthSaving(hits: ReadonlyArray<Hit>, slug: string, n = 5): Hit[] {
+export function worthSaving(hits: ReadonlyArray<Hit>, slug: string, n = WORTH_LIMIT): Hit[] {
   return hits.filter((h) => h.character_slug === slug && isNew(h)).sort(bestFirst).slice(0, Math.max(0, n));
 }
 
 /** "Hot right now" (spec 10): the general lane's top `n` new hits (no character: any character may take one), best first. */
-export function hotNow(hits: ReadonlyArray<Hit>, n = 10): Hit[] {
+export function hotNow(hits: ReadonlyArray<Hit>, n = HOT_LIMIT): Hit[] {
   return hits.filter((h) => h.character_slug == null && isNew(h)).sort(bestFirst).slice(0, Math.max(0, n));
+}
+
+// ---- loading: one query per lane --------------------------------------------------------------------------------------------------
+
+/** The live characters whose hits are loaded (one v_hits query each, `WORTH_LIMIT` rows), in the owner's order. */
+export function hitLaneSlugs(characters: ReadonlyArray<{ slug: string; status?: string | null }>): string[] {
+  return orderRoster(characters.filter((c) => c.status === 'live')).map((c) => c.slug);
+}
+
+/** A v_hits row as the terminal keeps it: bigint and numeric columns can arrive as strings over PostgREST; a missing score is 0. */
+export function hitFromRow(row: Record<string, unknown>): Hit {
+  const num = (v: unknown) => (v == null || v === '' ? null : Number.isFinite(Number(v)) ? Number(v) : null);
+  const out: Record<string, unknown> = { ...row };
+  for (const k of ['followers', 'views', 'likes', 'comments', 'shares', 'saves', 'duration_s', 'reach']) if (k in out) out[k] = num(out[k]);
+  out.score = num(row.score) ?? 0;
+  return out as unknown as Hit;
+}
+
+/** The lanes' answers as one list: each hit once (a lane may repeat one), best first. */
+export function mergeHitLanes(lanes: ReadonlyArray<ReadonlyArray<Hit>>): Hit[] {
+  const seen = new Map<string, Hit>();
+  for (const lane of lanes) for (const h of lane) if (!seen.has(h.hit_id)) seen.set(h.hit_id, h);
+  return [...seen.values()].sort(bestFirst);
+}
+
+/**
+ * What the live loader keeps of v_hits (and the demo, to look the same): the general lane's top `HOT_LIMIT` and each live
+ * character's top `WORTH_LIMIT`, merged best first. One global top 100 would let one busy lane crowd out a character's hits.
+ */
+export function hitsByLane(offered: ReadonlyArray<Hit>, liveSlugs: ReadonlyArray<string>): Hit[] {
+  return mergeHitLanes([hotNow(offered, HOT_LIMIT), ...liveSlugs.map((slug) => worthSaving(offered, slug, WORTH_LIMIT))]);
 }
 
 // ---- the lines on a hit card ----------------------------------------------------------------------------------------------------
 
 const intGB = new Intl.NumberFormat('en-GB', { maximumFractionDigits: 0 });
 
-/** The reach (views ÷ the creator's followers) for a glance: "12× his followers", "2.5× his followers"; null without it. */
+/** The reach (views ÷ the creator's followers) for a glance: "12× the creator’s followers", "2.5× …"; null without it. */
 export function reachLabel(reach: number | null | undefined): string | null {
   if (typeof reach !== 'number' || !Number.isFinite(reach) || reach < 0) return null;
-  let x: string;
-  if (reach < 0.1) return 'under 0.1× his followers';
-  if (reach >= 10) x = intGB.format(Math.round(reach));
-  else x = String(Number(reach.toFixed(1)));
-  return `${x}× his followers`;
+  if (reach < 0.1) return 'under 0.1× the creator’s followers';
+  const x = reach >= 10 ? intGB.format(Math.round(reach)) : String(Number(reach.toFixed(1)));
+  return `${x}× the creator’s followers`;
 }
 
 /** When it was posted: "just now", "5 hours ago", "1 day ago", "2 days ago"; "posting date unknown" without a date. */
@@ -131,67 +165,108 @@ export function postLink(url: string | null | undefined): string | null {
 
 // ---- who may take a general hit -------------------------------------------------------------------------------------------------
 
-/** A keyword that names a dog (whole words): the hit's star is a dog. "hotdog" is no dog. */
-const DOG = /\b(dogs?|pupp(y|ies)|pups?|doggos?|dachshunds?|sausage dogs?|corgis?|pooch(es)?)\b/i;
-
 /**
- * "Use this clip" on a general hit (spec 10: any character may take it): the live characters who could take its star, in the
- * owner's order. A hit says nothing about its star except what it was found for: a keyword naming a dog gives the reuse rules of
- * spec 4 for a dog (his kinds of star, setup.stars else setup.swap.stars, include a dog, and he has a quadruped body; with no
- * stars list his body alone decides, as copy_drop does); any other hit goes to every live character (the free check blocks a
- * wrong star anyway). A paused or designing character takes none.
+ * "Use this clip" on a general hit (spec 10: any character may take it): every live character, in the owner's order, for the
+ * owner's own choice; the card offers "Let the check choose" before them (add_drop with no character: the free check looks at
+ * the clip and moves it to the character who fits). A paused or designing character takes none.
  */
-export function hitTakers(h: Pick<Hit, 'keyword'>, roster: ReadonlyArray<Pick<Character, 'slug' | 'name' | 'status' | 'bodies' | 'setup'>>): RosterEntry[] {
-  const dog = DOG.test(h.keyword ?? '');
+export function hitTakers(roster: ReadonlyArray<Pick<Character, 'slug' | 'name' | 'status'>>): RosterEntry[] {
   return orderRoster(roster)
-    .filter((c) => {
-      if (c.status !== 'live' || isPaused(c)) return false;
-      if (!dog) return true;
-      const stars = c.setup?.stars ?? c.setup?.swap?.stars;
-      if (Array.isArray(stars) && !stars.includes('dog')) return false;
-      return (c.bodies ?? []).includes('quadruped');
-    })
+    .filter((c) => c.status === 'live' && !isPaused(c))
     .map((c) => ({ slug: c.slug, name: c.name }));
 }
 
 // ---- "Use this clip" --------------------------------------------------------------------------------------------------------------
 
-/** What "Use this clip" did: the drop filed (or found again: `duplicate`), and whether the hit was marked dropped. */
+/** The pick statuses of a clip already on its way to a video (add_drop then files nothing new and no check runs). */
+const ON_ITS_WAY = ['queued', 'made'];
+
+/** What "Use this clip" did. */
 export interface FiledHit {
   pickId: string;
+  /** add_drop found the link already filed (for that character, or for anyone when the check chooses). */
   duplicate: boolean;
+  /** That pick is already being made or made: nothing was filed or checked again. */
+  onItsWay: boolean;
+  /** Who it waits under (the provisional character when the check chooses); null when the answer did not say. */
+  characterSlug: string | null;
   marked: boolean;
   /** Why the hit could not be marked (the clip is filed all the same); null when it was. */
   markError: string | null;
+  /** `now`: the cloud check started; `soon`: the next sweep takes it (no dispatch, or the request was refused); `none`: nothing
+   * to check (already on its way). */
+  check: 'now' | 'soon' | 'none';
+  /** Why request_job refused a new drop (the drop stays; the sweep checks it); null otherwise and on a duplicate's refusal. */
+  checkError: string | null;
 }
 
 /**
- * "Use this clip" (spec 10): add_drop(slug, link) files the hit's post as his drop (the link tidied as the Add clips box tidies a
- * pasted one; one the terminal cannot tidy goes as stored and the database judges it), then set_hit_status(dropped). A refused
- * add_drop throws (nothing was filed, nothing is marked). When the drop is filed but the mark is refused, that is said in the
- * result, never thrown: the clip is in Clips, and the hit must not be filed a second time by a retry.
+ * "Use this clip" (spec 10): add_drop(slug, link) files the hit's post as his drop, or with `slug` null for the free check to
+ * choose (character_by studio); the link is tidied as the Add clips box tidies a pasted one (one the terminal cannot tidy goes as
+ * stored and the database judges it). Then set_hit_status(dropped), then request_job(pick, process), as the Add clips box does for
+ * a pasted link, so the check starts now instead of at the next sweep. A refused add_drop throws (nothing was filed, nothing is
+ * marked). After that nothing throws: the drop exists, and a retry must not file it twice. A refused mark is said in the result;
+ * a refused check request is ignored on a duplicate (it is checked or on its way already) and otherwise said in the result (the
+ * cloud sweep checks it within 2 hours). A pick already being made or made is not asked to check again.
  */
-export async function fileHit(backend: Pick<Backend, 'addDrop' | 'setHitStatus'>, h: Pick<Hit, 'hit_id' | 'url'>, slug: string): Promise<FiledHit> {
+export async function fileHit(
+  backend: Pick<Backend, 'addDrop' | 'setHitStatus' | 'requestJob'>, h: Pick<Hit, 'hit_id' | 'url'>, slug: string | null,
+): Promise<FiledHit> {
   let link = h.url;
   try {
     link = canonicalVideoUrl(h.url).url;
   } catch {
     // not a link the terminal can tidy: add_drop refuses it in its own words when it is not one it takes
   }
-  const { pickId, duplicate } = await backend.addDrop(slug, link);
+  const filed = await backend.addDrop(slug, link);
+  const onItsWay = filed.duplicate && ON_ITS_WAY.includes(filed.status ?? '');
+  const out: FiledHit = {
+    pickId: filed.pickId, duplicate: filed.duplicate, onItsWay, characterSlug: filed.characterSlug ?? slug,
+    marked: true, markError: null, check: onItsWay ? 'none' : 'soon', checkError: null,
+  };
   const status: HitStatus = 'dropped';
   try {
     await backend.setHitStatus(h.hit_id, status);
-    return { pickId, duplicate, marked: true, markError: null };
   } catch (e) {
-    return { pickId, duplicate, marked: false, markError: e instanceof Error ? e.message : String(e) };
+    out.marked = false;
+    out.markError = message(e);
   }
+  if (!onItsWay) {
+    try {
+      const { dispatched } = await backend.requestJob(filed.pickId, 'process');
+      out.check = dispatched ? 'now' : 'soon';
+    } catch (e) {
+      if (!filed.duplicate) out.checkError = message(e);
+    }
+  }
+  return out;
+}
+
+const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/**
+ * The line after "Use this clip", true to what happened. `name` is the character chosen, null when the check chooses (`nameOf`
+ * gives the name of the one it waits under).
+ */
+export function filedLine(r: FiledHit, name: string | null, nameOf: (slug: string) => string = (s) => s): { text: string; kind: 'ok' | 'error' } {
+  const who = name ?? (r.characterSlug ? nameOf(r.characterSlug) : null);
+  const his = who ? `${who}’s clips` : 'your clips';
+  const now = r.check === 'now';
+  let text: string;
+  if (r.onItsWay) text = `Already in ${his} (being made or made)`;
+  else if (r.duplicate) text = `Already in ${his}: checked again ${now ? 'now' : 'within 2 hours'} (free)`;
+  else if (name == null) text = `Filed: the free check chooses who goes in (${now ? 'checking now' : 'within 2 hours'})`;
+  else text = `Filed for ${name}: ${now ? 'being checked now (free)' : 'it is checked within 2 hours (free)'}`;
+  if (!r.marked) return { text: `${text}. The hit is still listed as new: ${r.markError}`, kind: 'error' };
+  return { text, kind: 'ok' };
 }
 
 // ---- Keep (retention, spec 10) ------------------------------------------------------------------------------------------------------
 
-/** The one line by the Keep toggle. */
-export const KEEP_HINT = 'Kept clips are never deleted';
+/** The one line by the Keep toggle: what Keep does, or what happens without it (studio.fetch.purge_stale). */
+export function keepHint(kept: boolean): string {
+  return kept ? 'Kept: never deleted for going unused' : 'Unused clips are deleted after 30 days (60 for your own)';
+}
 
 /**
  * Where the clip card shows Keep: a drop not made yet, the only clips retention deletes (studio.fetch.purge_stale: a hit's clip
