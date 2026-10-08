@@ -41,22 +41,34 @@
   Reels switch): see section 3 for its state.
 - Marketing skills wired in, a measurement and learning plan, an independent system review.
 
-## 3. Your clips, ranked per character
-**Not ranked yet: the free check runs in the cloud, and the cloud is blocked (decision 1, now solved).** State at 09:45:
-- **20 clips wait for their check** ("checking" in the terminal). Of these:
-  - 15 are the 11 that hit Gemini's free limit last night plus 4 that were ready with a score. I sent those 4 back this
-    morning so they get the new hit rules and the character spread.
-  - The other 5 were already waiting.
-  - Side effect: until the check runs, Make these shows nothing ready. Their earlier scores were Reginald 80 and 58,
-    Lenny 72 and 68.
-- **9 are blocked** (burned-in text or another creator's watermark): not usable as Drop-ins.
-- **1 failed paid make** (25889785, Reginald, yellow jumpsuit; Higgsfield answered 401 on 7 Oct). It needs your OK
-  before any retry.
-- Most of these were filed under Lenny before the spread rule existed. The new check re-suggests the character per clip
-  (Franz now also takes people), so expect a fairer split once it runs.
+## 3. Your clips, ranked per character (12:15)
+**17 clips are checked and ready**, scored 0-100 (how likely the clip gets views with him in it). Prices are Higgsfield
+credits for the trimmed section. All of them wait for the credit top-up (about 67 left, so no video fits yet).
 
-Once billing is fixed, the 2-hourly sweep checks all 20 within about 2 hours (free). The ranked list then appears under
-Make these on Today, with the top picks per character.
+| Character | Score | Clip | Credits |
+|---|---|---|---|
+| **Franz** | 80 | A dapple dachshund on its back, tail wagging to the beat (a hit, 3.4M views) | 91 |
+| | 72 | A puppy being tickled (a hit, 4.1M views) | 91 |
+| **Reginald** | 80 | The dancer in the striped sweater and pink leg warmers: full energy from second one | 100 |
+| | 52 | The bucket-hat strut | 91 |
+| | 44 | The beach-club DJ (stiff butler versus wild party) | 91 |
+| **Lenny** | 76 | The motorcycle stunt (a suited agent in a stunt) | 91 |
+| | 74 | The white-tracksuit dancer | 93 |
+| | 70 | The driver in the bob wig and moustache (a classic meme) | 78 |
+| | 64 | The grey-suit DJ meme | 135 |
+| | 62 | The red-cap street dance | 91 |
+| | 38-58 | 7 more (DJ and festival clips, the wheelchair engine-sound clip, 54) | 72-107 |
+
+**What else happened to today's clips:**
+- **15 blocked:**
+  - burned-in text or a watermark;
+  - 2 hits where the star is a child (correctly refused: our characters only replace adults);
+  - 2 hits that are only 5.5 s (the minimum is 6 s).
+- **Google's free Gemini limit was hit again at about 12:00.** 3 of the new hits failed on it: Lenny's "Unc talks to
+  Titi's manager", Reginald's "Giddy up" and one more trend dance. They are retried after the limit resets (08:00 London)
+  or at once with billing on (decision 6). Two more failed earlier on Gemini timeouts. 3 are still in the check.
+- **Still skewed to Lenny** (12 of 17): most of your folder clips are DJ and street clips, which the check gives to the
+  loud agent. The hits job evens it out: 3 a day per character.
 
 ## 4. Hot right now and Worth saving
 **The first hits run (10:50, 24 ScrapeCreators credits, about 74 of the 100 free ones left):**
