@@ -184,7 +184,7 @@ CDN prefix as above.
 Colours (2026-10-07, the tall canon): cap and hoodie cream `#EDE3D6` / `#E8DCCF`, overshirt sage `#7C806A`, joggers charcoal `#4A4547`, fur golden-cream `#DCB08C`; the eyes: right ice-blue `#8FD3FF`, left amber `#FFB040`. Caption kit: refs.json `style` (owner 2026-10-07: the cream pill `#F4EBDD` with navy `#1F2A44` Figtree ExtraBold text, the caption slams in, a punch-in on the hook, warm tone). (Until 2026-10-07: polo navy `#16213B`, gold accent `#C9A227`, an elegant serif italic hook font.)
 
 ## Scan profile (daily trend scan)
-- vidIQ queries (rotate): "dog refuses to walk", "dachshund funny video", "posh dog reaction", "dog dancing to a trend"
+- vidIQ queries (rotate): "dog refuses to walk", "dachshund funny video", "dog show-off strut", "dog dancing to a trend"
 - Audience string: `Culture/Region: UK/US English-speaking; Global: true; Demographics: dog lovers and Gen Z/millennials 16-40 who watch funny pet and dance content;`
 - Hashtags to watch: #dachshund #sausagedog #doxie #dogsoftiktok #poshdog
 - Motion types: dog-star clips and person-star clips (Object swap, like for like: his four-paw body for a dog, his upright body for a person, owner 2026-10-07); a Recreate keeps the body guard of the body used (see "Motion").
