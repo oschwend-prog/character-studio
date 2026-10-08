@@ -10,6 +10,7 @@ from __future__ import annotations
 import base64
 import dataclasses
 import json
+import re
 from pathlib import Path
 
 import httpx
@@ -50,9 +51,11 @@ GOOD = {
     "classic": False, "moment_name": "shoulder shimmy", "suggested_part": "featured",
     "gadgets": ["Black Umbrella", "a flamethrower"],
     "hooks": ["The household is unaware.", "Breakfast is at eight.", "Kindly do not tell the Duchess."],
+    "hook_patterns": ["understatement", "false-premise", "understatement"],
     "caption": {"title": "Shoulder shimmy · butler edition", "joke": "The hallway has been informed.", "send": "Send this to your butler.",
                 "question": "Which eye did you notice first?", "tease": "Next week: the stairs."},
     "first_comment": "Requests for next week may be left below. Within reason.",
+    "first_comment_question": "What should the household attempt next week?",
     "hashtags": ["shouldershimmy", "#butler", "#deadpan"],
     "notes": "",
     "watermark_spans": [], "burned_in_text_spans": [],
@@ -198,6 +201,46 @@ def test_potential_validated(change, problem):
     assert potential["properties"]["score"] == {**potential["properties"]["score"], "type": "integer", "minimum": 0, "maximum": 10}
 
 
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        ({"hook_patterns": ["understatement", "false-premise"]}, "hook_patterns must be 3 of"),
+        ({"hook_patterns": ["understatement", "false-premise", "pun"]}, "hook_patterns must be 3 of"),
+        ({"hook_patterns": "understatement"}, "hook_patterns must be 3 of"),
+        ({"hook_patterns": ["understatement", "false-premise", 3]}, "hook_patterns must be 3 of"),
+        ({"first_comment_question": ""}, "first_comment_question must be one line of 1-300 characters"),
+        ({"first_comment_question": "x" * 301}, "first_comment_question must be one line of 1-300 characters"),
+        ({"first_comment_question": "two\nlines"}, "first_comment_question must be one line of 1-300 characters"),
+    ],
+)
+def test_each_hook_carries_its_pattern_and_the_first_comment_a_question_variant(change, problem):
+    """Learning plan section 2 (tags 3 and 5): Gemini labels each of the 3 hooks with one of the 7 hook patterns, in the same
+    order, and writes the first comment once more as a question (test F's other arm); both required and checked."""
+    assert gemini.HOOK_PATTERNS == (
+        "ego-claim", "when-relatable", "false-premise", "understatement", "mid-deal", "trend-label", "myth-bust",
+    )
+    assert any(problem in p for p in deconstruct_problems({**GOOD, **change}, REGINALD))
+    for key in ("hook_patterns", "first_comment_question"):
+        assert key in gemini.DECONSTRUCT_SCHEMA["required"]
+        assert deconstruct_problems({k: v for k, v in GOOD.items() if k != key}, REGINALD) == [f"missing field(s) {key}"]
+    labels = gemini.DECONSTRUCT_SCHEMA["properties"]["hook_patterns"]
+    assert labels["items"]["enum"] == list(gemini.HOOK_PATTERNS) and labels["minItems"] == labels["maxItems"] == 3
+
+
+def test_the_hook_patterns_and_the_question_are_asked_for_and_tidied(clip):
+    prompt = gemini.deconstruct_prompt(REGINALD)
+    labels = prompt.split("- hook_patterns:", 1)[1].split("\n- ", 1)[0]
+    assert "same order" in labels and all(name in labels for name in gemini.HOOK_PATTERNS)
+    question = prompt.split("- first_comment_question:", 1)[1].split("\n- ", 1)[0]
+    assert "question" in question and "at most 300 characters" in question
+    messy = {**GOOD, "hook_patterns": [" Understatement", "FALSE-PREMISE ", "understatement"],
+             "first_comment_question": "  What should the household attempt next week?  "}
+    assert deconstruct_problems(messy, REGINALD) == []  # case and spaces aside, the names are the 7
+    out = deconstruct(client(Fake((200, answer(messy)))), clip, REGINALD)
+    assert out["hook_patterns"] == ["understatement", "false-premise", "understatement"]
+    assert out["first_comment_question"] == "What should the household attempt next week?"
+
+
 def test_prompt_carries_hit_rules(tmp_path, monkeypatch):
     """The owner-editable hit rules (config/hit_rules.md) go into the prompt under "What gets views now"; no file, no heading."""
     rules = tmp_path / "hit_rules.md"
@@ -233,9 +276,38 @@ def test_the_hit_rules_are_capped_at_20_lines_and_2000_characters(tmp_path, monk
 def test_the_studios_hit_rules_file_is_short_and_seeded():
     text = gemini.HIT_RULES_PATH.read_text(encoding="utf-8")
     assert gemini.HIT_RULES_PATH == ROOT / "config" / "hit_rules.md"
-    assert 0 < len(text.strip().splitlines()) <= 20
+    assert 0 < len(text.strip().splitlines()) <= 21  # the version line and at most 20 rules
     for part in ("first second", "7 words", "two-option vote", "own sound", "character skit"):  # rules 1, 6, 8, 9 and 4
         assert part in text, part
+
+
+def test_the_studios_hit_rules_file_has_a_version_and_numbered_rules():
+    """Learning plan section 4.3: line 1 is ``v<N> · <date>``, each rule ``R<n>`` and its text, numbered from 1 in order."""
+    lines = [line for line in gemini.HIT_RULES_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert re.fullmatch(r"v\d+ · \d{4}-\d{2}-\d{2}", lines[0]), lines[0]
+    assert gemini.hit_rules_version() == lines[0].split(" ", 1)[0]
+    rules = lines[1:]
+    assert 0 < len(rules) <= gemini.HIT_RULES_MAX_LINES
+    assert [line.split(" ", 1)[0] for line in rules] == [f"R{n}" for n in range(1, len(rules) + 1)]
+    assert "two-option vote" in rules[9]  # rule 10: the first comment (test F names it so)
+    assert gemini.hit_rules().splitlines() == rules  # the version line never goes into the prompt
+
+
+def test_the_hit_rules_version_line_is_read_and_kept_out_of_the_prompt(tmp_path, monkeypatch):
+    rules = tmp_path / "hit_rules.md"
+    monkeypatch.setattr(gemini, "HIT_RULES_PATH", rules)
+    rules.write_text("\nv3 · 2026-10-09\nR1 Score a clip high when its star moves in the first second.\nR2 One hook in three names the trend.\n",
+                     encoding="utf-8")
+    assert gemini.hit_rules_version() == "v3"
+    assert gemini.hit_rules() == "R1 Score a clip high when its star moves in the first second.\nR2 One hook in three names the trend."
+    assert "v3 ·" not in gemini.deconstruct_prompt(REGINALD) and "R2 One hook in three" in gemini.deconstruct_prompt(REGINALD)
+    rules.write_text("R1 a rule\nv4 · 2026-10-10\n", encoding="utf-8")  # only a FIRST line is a version line
+    assert gemini.hit_rules_version() == "none" and gemini.hit_rules() == "R1 a rule\nv4 · 2026-10-10"
+    rules.write_text("v5\n", encoding="utf-8")  # a version with no rules: no rules block
+    assert gemini.hit_rules_version() == "v5" and gemini.hit_rules() == ""
+    assert "What gets views now" not in gemini.deconstruct_prompt(REGINALD)
+    monkeypatch.setattr(gemini, "HIT_RULES_PATH", tmp_path / "missing.md")
+    assert gemini.hit_rules_version() == "none"  # no file: the built-in rubric, no version
 
 
 RUBRIC = (

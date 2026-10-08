@@ -16,7 +16,7 @@ from typer.testing import CliRunner
 
 from studio import review
 from studio.cli import app
-from studio.clips import REQUIRED_FEATURES
+from studio.clips import LEARN_FEATURES, REQUIRED_FEATURES
 from studio.models import Account, Character, Clip, Post, PostStatus, Snapshot
 from studio.review import (
     Lift,
@@ -119,10 +119,28 @@ def test_lifts_cover_only_the_required_feature_keys_and_split_by_value():
     clips = measured([2.0] * 5, seamless_loop=True, rerolls=0)
     clips += measured([1.0] * 5, seamless_loop=False, rerolls=0)
     lifts = feature_lifts(clips)
-    assert {lf.feature for lf in lifts} <= REQUIRED_FEATURES  # not outlier_x, not rerolls
+    assert {lf.feature for lf in lifts} <= REQUIRED_FEATURES | LEARN_FEATURES  # not outlier_x, not rerolls
     loops = {lf.value: lf for lf in lifts if lf.feature == "seamless_loop"}
     assert set(loops) == {True, False}
     assert loops[True].median_outlier_x == 2.0 and loops[False].median_outlier_x == 1.0
+
+
+def test_lifts_read_the_learning_tags_but_not_the_ids_and_exact_numbers():
+    """Learning plan section 2: every made clip carries the learning tags, and the lifts read them (the hook pattern, the length
+    and score buckets, the sound, the source...). An id (``family_id``), the test arms (each test reads its own) and an exact
+    number that has a bucket (``length_s``, ``score_total``) are no feature value to group by."""
+    tags = {"length_bucket": "8_10", "score_bucket": "65_79", "sound_type": "own_trend_sound", "source_kind": "owner_saved",
+            "hit_rules_version": "v1", "hook_by": "studio", "part": "star", "score_potential": 7, "family_id": "p1",
+            "test_arms": {}, "length_s": 9.0, "score_total": 70}
+    clips = measured([2.0] * 5, **tags) + measured([1.0] * 5, **{**tags, "length_bucket": "11_16"})
+    lifts = feature_lifts(clips)
+    seen = {lf.feature for lf in lifts}
+    assert {"length_bucket", "score_bucket", "sound_type", "source_kind", "hit_rules_version", "hook_by", "part",
+            "score_potential"} <= seen
+    assert not seen & {"family_id", "test_arms", "length_s", "score_total"}
+    lengths = {lf.value: lf.median_outlier_x for lf in lifts if lf.feature == "length_bucket"}
+    assert lengths == {"8_10": 2.0, "11_16": 1.0}
+    assert review.LIFT_FEATURES == (REQUIRED_FEATURES | LEARN_FEATURES) - {"family_id", "test_arms", "length_s", "score_total"}
 
 
 def test_lifts_skip_clips_that_lack_the_feature_or_the_outlier():

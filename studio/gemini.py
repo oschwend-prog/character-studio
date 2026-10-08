@@ -33,9 +33,16 @@ no block.
 **What gets views now** (terminal v3, spec section 3). The deconstruct also rates the clip's ``potential`` (a whole score 0-10
 and a one-line reason of at most ``REASON_MAX`` characters: how likely this clip, with our character swapped in, gets views),
 judged by the studio's current hit rules (``config/hit_rules.md``, owner-editable; ``hit_rules`` reads its first 20 non-empty
-lines, at most 2,000 characters), which go into the prompt under "What gets views now" and steer that score, the hooks and the
-first comment. Without the file there is no such block and the potential is judged by ``POTENTIAL_RUBRIC`` instead.
-``studio.drop.drop_score`` turns the potential into the clip's score.
+lines after the version line, at most 2,000 characters), which go into the prompt under "What gets views now" and steer that
+score, the hooks and the first comment. Without the file there is no such block and the potential is judged by
+``POTENTIAL_RUBRIC`` instead. ``studio.drop.drop_score`` turns the potential into the clip's score. The file's first line is its
+version, ``v<N> · <date>`` (learning plan section 4.3; the rules are ``R<n>`` lines): ``hit_rules_version`` reads ``v<N>`` (or
+``"none"``), the check stores it and the clip made from it carries it; the version line never goes into the prompt.
+
+**What the clip will be tagged with** (``docs/launch/measurement-and-learning-plan.md`` section 2). Each of the 3 hooks gets one
+of the 7 hook patterns (``HOOK_PATTERNS``, ``hook_patterns`` in the same order: the clip carries the pattern of the hook on
+screen), and the first comment, a vote, is written once more as an open question (``first_comment_question``, test F's other
+arm). Both are required and checked like the rest; a pattern is kept trimmed and in lower case.
 
 **One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 42, a hashtag list that is
 not 3-5 tags), the same request is made once more with the problems appended to the prompt; a second miss raises
@@ -63,6 +70,7 @@ from typing import Any
 import httpx
 
 from studio.captions import BANNED_HASHTAGS, clean_tags
+from studio.models import HOOK_PATTERNS
 
 API_ROOT = "https://generativelanguage.googleapis.com"
 DEFAULT_MODEL = "gemini-3.8-flash"  # the current stable Flash (ai.google.dev/gemini-api/docs/models, 2026-10-06); GEMINI_MODEL overrides
@@ -105,6 +113,16 @@ BALANCE_RULE = "When two characters fit about as well, prefer the one with fewer
 HIT_RULES_PATH = Path(__file__).resolve().parents[1] / "config" / "hit_rules.md"  # the owner's "What gets views now"
 HIT_RULES_MAX_LINES = 20  # what of the file goes into the prompt: its first 20 non-empty lines, at most 2,000 characters
 HIT_RULES_MAX_CHARS = 2000
+HIT_RULES_VERSION = re.compile(r"v(\d+)(?:\s*·\s*\d{4}-\d{2}-\d{2})?")  # the file's line 1, "v<N> · <date>" (plan 4.3)
+HOOK_PATTERN_WORDS = {  # what each pattern is (hit-patterns section 4.3), for the prompt
+    "ego-claim": "first person, proud, the clip proves it",
+    "when-relatable": '"When ..." and a situation the viewer knows',
+    "false-premise": "a calm label for a job, then the drop",
+    "understatement": "calm words under a wild moment",
+    "mid-deal": "starts mid-argument, the clip is the answer",
+    "trend-label": "names the trend or the classic",
+    "myth-bust": '"they said X can\'t", the clip proves otherwise',
+}
 # the potential's rubric when there is no rules file (spec section 3); with one, the prompt points at its rules instead
 POTENTIAL_RUBRIC = (
     "the star moves in the first second and pays off by second 3; a recognisable moment or a trend many people do; a hook that "
@@ -470,12 +488,17 @@ DECONSTRUCT_SCHEMA: dict[str, Any] = {
         "suggested_part": {"type": "string", "enum": list(PARTS)},
         "gadgets": {"type": "array", "items": _STR, "maxItems": GADGETS_MAX},
         "hooks": {"type": "array", "items": _STR, "minItems": 3, "maxItems": 3},
+        "hook_patterns": {
+            "type": "array", "items": {"type": "string", "enum": list(HOOK_PATTERNS)}, "minItems": 3, "maxItems": 3,
+            "description": "the pattern of each hook, in the same order as hooks",
+        },
         "caption": {
             "type": "object",
             "properties": {"title": _STR, "joke": _STR, "send": _STR, "question": _STR, "tease": _STR},
             "required": ["title", "joke", "send", "question", "tease"],
         },
         "first_comment": _STR,
+        "first_comment_question": {**_STR, "description": "the first comment once more, as an open question to the viewer"},
         "hashtags": {"type": "array", "items": _STR, "minItems": HASHTAGS[0], "maxItems": HASHTAGS[1]},
         "notes": _STR,
         "recommended": {
@@ -500,21 +523,38 @@ DECONSTRUCT_SCHEMA: dict[str, Any] = {
     },
     "required": [
         "people_count", "star", "minors", "watermark", "watermark_spans", "burned_in_text", "burned_in_text_spans", "camera",
-        "setting", "what_happens", "classic", "moment_name", "suggested_part", "gadgets", "hooks", "caption", "first_comment",
-        "hashtags", "notes", "recommended", "potential",
+        "setting", "what_happens", "classic", "moment_name", "suggested_part", "gadgets", "hooks", "hook_patterns", "caption",
+        "first_comment", "first_comment_question", "hashtags", "notes", "recommended", "potential",
     ],
 }
 
 
-def hit_rules() -> str:
-    """The studio's current hit rules (``HIT_RULES_PATH``, the owner's file): its first ``HIT_RULES_MAX_LINES`` non-empty lines,
-    cut to whole lines within ``HIT_RULES_MAX_CHARS`` characters (one longer line is cut at the cap); "" when there is no file."""
+def _hit_rule_lines() -> tuple[str | None, list[str]]:
+    """``(version, rule lines)`` of the hit rules file: its non-empty lines, the first one taken out as the version when it is
+    ``v<N> · <date>`` (``HIT_RULES_VERSION``). No file: ``(None, [])``."""
     try:
         text = HIT_RULES_PATH.read_text(encoding="utf-8")
     except FileNotFoundError:
-        return ""
-    out = "\n".join(line.rstrip() for line in text.splitlines() if line.strip())
-    out = "\n".join(out.splitlines()[:HIT_RULES_MAX_LINES])
+        return None, []
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    if lines and (m := HIT_RULES_VERSION.fullmatch(lines[0].strip())):
+        return f"v{m.group(1)}", lines[1:]
+    return None, lines
+
+
+def hit_rules_version() -> str:
+    """The version of the hit rules a check runs under (learning plan section 4.3): ``v<N>`` from the file's first line
+    ``v<N> · <date>``; ``"none"`` when there is no file or no version line (the clip's ``hit_rules_version`` tag)."""
+    version, _ = _hit_rule_lines()
+    return version or "none"
+
+
+def hit_rules() -> str:
+    """The studio's current hit rules (``HIT_RULES_PATH``, the owner's file) for the prompt: its first ``HIT_RULES_MAX_LINES``
+    non-empty lines after the version line (which never goes into the prompt), cut to whole lines within ``HIT_RULES_MAX_CHARS``
+    characters (one longer line is cut at the cap); "" when there is no file or no rule."""
+    _, lines = _hit_rule_lines()
+    out = "\n".join(lines[:HIT_RULES_MAX_LINES])
     if len(out) > HIT_RULES_MAX_CHARS:
         cut = out[:HIT_RULES_MAX_CHARS]
         out = cut[: cut.rfind("\n")] if "\n" in cut else cut
@@ -591,12 +631,16 @@ within its first 3 seconds, TRUE to what happens in this clip (the video pays it
 to close: a deadpan understatement of an absurd moment, a mundane frame on a wild one, a confident claim the clip proves wrong. \
 Use a different angle for each; the strongest first. When the clip has a trend or moment name, one of the three names it. Never \
 explain the joke, never a greeting, never "POV:" or "wait for it", never mention AI.
+- hook_patterns: the pattern of each hook, in the same order as hooks (3 names), each one of: \
+{"; ".join(f"{name} ({HOOK_PATTERN_WORDS[name]})" for name in HOOK_PATTERNS)}.
 - caption: title = a searchable label of at most {TITLE_MAX} characters, "<famous moment or format> · {c.edition or c.noun} edition", carrying \
 a literal search phrase (the moment's name or a search keyword below); joke = one line in {c.name}'s voice (at most {JOKE_MAX} \
 characters); send = a send trigger ("send this to ..."); question = a question to the viewer; tease = a series tease ("next \
 week: ..."). Never mention AI, never explain the joke.
 - first_comment: a two-option vote for {c.name}'s next clip, in his voice: two concrete options the viewer answers with one \
 word, one line of at most {FIRST_COMMENT_MAX} characters.
+- first_comment_question: the same first comment as an open question to the viewer instead of a vote, in his voice, one line \
+of at most {FIRST_COMMENT_MAX} characters.
 - hashtags: 3-5: the moment, the niche, the format and #oddeyes. Never #fyp, #foryou, #foryoupage, #viral or #explore.
 - notes: anything the editor should know (cuts, crowds, fast camera), at most {NOTES_MAX} characters, "" when nothing.
 - recommended: which of our characters below should replace this clip's star, whoever it was dropped for: slug = one of \
@@ -676,6 +720,9 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character, roster: Sequen
     hooks = answer["hooks"]
     if not isinstance(hooks, list) or len(hooks) != 3 or not all(_text(h, HOOK_MAX) for h in hooks):
         p.append(f"hooks must be 3 lines of 1-{HOOK_MAX} characters each")
+    labels = answer["hook_patterns"]
+    if not isinstance(labels, list) or len(labels) != 3 or not all(_pattern(x) in HOOK_PATTERNS for x in labels):
+        p.append(f"hook_patterns must be 3 of {', '.join(HOOK_PATTERNS)}, one per hook in the same order")
     cap = answer["caption"]
     if not isinstance(cap, Mapping):
         p.append("caption must be an object")
@@ -689,6 +736,8 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character, roster: Sequen
                 p.append(f"caption.{kind} must be one line of 1-{LINE_MAX} characters")
     if not _text(answer["first_comment"], FIRST_COMMENT_MAX):
         p.append(f"first_comment must be one line of 1-{FIRST_COMMENT_MAX} characters")
+    if not _text(answer["first_comment_question"], FIRST_COMMENT_MAX):
+        p.append(f"first_comment_question must be one line of 1-{FIRST_COMMENT_MAX} characters")
     tags = answer["hashtags"]
     if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
         p.append("hashtags must be a list of tags")
@@ -702,6 +751,11 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character, roster: Sequen
     p.extend(recommendation_problems(answer["recommended"], star, crew_of(c, roster)))
     p.extend(potential_problems(answer["potential"]))
     return p
+
+
+def _pattern(value: Any) -> str | None:
+    """A hook pattern label as the clip stores it (trimmed, lower case); None for anything but text."""
+    return value.strip().lower() if isinstance(value, str) else None
 
 
 def potential_problems(potential: Any) -> list[str]:
@@ -757,8 +811,10 @@ def tidy_deconstruct(answer: Mapping[str, Any], c: Character) -> dict[str, Any]:
     out["star"]["description"] = out["star"]["description"].strip()
     out["gadgets"] = list(dict.fromkeys(known[g.strip().lower()] for g in answer["gadgets"] if g.strip().lower() in known))
     out["hooks"] = [h.strip() for h in answer["hooks"]]
+    out["hook_patterns"] = [_pattern(x) for x in answer["hook_patterns"]]
     out["caption"] = {k: answer["caption"][k].strip() for k in ("title", "joke", *ENGAGEMENT_KINDS)}
     out["first_comment"] = answer["first_comment"].strip()
+    out["first_comment_question"] = answer["first_comment_question"].strip()
     tags = clean_tags(answer["hashtags"])
     if "#oddeyes" not in (t.lower() for t in tags):
         tags = [*tags[: HASHTAGS[1] - 1], "#oddeyes"]
@@ -874,7 +930,7 @@ def frame_qa(client: GeminiClient, sheet: Path | str, c: Character, frames: int 
 
 __all__ = [
     "Character", "DECONSTRUCT_SCHEMA", "DEFAULT_MODEL", "FRAME_QA_SCHEMA", "FrameVerdict", "GeminiBlocked", "GeminiClient",
-    "GeminiError", "GeminiUnexpected", "bible_section", "crew_of", "deconstruct", "deconstruct_problems", "deconstruct_schema",
-    "frame_qa", "hit_rules", "judge_frames", "parse_answer", "potential_problems", "recommendation_problems", "roster_card",
-    "tidy_deconstruct", "used_hooks_block",
+    "GeminiError", "GeminiUnexpected", "HOOK_PATTERNS", "bible_section", "crew_of", "deconstruct", "deconstruct_problems",
+    "deconstruct_schema", "frame_qa", "hit_rules", "hit_rules_version", "judge_frames", "parse_answer", "potential_problems",
+    "recommendation_problems", "roster_card", "tidy_deconstruct", "used_hooks_block",
 ]

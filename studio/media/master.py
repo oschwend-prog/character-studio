@@ -86,7 +86,9 @@ trimmed window (``studio.media.clipwork``).
 
 ``studio master upload <clip> <file>`` is the last step: it re-checks the file against the master spec
 (``--loop`` for an eye loop), uploads it to bucket ``clips`` at ``<character>/<clip id>.mp4`` (what
-publishing and the terminal sign) and sets ``clip.master_path``. A file that misses the spec is not
+publishing and the terminal sign), sets ``clip.master_path`` and writes the master's real length on the clip
+(``features.length_s`` / ``length_bucket``, the learning plan's tag 8: the drop's make goes through the same
+``upload_master``; ``master build`` writes nothing on a clip). A file that misses the spec is not
 uploaded (exit 1, the JSON lists the problems); the clip's state is left to ``clip set --state``.
 """
 
@@ -109,7 +111,7 @@ from PIL import Image
 
 from studio import seed
 from studio.cli_support import emit, fail, open_storage, open_store
-from studio.clips import set_fields
+from studio.clips import set_fields, set_length
 from studio.media import analyze, clipwork, overlays
 from studio.media.qa import QAError, check_master, probe
 from studio.models import MUSIC_ARMS, Clip, Mode, Source, SourceKind
@@ -1022,7 +1024,8 @@ app = typer.Typer(
 def upload_master(
     store: Store, storage: Storage, clip_id: str, file: Path | str, *, loop: bool = False
 ) -> Clip:
-    """Check ``file`` against the master spec, upload it to ``clips/<character>/<clip id>.mp4``, set the path.
+    """Check ``file`` against the master spec, upload it to ``clips/<character>/<clip id>.mp4``, set the path and write the
+    master's real length on the clip (``clips.set_length``: ``length_s`` and ``length_bucket``, learning plan tag 8).
 
     ``KeyError`` for an unknown clip, ``QAError`` for an unreadable file, ``MasterRejected`` (nothing
     uploaded) when it misses the spec, ``StorageError`` when the upload fails.
@@ -1030,12 +1033,14 @@ def upload_master(
     clip = store.get_clip(clip_id)
     if clip is None:
         raise KeyError(clip_id)
-    problems = check_master(probe(file), loop=loop, silent=clip.features.get("music") == "in_app")
+    report = probe(file)
+    problems = check_master(report, loop=loop, silent=clip.features.get("music") == "in_app")
     if problems:
         raise MasterRejected(problems)
     key = f"{clip.character_slug}/{clip.id}.mp4"
     storage.upload(MASTER_BUCKET, key, file)
-    return set_fields(store, clip_id, master_path=key)
+    set_fields(store, clip_id, master_path=key)
+    return set_length(store, clip_id, report.duration_s)
 
 
 def _check_audio_rights(spec: MasterSpec, clip_id: str | None) -> None:

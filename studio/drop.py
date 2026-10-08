@@ -37,8 +37,9 @@ terminal's Adjust refuses a longer section before Make it, as ``validate_adjust`
 **Process** (``process_drop``, free): the clip (``source ingest-owner`` for a file, ``source fetch`` with no Recreate fallback
 for a link), a probe, the free local analysis (``source analyze``: cuts, beat, the best window), the Gemini **deconstruct**
 (``studio.gemini``: people, the star and where and whether the star is a child, children anywhere (recorded only), a watermark or
-handle, burned-in text, setting, what happens, his part, gadgets from the traits card, 3 hooks in the bible voice, a playbook caption, a first comment, hashtags) or, without the key, the
-one the daily run wrote by hand (``--deconstruct-file``), the checks, the window (``drop_window``: a classic 12-15 s, any other
+handle, burned-in text, setting, what happens, his part, gadgets from the traits card, 3 hooks in the bible voice with their
+patterns, a playbook caption, a first comment and its question variant, hashtags) or, without the key, the one the daily run
+wrote by hand (``--deconstruct-file``), the checks, the window (``drop_window``: a classic 12-15 s, any other
 clip 8-10 s, inside one shot, on the beat), the crop of a landscape clip around the star, the price (``planning.estimate_credits``
 for the window) and a preview strip in ``sources/owner/<pick id>/preview.jpg`` (the owner's browser may read ``owner/``). Then
 ``ready``, with the clip's **score** (terminal v3, ``drop_score``: ``drop['score'] = {total 0-100, potential 0-10, swap 0-10,
@@ -65,6 +66,15 @@ the family's posts at least 14 days apart.
 part: the check writes it as the drop's ``part`` (the Adjust sheet's default) and Make it reads it from refs.json again (the
 owner's Adjust wins, then ``swap_part``, then the check's suggestion, then featured); his ``swap_performance`` line is added to
 the swap prompt as one sentence. A character without them builds exactly the prompt it did before.
+
+**Learning tags** (``docs/launch/measurement-and-learning-plan.md`` section 2, plan Task 10: tags cannot be added to posts
+afterwards). The check stores the version of the hit rules it was judged by (``drop['hit_rules_version']``, from
+``gemini.hit_rules_version``; a check that does not end ready keeps none, like the score), and its deconstruct carries a pattern
+per hook (``hook_patterns``) and the question variant of the first comment (``first_comment_question``). Make it writes every
+tag on the clip (``learn_tags``: the format, the hook used with its pattern, the score, the family, his part, the sound, the
+source...; ``clips.new_clip`` refuses a drop's clip that misses one) and the master writes its real length
+(``master.upload_master``). A drop checked before this build is made with ``none`` where the check gave nothing (``drop recheck
+--all-ready`` gives the ready ones their labels first).
 
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
 record (``{"at", "by": "owner"}``, written only by ``request_job``; nothing in this CLI writes it). The owner's Adjust
@@ -149,7 +159,7 @@ from studio.media import clipwork
 from studio.media.analyze import AnalysisError, analyze_clip
 from studio.media.master import MasterSpec, audio_problem, build_master, style_lead_s, upload_master
 from studio.media.qa import QAError, check_master, contact_sheet, frame_sheet, probe
-from studio.models import Body, Clip, ClipState, Favorite, Mode, Source
+from studio.models import HOOK_PATTERNS, Body, Clip, ClipState, Favorite, Mode, Source
 from studio.planning import estimate_credits
 from studio.storage import Storage, StorageError
 from studio.store import Store
@@ -250,9 +260,9 @@ def _update(store: Store, pick: Favorite, now: datetime, *, status: str | None =
 
 def _unready(store: Store, pick: Favorite, now: datetime, **drop_changes: Any) -> Favorite:
     """``_update`` for a check that does not end ``ready`` (blocked, failed, waiting, still checking): the drop keeps no
-    ``score`` (an older check's, or another character's: the owner's menu moves a scored drop back to checking with it). A
-    failed MAKE goes through ``_update`` and keeps its score for Try again."""
-    return _update(store, pick, now, score=None, **drop_changes)
+    ``score`` and no ``hit_rules_version`` (an older check's, or another character's: the owner's menu moves a scored drop back
+    to checking with it). A failed MAKE goes through ``_update`` and keeps both for Try again."""
+    return _update(store, pick, now, score=None, hit_rules_version=None, **drop_changes)
 
 
 # ---- one run per pick ------------------------------------------------------------------------------------------------------
@@ -1086,6 +1096,7 @@ def _process(
     slug = pick.character_slug
     ref, who = character(slug, characters_dir)
     crew = roster(store, characters_dir)
+    rules_version = gemini.hit_rules_version()  # the hit rules this look is judged by (the clip's hit_rules_version tag)
     by_studio = drop_of(pick).get("character_by") == "studio"
     in_family = {m.character_slug for m in family(store, pick) if m.id != pick.id}  # the studio never moves it to one of them
     got = _get_source(store, storage, pick, now, runner)
@@ -1191,6 +1202,7 @@ def _process(
             # the longest section Make it takes for him (validate_adjust's cap): the terminal's Adjust checks it before Make it
             "max_length_s": round(MASTER_MAX_S - style_lead_s(ref.get("style")), 3),
             "score": drop_score(look, window, avoid, basics["has_audio"]),  # only a check that ends ready has one
+            "hit_rules_version": rules_version,  # copied to the clip at make (learning plan section 2)
         },
     }
     proposal["drop"] = {k: v for k, v in proposal["drop"].items() if v is not None or k in ("reason", "crop_x")}
@@ -1216,14 +1228,104 @@ def _preview(storage: Storage, local: Path, work: Path, pick_id: str, window: Ma
 # ---- make --------------------------------------------------------------------------------------------------------------------
 
 
-def _features(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], kind: str) -> dict[str, Any]:
+def _same_line(a: Any, b: Any) -> bool:
+    """Two hooks are the same line, case and spaces aside."""
+    return isinstance(a, str) and isinstance(b, str) and " ".join(a.split()).casefold() == " ".join(b.split()).casefold()
+
+
+def _hook_tags(drop: Mapping[str, Any], look: Mapping[str, Any], hook: Any) -> dict[str, Any]:
+    """Which hook went on screen (learning plan tag 3). ``hook_index`` 1-3 = the check's hook of that place (case and spaces
+    aside), with the pattern the check gave it (``"none"`` for a check made before the labels); 0 = none of them (the owner's own
+    line): its pattern is ``"owner"``, never guessed from the nearest one. ``hook_by`` is ``owner`` when his Adjust changed the
+    hook (an Adjust that kept the default changed nothing), else ``studio`` (``bandit`` is the hook test's, not built yet)."""
+    hooks = list(look.get("hooks") or drop.get("hooks") or [])
+    labels = list(look.get("hook_patterns") or [])
+    index = next((i for i, h in enumerate(hooks) if _same_line(h, hook)), None)
+    if index is None:
+        pattern = "owner"
+    else:
+        pattern = labels[index] if index < len(labels) and labels[index] in HOOK_PATTERNS else "none"
+    adjusted = (drop.get("adjust") or {}).get("hook")
+    by = "owner" if isinstance(adjusted, str) and not _same_line(adjusted, drop.get("hook")) else "studio"
+    return {"hook_pattern": pattern, "hook_index": 0 if index is None else index + 1, "hook_by": by}
+
+
+def _whole(value: Any, low: int) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= low else None
+
+
+def learn_tags(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], *, version_index: int) -> dict[str, Any]:
+    """The learning tags of the clip a drop makes (docs/launch/measurement-and-learning-plan.md section 2; pure; every value
+    from ``clips.LEARN_VALUES``), from the check (``drop``: its deconstruct, ``classic``, ``has_audio``, ``score``,
+    ``hit_rules_version``, ``own_footage``), what is made (``eff``: the hook and his part) and the pick:
+
+    - ``format_id``: ``own_footage`` for the owner's own footage, else ``swap_classic`` (a classic), ``swap_trend`` (a moment or
+      trend name), ``swap_other``; ``source_kind``: ``own_footage``, ``auto_filed`` (a pick the hits job filed,
+      ``drop.auto_filed``, plan Task 6), else ``owner_saved``.
+    - the hook: ``_hook_tags``.
+    - ``trend_stage``: ``classic`` for a classic, else the hits job's ``drop.trend_stage`` when it gave one, else ``none``;
+      ``days_since_trend_peak`` and ``sound_rising`` likewise (None and false until then).
+    - ``sound_type``: the clip keeps its own sound (music ``original``): ``own_trend_sound`` with a moment name, ``own_other``
+      without, ``none`` when the clip has no sound; ``ai_beat`` / ``in_app`` per the music.
+    - the score (``drop.score``, terminal v3) as ``score_bucket`` and its three numbers (``none`` and None for a check made
+      before the score); ``part`` = the part he really plays; ``family_id`` = the root pick (``drop.copy_of``), ``version_index``
+      as given (``version_index``); ``series`` / ``episode`` from the pick's proposal when it names a series of the list.
+    - ``caption_line1`` ``label-first`` (``caption_text``: the title, then the joke); ``first_comment_kind`` ``vote`` (the check
+      writes a vote; its question variant is not used yet) or ``none``; ``hit_rules_version`` (``none`` for a check made before
+      the version); ``test_arms`` ``{}`` and ``explore_pick`` false until a test runs."""
+    look = drop.get("deconstruct") or {}
+    classic = bool(drop.get("classic", look.get("classic")))
+    moment = (look.get("moment_name") or "").strip()
+    own = bool(drop.get("own_footage"))
+    fmt = "own_footage" if own else "swap_classic" if classic else "swap_trend" if moment else "swap_other"
+    source_kind = "own_footage" if own else "auto_filed" if drop.get("auto_filed") is True else "owner_saved"
+    stage = drop.get("trend_stage")
+    stage = "classic" if classic else stage if stage in ("rising", "peak", "fading") else "none"
+    music = drop.get("music") or MUSIC
+    if music == "original":
+        sound = ("own_trend_sound" if moment else "own_other") if drop.get("has_audio", True) else "none"
+    else:
+        sound = music if music in ("ai_beat", "in_app") else "none"
+    score = drop.get("score") if isinstance(drop.get("score"), Mapping) else {}
+    total = _whole(score.get("total"), 0)
+    series = pick.proposal.get("series")
+    series = series if isinstance(series, str) and series in clips.LEARN_VALUES["series"] else "none"
+    return {
+        "format_id": fmt, **_hook_tags(drop, look, eff["hook"]),
+        "caption_line1": "label-first", "first_comment_kind": "vote" if look.get("first_comment") else "none",
+        "trend_stage": stage, "days_since_trend_peak": None if classic else _whole(drop.get("days_since_trend_peak"), 0),
+        "sound_type": sound, "sound_rising": drop.get("sound_rising") is True,
+        "score_bucket": clips.score_bucket(total), "score_total": total,
+        "score_potential": _whole(score.get("potential"), 0) if total is not None else None,
+        "score_swap": _whole(score.get("swap"), 0) if total is not None else None,
+        "part": eff["part"], "family_id": family_root_id(pick), "version_index": version_index,
+        "series": series, "episode": _whole(pick.proposal.get("episode"), 1) if series != "none" else None,
+        "hit_rules_version": drop.get("hit_rules_version") or "none", "source_kind": source_kind,
+        "test_arms": {}, "explore_pick": False,
+    }
+
+
+def version_index(store: Store, pick: Favorite) -> int:
+    """The pick's place in its family (learning plan tag 11): 1 = the root, 2-3 = its versions by creation order, skipped ones
+    not counted (``family``)."""
+    root = family_root_id(pick)
+    if root == pick.id:
+        return 1
+    versions = [m.id for m in family(store, pick) if m.id != root]
+    return (versions.index(pick.id) if pick.id in versions else len(versions)) + 2
+
+
+def _features(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], kind: str, version_index: int) -> dict[str, Any]:
+    """The clip's feature tags: the required ones, the learning tags (``learn_tags``) and the drop's own (``presence`` is the
+    old name of ``part``, kept)."""
     look = drop.get("deconstruct") or {}
     return {
-        "format_id": "drop_object_swap", "hook_pattern": "drop", "hook_text": eff["hook"],
+        "hook_text": eff["hook"],
         "prop": ", ".join(eff["gadgets"]) or "none", "setting": look.get("setting") or "the clip's own",
         "motion_type": "object_swap", "audio_arm": "original_audio", "bodies_in_frame": int(look.get("people_count") or 1),
         "seamless_loop": False, "eye_closeup_end": False, "trend_name": look.get("moment_name") or "evergreen",
         "music": MUSIC, "fav_id": pick.id, "drop": True, "presence": eff["part"], "engagement_kind": kind,
+        **learn_tags(pick, drop, eff, version_index=version_index),
     }
 
 
@@ -1334,7 +1436,8 @@ def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part:
             return clip
     eff = effective(drop, swap_part=swap_part)
     kind = next_engagement(store, pick.character_slug)
-    clip = clips.new_clip(store, pick.character_slug, None, Mode.dropin, _features(pick, drop, eff, kind))
+    features = _features(pick, drop, eff, kind, version_index(store, pick))
+    clip = clips.new_clip(store, pick.character_slug, None, Mode.dropin, features)
     pick = _record_make(store, pick, now, clip_id=clip.id, attempt=0)
     mark_favorite(store, pick.id, "queued", clip_id=clip.id)
     return clip

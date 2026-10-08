@@ -86,6 +86,10 @@ AccountMode = Literal["approval", "auto"]
 # when the owner chose it for this video; ``ai_beat`` = our own Seedance beat render (~30 credits), for autopilot.
 MusicArm = Literal["in_app", "original", "ai_beat"]
 MUSIC_ARMS: tuple[str, ...] = get_args(MusicArm)
+# The 7 hook patterns of docs/research/2026-10-07-hit-patterns.md section 4.3: the check labels each hook with one, the clip
+# carries the one on screen (``features.hook_pattern``, docs/launch/measurement-and-learning-plan.md section 2).
+HookPattern = Literal["ego-claim", "when-relatable", "false-premise", "understatement", "mid-deal", "trend-label", "myth-bust"]
+HOOK_PATTERNS: tuple[str, ...] = get_args(HookPattern)
 LedgerKind = Literal["reserve", "settle", "release"]
 FavoriteOrigin = Literal["scan", "owner"]
 FavoriteStatus = Literal["new", "approved", "skipped", "analysed", "queued", "made"]

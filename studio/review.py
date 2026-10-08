@@ -69,7 +69,7 @@ from typing import Annotated, Any, Literal
 import typer
 
 from studio.cli_support import emit, fail, open_store, text_option
-from studio.clips import REQUIRED_FEATURES
+from studio.clips import LEARN_FEATURES, REQUIRED_FEATURES
 from studio.config import now_london
 from studio.metrics import posted_at, views_at_7d
 from studio.models import Account, Clip, ClipState, Platform, PostStatus, Review, Snapshot
@@ -85,6 +85,11 @@ FORMAT_KILL_MEDIAN, FORMAT_KILL_MIN_N = 0.7, 8  # kill: median <= 0.7 over >= 8 
 HOOK_WINDOW, HOOK_MIN_HITS = 10, 2  # proven: >= 2 hits in the last 10 uses
 
 LIFT_MIN_N = 5  # a feature value needs >= 5 clips to be reported
+
+# The tags the lifts group by: the required ones and the learning tags (clips.LEARN_FEATURES, learning plan section 2), but not
+# an id (family_id: a family is at most 3 clips), the test arms (each test reads its own) or an exact number that has its bucket
+# (length_s -> length_bucket, score_total -> score_bucket).
+LIFT_FEATURES = (REQUIRED_FEATURES | LEARN_FEATURES) - {"family_id", "test_arms", "length_s", "score_total"}
 
 CHARACTER_MIN_POSTS = 20  # the bar opens after 20 posts ...
 CHARACTER_MIN_AGE = timedelta(weeks=4)  # ... or 4 weeks since the first post, whichever comes first
@@ -158,15 +163,16 @@ class Lift:
 
 
 def feature_lifts(clips: list[Clip], min_n: int = LIFT_MIN_N) -> list[Lift]:
-    """One ``Lift`` per (required feature, value) used by at least ``min_n`` measured clips.
+    """One ``Lift`` per (feature, value) used by at least ``min_n`` measured clips.
 
-    Only ``REQUIRED_FEATURES`` keys are considered. Clips without an ``outlier_x`` and clips whose
-    feature is absent or ``None`` do not count. Sorted by feature, then best median first.
+    Only ``LIFT_FEATURES`` keys are considered (the required tags and the learning tags). Clips without an ``outlier_x`` and
+    clips whose feature is absent or ``None`` do not count (a clip made before the learning tags has none of them). Sorted by
+    feature, then best median first.
     """
     rated = [(c, x) for c in clips if (x := clip_outlier_x(c)) is not None]
     overall = _median([x for _, x in rated])
     lifts: list[Lift] = []
-    for feature in sorted(REQUIRED_FEATURES):
+    for feature in sorted(LIFT_FEATURES):
         groups: dict[str, tuple[Any, list[float]]] = {}
         for clip, x in rated:
             value = clip.features.get(feature)

@@ -1165,6 +1165,21 @@ def test_upload_master_stores_the_file_and_sets_the_master_path(upload_rig, synt
     assert got.state.value == "qa_passed"  # the state moves through `clip set`, not here
 
 
+def test_upload_master_writes_the_masters_real_length_on_the_clip(upload_rig, synth_video):
+    """Learning plan tag 8: ``length_s`` and ``length_bucket`` from the master's real length, written when the master is
+    attached to the clip (the drop's make and ``studio master upload`` for a clip made by hand); the other tags are kept."""
+    store, storage, clip = upload_rig
+    store.update_clip(clip.id, features={"format_id": "recreate", "music": "ai_beat"})
+    got = master.upload_master(store, storage, clip.id, synth_video(dur=10))
+    feats = dict(got.features)
+    length = feats.pop("length_s")
+    assert abs(length - 10.0) < 0.1 and round(length, 2) == length  # seconds, to the hundredth
+    assert feats == {"format_id": "recreate", "music": "ai_beat", "length_bucket": "8_10"}
+    assert store.get_clip(clip.id).features == got.features and got.master_path == f"biscuit/{clip.id}.mp4"
+    got = master.upload_master(store, storage, clip.id, synth_video(dur=7))  # a new master: its own length
+    assert abs(got.features["length_s"] - 7.0) < 0.1 and got.features["length_bucket"] == "under_8"
+
+
 def test_upload_master_refuses_a_file_that_misses_the_master_spec(upload_rig, synth_video):
     store, storage, clip = upload_rig
     with pytest.raises(master.MasterRejected) as e:

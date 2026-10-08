@@ -445,3 +445,24 @@ def test_the_drops_by_hand_section_uses_the_cli_for_every_step_and_never_makes_w
 
     for key in gemini.DECONSTRUCT_SCHEMA["required"]:  # the shape the run writes by hand names every field the CLI checks
         assert key in drops, key
+
+
+def test_the_weekly_reviews_length_buckets_are_the_tags():
+    """Learning plan tag 8: the post audit compares the clips' ``length_bucket`` (under_8, 8_10, 11_16), not other buckets."""
+    from studio.clips import LEARN_VALUES
+
+    audit = text("weekly-review").split("Post audit", 1)[1].split("\n", 1)[0]
+    assert "`length_bucket`" in audit and all(f"`{b}`" in audit for b in LEARN_VALUES["length_bucket"])
+    assert "under 9 s" not in audit and "9-12 s" not in audit
+
+
+def test_a_clip_the_daily_run_makes_writes_every_learning_tag():
+    """Learning plan section 2, "the Recreate path writes the same vocabulary": the create step names every tag ``new_clip``
+    requires once ``source_kind`` is written (the master writes the length itself)."""
+    from studio.clips import LEARN_FEATURES, MASTER_FEATURES
+
+    create = text("daily-run").split("## 5. Create", 1)[1].split("\n2. ", 1)[0]
+    for key in sorted(LEARN_FEATURES - MASTER_FEATURES):
+        assert f"`{key}`" in create, key
+    for value in ("`recreate`", "`owner_saved`", "`auto_filed`", "`test_arms` `{}`"):
+        assert value in create, value

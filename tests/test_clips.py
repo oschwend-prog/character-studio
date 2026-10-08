@@ -450,6 +450,144 @@ def test_new_clip_accepts_mode_as_string():
     assert new_clip(store, "biscuit", None, "recreate", FEATURES).mode is Mode.recreate
 
 
+# ---- the learning tags (docs/launch/measurement-and-learning-plan.md section 2) --------------------------
+
+# a Recreate made by hand that opts in (``source_kind``): every learning tag, each from its vocabulary
+LEARN = {
+    **FEATURES, "format_id": "recreate", "hook_pattern": "ego-claim", "hook_index": 0, "hook_by": "studio",
+    "caption_line1": "label-first", "first_comment_kind": "vote", "trend_stage": "none", "days_since_trend_peak": None,
+    "sound_type": "ai_beat", "sound_rising": False, "score_bucket": "none", "score_total": None, "score_potential": None,
+    "score_swap": None, "part": "star", "family_id": "none", "version_index": 1, "series": "none", "episode": None,
+    "hit_rules_version": "v1", "source_kind": "recreate", "test_arms": {}, "explore_pick": False,
+}
+
+
+def test_the_learning_tags_are_the_plans():
+    assert clips.LEARN_FEATURES == {
+        "hook_index", "hook_by", "caption_line1", "first_comment_kind", "trend_stage", "days_since_trend_peak", "sound_type",
+        "sound_rising", "length_s", "length_bucket", "score_bucket", "score_total", "score_potential", "score_swap", "part",
+        "family_id", "version_index", "series", "episode", "hit_rules_version", "source_kind", "test_arms", "explore_pick",
+    }
+    assert clips.MASTER_FEATURES == {"length_s", "length_bucket"} < clips.LEARN_FEATURES  # the master writes these two
+    assert not clips.LEARN_FEATURES & REQUIRED_FEATURES  # format_id and hook_pattern stay required for every clip
+    v = clips.LEARN_VALUES
+    assert v["format_id"] == ("swap_trend", "swap_classic", "swap_other", "recreate", "own_footage")
+    assert v["hook_pattern"] == (
+        "ego-claim", "when-relatable", "false-premise", "understatement", "mid-deal", "trend-label", "myth-bust", "owner", "none",
+    )
+    assert v["caption_line1"] == ("label-first", "joke-first") and v["first_comment_kind"] == ("vote", "question", "none")
+    assert v["trend_stage"] == ("rising", "peak", "fading", "classic", "none")
+    assert v["sound_type"] == ("own_trend_sound", "own_other", "ai_beat", "in_app", "none")
+    assert v["length_bucket"] == ("under_8", "8_10", "11_16")
+    assert v["score_bucket"] == ("none", "under_50", "50_64", "65_79", "80_up") and v["part"] == ("cameo", "featured", "star")
+    assert v["series"] == ("sausage_vs_trend", "household_unaware", "on_hold", "classics", "halloween_countdown", "none")
+    assert v["source_kind"] == ("owner_saved", "auto_filed", "own_footage", "recreate")
+    assert v["hook_by"] == ("studio", "owner", "bandit")
+
+
+def test_a_clip_that_opts_in_carries_every_learning_tag():
+    store = make_store()
+    clip = new_clip(store, "biscuit", None, Mode.recreate, LEARN)
+    assert {k: clip.features[k] for k in LEARN} == LEARN and clips.learn_problems(clip.features) == []
+
+
+@pytest.mark.parametrize("key", sorted(LEARN.keys() - FEATURES.keys() - {"source_kind"}))  # source_kind: below
+def test_a_missing_learning_tag_refuses_new_clip(key):
+    store = make_store()
+    with pytest.raises(ValueError, match=f"missing feature tags: .*{key}"):
+        new_clip(store, "biscuit", None, Mode.recreate, {k: v for k, v in LEARN.items() if k != key})
+    assert store.list_clips() == []
+
+
+def test_a_drop_clip_needs_the_learning_tags_even_without_source_kind():
+    """``studio drop`` marks its clips ``drop: True``: one that lost a tag (or ``source_kind`` itself) is refused."""
+    store = make_store()
+    no_kind = {k: v for k, v in LEARN.items() if k != "source_kind"}
+    with pytest.raises(ValueError, match="source_kind"):
+        new_clip(store, "biscuit", None, Mode.dropin, {**no_kind, "drop": True, "fav_id": "p1"})
+    with pytest.raises(ValueError, match="hook_index"):
+        new_clip(store, "biscuit", None, Mode.dropin, {**FEATURES, "drop": True, "fav_id": "p1"})
+    assert store.list_clips() == []
+
+
+def test_a_by_hand_clip_that_does_not_opt_in_is_made_as_before():
+    """Legacy and by-hand clips (no ``source_kind``, not a drop's): the eleven required tags are enough."""
+    store = make_store()
+    assert new_clip(store, "biscuit", None, Mode.recreate, FEATURES).features["format_id"] == "B1"
+
+
+@pytest.mark.parametrize(
+    ("change", "problem"),
+    [
+        ({"format_id": "drop_object_swap"}, "format_id"),
+        ({"hook_pattern": "drop"}, "hook_pattern"),
+        ({"hook_by": "bandito"}, "hook_by"),
+        ({"hook_index": 4}, "hook_index"),
+        ({"hook_index": True}, "hook_index"),
+        ({"caption_line1": "hook-first"}, "caption_line1"),
+        ({"first_comment_kind": "poll"}, "first_comment_kind"),
+        ({"trend_stage": "dead"}, "trend_stage"),
+        ({"days_since_trend_peak": -1}, "days_since_trend_peak"),
+        ({"sound_type": "spotify"}, "sound_type"),
+        ({"sound_rising": 1}, "sound_rising"),
+        ({"explore_pick": "no"}, "explore_pick"),
+        ({"score_bucket": "80_up"}, "score_bucket"),  # no score: the bucket is none
+        ({"score_total": 81, "score_potential": 8, "score_swap": 9}, "score_bucket"),  # 81 is 80_up, not none
+        ({"score_bucket": "80_up", "score_total": 101, "score_potential": 8, "score_swap": 9}, "score_total"),
+        ({"score_bucket": "65_79", "score_total": 70, "score_potential": 11, "score_swap": 9}, "score_potential"),
+        ({"part": "lead"}, "part"),
+        ({"family_id": ""}, "family_id"),
+        ({"version_index": 4}, "version_index"),
+        ({"version_index": 0}, "version_index"),
+        ({"series": "my_series"}, "series"),
+        ({"episode": 0}, "episode"),
+        ({"hit_rules_version": ""}, "hit_rules_version"),
+        ({"source_kind": "scraped"}, "source_kind"),
+        ({"test_arms": []}, "test_arms"),
+        ({"hook_by": None}, "hook_by"),  # a categorical tag is never null: "none" is a value
+    ],
+)
+def test_a_learning_tag_outside_its_vocabulary_refuses_new_clip(change, problem):
+    store = make_store()
+    with pytest.raises(ValueError, match=problem):
+        new_clip(store, "biscuit", None, Mode.recreate, {**LEARN, **change})
+    assert store.list_clips() == []
+
+
+def test_the_score_tags_agree():
+    store = make_store()
+    scored = {**LEARN, "score_bucket": "65_79", "score_total": 78, "score_potential": 7, "score_swap": 9}
+    assert new_clip(store, "biscuit", None, Mode.recreate, scored).features["score_bucket"] == "65_79"
+
+
+@pytest.mark.parametrize(
+    ("total", "bucket"),
+    [(None, "none"), (0, "under_50"), (49, "under_50"), (50, "50_64"), (64, "50_64"), (65, "65_79"), (79, "65_79"),
+     (80, "80_up"), (100, "80_up")],
+)
+def test_score_bucket(total, bucket):
+    assert clips.score_bucket(total) == bucket
+
+
+@pytest.mark.parametrize(
+    ("seconds", "bucket"),
+    [(6.0, "under_8"), (7.99, "under_8"), (8.0, "8_10"), (10.9, "8_10"), (10.99, "8_10"), (11.0, "11_16"), (16.0, "11_16")],
+)
+def test_length_bucket(seconds, bucket):
+    assert clips.length_bucket(seconds) == bucket
+
+
+def test_set_length_writes_the_masters_length_and_its_bucket():
+    store, clip = fresh(features=LEARN)
+    got = clips.set_length(store, clip.id, 9.0333)
+    assert got.features["length_s"] == 9.03 and got.features["length_bucket"] == "8_10"
+    assert {k: got.features[k] for k in LEARN} == LEARN  # the other tags are kept
+    with pytest.raises(KeyError):
+        clips.set_length(store, "nope", 9.0)
+    with pytest.raises(ValueError):
+        clips.set_length(store, clip.id, float("nan"))
+
+
 # ---- CLI ---------------------------------------------------------------------------------
 
 

@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from studio import budget, drop, sources
+from studio import budget, clips, drop, gemini, sources
 from studio.cli import app
 from studio.config import now_london
 from studio.drop import DropError, add_drop, attach_file, drop_window, make_drop, pending, process_drop, validate_adjust
@@ -42,9 +42,11 @@ def deconstruct(**over) -> dict:
         "setting": "an office corridor", "what_happens": "a man in a suit does the shoulder shimmy down the corridor",
         "classic": False, "moment_name": "shoulder shimmy", "suggested_part": "featured", "gadgets": ["black umbrella"],
         "hooks": ["The household is unaware.", "Breakfast is at eight.", "Kindly do not tell the Duchess."],
+        "hook_patterns": ["understatement", "false-premise", "understatement"],
         "caption": {"title": "Shoulder shimmy · butler edition", "joke": "The corridor has been informed.",
                     "send": "Send this to your butler.", "question": "Which eye did you notice first?", "tease": "Next week: the stairs."},
         "first_comment": "Requests for next week may be left below. Within reason.",
+        "first_comment_question": "What should the household attempt next week?",
         "hashtags": ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes"], "notes": "",
         "watermark_spans": [], "burned_in_text_spans": [],
         "potential": {"score": 7, "reason": " a shimmy many people do, moving from the first second "},
@@ -1707,3 +1709,126 @@ def test_copy_from_a_version_says_what_is_true_of_the_original(world):
 
 def test_the_seeds_parts_are_the_drops_parts():
     assert drop.seed.SWAP_PARTS == drop.PARTS == drop.gemini.PARTS
+
+
+# ---- the learning tags (docs/launch/measurement-and-learning-plan.md section 2, plan Task 10) ----------------------------------
+
+
+def test_the_check_stores_the_hit_rules_version_it_ran_under(world, portrait, tmp_path, monkeypatch):
+    store, storage = world
+    rules = tmp_path / "hit_rules.md"
+    rules.write_text("v7 · 2026-10-08\nR1 Score a clip high when its star moves in the first second.\n", encoding="utf-8")
+    monkeypatch.setattr(gemini, "HIT_RULES_PATH", rules)
+    pid = ready_drop(store, storage, portrait)
+    assert store.get_favorite(pid).proposal["drop"]["hit_rules_version"] == "v7"
+    pid = drop_file(store, storage, portrait)  # a check that does not end ready keeps none (like the score)
+    process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(star=DOG_STAR)), now=NOW, job="t")
+    assert "hit_rules_version" not in store.get_favorite(pid).proposal["drop"]
+
+
+def test_a_made_drop_clip_carries_every_learning_tag_from_its_vocabulary(world, portrait, gen_out, fast_master):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    d = store.get_favorite(pid).proposal["drop"]
+    tap_make(store, pid)
+    assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
+    f = store.get_clip(store.get_favorite(pid).clip_id).features
+    assert clips.LEARN_FEATURES | clips.REQUIRED_FEATURES <= f.keys()  # the master wrote its length too
+    assert clips.learn_problems(f) == []  # every value from its vocabulary
+    score = d["score"]
+    assert {k: f[k] for k in sorted(clips.LEARN_FEATURES - {"length_s"})} == {
+        "caption_line1": "label-first", "days_since_trend_peak": None, "episode": None, "explore_pick": False,
+        "family_id": pid, "first_comment_kind": "vote", "hit_rules_version": gemini.hit_rules_version(), "hook_by": "studio",
+        "hook_index": 1, "length_bucket": "under_8", "part": "featured", "score_bucket": clips.score_bucket(score["total"]),
+        "score_potential": score["potential"], "score_swap": score["swap"], "score_total": score["total"], "series": "none",
+        "sound_rising": False, "sound_type": "own_trend_sound", "source_kind": "owner_saved", "test_arms": {},
+        "trend_stage": "none", "version_index": 1,
+    }
+    assert abs(f["length_s"] - 7.0) < 0.1  # fast_master's 7 s master
+    assert f["format_id"] == "swap_trend" and f["hook_pattern"] == "understatement"  # a named trend; the first hook's pattern
+    assert f["presence"] == f["part"] and f["hook_text"] == "The household is unaware."  # the old key stays as an alias
+    assert f["hit_rules_version"] != "none"  # the studio's file is versioned
+
+
+LOOK = deconstruct()
+SCORED = {"total": 78, "potential": 7, "swap": 9, "reason": "x"}
+
+
+def tags(drop_over=None, look=None, adjust_hook=None, proposal=None, version_index=1, part="featured"):
+    """``drop.learn_tags`` of a checked drop (pure): the check's card, the effective choices, the pick."""
+    look = look or LOOK
+    d = {"state": "ready", "classic": look["classic"], "hooks": look["hooks"], "hook": look["hooks"][0], "deconstruct": look,
+         "has_audio": True, "score": SCORED, "hit_rules_version": "v1", **(drop_over or {})}
+    if adjust_hook is not None:
+        d["adjust"] = {"hook": adjust_hook}
+    pick = Favorite(id="p1", url="owner-drop:p1", platform="drop", origin="owner", character_slug="reginald",
+                    proposal={**(proposal or {}), "drop": d}, status="queued")
+    eff = {"hook": adjust_hook or d["hook"], "part": part, "gadgets": []}
+    return drop.learn_tags(pick, d, eff, version_index=version_index)
+
+
+def test_the_format_trend_and_sound_follow_the_clip():
+    assert {k: tags()[k] for k in ("format_id", "trend_stage", "sound_type")} == {
+        "format_id": "swap_trend", "trend_stage": "none", "sound_type": "own_trend_sound"}
+    classic = tags({"classic": True}, look={**LOOK, "classic": True})
+    assert (classic["format_id"], classic["trend_stage"]) == ("swap_classic", "classic")
+    plain = tags(look={**LOOK, "moment_name": ""})
+    assert (plain["format_id"], plain["sound_type"]) == ("swap_other", "own_other")
+    assert tags({"has_audio": False})["sound_type"] == "none"  # nothing to keep: no sound
+    own = tags({"own_footage": True}, look={**LOOK, "classic": True})
+    assert (own["format_id"], own["source_kind"]) == ("own_footage", "own_footage")  # how it was made wins over classic
+    assert tags({"auto_filed": True})["source_kind"] == "auto_filed"  # the hits job's picks (plan Task 6)
+    assert tags()["source_kind"] == "owner_saved"
+
+
+def test_the_hits_job_fields_are_copied_when_the_check_has_them():
+    got = tags({"trend_stage": "rising", "days_since_trend_peak": 3, "sound_rising": True})
+    assert (got["trend_stage"], got["days_since_trend_peak"], got["sound_rising"]) == ("rising", 3, True)
+    junk = tags({"trend_stage": "huge", "days_since_trend_peak": "3", "sound_rising": "yes"})
+    assert (junk["trend_stage"], junk["days_since_trend_peak"], junk["sound_rising"]) == ("none", None, False)
+    classic = tags({"classic": True, "trend_stage": "fading"}, look={**LOOK, "classic": True})
+    assert classic["trend_stage"] == "classic"  # a classic everyone knows never fades
+
+
+def test_the_hook_used_is_tagged_with_its_pattern_and_who_chose_it():
+    first = tags()
+    assert (first["hook_pattern"], first["hook_index"], first["hook_by"]) == ("understatement", 1, "studio")
+    second = tags(adjust_hook="  breakfast is AT eight. ")  # the owner picked the second candidate (case and spaces aside)
+    assert (second["hook_pattern"], second["hook_index"], second["hook_by"]) == ("false-premise", 2, "owner")
+    own = tags(adjust_hook="Tea is at four.")  # his own line: none of the three, so no pattern is guessed
+    assert (own["hook_pattern"], own["hook_index"], own["hook_by"]) == ("owner", 0, "owner")
+    same = tags(adjust_hook="The household is unaware.")  # an Adjust that kept the default changed nothing
+    assert (same["hook_pattern"], same["hook_index"], same["hook_by"]) == ("understatement", 1, "studio")
+
+
+def test_a_drop_checked_before_the_labels_is_made_with_none():
+    """A ready drop checked before this build: no pattern labels, no hit-rules version, no score. Its Make it still works and
+    says "none" (never a guess); ``drop recheck --all-ready`` gives the others their labels before they are made."""
+    old = {k: v for k, v in LOOK.items() if k not in ("hook_patterns", "first_comment_question")}
+    got = tags({"score": None, "hit_rules_version": None}, look=old)
+    assert (got["hook_pattern"], got["hook_index"], got["hit_rules_version"]) == ("none", 1, "none")
+    assert (got["score_bucket"], got["score_total"], got["score_potential"], got["score_swap"]) == ("none", None, None, None)
+    assert clips.learn_problems(got) == []
+
+
+def test_the_score_family_part_series_and_comment_are_copied():
+    got = tags(version_index=2, part="star", proposal={"series": "household_unaware", "episode": 4})
+    assert (got["score_bucket"], got["score_total"], got["score_potential"], got["score_swap"]) == ("65_79", 78, 7, 9)
+    assert (got["family_id"], got["version_index"], got["part"]) == ("p1", 2, "star")
+    assert (got["series"], got["episode"]) == ("household_unaware", 4)
+    assert tags(proposal={"series": "my own idea", "episode": 0})["series"] == "none"  # only a series of the list
+    assert tags(look={**LOOK, "first_comment": ""})["first_comment_kind"] == "none"
+    assert (tags()["first_comment_kind"], tags()["caption_line1"], tags()["test_arms"], tags()["explore_pick"]) == (
+        "vote", "label-first", {}, False)
+
+
+def test_a_version_is_tagged_with_its_root_and_its_place(world):
+    store, _ = world
+    with_lenny_and_franz(store)
+    root = checked(store)
+    v1 = drop.copy_drop(store, root.id, "lenny", now=NOW)
+    v2 = drop.copy_drop(store, root.id, "franz", now=NOW + timedelta(minutes=1))
+    assert [drop.version_index(store, store.get_favorite(p.id)) for p in (root, v1, v2)] == [1, 2, 3]
+    assert drop.family_root_id(store.get_favorite(v2.id)) == root.id
+    store.update_favorite(v1.id, status="skipped")  # a skipped version is no member: the next one moves up
+    assert drop.version_index(store, store.get_favorite(v2.id)) == 2
