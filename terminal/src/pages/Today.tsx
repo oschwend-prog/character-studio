@@ -1,15 +1,28 @@
-// Today: the daily dashboard (terminal v2, owner 2026-10-07). What needs the owner now as four counts (each a link to its
-// list), tonight's departures with the one lit plate (Approve all), the last posts of every live character, what is left of
-// the month's credits and, only when something is wrong, the alerts. Every action is one or two taps from here.
+// Today: the daily dashboard (terminal v2, owner 2026-10-07; v3 2026-10-07). First the studio at a glance (every live character's
+// clips, views, next post, runway and test status), then Make these (each character's best ready clips, ranked, with the
+// tick-and-make bar), then Approve these (the finished videos waiting for his OK), then tonight's departures with the one lit
+// plate (Approve all), the last posts of every live character, what is left of the month's credits and, only when something is
+// wrong, the alerts. Every action is one or two taps from here.
 import { AlertTriangle, ArrowRight, CircleCheck, OctagonAlert } from 'lucide-react';
 import { useMemo } from 'react';
+import { DropThumb } from '../components/DropsTable';
+import { Glance } from '../components/Glance';
+import { MakeBar, useTicks } from '../components/MakeBar';
+import { PickThumb } from '../components/PickThumb';
+import { RankedClips } from '../components/RankedClips';
 import { Flap, Livery, PlatformCode, Section, Skeleton, Spinner, characterName } from '../components/ui';
-import { creditsLeft, hasWarnings, liveChannels, liveLastPosts, postNumbers, problemClips, problemClipsLine, todayCounts, type TodayCounts } from '../lib/dashboard';
-import { clipCode, formatCountdown, formatCredits, londonDate, platformName } from '../lib/format';
+import { clipChip } from '../lib/clipstatus';
+import { creditsLeft, hasWarnings, liveChannels, liveLastPosts, postNumbers, problemClips, problemClipsLine } from '../lib/dashboard';
+import { clipCode, formatAge, formatCountdown, formatCredits, londonDate, platformName } from '../lib/format';
+import { approvalOrder } from '../lib/glance';
 import { href, useNow } from '../lib/hooks';
 import { useApproveAll } from '../lib/actions';
+import { liveSelection } from '../lib/makebar';
+import { liveryClass, orderRoster } from '../lib/roster';
 import { KILL_SWITCH_COPY, boardRows, selectApprovable, type BoardRow } from '../lib/rules';
 import { useStudio } from '../lib/store';
+import { inTracker } from '../lib/tracker';
+import type { QueueClip } from '../lib/types';
 
 export function Today() {
   const { data, busy } = useStudio();
@@ -33,7 +46,6 @@ export function Today() {
   const approvable = selectApprovable(data.queue, inFlight);
   const approveAll = () => approveAllClips(approvable.ids);
 
-  const counts = todayCounts(data);
   const killSwitch = data.budget?.kill_switch === true;
 
   return (
@@ -49,7 +61,12 @@ export function Today() {
         </div>
       )}
 
-      <Tiles counts={counts} />
+      <Glance now={now} />
+
+      <div className="today-grid">
+        <MakeThese now={now} />
+        <ApproveThese now={now} />
+      </div>
 
       <div className="today-grid">
         <div className="stack">
@@ -117,35 +134,81 @@ export function Today() {
   );
 }
 
-const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
-
-/** The four counts, each a link to the list it counts. Amber while it is waiting for the owner, dim at zero. */
-function Tiles({ counts }: { counts: TodayCounts }) {
-  const tiles = [
-    {
-      key: 'pick', label: 'Pick a character', n: counts.needCharacter, wait: true,
-      sub: plural(counts.needCharacter, 'clip needs a character', 'clips need a character'), to: href('clips', undefined, { f: 'pick' }),
-    },
-    {
-      key: 'ready', label: 'Ready to make', n: counts.ready, wait: true,
-      sub: counts.ready ? `${formatCredits(counts.readyCredits)} in all` : 'nothing ready', to: href('clips', undefined, { f: 'ready' }),
-    },
-    { key: 'making', label: 'Making now', n: counts.making, wait: false, sub: 'in production', to: href('videos') },
-    {
-      key: 'approve', label: 'To approve', n: counts.toApprove, wait: true,
-      sub: plural(counts.toApprove, 'video waits for your OK', 'videos wait for your OK'), to: href('videos'),
-    },
-  ];
+/**
+ * Make these (spec 5.2): per live character his top 3 ready clips by score, with rank, score, reason and price; tick the ones to
+ * make and the bar adds them up, then asks once more with the total, the month's budget left and the cap. Nothing is ticked first.
+ */
+function MakeThese({ now }: { now: number }) {
+  const { data } = useStudio();
+  const { ticked, toggle, untick, clear } = useTicks();
+  const rows = useMemo(() => (data ? data.tracker.filter((r) => r.drop_card && inTracker(r, now)) : []), [data, now]);
+  const live = useMemo(() => orderRoster((data?.characters ?? []).filter((c) => c.status === 'live')), [data]);
+  if (!data) return null;
+  // only the clips this block shows can be ticked here: each character's top 3 Ready ones
+  const makeable = new Set(rows.filter((r) => clipChip(r) === 'ready').map((r) => r.pick_id));
+  const selected = liveSelection(ticked, makeable);
   return (
-    <nav className="today-tiles" aria-label="What needs you">
-      {tiles.map((t) => (
-        <a key={t.key} className="panel today-tile" href={t.to} data-hot={t.wait && t.n > 0} data-zero={t.n === 0}>
-          <span className="label">{t.label}</span>
-          <span className="h1 num">{t.n}</span>
-          <span className="small muted">{t.sub}</span>
-        </a>
-      ))}
-    </nav>
+    <Section id="make-these" title="Make these" aside={<a href={href('clips')}>All clips <ArrowRight size={14} aria-hidden="true" /></a>}>
+      <p className="small muted" style={{ margin: 0 }}>
+        Each character’s best ready clips, ranked by the free check’s score (how likely the clip gets views with him in it). Tick the
+        ones to make: the price shows first, and nothing is spent before you confirm.
+      </p>
+      <div className="make-scope">
+        <RankedClips compact rows={rows} characters={live} ticked={ticked} onTick={toggle} now={now} />
+        <MakeBar rows={rows} selected={selected} budget={data.budget} onSent={untick} onClear={clear} />
+      </div>
+    </Section>
+  );
+}
+
+/** Approve these (spec 5.3): the finished videos waiting for his OK, the newest first, each with a Review button to the Queue. */
+function ApproveThese({ now }: { now: number }) {
+  const { data } = useStudio();
+  if (!data) return null;
+  const queue = approvalOrder(data.queue);
+  return (
+    <Section id="approve-these" title="Approve these" aside={queue.length ? <span className="num">{queue.length}</span> : undefined}>
+      {queue.length === 0 ? (
+        <p className="small muted" style={{ margin: 0 }}>
+          Nothing to approve. Finished videos land here.
+        </p>
+      ) : (
+        <ul className="pipe-list approve-list" aria-label="Videos waiting for your OK">
+          {queue.map((q) => (
+            <li key={q.id} className="pipe-row" data-char={q.character_slug}>
+              <QueueThumb clip={q} />
+              <div className="pipe-main">
+                <b className="pipe-hook">{q.hook ? `“${q.hook}”` : 'untitled video'}</b>
+                <div className="pipe-meta">
+                  <Livery slug={q.character_slug} />
+                  <span>{q.character_name || characterName(q.character_slug)}</span>
+                  <span>made {formatAge(q.created_at, now)}</span>
+                  {q.blocked_reason && <span className="tag alert">can’t go yet</span>}
+                </div>
+              </div>
+              <a className="btn primary" href={href('videos', q.id)} aria-label={`Review ${q.hook ?? 'this video'}`}>
+                Review
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </Section>
+  );
+}
+
+/** A finished video's picture: the frames of the clip it came from (its drop), else the pick's picture, else his colour. */
+function QueueThumb({ clip }: { clip: QueueClip }) {
+  const { data } = useStudio();
+  const row = clip.pick_id ? data?.tracker.find((r) => r.pick_id === clip.pick_id) : undefined;
+  if (row?.drop_card) return <DropThumb row={row} />;
+  if (row) return <PickThumb pick={row} size="small" />;
+  return (
+    <div className="thumb small" aria-hidden="true">
+      <span className={`stand-in ${liveryClass(clip.character_slug)}`}>
+        <span className="bug"><i /><i /></span>
+      </span>
+    </div>
   );
 }
 
@@ -312,7 +375,7 @@ export function Alerts() {
             <div className="alert-row warning">
               <AlertTriangle aria-label="Warning" />
               <span>
-                <a href={href('clips', undefined, { f: 'problems' })}>{problemClipsLine(clips)}</a>
+                <a href={href('clips', undefined, { v: 'all', f: 'problems' })}>{problemClipsLine(clips)}</a>
               </span>
             </div>
           )}

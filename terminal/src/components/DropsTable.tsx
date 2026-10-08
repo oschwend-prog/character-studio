@@ -101,8 +101,9 @@ export function DropsTable({
   );
 }
 
-/** The preview still: the middle frame of the five-frame strip of the section (a signed URL), else the drop's tile. */
-function DropThumb({ row }: { row: TrackerRow }) {
+/** The preview still: the middle frame of the five-frame strip of the section (a signed URL), else the drop's tile. Also used by
+ * Clips by character and Today. */
+export function DropThumb({ row }: { row: TrackerRow }) {
   const { backend } = useStudio();
   const path = row.drop_card?.preview_path ?? null;
   const [src, setSrc] = useState<string | null>(null);
@@ -240,7 +241,9 @@ function DropRow({
   );
 }
 
-function CharacterCell({
+/** The character menu of a clip (★ on the recommended one, "Use <him>" for a Pick a character clip): also Clips by character's
+ * Needs you. */
+export function CharacterCell({
   row, menu, confirm, working, onChoose,
 }: { row: TrackerRow; menu: CharacterMenu; confirm: { slug: string; name: string } | null; working: boolean; onChoose(slug: string): void }) {
   const line = recommendationLine(menu, row.character_slug);
