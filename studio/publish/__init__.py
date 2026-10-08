@@ -7,7 +7,8 @@ The logic lives in ``studio.publish.base`` (claim, cap, retry, stale handling) a
 (posts that failed or need a check are in the summary, and ``studio health`` raises them); exit 1 when
 an outcome could not be recorded (the post stays ``posting`` and becomes ``needs_check``); exit 2 for
 something the caller must fix (no ``DATABASE_URL``, Supabase or ``POSTIZ_API_KEY``, no ``postiz`` CLI, a broken reach pack
-config: ``config/scan.json`` ``reach.trial_reels`` or a character's ``style.series_tag``, ``studio.publish.reach.load_reach``).
+config: ``config/scan.json`` ``reach.stories`` / ``reach.trial_reels`` or a character's ``style.series_tag``,
+``studio.publish.reach.load_reach``).
 ``--dry-run`` claims and writes nothing, needs neither Storage nor Postiz, and prints what would go (with each post's reach pack).
 With the kill switch on, ``due`` claims nothing and prints ``"paused": true``.
 

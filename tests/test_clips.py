@@ -607,6 +607,21 @@ def test_set_publish_tags_writes_the_publishers_learning_tags():
     assert store.get_clip(clip.id).features["trial_reel"] is False  # the refusals wrote nothing
 
 
+def test_set_story_path_records_and_clears_the_labelled_story_video():
+    """``master.upload_master`` records the Story video it uploaded next to the master, and clears an earlier one."""
+    store = make_store()
+    clip = new_clip(store, "biscuit", None, Mode.recreate, LEARN)
+    out = clips.set_story_path(store, clip.id, f"biscuit/{clip.id}-story.mp4")
+    assert out.features["story_path"] == f"biscuit/{clip.id}-story.mp4" and out.features["hook_index"] == 0
+    out = clips.set_story_path(store, clip.id, None)
+    assert "story_path" not in out.features and out.features == clip.features
+    for bad in ("", "  ", 7):
+        with pytest.raises(ValueError, match="story_path"):
+            clips.set_story_path(store, clip.id, bad)
+    with pytest.raises(KeyError):
+        clips.set_story_path(store, "missing", None)
+
+
 def test_the_score_tags_agree():
     store = make_store()
     scored = {**LEARN, "score_bucket": "65_79", "score_total": 78, "score_potential": 7, "score_swap": 9}

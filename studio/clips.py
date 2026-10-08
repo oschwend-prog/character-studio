@@ -404,6 +404,24 @@ def set_length(store: Store, clip_id: str, seconds: float) -> Clip:
     return store.update_clip(clip_id, features={**clip.features, "length_s": length, "length_bucket": length_bucket(length)})
 
 
+def set_story_path(store: Store, clip_id: str, key: str | None) -> Clip:
+    """Record the clip's labelled Story video (``features['story_path']``, its key in bucket ``clips``, written by
+    ``master.upload_master`` next to the master), or remove it (``None``: the master has none). The other features are kept.
+    ``KeyError`` for an unknown clip, ``ValueError`` for a key that is not a non-empty string."""
+    if key is not None and not (isinstance(key, str) and key.strip()):
+        raise ValueError(f"story_path must be a Storage key, got {key!r:.60}")
+    with store.transaction():
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(clip_id)
+        features = {k: v for k, v in clip.features.items() if k != "story_path"}
+        if key is not None:
+            features["story_path"] = key
+        if features == clip.features:
+            return clip
+        return store.update_clip(clip_id, features=features)
+
+
 def set_publish_tags(store: Store, clip_id: str, tags: Mapping[str, Any], *, only_missing: bool = False) -> Clip:
     """Write the publisher's learning tags (``PUBLISH_FEATURES``: ``first_comment_posted``, ``trial_reel``, each true or false) on
     the clip, keeping every other feature. ``only_missing`` writes only the ones the clip does not carry yet (a TikTok post never

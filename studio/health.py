@@ -2,7 +2,7 @@
 
 ``check(store, now)`` returns the problems, one human sentence each; no problem, no output. A failing
 scheduled workflow emails the owner through GitHub's own notifications, so ``studio health`` just exits 1
-with the problems printed. The three checks, in this order:
+with the problems printed. The four checks, in this order:
 
 1. **The daily run.** Some ``runs`` row of kind ``daily`` must have *finished* within the last 26 h
    (``DAILY_MAX_AGE``, inclusive) without ending in ``error``. A run that never reported an end does not
@@ -12,6 +12,12 @@ with the problems printed. The three checks, in this order:
 2. **Posts.** Every post in ``failed`` or ``needs_check`` is a problem of its own, named with its
    account's handle and the stored error. These never clear themselves: ``needs_check`` is a human's call
    (is the post live?) and ``failed`` ran out of attempts.
+2b. **Stories** (the reach pack: a Story is not a post row, it is ``features['story']`` on its clip, ``studio.publish.base``).
+   A Story still ``posting`` more than ``STORY_STALE_AFTER`` (30 minutes) after its claim (``at``; an unreadable one counts as
+   old), or in ``needs_check`` (it may be live), is a problem of its own, named with the Reel's account. A Story is never sent
+   again, so there is nothing to settle in the studio: the line asks the owner to look in the app. It is shown while the Story
+   could still be live, ``STORY_CHECK_WINDOW`` (24 hours, a Story's life) after its claim; after that there is nothing left to
+   check and the line goes away by itself.
 3. **The budget.** Credits committed this London month (settled + still reserved, ``budget.committed``)
    at or past ``CAP_WARN_PCT`` (80 %) of ``Settings.monthly_cap_credits``. Exact integer arithmetic, no
    rounding: 4,800 of 6,000 is a problem, 4,799 is not. A cap of 0 has no percentage and is not flagged.
@@ -52,6 +58,8 @@ from studio.models import PostStatus, Run, RunKind, RunStatus
 from studio.store import Store, require_aware
 
 DAILY_MAX_AGE = timedelta(hours=26)
+STORY_STALE_AFTER = timedelta(minutes=30)  # like a post's claim (studio.publish.base.STALE_AFTER)
+STORY_CHECK_WINDOW = timedelta(hours=24)  # a Story lives 24 hours: after that there is nothing on Instagram to check
 CAP_WARN_PCT = 80
 _ERROR_CHARS = 300
 
@@ -93,6 +101,35 @@ def _post_problems(store: Store) -> list[str]:
     return problems
 
 
+def _story_problems(store: Store, now: datetime) -> list[str]:
+    """Stories stuck in ``posting`` past ``STORY_STALE_AFTER`` or in ``needs_check``, while they could still be live."""
+    handles = {a.id: a.handle for a in store.accounts()}
+    problems: list[str] = []
+    for clip in store.list_clips():
+        marker = clip.features.get("story")
+        if not isinstance(marker, dict) or marker.get("status") not in ("posting", "needs_check"):
+            continue
+        try:
+            at = datetime.fromisoformat(str(marker.get("at")))
+            at = at if at.tzinfo is not None else None
+        except ValueError:
+            at = None
+        if at is not None and now - at > STORY_CHECK_WINDOW:
+            continue
+        status = marker["status"]
+        if status == "posting" and at is not None and now - at <= STORY_STALE_AFTER:
+            continue  # in flight: the run that claimed it is sending it
+        reel = next(iter(store.list_posts(id=marker["post_id"])), None) if isinstance(marker.get("post_id"), str) else None
+        handle = handles.get(reel.account_id, "an unknown account") if reel is not None else "an unknown account"
+        error = " ".join(str(marker.get("error") or "").split())[:_ERROR_CHARS]
+        when = f"since {_local(at)}" if at is not None else "since an unknown time"
+        problems.append(
+            f"the Story of clip {clip.id} on {handle} is {status} {when}" + (f": {error}" if error else "")
+            + ". Look in the Instagram app whether it is live; it is never sent again"
+        )
+    return problems
+
+
 def _budget_problem(store: Store, now: datetime) -> str | None:
     cap = store.get_settings().monthly_cap_credits
     month = month_key(now)
@@ -108,7 +145,7 @@ def _budget_problem(store: Store, now: datetime) -> str | None:
 def check(store: Store, now: datetime) -> list[str]:
     """The problems found at ``now`` (aware), empty when all is well. Read-only."""
     require_aware(now, "health.check(now)")
-    found = [_daily_run_problem(store, now), *_post_problems(store), _budget_problem(store, now)]
+    found = [_daily_run_problem(store, now), *_post_problems(store), *_story_problems(store, now), _budget_problem(store, now)]
     return [p for p in found if p is not None]
 
 
@@ -116,7 +153,7 @@ def check(store: Store, now: datetime) -> list[str]:
 
 
 def health_command() -> None:
-    """Check the daily run, failed posts and the budget; exit 1 with the problems when any is found."""
+    """Check the daily run, failed posts, stuck Stories and the budget; exit 1 with the problems when any is found."""
     problems = check(open_store(), now_london())
     emit({"ok": not problems, "problems": problems})
     if problems:

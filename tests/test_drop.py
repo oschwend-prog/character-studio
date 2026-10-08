@@ -592,6 +592,10 @@ def test_make_it_swaps_qas_masters_and_waits_for_the_owners_ok(world, portrait, 
     assert clip.master_path == f"reginald/{clip.id}.mp4" and (Path(storage.root) / "clips" / clip.master_path).is_file()
     master = probe(Path(storage.root) / "clips" / clip.master_path)
     assert (master.width, master.height) == (1080, 1920) and master.has_audio and abs(master.lufs - -14) <= 1
+    # and its labelled Story video next to it (a Story shows no caption: the AI label is in the picture)
+    assert clip.features["story_path"] == f"reginald/{clip.id}-story.mp4"
+    story = probe(Path(storage.root) / "clips" / clip.features["story_path"], loudness=False)
+    assert (story.width, story.height) == (1080, 1920) and abs(story.duration_s - master.duration_s) <= 0.1
     assert clip.caption.splitlines()[0] == "Shoulder shimmy · butler edition" and clip.hook == "The household is unaware."
     assert clip.caption.splitlines()[2] == "Send this to your butler."  # the first engagement kind
     assert clip.hashtags == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes"]

@@ -33,7 +33,10 @@ from typing import Any
 
 # Every post carries a visible AI disclosure, whatever the platform: on Instagram it is the only one
 # (the label is not an API setting there); on TikTok it backs up ``video_made_with_ai``.
-AI_DISCLOSURE = "AI-generated character 🤖"
+# ``AI_LABEL`` is its short visible form, the words without the emoji: what a Story (it shows no caption) carries burned into
+# its picture (``studio.media.overlays.story_label_png``; the committed font has no emoji glyph).
+AI_LABEL = "AI-generated character"
+AI_DISCLOSURE = f"{AI_LABEL} 🤖"
 
 CAPTION_LIMIT = 2200
 HASHTAG_LIMIT = 5  # Instagram's cap

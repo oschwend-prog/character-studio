@@ -18,11 +18,12 @@
   ``{label}``) and ``audio`` (never sent). ``INSTAGRAM_SETTING_KEYS`` holds them; Postiz drops an unknown key without a word, so
   nothing else is ever written. A Trial Reel with collaborators, or any Instagram lever on TikTok, is a ``ValueError`` before
   anything is fetched;
-* ``publish_story`` posts a Story: ``post_type: story``, exactly one attachment (the master: Instagram takes one media on a Story),
-  the AI disclosure as its text (the CLI needs a text; a Story shows none, so nothing else goes in), scheduled ``STORY_DELAY``
-  after now so the Reel created a moment before is live first. It reuses the Reel's upload (``PublishResult.media_ref``, the
-  ``path`` the upload returned) instead of fetching and uploading the master again. Its ``posts:create`` fails like a Reel's: a
-  definite 4xx is ``PostizError``, anything that may have created it is ``UncertainPublish``.
+* ``publish_story`` posts a Story: ``post_type: story``, exactly one attachment (Instagram takes one media on a Story): the file it
+  is given, the clip's labelled Story video (the master with the AI label burned in: a Story shows no caption, so the Reel's
+  upload of the plain master is never reused), fetched and uploaded like a Reel's master; the AI disclosure as its text (the CLI
+  needs a text; nothing else goes in), scheduled ``STORY_DELAY`` after now so the Reel created a moment before is live first. Its
+  ``posts:create`` fails like a Reel's: a definite 4xx is ``PostizError``, anything that may have created it is
+  ``UncertainPublish``.
 
 The posts are scheduled for *now*: the publish job (every 15 minutes in the evening window) decides when a post is due, Postiz
 just sends it. ``posted`` in our database therefore means "Postiz accepted it", and the
@@ -234,25 +235,23 @@ class PostizPublisher:
         content = compose_content(caption, hashtags)  # ValueError when over the limit: nothing sent
         settings = platform_settings(platform, reach)  # ValueError for a lever the platform has no key for: nothing sent
         comments = [reach.first_comment] if reach.first_comment and reach.first_comment.strip() else []
-        uploaded = self._upload_master(media_url)
+        uploaded = self._upload_media(media_url)
         return self._create([content, *comments], integration_id, uploaded, settings, self._clock())
 
-    def publish_story(
-        self, *, integration_id: str, media_url: str, ai_label: bool, media_ref: str | None = None
-    ) -> PublishResult:
-        """An Instagram Story of the master (see the module docstring); ``media_ref`` is the Reel's upload, reused when given."""
+    def publish_story(self, *, integration_id: str, media_url: str, ai_label: bool) -> PublishResult:
+        """An Instagram Story of ``media_url``, the clip's labelled Story video (see the module docstring)."""
         if not ai_label:
             raise ValueError("refusing to publish without the AI label")
         if not integration_id:
             raise ValueError("no Postiz integration id for this account")
-        uploaded = media_ref or self._upload_master(media_url)
+        uploaded = self._upload_media(media_url)
         when = self._clock() + STORY_DELAY
         return self._create([AI_DISCLOSURE], integration_id, uploaded, dict(INSTAGRAM_STORY_SETTINGS), when)
 
-    def _upload_master(self, media_url: str) -> str:
-        """Fetch the master into a private temp folder, ``postiz upload`` it, delete the folder; the path Postiz returned."""
+    def _upload_media(self, media_url: str) -> str:
+        """Fetch the file into a private temp folder, ``postiz upload`` it, delete the folder; the path Postiz returned."""
         with tempfile.TemporaryDirectory(prefix="studio-publish-") as tmp:
-            local = Path(tmp) / f"master{Path(urlparse(media_url).path).suffix.lower() or '.mp4'}"
+            local = Path(tmp) / f"media{Path(urlparse(media_url).path).suffix.lower() or '.mp4'}"
             self._fetch(media_url, local)
             return self._upload(local)
 
@@ -320,4 +319,4 @@ class PostizPublisher:
             raise UncertainPublish(
                 f"postiz posts:create exited 0 but returned no post id: {_tail(proc)}"
             )
-        return PublishResult(platform_post_id=post_id, url=url, media_ref=media_path)
+        return PublishResult(platform_post_id=post_id, url=url)

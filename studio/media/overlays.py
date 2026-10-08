@@ -512,6 +512,37 @@ def title_png(text: str, out: str | Path, y: int = 1400, size: int = 96, font: s
     return _save(layer, out)
 
 
+# ---- the Story's AI label ----------------------------------------------------------------------
+
+# A Story shows no caption, so its AI disclosure is burned into the picture: white text on a semi-transparent dark pill in the lower
+# third, between these rows (above Instagram's Story reply bar, below the hook pill's usual place, far from the two-dot bug).
+STORY_LABEL_BAND = (1450, 1600)
+STORY_LABEL_SIZE = 44
+STORY_LABEL_PAD = (36, 20)  # x, y around the text
+STORY_LABEL_FILL = (0, 0, 0, 150)  # dark, 59 % opaque: the video shows through, the white text stays legible
+
+
+def story_label_png(text: str, out: str | Path) -> Path:
+    """The Story's AI label (``captions.AI_LABEL``): a full-frame transparent PNG, ``text`` in white (the committed Figtree, Bold)
+    on a rounded semi-transparent dark pill, centred, inside ``STORY_LABEL_BAND``. Drawn at 3x and scaled down so the curves are
+    smooth. Raises ``ValueError`` for no text."""
+    text = _clean([text])[0]
+    fnt = _pill_font(STORY_LABEL_SIZE, PillStyle(weight="Bold"))
+    pad_x, pad_y = STORY_LABEL_PAD
+    w, h = round(_text_w(text, fnt) + 2 * pad_x), STORY_LABEL_SIZE + 2 * pad_y
+    k = 3
+    pill = Image.new("RGBA", (w * k, h * k), (0, 0, 0, 0))
+    d = ImageDraw.Draw(pill)
+    d.rounded_rectangle((0, 0, w * k - 1, h * k - 1), radius=h * k // 2, fill=STORY_LABEL_FILL)
+    big = _pill_font(STORY_LABEL_SIZE * k, PillStyle(weight="Bold"))
+    d.text((w * k / 2, h * k / 2), text, font=big, fill=(255, 255, 255, 255), anchor="mm")
+    pill = pill.resize((w, h), Image.LANCZOS)
+    top, bottom = STORY_LABEL_BAND
+    layer = Image.new("RGBA", FRAME, (0, 0, 0, 0))
+    layer.alpha_composite(pill, ((FRAME[0] - w) // 2, (top + bottom - h) // 2))
+    return _save(layer, out)
+
+
 # ---- the ODD EYES bug and the sparkle ----------------------------------------------------------
 
 

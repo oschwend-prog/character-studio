@@ -90,6 +90,14 @@ publishing and the terminal sign), sets ``clip.master_path`` and writes the mast
 (``features.length_s`` / ``length_bucket``, the learning plan's tag 8: the drop's make goes through the same
 ``upload_master``; ``master build`` writes nothing on a clip). A file that misses the spec is not
 uploaded (exit 1, the JSON lists the problems); the clip's state is left to ``clip set --state``.
+
+**The labelled Story video** (task 8 fix 1: a Story shows no caption, so its AI disclosure must be in the picture). Every
+``master build`` also writes ``<stem>-story.mp4`` next to the master (``story_file``, ``render_story``): the finished master with
+``captions.AI_LABEL`` burned in, white on a semi-transparent dark pill in the lower third (``overlays.STORY_LABEL_BAND``, y
+1450-1600 of 1920: above Instagram's Story reply bar, never over the two-dot bug). Both files land together or neither does.
+``upload_master`` uploads it to ``<character>/<clip id>-story.mp4`` and records it on the clip as ``features.story_path``; a
+master with no matching Story video next to it (not 1080x1920, or not its length) clears that, and the publisher then skips the
+Story ("no labelled story video"): a Story is only ever posted from this file, never from the master.
 """
 
 from __future__ import annotations
@@ -110,8 +118,9 @@ import typer
 from PIL import Image
 
 from studio import seed
+from studio.captions import AI_LABEL
 from studio.cli_support import emit, fail, open_storage, open_store
-from studio.clips import set_fields, set_length
+from studio.clips import set_fields, set_length, set_story_path
 from studio.media import analyze, clipwork, overlays
 from studio.media.qa import QAError, check_master, probe
 from studio.models import MUSIC_ARMS, Clip, Mode, Source, SourceKind
@@ -119,6 +128,8 @@ from studio.storage import Storage, StorageError
 from studio.store import Store
 
 MASTER_BUCKET = "clips"  # the bucket studio.publish.base signs masters from
+STORY_SUFFIX = "-story"  # the labelled Story video: <master stem>-story.mp4 next to the master, <clip id>-story.mp4 in Storage
+STORY_MATCH_S = 0.1  # a Story video whose length differs from its master's by more than this is not the master's
 WIDTH, HEIGHT = 1080, 1920
 FPS = 30
 ZOOM_HIT_SECONDS = 0.25
@@ -615,6 +626,29 @@ def _boxed(png: Path, start: float = 0.0, end: float | None = None) -> Overlay:
     return Overlay(small, start, end, x=box[0], y=box[1])
 
 
+# ---- the labelled Story video -------------------------------------------------------------------
+
+
+def story_file(master: Path | str) -> Path:
+    """Where the labelled Story video of the master file ``master`` lives: next to it, ``<stem>-story.mp4``."""
+    m = Path(master)
+    return m.with_name(f"{m.stem}{STORY_SUFFIX}.mp4")
+
+
+def render_story(master: Path, out: Path, work: Path, preset: str = "slow") -> Path:
+    """The Story video of the finished ``master``: the same picture and sound with the AI label burned in
+    (``overlays.story_label_png`` of ``captions.AI_LABEL``: a Story shows no caption). The sound is copied as it is; the picture
+    is encoded like the master's (H.264 High, ~15 Mbps). ``MasterError`` when ffmpeg fails."""
+    label = _boxed(overlays.story_label_png(AI_LABEL, work / "story_label.png"))
+    graph = f"{overlay_filter('0:v', 1, 'lb', label)};[lb]format=yuv420p[story]"  # its own pass: the master's graph is unchanged
+    _ffmpeg(
+        "-i", master, "-i", label.png, "-filter_complex", graph, "-map", "[story]", "-map", "0:a?",
+        "-c:v", "libx264", "-profile:v", "high", "-preset", preset,
+        "-b:v", "15M", "-maxrate", "18M", "-bufsize", "30M", "-r", FPS, "-c:a", "copy", "-movflags", "+faststart", out,
+    )  # fmt: skip
+    return out
+
+
 # ---- the style kits ----------------------------------------------------------------------------
 
 
@@ -765,7 +799,8 @@ def build_master(spec: MasterSpec) -> Path:
     """Render ``spec`` to ``spec.out`` (see the module docstring); returns that path.
 
     Raises ``ValueError`` for a bad spec (checked before anything renders) and ``MasterError`` when
-    ffmpeg fails. The finished file replaces ``out`` only when the whole build succeeded.
+    ffmpeg fails. The finished file replaces ``out`` only when the whole build succeeded, together with its labelled Story video
+    (``render_story``) at ``story_file(out)``: both or neither.
     """
     items = parse_enhancements(spec.enhancements)
     kit = _kit(spec)
@@ -889,7 +924,9 @@ def build_master(spec: MasterSpec) -> Path:
                 "-af", _loudnorm_params(mix), "-c:a", "aac", "-b:a", "320k", "-ar", "48000",
                 "-shortest", "-movflags", "+faststart", finished,
             )  # fmt: skip
+        story = render_story(finished, work / "story.mp4", work, spec.preset)  # the Story's own file, its AI label burned in
         out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(story, story_file(out))
         shutil.move(finished, out)
     return out
 
@@ -1025,7 +1062,9 @@ def upload_master(
     store: Store, storage: Storage, clip_id: str, file: Path | str, *, loop: bool = False
 ) -> Clip:
     """Check ``file`` against the master spec, upload it to ``clips/<character>/<clip id>.mp4``, set the path and write the
-    master's real length on the clip (``clips.set_length``: ``length_s`` and ``length_bucket``, learning plan tag 8).
+    master's real length on the clip (``clips.set_length``: ``length_s`` and ``length_bucket``, learning plan tag 8). The labelled
+    Story video next to it (``story_file``, written by ``build_master``) goes to ``clips/<character>/<clip id>-story.mp4`` and the
+    clip records it as ``features.story_path`` (``clips.set_story_path``); a master without a matching one clears it.
 
     ``KeyError`` for an unknown clip, ``QAError`` for an unreadable file, ``MasterRejected`` (nothing
     uploaded) when it misses the spec, ``StorageError`` when the upload fails.
@@ -1040,7 +1079,29 @@ def upload_master(
     key = f"{clip.character_slug}/{clip.id}.mp4"
     storage.upload(MASTER_BUCKET, key, file)
     set_fields(store, clip_id, master_path=key)
-    return set_length(store, clip_id, report.duration_s)
+    set_length(store, clip_id, report.duration_s)
+    return set_story_path(store, clip_id, _upload_story(storage, clip, Path(file), report.duration_s))
+
+
+def _upload_story(storage: Storage, clip: Clip, file: Path, length_s: float) -> str | None:
+    """Upload the labelled Story video next to the master (``<character>/<clip id>-story.mp4``) and return its key; ``None`` when
+    there is none next to ``file``, it is not 1080x1920 or not the master's length (another build's), or its upload failed: the
+    clip then has no Story video and the publisher skips its Story ("no labelled story video"), never posting the master."""
+    story = story_file(file)
+    if not story.is_file():
+        return None
+    try:
+        r = probe(story, loudness=False)
+    except QAError:
+        return None
+    if (r.width, r.height) != (WIDTH, HEIGHT) or abs(r.duration_s - length_s) > STORY_MATCH_S:
+        return None
+    key = f"{clip.character_slug}/{clip.id}{STORY_SUFFIX}.mp4"
+    try:
+        storage.upload(MASTER_BUCKET, key, story)
+    except StorageError:  # the master is attached: only its Story is lost (skipped when the Reel goes out)
+        return None
+    return key
 
 
 def _check_audio_rights(spec: MasterSpec, clip_id: str | None) -> None:
@@ -1143,4 +1204,4 @@ def upload_command(
         raise typer.Exit(1) from e
     except (QAError, StorageError) as e:
         fail(str(e))
-    emit({"clip": done.id, "master_path": done.master_path, "bucket": MASTER_BUCKET})
+    emit({"clip": done.id, "master_path": done.master_path, "bucket": MASTER_BUCKET, "story_path": done.features.get("story_path")})

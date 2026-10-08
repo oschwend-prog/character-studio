@@ -136,6 +136,50 @@ def test_ordinary_posts_are_not_problems(status):
     assert check(store, NOW) == []
 
 
+# ---- Stories (the reach pack: a Story is a marker on its clip, features.story, never a post row) ---------------------------
+
+
+def story(store: MemoryStore, status: str, ago: timedelta, **extra) -> Clip:
+    """A clip whose Reel went out on Biscuit's account and whose Story is ``status``, claimed ``ago`` before NOW."""
+    reel = add_post(store, PostStatus.posted)
+    marker = {"post_id": reel.id, "status": status, "at": (NOW - ago).isoformat(), **extra}
+    return store.update_clip(reel.clip_id, features={"story": marker})
+
+
+def test_health_flags_a_story_stuck_in_posting_for_more_than_30_minutes():
+    assert health.STORY_STALE_AFTER == timedelta(minutes=30)
+    store = fresh()
+    stuck = story(store, "posting", timedelta(minutes=31))
+    story(store, "posting", timedelta(minutes=29))  # still in flight: another run is sending it
+    (problem,) = check(store, NOW)
+    assert stuck.id in problem and "Story" in problem and "posting" in problem and "@biscuit" in problem
+
+
+def test_health_flags_a_story_that_needs_a_check():
+    store = fresh()
+    clip = story(store, "needs_check", timedelta(minutes=5), error="UncertainPublish: postiz posts:create timed out")
+    (problem,) = check(store, NOW)
+    assert clip.id in problem and "needs_check" in problem and "timed out" in problem and "never sent again" in problem
+
+
+@pytest.mark.parametrize("status", ["posted", "failed", "skipped"])
+def test_settled_stories_are_not_problems(status):
+    store = fresh()
+    story(store, status, timedelta(hours=2))
+    assert check(store, NOW) == []
+
+
+def test_a_story_older_than_its_24_hours_is_no_longer_flagged():
+    """A Story lives 24 hours: after that there is nothing left on Instagram to check, and it is never sent again."""
+    assert health.STORY_CHECK_WINDOW == timedelta(hours=24)
+    store = fresh()
+    story(store, "needs_check", timedelta(hours=24, minutes=1))
+    story(store, "posting", timedelta(hours=25))
+    assert check(store, NOW) == []
+    story(store, "posting", timedelta(0), at="not a time")  # an unreadable claim time is flagged: nobody can tell its age
+    assert len(check(store, NOW)) == 1
+
+
 # ---- the monthly cap -------------------------------------------------------------------------------
 
 

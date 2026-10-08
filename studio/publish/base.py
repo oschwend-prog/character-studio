@@ -53,10 +53,13 @@ is reported under ``errors`` and leaves the post in ``posting``: 30 minutes late
 ``needs_check``. That is the whole crash story: a post can be late or need a human, never be posted
 twice. One post's failure never stops the others.
 
-**The Story after a Reel** (terminal v3 spec section 11, item 2). Right after an Instagram Reel is recorded ``posted``,
-``publisher.publish_story`` posts the same master as a Story (the AI disclosure is its text; it reuses the Reel's upload,
-``PublishResult.media_ref``). The Story is not a post row (``posts`` holds one row per clip and account): it is recorded on the
-clip as ``features['story']`` = ``{post_id (the Reel's), status, at, ...}``, and that record is what keeps it to one:
+**The Story after a Reel** (terminal v3 spec section 11, item 2; task 8 fix 1). Only with ``reach.stories`` on
+(``config/scan.json``, off by default). Right after an Instagram Reel is recorded ``posted``, ``publisher.publish_story`` posts the
+clip's **labelled Story video** as a Story: ``features['story_path']``, the master with the AI label burned into the picture
+(``master.render_story``), signed from bucket ``clips`` and uploaded on its own. A Story shows no caption, so it is never the
+plain master: a clip without that file gets no Story ("no labelled story video"). The Story is not a post row (``posts`` holds
+one row per clip and account): it is recorded on the clip as ``features['story']`` = ``{post_id (the Reel's), status, at, ...}``,
+and that record is what keeps it to one:
 
 * it is **claimed first**: ``status: posting`` is written before Postiz is asked, and only when the clip has no ``story`` yet.
   A clip that already has one (any status) never gets another; a claim that cannot be written means no Story at all;
@@ -64,8 +67,9 @@ clip as ``features['story']`` = ``{post_id (the Reel's), status, at, ...}``, and
   kept) or ``needs_check`` (``UncertainPublish``: it may exist). **A failed Story is never retried**, on this run or a later one:
   a Story lives 24 hours, a late one is worth little, and a resend could double one that went out after all. A claim left in
   ``posting`` (the process died) stays as it is, like a stale post: a human looks;
-* ``skipped`` (with the ``reason``) for a silent master (``music: in_app``: the owner adds the song to the Reel in the app; a
-  Story of it would go out silent on autopilot);
+* ``skipped`` (with the ``reason``, ``PostPlan.story_skip``): Stories are off; a silent master (``music: in_app``: the owner adds
+  the song to the Reel in the app; a Story of it would go out silent on autopilot); a Trial Reel (it is shown to non-followers
+  first, and a Story would show it to the followers before it graduates); no labelled Story video;
 * it is **not counted** toward the 2-a-day cap (it is not a feed post: ``_posted_counts`` reads post rows only), and **a Story
   never fails, retries or holds up its Reel**: whatever happens to it lands in the summary's ``stories``, never in ``errors``.
   No Story follows a Reel that failed, is uncertain or whose ``posted`` write was lost, a TikTok post, or a Reel settled by hand
@@ -115,7 +119,6 @@ class UncertainPublish(Exception):
 class PublishResult:
     platform_post_id: str
     url: str | None = None
-    media_ref: str | None = None  # the publisher's own handle on the uploaded master (Postiz: the upload's path), for the Story
 
 
 @runtime_checkable
@@ -132,9 +135,9 @@ class Publisher(Protocol):
         reach: Reach = NO_REACH,
     ) -> PublishResult: ...
 
-    def publish_story(
-        self, *, integration_id: str, media_url: str, ai_label: bool, media_ref: str | None = None
-    ) -> PublishResult: ...
+    def publish_story(self, *, integration_id: str, media_url: str, ai_label: bool) -> PublishResult:
+        """A Story of ``media_url``: the clip's labelled Story video (never the master: a Story shows no caption)."""
+        ...
 
 
 # ---- days, slots, caps ---------------------------------------------------------------------------
@@ -364,7 +367,7 @@ def _publish_one(
     )
     _record_reach(store, clip, account, plan, out)
     if account.platform is Platform.instagram:
-        out["stories"].append(_follow_with_story(store, publisher, post, clip, account, plan, media_url, result, now))
+        out["stories"].append(_follow_with_story(store, storage, publisher, post, clip, account, plan, now))
     if _all_posted(store, clip.id):
         transition(store, clip.id, ClipState.posted)
         out["clips_posted"].append(clip.id)
@@ -383,6 +386,8 @@ def _record_reach(store: Store, clip: Clip, account: Account, plan: PostPlan, ou
 def _story_marker(store: Store, clip_id: str, marker: dict[str, Any], *, claim: bool) -> bool:
     """Write ``features['story']``. ``claim``: only when the clip has none yet (False when it has one: never a second Story)."""
     with store.transaction():
+        # No row lock (the store has no locking read of a clip): safe, one runner claims a clip's Story (one Instagram Reel row
+        # per clip, posts are claimed atomically, and the publish workflow runs one at a time, ``concurrency: publish``).
         clip = store.get_clip(clip_id)
         if clip is None:
             raise KeyError(clip_id)
@@ -394,13 +399,12 @@ def _story_marker(store: Store, clip_id: str, marker: dict[str, Any], *, claim: 
 
 def _follow_with_story(
     store: Store,
+    storage: Storage,
     publisher: Publisher,
     post: Post,
     clip: Clip,
     account: Account,
     plan: PostPlan,
-    media_url: str,
-    reel: PublishResult,
     now: datetime,
 ) -> dict[str, Any]:
     """The Story of a Reel that was just posted (see the module docstring). Never raises: the summary line says what happened."""
@@ -417,8 +421,12 @@ def _follow_with_story(
         return {**entry, "status": "failed", "error": _short(f"the Story could not be claimed, so none was sent: {_short(e)}")}
 
     try:
+        if not plan.story_path:  # never: plan_post plans a Story only with its labelled video
+            raise ValueError("no labelled story video")
         story = publisher.publish_story(
-            integration_id=account.postiz_integration_id or "", media_url=media_url, ai_label=True, media_ref=reel.media_ref
+            integration_id=account.postiz_integration_id or "",
+            media_url=storage.signed_url(MASTER_BUCKET, plan.story_path),  # the labelled Story video, never the master
+            ai_label=True,
         )
         outcome: dict[str, Any] = {"status": "posted", "platform_post_id": story.platform_post_id, "url": story.url}
     except UncertainPublish as e:  # it may exist: a human looks, never a resend

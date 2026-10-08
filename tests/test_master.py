@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import shutil
 import subprocess
 import wave
 from pathlib import Path
@@ -656,6 +657,69 @@ def test_master_without_closeup_has_no_intro_or_outro(tmp_path):
     assert (report.width, report.height, report.fps) == (1080, 1920, 30.0) and report.has_audio
 
 
+# ---- the labelled Story video (task 8 fix 1, finding 1: a Story shows no caption, so its AI label is burned in) ------------
+
+STORY_BAND = (0, 1450, 1080, 1600)  # the lower third the Story's label must stay in: above Instagram's Story reply bar
+
+
+def test_the_story_label_is_the_short_visible_form_of_the_ai_disclosure():
+    from studio import captions
+
+    assert captions.AI_LABEL == "AI-generated character"  # drawn with the committed font: the caption's emoji has no glyph there
+    assert captions.AI_DISCLOSURE == f"{captions.AI_LABEL} 🤖"  # the caption's line is unchanged (the terminal mirrors it)
+
+
+def test_the_story_label_is_legible_inside_the_story_safe_zone_and_clear_of_the_bug(tmp_path):
+    from studio.captions import AI_LABEL
+
+    img = Image.open(overlays.story_label_png(AI_LABEL, tmp_path / "label.png"))
+    assert img.mode == "RGBA" and img.size == overlays.FRAME
+    left, top, right, bottom = img.getchannel("A").getbbox()
+    assert (STORY_BAND[1], STORY_BAND[3]) == overlays.STORY_LABEL_BAND
+    assert STORY_BAND[1] <= top and bottom <= STORY_BAND[3]  # the lower third, above the Story's reply bar
+    assert abs((left + right) / 2 - overlays.FRAME[0] / 2) <= 2 and right - left >= 400  # centred, a readable width
+    bx, by = overlays.BUG_CENTER
+    assert img.crop((bx - 60, by - 60, bx + 60, by + 60)).getchannel("A").getbbox() is None  # never over the two-dot bug
+    pixels = list(img.crop((left, top, right, bottom)).get_flattened_data())
+    white = [p for p in pixels if p[3] == 255 and min(p[:3]) >= 240]
+    pill = [p for p in pixels if 100 <= p[3] <= 200 and max(p[:3]) <= 40]
+    assert len(white) > 1500  # the text: white, opaque
+    assert len(pill) > len(pixels) / 3  # on a semi-transparent dark pill (the video shows through, the text stays legible)
+    with pytest.raises(ValueError):
+        overlays.story_label_png("  ", tmp_path / "x.png")
+
+
+def test_a_built_master_comes_with_its_labelled_story_video(tmp_path):
+    """The master build also writes the Story video next to the master (``<stem>-story.mp4``): the same picture and sound with
+    the AI label burned in; the master itself carries no label."""
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
+    out = build_master(spec)
+    story = master.story_file(out)
+    assert story == tmp_path / "master-story.mp4" and story.is_file()
+    m, s = probe(out), probe(story)
+    assert (s.width, s.height, s.fps, s.video_profile) == (1080, 1920, 30.0, "High") and s.has_audio
+    assert s.duration_s == pytest.approx(m.duration_s, abs=0.05) and s.lufs == pytest.approx(m.lufs, abs=0.3)
+    (tmp_path / "s").mkdir(), (tmp_path / "m").mkdir()
+    in_story, in_master = frame_at(story, 1.0, tmp_path / "s"), frame_at(out, 1.0, tmp_path / "m")
+    assert bright_pixels(in_story, STORY_BAND, floor=235) > 1500  # the label's white text
+    assert bright_pixels(in_master, STORY_BAND, floor=235) == 0  # the Reel's master stays clean: its caption carries the line
+
+
+def test_a_failed_story_render_fails_the_build_and_leaves_no_file(tmp_path, monkeypatch):
+    """Both files land together or neither does: a Story video never belongs to another build's master."""
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
+
+    def broken(*a, **k):
+        raise master.MasterError("ffmpeg failed (1): story")
+
+    monkeypatch.setattr(master, "render_story", broken)
+    with pytest.raises(master.MasterError, match="story"):
+        build_master(spec)
+    assert not spec.out.exists() and not master.story_file(spec.out).exists()
+
+
 def test_slowmo_extends_duration(tmp_path):
     """Half speed over 0.5 s adds 0.5 s; later enhancements follow their moment to its new place."""
     dance = flat_video(tmp_path / "dance.mp4", 2)
@@ -1180,6 +1244,38 @@ def test_upload_master_writes_the_masters_real_length_on_the_clip(upload_rig, sy
     assert abs(got.features["length_s"] - 7.0) < 0.1 and got.features["length_bucket"] == "under_8"
 
 
+def test_upload_master_uploads_the_story_video_next_to_the_master_and_records_it(upload_rig, synth_video, tmp_path):
+    """The labelled Story video the build wrote next to the master goes to the same Storage folder, ``<clip>-story.mp4``, and the
+    clip records it (``features.story_path``): the only file a Story is ever posted from."""
+    store, storage, clip = upload_rig
+    file = tmp_path / "master.mp4"
+    shutil.copyfile(synth_video(dur=8), file)
+    shutil.copyfile(synth_video(dur=8), master.story_file(file))
+    got = master.upload_master(store, storage, clip.id, file)
+    assert got.master_path == f"biscuit/{clip.id}.mp4" and got.features["story_path"] == f"biscuit/{clip.id}-story.mp4"
+    assert (Path(storage.root) / "clips" / got.features["story_path"]).read_bytes() == master.story_file(file).read_bytes()
+    assert store.get_clip(clip.id).features == got.features and "length_s" in got.features
+
+
+def test_a_master_without_its_story_video_clears_an_earlier_story_path(upload_rig, synth_video):
+    """A new master with no Story video of its own: the earlier master's Story file is never posted with it."""
+    store, storage, clip = upload_rig
+    store.update_clip(clip.id, features={"story_path": f"biscuit/{clip.id}-story.mp4"})
+    got = master.upload_master(store, storage, clip.id, synth_video(dur=8))
+    assert "story_path" not in got.features and got.master_path == f"biscuit/{clip.id}.mp4"
+
+
+@pytest.mark.parametrize("story", [{"dur": 7}, {"dur": 8, "w": 720, "h": 1280}])
+def test_a_story_video_that_does_not_match_its_master_is_not_uploaded(upload_rig, synth_video, tmp_path, story):
+    store, storage, clip = upload_rig
+    file = tmp_path / "master.mp4"
+    shutil.copyfile(synth_video(dur=8), file)
+    shutil.copyfile(synth_video(**story), master.story_file(file))
+    got = master.upload_master(store, storage, clip.id, file)
+    assert "story_path" not in got.features and got.master_path  # the master is attached; the Story is skipped later
+    assert not (Path(storage.root) / "clips" / f"biscuit/{clip.id}-story.mp4").exists()
+
+
 def test_upload_master_refuses_a_file_that_misses_the_master_spec(upload_rig, synth_video):
     store, storage, clip = upload_rig
     with pytest.raises(master.MasterRejected) as e:
@@ -1221,7 +1317,7 @@ def test_cli_master_upload_prints_the_clip_path(upload_rig, synth_video):
     r = CliRunner().invoke(app, ["master", "upload", clip.id, str(synth_video())])
     assert r.exit_code == 0, r.output
     out = json.loads(r.stdout)
-    assert out == {"clip": clip.id, "master_path": f"biscuit/{clip.id}.mp4", "bucket": "clips"}
+    assert out == {"clip": clip.id, "master_path": f"biscuit/{clip.id}.mp4", "bucket": "clips", "story_path": None}
 
 
 def test_cli_master_upload_exit_codes(upload_rig, synth_video):
