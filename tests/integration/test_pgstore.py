@@ -13,7 +13,7 @@ schema renamed to ``studio_test`` (it never touches ``studio``) and drops it aft
 import os
 import re
 import threading
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 import psycopg
@@ -294,3 +294,70 @@ def test_free_slot_in_sql_agrees_with_planning_free_slot(store):
             f"select {SCHEMA}.free_slot('biscuit', %s::uuid[], %s::uuid, %s)", [ids, clip.id, tue_evening]
         ).fetchone()[0]
     assert got == expected == datetime(2026, 10, 7, 19, 0, tzinfo=LONDON)
+
+
+# The family's days (terminal v3, migration 0015): the same data through planning (taken_days | family_days -> free_slot, as
+# schedule_clip feeds it) and through studio.free_slot / studio.family_days. A family: Reginald's root drop (its clip linked by
+# favorites.clip_id only), a skipped Franz version (its clip linked by features.fav_id only) and the Lenny version being scheduled.
+# Each case: the posts of the family's clips (member, account, London day in October, status, claimed_at), then the expected
+# London day for the Lenny version and for a Lenny clip of no family (its own posts are taken_days', not the family's).
+FAMILY_SLOT_CASES = [
+    ("root scheduled on another character's account", [("root", "reginald", 6, "scheduled", None)], date(2026, 10, 20), date(2026, 10, 6)),
+    ("a failed post never took a day", [("root", "reginald", 6, "failed", None)], date(2026, 10, 6), date(2026, 10, 6)),
+    ("posting holds the day too", [("root", "reginald", 6, "posting", None)], date(2026, 10, 20), date(2026, 10, 6)),
+    ("dated by claimed_at in London", [("root", "reginald", 6, "posted", "2026-10-07T23:30:00+00:00")], date(2026, 10, 22), date(2026, 10, 6)),
+    ("a skipped member's post still counts", [("skipped", "franz", 13, "scheduled", None)], date(2026, 10, 27), date(2026, 10, 6)),
+    ("the clip's own post is no family's", [("self", "lenny_ig", 6, "scheduled", None)], date(2026, 10, 6), date(2026, 10, 7)),
+    ("two windows", [("root", "reginald", 6, "posted", None), ("skipped", "franz", 20, "needs_check", None)], date(2026, 11, 3), date(2026, 10, 6)),
+    ("14 days before a member's post is free", [("root", "reginald", 20, "scheduled", None)], date(2026, 10, 6), date(2026, 10, 6)),
+    ("13 days before a member's post is not", [("root", "reginald", 19, "scheduled", None)], date(2026, 11, 3), date(2026, 10, 6)),
+]
+
+
+@pytest.mark.parametrize(("case", "posts", "expected", "expected_plain"), FAMILY_SLOT_CASES, ids=[c[0] for c in FAMILY_SLOT_CASES])
+def test_free_slot_in_sql_agrees_with_planning_on_a_familys_days(store, case, posts, expected, expected_plain):
+    from studio.config import LONDON
+    from studio.planning import family_days, free_slot, taken_days
+
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        conn.execute(
+            f"insert into {SCHEMA}.characters (slug, name, bodies) values ('reginald', 'Reginald', '{{biped}}'), "
+            "('lenny', 'Lenny Gold', '{biped}'), ('franz', 'Franz', '{biped,quadruped}')"
+        )
+        for slug, platform in (("reginald", "tiktok"), ("franz", "tiktok"), ("lenny", "tiktok"), ("lenny", "instagram")):
+            conn.execute(
+                f"insert into {SCHEMA}.accounts (character_slug, platform, handle) values (%s, %s, %s)",
+                [slug, platform, f"@{slug}.{platform}"],
+            )
+    store.set_settings(cadence={"lenny": {"days": ["tue", "wed", "thu"], "slot": "12:30"}})
+    accounts = {f"{a.character_slug}{'' if a.platform.value == 'tiktok' else '_ig'}": a.id for a in store.accounts()}
+    root = store.add_favorite(Favorite(url="owner-drop:root", platform="drop", origin="owner", character_slug="reginald",
+                                       status="made", proposal={"drop": {"state": "made"}}))
+    skipped = store.add_favorite(Favorite(url="owner-drop:franz", platform="drop", origin="owner", character_slug="franz",
+                                          status="skipped", proposal={"drop": {"state": "made", "copy_of": root.id}}))
+    own = store.add_favorite(Favorite(url="owner-drop:lenny", platform="drop", origin="owner", character_slug="lenny",
+                                      status="approved", proposal={"drop": {"state": "made", "copy_of": root.id}}))
+    clips_ = {
+        "root": store.add_clip(Clip(character_slug="reginald", mode=Mode.dropin, state=ClipState.scheduled)),
+        "skipped": store.add_clip(Clip(character_slug="franz", mode=Mode.dropin, state=ClipState.scheduled, features={"fav_id": skipped.id})),
+        "self": store.add_clip(Clip(character_slug="lenny", mode=Mode.dropin, state=ClipState.mastered, features={"fav_id": own.id})),
+    }  # fmt: skip
+    store.update_favorite(root.id, clip_id=clips_["root"].id)
+    store.update_favorite(own.id, clip_id=clips_["self"].id)
+    plain = store.add_clip(Clip(character_slug="lenny", mode=Mode.dropin, state=ClipState.mastered))  # of no family
+    for member, acct, day, status, claimed in posts:
+        store.add_post(Post(clip_id=clips_[member].id, account_id=accounts[acct], scheduled_for=datetime(2026, 10, day, 19, 0, tzinfo=LONDON),
+                            status=PostStatus(status), claimed_at=datetime.fromisoformat(claimed) if claimed else None))  # fmt: skip
+    targets = [accounts["lenny"], accounts["lenny_ig"]]
+    tue = datetime(2026, 10, 6, 8, 0, tzinfo=LONDON)
+    with psycopg.connect(DSN, autocommit=True) as conn:
+        for clip in (clips_["self"], plain):
+            python_days = family_days(store, clip.id)
+            sql_days = conn.execute(f"select {SCHEMA}.family_days(%s)", [clip.id]).fetchone()[0]
+            assert set(sql_days) == python_days and len(sql_days) == len(python_days)
+            cadence = store.get_settings().cadence
+            python = free_slot("lenny", tue, cadence, taken_days(store, targets, exclude_clip_id=clip.id) | python_days)
+            sql_ = conn.execute(f"select {SCHEMA}.free_slot('lenny', %s::uuid[], %s::uuid, %s)", [targets, clip.id, tue]).fetchone()[0]
+            assert sql_ == python, (case, clip is plain)
+            want = expected if clip is not plain else expected_plain  # a clip of no family is never held back by it
+            assert python == datetime.combine(want, time(12, 30), tzinfo=LONDON), case

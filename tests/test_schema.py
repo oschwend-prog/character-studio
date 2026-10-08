@@ -1326,3 +1326,312 @@ def test_0014_the_dispatch_event_is_the_one_publish_yml_listens_for():
     assert re.search(r"(?m)^  repository_dispatch:\n    types: \[publish\]$", workflow)
     assert "body := jsonb_build_object('event_type', 'publish')" in TIMER_CODE
     assert "oschwend-prog/character-studio/dispatches" in TIMER_CODE
+
+
+# ---- 0015: terminal v3 (copy_drop, the family's two weeks in free_slot, v_views_daily) ---------------------------------------
+
+V3_PATH = MIGRATIONS / "0015_terminal_v3.sql"
+V3_SQL = V3_PATH.read_text() if V3_PATH.is_file() else ""  # read lazily: a missing file fails these tests, not the module
+V3_CODE = re.sub(r"--[^\n]*", "", V3_SQL)
+V3_FUNCTIONS = ["family_root_id", "family_days", "free_slot", "copy_drop", "set_drop_character", "add_drop"]
+STARS = "coalesce(ch.setup -> 'stars', ch.setup -> 'swap' -> 'stars')"  # who he replaces: the seed's key, else 0013's
+
+
+def _v3(name: str) -> str:
+    return _function(V3_SQL, name)
+
+
+def _py(module) -> str:
+    return Path(module.__file__).read_text(encoding="utf-8")
+
+
+def test_0015_is_its_functions_the_view_and_their_grants_only():
+    assert V3_PATH.is_file()
+    assert re.findall(r"create or replace function studio\.(\w+)", V3_CODE) == V3_FUNCTIONS
+    assert re.findall(r"create or replace view studio\.(\w+)", V3_CODE) == ["v_views_daily"]
+    code = re.sub(r"create or replace (?:function studio\.\w+\(.*?\n\$\$|view studio\.v_views_daily .*?);", "", V3_CODE, flags=re.S)
+    code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
+    statements = [" ".join(s.split()) for s in code.split(";") if s.strip()]
+    assert statements == [
+        "revoke all on function studio.family_root_id(jsonb, uuid) from public",
+        "grant execute on function studio.family_root_id(jsonb, uuid) to authenticated",
+        "revoke all on function studio.family_days(uuid) from public",
+        "grant execute on function studio.family_days(uuid) to authenticated",
+        "revoke all on function studio.free_slot(text, uuid[], uuid, timestamptz) from public",
+        "grant execute on function studio.free_slot(text, uuid[], uuid, timestamptz) to authenticated",
+        "revoke all on function studio.copy_drop(uuid, text) from public",
+        "grant execute on function studio.copy_drop(uuid, text) to authenticated",
+        "revoke all on function studio.set_drop_character(uuid, text) from public",
+        "grant execute on function studio.set_drop_character(uuid, text) to authenticated",
+        "revoke all on function studio.add_drop(text, text) from public",
+        "grant execute on function studio.add_drop(text, text) to authenticated",
+        "grant select on studio.v_views_daily to authenticated",
+    ]
+    # the one do-block: the two definers are revoked from anon where the role exists (as 0012 and 0013 do)
+    blocks = re.findall(r"do \$\$.*?\n\$\$;", V3_CODE, re.S)
+    assert len(blocks) == 1 and "rolname = 'anon'" in blocks[0]
+    for fn in ("copy_drop(uuid, text)", "set_drop_character(uuid, text)"):
+        assert f"execute 'revoke all on function studio.{fn} from anon';" in blocks[0]
+    assert "to anon" not in V3_CODE and "service_role" not in V3_CODE
+    # additive: nothing is removed, altered or created but functions and one view
+    assert not re.search(r"\b(truncate|delete|alter|create table|create index|drop function|drop view|drop table|create policy)\b", V3_CODE, re.I)
+    # outside schema studio: only the owner rule (the Vault and pg_net stay inside request_job)
+    outside = set(re.findall(r"\b(?:public|auth|storage|extensions|vault|net|cron)\.[a-z_]+", V3_CODE))
+    assert outside == {"auth.jwt"}
+    # the header says why, what, how to apply (after 0014, under its migration name) and how to undo; it is re-run safe
+    for said in ("WHY.", "studio_0015_terminal_v3", "AFTER 0014", "TO UNDO", "Re-run safe", "hkcafvzjwkeibbmvskko"):
+        assert said in V3_SQL, said
+
+
+def test_0015_every_function_runs_with_an_empty_search_path_and_qualified_names():
+    for name in V3_FUNCTIONS:
+        body = _v3(name)
+        assert "set search_path = ''" in body, name
+        for schema, _ in re.findall(r"\b(?:from|update|into|join)\s+(\w+)\.(\w+)", body):
+            assert schema in ("studio", "pg_catalog"), (name, schema)
+    for name in ("family_root_id", "family_days", "free_slot", "add_drop"):
+        assert "security invoker" in _v3(name) and "security definer" not in _v3(name), name  # RLS applies: the caller's rights
+    for name in ("copy_drop", "set_drop_character"):
+        assert "security definer" in _v3(name) and "security invoker" not in _v3(name), name  # they start request_job
+
+
+def test_0015_family_root_id_is_favorites_family_root_id():
+    body = _v3("family_root_id")
+    assert "family_root_id(proposal jsonb, pick_id uuid)" in body and "returns text" in body and "immutable" in body
+    # drop.copy_of when it is a non-empty string, else the pick itself (studio.favorites.family_root_id)
+    assert "jsonb_typeof(family_root_id.proposal #> '{drop,copy_of}') = 'string'" in body
+    assert "family_root_id.proposal #>> '{drop,copy_of}' <> ''" in body
+    assert "else family_root_id.pick_id::text" in body
+    from studio import favorites
+
+    src = _py(favorites)
+    assert 'root = d.get("copy_of") if isinstance(d, Mapping) else None' in src
+    assert "return root if isinstance(root, str) and root else str(pick.id)" in src
+
+
+def test_0015_family_days_mirror_planning_family_days():
+    body = _v3("family_days")
+    assert "family_days(clip_id uuid)" in body and "returns date[]" in body and "stable" in body
+    # the clip's pick: its features.fav_id, else the oldest pick that names the clip (PostgresStore lists by created_at, id)
+    assert "jsonb_typeof(c.features -> 'fav_id') = 'string'" in body
+    assert "where fa.id::text = c.features ->> 'fav_id'" in body
+    assert "where fa.clip_id = c.id order by fa.created_at, fa.id limit 1" in body
+    # the family, whatever the status (a skipped member's posts still count), and at least two members
+    assert "where studio.family_root_id(fa.proposal, fa.id) = root_" in body and "'skipped'" not in body
+    assert "if coalesce(cardinality(members), 0) < 2 then" in body
+    # the members' clips (their clip_id, or a clip whose fav_id is one), the clip itself left out, posts on ANY account
+    assert "fa.id::text = any (members) and fa.clip_id is not null" in body
+    assert "cl.features ->> 'fav_id' = any (members)" in body
+    assert "p.clip_id <> c.id" in body and "account" not in re.sub(r"--[^\n]*", "", body)
+    # the days that hold a slot (planning.TAKEN_STATUSES), dated by claimed_at else scheduled_for, in London
+    assert "p.status in ('scheduled', 'posting', 'posted', 'needs_check')" in body
+    assert "(coalesce(p.claimed_at, p.scheduled_for) at time zone 'Europe/London')::date" in body
+    # that day and the 13 days either side: FAMILY_GAP_DAYS 14
+    from studio import planning
+    from studio.models import PostStatus
+
+    assert "generate_series(-13, 13)" in body and planning.FAMILY_GAP_DAYS - 1 == 13
+    assert "near = range(-(FAMILY_GAP_DAYS - 1), FAMILY_GAP_DAYS)" in _py(planning)
+    assert {s.value for s in planning.TAKEN_STATUSES} == {"scheduled", "posting", "posted", "needs_check"} <= {s.value for s in PostStatus}
+
+
+def test_0015_free_slot_is_0006s_rule_plus_the_familys_days():
+    old, new = _function(SLOT_SQL, "free_slot"), _v3("free_slot")
+    head = "create or replace function studio.free_slot(\n  character_slug text,\n  target_accounts uuid[],\n  exclude_clip_id uuid default null,\n  after_ts timestamptz default now()\n)\nreturns timestamptz"
+    assert old.startswith(head) and new.startswith(head)  # the signature is unchanged: replaced in place, its grants kept
+    added = (
+        "\n\n  -- the clip's family (terminal v3): no day within 13 days of another family member's post, on any account\n"
+        "  if free_slot.exclude_clip_id is not null then\n"
+        "    taken := taken || studio.family_days(free_slot.exclude_clip_id);\n"
+        "  end if;"
+    )
+    assert added in new and new.replace(added, "") == old  # 0006's function word for word, plus the family's days
+    assert new.index("into taken") < new.index(added) < new.index("for i in 0..55 loop")
+    # Python: schedule_clip passes taken_days | family_days to planning.free_slot (the same union)
+    from studio import clips
+
+    assert "taken_days(store, [a.id for a in accounts], exclude_clip_id=clip.id) | family_days(store, clip.id)," in _py(clips)
+
+
+def test_0015_copy_drop_is_a_definer_with_the_owner_check_first_and_locks_the_root_before_counting():
+    body = _v3("copy_drop")
+    assert "copy_drop(pick_id uuid, character_slug text)" in body and "returns jsonb" in body and "volatile" in body
+    owner = "if coalesce((select auth.jwt() ->> 'email'), '') <> 'o.schwend@gmail.com' then"
+    assert owner in _function(DROPVIDEO_SQL, "request_job") and owner in _function(DROPCHAR_SQL, "set_drop_character")
+    assert "insufficient_privilege" in body
+    lock = "select * into root from studio.favorites fa where fa.id::text = root_id for update;"
+    count = "select count(*), coalesce(bool_or(fa.character_slug = ch.slug), false) into members, has_him"
+    insert = "insert into studio.favorites"
+    assert body.index(owner) < body.index("select * into f from") < body.index(lock) < body.index(count) < body.index(insert)
+    assert body.count("for update") == 1  # the root, and only the root: two taps wait for each other there
+    assert "root_id := studio.family_root_id(f.proposal, f.id);" in body
+    # the family: the root's own family key, skipped picks not counted, at most MAX_FAMILY (3)
+    assert "where fa.status <> 'skipped' and studio.family_root_id(fa.proposal, fa.id) = studio.family_root_id(root.proposal, root.id);" in body
+    from studio import drop
+
+    assert drop.MAX_FAMILY == 3 and "if members >= 3 then" in body
+    assert "'a clip goes to at most 3 characters'" in body and 'f"a clip goes to at most {MAX_FAMILY} characters"' in _py(drop)
+
+
+def test_0015_copy_drop_refuses_with_the_clis_own_lines_in_the_clis_order():
+    body = _v3("copy_drop")
+    from studio import drop
+
+    src = _py(drop)
+    copy_src = re.search(r"\ndef copy_drop\(.*?\n    \)\)  # fmt: skip\n", src, re.S).group(0).split('"""', 2)[2]  # the code
+    # (the SQL line, the Python line): word for word, in the same order in both
+    lines = [
+        ("'the original clip % is gone'", 'f"the original clip {root_id} is gone"'),
+        ("'the original clip can''t be used any more'", '"the original clip can\'t be used any more"'),
+        ("'the original clip is being checked again: try in a few minutes'", '"the original clip is being checked again: try in a few minutes"'),
+        ("'the clip is not checked yet'", '"the clip is not checked yet"'),
+        ("'the clip''s file is gone (deleted after posting): drop it again'", '"the clip\'s file is gone (deleted after posting): drop it again"'),
+        ("'unknown character %'", 'f"unknown character {character_slug!r}"'),
+        ("'% already has a version of this clip'", 'f"{name} already has a version of this clip"'),
+        ("'a clip goes to at most 3 characters'", 'f"a clip goes to at most {MAX_FAMILY} characters"'),
+        ("'% is paused'", 'f"{name} is paused"'),
+    ]
+    assert [body.index(s) for s, _ in lines] == sorted(body.index(s) for s, _ in lines)
+    assert [copy_src.index(p) for _, p in lines] == sorted(copy_src.index(p) for _, p in lines)
+    assert copy_src.index('f"{name} is paused"') < copy_src.index("like_for_like(") and body.index("'% is paused'") < body.index("the wrong star")
+    # the version's card says what is true of the root (blocked or failed / still being checked), only from a version
+    assert "if root.id <> f.id and state_ in ('blocked', 'failed') then" in body
+    assert "if root.id <> f.id and state_ in ('uploading', 'checking', 'waiting') then" in body
+    assert drop.PROCESS_FROM == {"uploading", "checking", "waiting"}
+    assert "if state_ is null or state_ not in ('ready', 'making', 'made') or source_ is null then" in body
+    assert drop.CHECKED_STATES == ("ready", "making", "made")
+    assert "source_ := coalesce(root.source_id::text, nullif(d ->> 'source_id', ''));" in body  # root.source_id or drop.source_id
+    assert "select s.storage_path into path_ from studio.sources s where s.id::text = source_;" in body
+    assert "if coalesce(path_, '') = '' then" in body
+    # unknown pick / not a drop: the CLI's KeyError and its "gone" line
+    assert "'unknown pick %'" in body and "no_data_found" in body
+    assert "jsonb_typeof(root.proposal -> 'drop') is distinct from 'object'" in body
+
+
+def test_0015_copy_drop_is_like_for_like_from_setup_stars_then_the_body_with_like_for_likes_lines():
+    body = _v3("copy_drop")
+    from studio import drop, gemini, seed
+
+    words = re.search(r"words constant jsonb := '(\{.*?\})';", body).group(1)
+    assert json.loads(words) == gemini.STAR_WORDS  # the same words for the kinds of star
+    # who he replaces is setup.stars (the seed copies refs.json swap.stars there); without it only the body is checked
+    assert 'setup["stars"] = list(ref["swap"]["stars"])' in _py(seed)
+    assert f"stars_ := {STARS};" in body  # setup.stars, else the setup.swap.stars 0013 read
+    assert "if jsonb_typeof(stars_) = 'array' and (kind_ is null or not stars_ ? kind_) then" in body
+    assert "from jsonb_array_elements_text(stars_) with ordinality as e(s, n);" in body and "ch.setup" not in body.replace(STARS, "")
+    assert "setup.stars" in body  # the comment that says what happens without it
+    assert "if kind_ = 'none' then" in body and "'nobody to replace: the clip has no clear star'" in body
+    assert "'the wrong star: % replaces %, this clip''s star is %'" in body
+    assert "string_agg(coalesce(words ->> e.s, e.s), ' or ' order by e.n)" in body
+    assert "coalesce(words ->> kind_, kind_, 'None')" in body
+    assert "if body_ is null or not (body_ = any (ch.bodies)) then" in body
+    assert "'the wrong star: % has no % body'" in body
+    py = re.search(r"\ndef like_for_like\(.*?\n    return None\n", _py(drop), re.S).group(0)
+    for line in (
+        'return "nobody to replace: the clip has no clear star"',
+        """return f"the wrong star: {name} replaces {wants}, this clip's star is {STAR_WORDS.get(kind, kind)}\"""",
+        """return f"the wrong star: {name} has no {star.get('body')} body\"""",
+    ):
+        assert line in py, line
+    assert body.index("if kind_ = 'none' then") < body.index("replaces %") < body.index("has no % body")
+
+
+def test_0015_copy_drop_files_the_version_as_the_cli_does_then_asks_request_job_for_the_check():
+    body = _v3("copy_drop")
+    # a file drop keyed owner-drop:<new id>, platform drop, origin owner, approved, the root's source and creator handle
+    assert "insert into studio.favorites (id, url, platform, origin, character_slug, creator_handle, proposal, status, source_id)" in body
+    assert "values (new_id, 'owner-drop:' || new_id::text, 'drop', 'owner', ch.slug, root.creator_handle, proposal_, 'approved', source_::uuid);" in body
+    # the drop: checking, the root's kind and own_footage, the owner's choice, copy_of = the ROOT, requested.process stamped
+    for part in (
+        "'decision', jsonb_build_object('decision', 'approve', 'by', 'owner', 'reason', 'owner''s own video', 'at', at_)",
+        "'state', 'checking', 'kind', coalesce(d -> 'kind', to_jsonb('file'::text)), 'at', at_, 'reason', null",
+        "'own_footage', coalesce(d -> 'own_footage' = 'true'::jsonb, false), 'character_by', 'owner'",
+        "'copy_of', root.id, 'requested', jsonb_build_object('process', at_)",
+    ):
+        assert part in body, part
+    for gone in ("'score'", "'window'", "'hooks'", "'deconstruct'"):
+        assert gone not in body, gone  # nothing of the root's own check: the version's check gives its own
+    # the root's fetched marker, without purged_at (one download shared, as studio.fetch shares it)
+    assert "if jsonb_typeof(root.proposal -> 'fetched') = 'object' then" in body
+    assert "jsonb_build_object('fetched', (root.proposal -> 'fetched') - 'purged_at')" in body
+    from studio import drop
+
+    copy_src = re.search(r"\ndef copy_drop\(.*?\n    \)\)  # fmt: skip\n", _py(drop), re.S).group(0)
+    for part in ('"copy_of": root.id', '"requested": {"process": at}', 'k != "purged_at"', "creator_handle=root.creator_handle",
+                 "source_id=source_id", 'status="approved"', 'origin="owner"', "url=f\"{DROP_URL_PREFIX}{version_id}\""):
+        assert part in copy_src, part
+    # then exactly request_job(<new>, 'process'): it records requested.process and dispatches drop-process; the token is its alone
+    assert body.count("studio.request_job(") == 1 and "sent := studio.request_job(new_id, 'process');" in body
+    assert body.index("insert into studio.favorites") < body.index("sent := studio.request_job(new_id, 'process');")
+    assert "return jsonb_build_object('pick_id', new_id, 'dispatched', coalesce((sent ->> 'dispatched')::boolean, false));" in body
+    code = re.sub(r"--[^\n]*", "", body)
+    assert "vault" not in code.lower() and "net.http_post" not in code and "token" not in code
+
+
+def test_0015_set_drop_character_is_0013s_plus_the_family_rule_and_the_score():
+    old, new = _function(DROPCHAR_SQL, "set_drop_character"), _v3("set_drop_character")
+    cleared_old = "(d - 'hooks' - 'hook' - 'part' - 'gadgets' - 'window' - 'seconds' - 'credits' - 'deconstruct' - 'adjust')"
+    cleared_new = "(d - 'hooks' - 'hook' - 'part' - 'gadgets' - 'window' - 'seconds' - 'credits' - 'deconstruct' - 'adjust' - 'score')"
+    assert cleared_old in old and cleared_new in new  # no stale score survives a change of character (terminal v3)
+    family = re.search(r"\n\n  -- a family has each character once.*?\n  end if;", new, re.S).group(0)
+    declared = "  root_ text;\n  name_ text;\n"
+    # 0013's function word for word, but the score, the family rule and its two variables
+    rebuilt = new.replace(family, "").replace(declared, "").replace(cleared_new, cleared_old).replace(
+        "-- what the old check worked out for the old character goes (its score too)", "-- what the old check worked out for the old character goes"
+    )
+    assert rebuilt == old
+    # the rule: the family's root row locked first (as copy_drop locks it), then any other member not skipped with him
+    assert "root_ := studio.family_root_id(f.proposal, f.id);" in family
+    assert "perform 1 from studio.favorites fa where fa.id::text = root_ for update;" in family
+    assert "where fa.id <> f.id and fa.status <> 'skipped' and fa.character_slug = slug_" in family
+    assert "and studio.family_root_id(fa.proposal, fa.id) = root_" in family
+    assert "raise exception '% already has a version of this clip', name_ using errcode = 'check_violation';" in family
+    # after the same-character shortcut (he is no other member), before anything is written
+    assert new.index("if f.character_slug is not distinct from slug_ then") < new.index(family) < new.index(cleared_new)
+    assert new.index(family) < new.index("update studio.favorites fa\n     set character_slug")
+
+
+def test_0015_v_views_daily_is_the_daily_gain_of_each_posts_latest_snapshot_per_character():
+    view = re.search(r"create or replace view studio\.v_views_daily .*?;", V3_CODE, re.S).group(0)
+    assert view.startswith("create or replace view studio.v_views_daily with (security_invoker = true) as")
+    top = view.split(" as\nselect\n", 1)[1].split("\nfrom (\n", 1)[0]
+    assert [re.search(r"(\w+)$", item.strip()).group(1) for item in top.split(",\n")] == ["character_slug", "day", "views", "follows"]
+    assert "coalesce(sum(g.views), 0)::bigint as views" in view and "coalesce(sum(g.follows), 0)::bigint as follows" in view
+    # each post's London days with a snapshot; the latest snapshot of the day minus the latest one before it (0 before the first)
+    assert "(s.captured_at at time zone 'Europe/London')::date as day" in view
+    assert "(m.day::timestamp at time zone 'Europe/London') as starts" in view
+    assert "((m.day + 1)::timestamp at time zone 'Europe/London') as ends" in view
+    for what in ("views", "follows"):
+        assert f"s.captured_at >= b.starts and s.captured_at < b.ends and s.{what} is not null" in view, what
+        assert f"s.captured_at < b.starts and s.{what} is not null" in view, what
+        assert view.count(f"select s.{what} from studio.snapshots s") == 2, what
+    assert view.count("order by s.captured_at desc limit 1") == 4
+    assert "views_end.views - coalesce(views_before.views, 0) as views" in view
+    assert "follows_end.follows - coalesce(follows_before.follows, 0) as follows" in view
+    # summed per character: the posts joined to their clips
+    assert "join studio.posts p on p.id = g.post_id" in view and "join studio.clips c on c.id = p.clip_id" in view
+    assert "group by c.character_slug, g.day" in view
+    # readable by the terminal's role exactly like v_library (the owner's RLS applies through security_invoker)
+    assert "grant select on studio.v_library to authenticated;" in TERMINAL_SQL
+    assert "grant select on studio.v_views_daily to authenticated;" in V3_CODE
+
+
+def test_0015_add_drop_is_0013s_word_for_word_but_reads_who_he_replaces_where_the_seed_writes_it():
+    old, new = _function(DROPCHAR_SQL, "add_drop"), _v3("add_drop")
+    old_order = (
+        "     order by case when jsonb_typeof(ch.setup #> '{swap,stars}') = 'array' then (ch.setup #> '{swap,stars}') ? 'person'\n"
+    )
+    new_order = (
+        f"     order by case when jsonb_typeof({STARS}) = 'array'\n"
+        f"                   then {STARS} ? 'person'\n"
+    )
+    assert old_order in old and new_order in new
+    note = "    -- (who he replaces: setup.stars, as the seed writes it since terminal v3; setup.swap.stars, the key 0013 read, still counts)\n"
+    assert new.replace(note, "").replace(new_order, old_order) == old  # the signature, links, duplicates: all 0013's
+    assert "add_drop(character_slug text default null, link text default null)" in new  # (text, text): replaced in place
+    # the seed writes setup.stars (never setup.swap), and Python's provisional picks the first by slug who replaces a person
+    from studio import drop, seed
+
+    setup_fn = _py(seed).split("\ndef character_setup", 1)[1].split("\ndef ", 1)[0]
+    assert 'setup["stars"] = list(ref["swap"]["stars"])' in setup_fn and 'setup["swap"]' not in setup_fn
+    assert 'return next((c.slug for c in crew if "person" in c.stars), crew[0].slug)' in _py(drop)
