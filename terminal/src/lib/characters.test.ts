@@ -520,9 +520,9 @@ describe('the demo backend’s decidePick (what the sheet calls)', () => {
 
   it('serves every stage of the pipeline for both characters, and a finished scan', async () => {
     const { snap } = await fresh();
-    // the roster of 2026-10-06 in the owner's order, Biscuit (retired, with his history) last
+    // the roster in the owner's order, all three live (since 2026-10-07), Biscuit (retired, with his history) last
     expect(snap.characters.map((c) => [c.slug, c.status])).toEqual([
-      ['franz', 'designing'], ['reginald', 'live'], ['lenny', 'designing'], ['biscuit', 'paused'],
+      ['franz', 'live'], ['reginald', 'live'], ['lenny', 'live'], ['biscuit', 'paused'],
     ]);
     expect(snap.characters.find((c) => c.slug === 'lenny')!.setup.planned_handles?.instagram).toBe('lennygold.agent');
     for (const slug of ['biscuit', 'reginald']) {

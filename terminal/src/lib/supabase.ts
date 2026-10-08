@@ -2,11 +2,13 @@
 // Reads go to the studio views (and the run log, studio.runs), writes only through the studio RPCs of migrations 0004-0008,
 // 0012 (add_drop, request_job: "Drop a video") and 0013 (add_drop without a character, set_drop_character: the drops table).
 // v_tracker (migration 0010) feeds "In the works"; a database without it yet shows that tab empty instead of failing the load.
+// Terminal v3 (migration 0015): v_views_daily feeds the studio at a glance (the same tolerance: no views before it), the cadence
+// of studio.settings gives each character's posts per week, and copy_drop files a version of a clip for another character.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { orderRoster } from './roster';
 import { checkClipBasics, ownerClipPath } from './rules';
-import type { Backend, ChangeKind, ClipFile, DecideExtras, DropAdjust, Snapshot } from './types';
+import type { Backend, CadenceEntry, ChangeKind, ClipFile, DecideExtras, DropAdjust, Snapshot } from './types';
 
 const URL_ = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -59,6 +61,12 @@ function normalise<T extends Record<string, unknown>>(row: T, keys: string[]): T
   return out as T;
 }
 
+/** studio.settings.cadence ({slug: {days, slot}}) as the snapshot keeps it: only object entries; anything else is no cadence. */
+function cadenceOf(raw: unknown): Record<string, CadenceEntry> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  return Object.fromEntries(Object.entries(raw).filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))) as Record<string, CadenceEntry>;
+}
+
 /** An upload with progress (fetch has none): XMLHttpRequest PUT-style POST to Supabase Storage, 0-100 to `onProgress`. */
 function putWithProgress(url: string, body: Blob, headers: Record<string, string>, onProgress?: (pct: number) => void): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -108,7 +116,7 @@ export class LiveBackend implements Backend {
 
   private async loadOnce(): Promise<Snapshot> {
     const sb = this.sb;
-    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker] = await Promise.all([
+    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings] = await Promise.all([
       sb.from('v_channels').select('*'),
       sb.from('v_queue').select('*').order('created_at'),
       sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(300),
@@ -120,16 +128,20 @@ export class LiveBackend implements Backend {
       // the Scanner card: the daily run's rows (RLS: the owner's), newest first; a month of them is plenty
       sb.from('runs').select('id,kind,started_at,finished_at,status,summary,details').eq('kind', 'daily').order('started_at', { ascending: false }).limit(60),
       sb.from('v_tracker').select('*'),
+      // newest first: should the API's row cap ever cut the list, the oldest days go
+      sb.from('v_views_daily').select('character_slug,day,views,follows').order('day', { ascending: false }),
+      sb.from('settings').select('cadence').eq('id', 1).maybeSingle(),
     ]);
-    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs]) fail(r.error);
+    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings]) fail(r.error);
     if (!isMissingRelation(tracker.error)) fail(tracker.error);
+    if (!isMissingRelation(viewsDaily.error)) fail(viewsDaily.error);
     const num = [
       'views', 'outlier_x', 'total_score', 'virality', 'reach', 'freshness', 'fit', 'feasibility', 'saturation', 'velocity', 'saturation_count',
       'recognisability', 'original_views', 'est_credits',
     ];
     return {
       channels: (channels.data ?? []).map((r) =>
-        normalise(r, ['dropin_share', 'dropin_ratio', 'views_7d', 'follows', 'median_outlier_x', 'hit_rate', 'approved_posts']),
+        normalise(r, ['dropin_share', 'dropin_ratio', 'views_7d', 'follows', 'median_outlier_x', 'hit_rate', 'approved_posts', 'measured_clips']),
       ),
       queue: (queue.data ?? []).map((r) => normalise(r, ['cost_credits'])),
       library: (library.data ?? []).map((r) => normalise(r, ['cost_credits', 'outlier_x', 'views'])),
@@ -143,6 +155,10 @@ export class LiveBackend implements Backend {
       tracker: (tracker.error ? [] : tracker.data ?? []).map((r) =>
         normalise(r, ['views', 'outlier_x', 'velocity', 'credits_spent', 'latest_views']),
       ),
+      viewsDaily: (viewsDaily.error ? [] : viewsDaily.data ?? []).map((r) => ({
+        ...r, day: String(r.day).slice(0, 10), views: n(r.views) ?? 0, follows: n(r.follows) ?? 0,
+      })),
+      cadence: cadenceOf(settings.data?.cadence),
       loadedAt: Date.now(),
     } as Snapshot;
   }
@@ -219,6 +235,12 @@ export class LiveBackend implements Backend {
       pick_id: pickId, kind, ...(adjust && Object.keys(adjust).length ? { adjust } : {}),
     });
     return { dispatched: Boolean(r?.dispatched) };
+  }
+  async copyDrop(pickId: string, characterSlug: string) {
+    // "Use for another character" (migration 0015): the version always points at the root; refusals are one plain line each
+    const r = await this.rpc('copy_drop', { pick_id: pickId, character_slug: characterSlug });
+    if (!r || typeof r.pick_id !== 'string') throw new StudioError('The version was not filed: try again');
+    return { pickId: r.pick_id, dispatched: Boolean(r.dispatched) };
   }
   async setDropFootage(pickId: string, ownFootage: boolean) {
     await this.rpc('set_drop_footage', { pick_id: pickId, own_footage: ownFootage });

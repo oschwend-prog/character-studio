@@ -9,10 +9,11 @@ import { validateAdjust } from '../lib/drop';
 import { velocityPerDay } from '../lib/analyst';
 import { decisionTime, inTracker } from '../lib/tracker';
 import { londonDayKey, londonWallToIso } from '../lib/format';
+import { addDays } from '../lib/overview';
 import { orderRoster } from '../lib/roster';
 import type {
-  Backend, Budget, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, Engagement, HealthRow, LibraryClip, OwnerMusic,
-  Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow,
+  Backend, Budget, CadenceEntry, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, DropScore, Engagement, HealthRow, LibraryClip, OwnerMusic,
+  Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow, ViewsDay,
 } from '../lib/types';
 
 interface Account { id: string; character_slug: string; platform: Platform; handle: string; connected: boolean; mode: 'approval' | 'auto'; dropin_share: number }
@@ -30,10 +31,13 @@ interface Fav {
   total_score: number | null; note: string | null; status: string; created_at: string; clip_id: string | null;
 }
 
-// The roster of 2026-10-06 (Franz, Reginald, Lenny Gold; the slots are the owner's) and Biscuit, retired (paused) with his history.
+// The roster (Franz, Reginald, Lenny Gold, all three live since 2026-10-07, refs.json `status: live`; the slots are the owner's) and
+// Biscuit, retired (paused) with his history.
 const NAMES: Record<string, string> = { franz: 'Franz', reginald: 'Reginald', lenny: 'Lenny Gold', biscuit: 'Biscuit' };
 const SLOTS: Record<string, string> = { franz: '19:00', reginald: '19:30', lenny: '12:30', biscuit: '19:00' };
-const STATUS: Record<string, string> = { franz: 'designing', reginald: 'live', lenny: 'designing', biscuit: 'paused' };
+const STATUS: Record<string, string> = { franz: 'live', reginald: 'live', lenny: 'live', biscuit: 'paused' };
+/** The weekly review's bar per account (v_channels.bar_status; none = no review yet): Reginald's Instagram test is on track. */
+const BARS: Record<string, string> = { 'reginald:instagram': 'continue', 'biscuit:instagram': 'kill' };
 const BODIES: Record<string, string[]> = { franz: ['quadruped'], reginald: ['biped'], lenny: ['biped'], biscuit: ['biped', 'quadruped'] };
 /** The handles each character's social kit plans (characters/<slug>/social.md), for the ones with no account yet. */
 const PLANNED: Record<string, Record<string, string>> = {
@@ -109,13 +113,42 @@ const DEMO_REASONS: Record<string, string> = {
 const PAUSE_LEAD_S: Record<string, number> = { reginald: 0.4 };
 /** set_drop_character's states (migration 0013): before Make it. */
 const CHOOSABLE = ['uploading', 'checking', 'waiting', 'ready', 'blocked', 'failed'];
-/** What set_drop_character clears: the old character's results. */
-const PER_CHARACTER = ['hooks', 'hook', 'part', 'gadgets', 'window', 'seconds', 'credits', 'deconstruct', 'adjust'];
+/** What set_drop_character clears: the old character's results (and, since migration 0015, the score: no stale score survives). */
+const PER_CHARACTER = ['hooks', 'hook', 'part', 'gadgets', 'window', 'seconds', 'credits', 'deconstruct', 'adjust', 'score'];
 const WORDS: Record<string, string> = { person: 'a person', dog: 'a dog', animal: 'a small animal' };
+/** The clip score of the check (studio.drop.drop_score): total = round(10 x (0.6 x potential + 0.4 x swap)). */
+const demoScore = (potential: number, swap: number, reason: string): DropScore => ({
+  total: Math.round(10 * (0.6 * potential + 0.4 * swap)), potential, swap, reason,
+});
+/** Why a clip may get views, as the demo's check says it (SYNTHETIC). */
+const DEMO_POTENTIAL: Record<string, string> = {
+  franz: 'a dog who refuses, then dances: people tag their own dog',
+  reginald: 'a straight face over a trend dance: the deadpan pays off by second 3',
+  lenny: 'a loud call that drops into the trend in second one',
+};
+/** A copy_of when the drop is a version (a non-empty string), else null. */
+const copyOfDrop = (f: { proposal: Record<string, unknown> }): string | null => {
+  const c = (f.proposal.drop as Record<string, unknown> | undefined)?.copy_of;
+  return typeof c === 'string' && c ? c : null;
+};
+/** How a post's views and follows reach the snapshots, day by day from its posting day to today: most on the first two days, the
+ * rest spread evenly over the days after (SYNTHETIC). Whole numbers that add up to the total exactly. */
+function accrue(total: number, days: number): number[] {
+  const shares = days === 1 ? [1] : days === 2 ? [0.7, 0.3] : [0.45, 0.2, ...Array(days - 2).fill(0.35 / (days - 2))];
+  const out = shares.map((w) => Math.floor(total * w));
+  out[0] += total - out.reduce((a, b) => a + b, 0);
+  return out;
+}
 const active = (slug: string) => slug in NAMES && STATUS[slug] !== 'paused';
 /** add_drop without a character (migration 0013): the first character not paused, by slug, who replaces a person. */
 const provisional = () => Object.keys(NAMES).filter(active).sort().find((s) => STARS[s].includes('person')) ?? Object.keys(NAMES).filter(active).sort()[0];
 const hashOf = (id: string) => [...id].reduce((h, ch) => (h * 31 + ch.charCodeAt(0)) % 1_000_003, 7);
+/** What a Recommend drop's made-up star is: a dog or a person, alternating with the order the drops were filed in (the counter at
+ * the end of the demo's ids), so a few drops in a row always show both, however many rows the demo seeds before them. */
+const dogStar = (id: string) => {
+  const counter = Number(id.slice(-12));
+  return (Number.isInteger(counter) ? counter : hashOf(id)) % 2 === 0;
+};
 
 /** v_tracker.drop_card (migration 0012): proposal.drop without the job's internals. */
 function dropCardOf(f: { proposal: Record<string, unknown> }): DropCard | null {
@@ -185,6 +218,7 @@ export class DemoBackend implements Backend {
     const big = acc('biscuit', 'instagram', 'biscuit.moves', 'auto', 1);
     const rtt = acc('reginald', 'tiktok', '@reginald.thebutler', 'approval', 1);
     const rig = acc('reginald', 'instagram', 'reginald.thebutler', 'approval', 1);
+    const lig = acc('lenny', 'instagram', 'lennygold.agent', 'approval', 1); // Lenny posts on Instagram only so far; Franz has no account yet
 
     const clip = (slug: string, hook: string, mode: Clip['mode'], state: ClipState, daysAgo: number, extra: Partial<Clip> = {}): Clip => {
       const c: Clip = {
@@ -226,8 +260,9 @@ export class DemoBackend implements Backend {
       post(c, big, ago, 'posted', vi);
       if (ago <= 1) this.settled[c.id] = c.cost ?? 0;
     }
-    // Reginald: four clips, so autopilot is still locked (4 of 6).
+    // Reginald: five clips, so autopilot is still locked (5 of 6); the first went out four weeks ago.
     const rHistory: [string, number, number | null, number, number][] = [
+      ['the silver is polished. so am I.', 27, 2.6, 31_000, 14_200],
       ['keep your eyes on the quiff', 6, 1.9, 22_600, 13_100],
       ['reasons to hire a butler:', 5, 0.6, 7_200, 3_900],
       ['watch the tea, not him', 4, 3.3, 61_500, 27_200],
@@ -236,6 +271,16 @@ export class DemoBackend implements Backend {
       const c = clip('reginald', hook, 'recreate', 'posted', ago, { outlier_x: x, cost: 162 });
       post(c, rtt, ago, 'posted', vt);
       post(c, rig, ago, 'posted', vi);
+    }
+    // Lenny Gold: three posts on Instagram over the month, one of them a hit (3.8x).
+    const lHistory: [string, number, number, number][] = [
+      ['the deal closes at noon. so do I.', 26, 2.4, 18_400],
+      ['my assistant will call your assistant', 12, 0.9, 6_100],
+      ['ten percent of nothing is nothing', 3, 3.8, 27_300],
+    ];
+    for (const [hook, ago, x, vi] of lHistory) {
+      const c = clip('lenny', hook, 'dropin', 'posted', ago, { outlier_x: x, cost: 102, features: { format_id: 'L-CALL', hook_text: hook } });
+      post(c, lig, ago, 'posted', vi);
     }
     const fine = clip('reginald', 'everything is fine, sir', 'recreate', 'scheduled', 1, { cost: 160 });
     post(fine, rtt, 1, 'posted', 5_800);
@@ -560,11 +605,17 @@ export class DemoBackend implements Backend {
     readyDrop(4, 'biscuit', 40, 'A dachshund trots across a sunlit kitchen and spins on the beat.', {
       slug: 'biscuit', star: dog('the dachshund on the kitchen floor'), seconds: 9, start: 1.5, duration: 14.2,
       hooks: ['kitchen is my stage', 'chef’s kiss, but with paws', 'the spin was not planned'], gadgets: ['gold chain'],
-    }, 'ready', { own_footage: true, recommended: { slug: 'franz', reason: 'a dachshund in a kitchen: Franz, now that Biscuit is retired' } }); // the owner's own recording
-    readyDrop(5, 'reginald', 25, 'A man in a grey suit does the shoulder shimmy down an office corridor.', {
+    }, 'ready', {
+      own_footage: true, recommended: { slug: 'franz', reason: 'a dachshund in a kitchen: Franz, now that Biscuit is retired' },
+      score: demoScore(6, 9, 'a kitchen spin on the beat: a moment dog owners share'),
+    }); // the owner's own recording
+    const shimmy = readyDrop(5, 'reginald', 25, 'A man in a grey suit does the shoulder shimmy down an office corridor.', {
       slug: 'reginald', star: person('the man in the grey suit in the middle', 0.42), seconds: 12.5, start: 3, duration: 31, landscape: true,
       hooks: ['The household is unaware.', 'Breakfast is at eight.', 'Kindly do not tell the Duchess.'], gadgets: ['silver tray + teapot'],
-    }, 'ready', { recommended: { slug: 'reginald', reason: 'an office-corridor shimmy: Reginald’s deadpan service' } });
+    }, 'ready', {
+      recommended: { slug: 'reginald', reason: 'an office-corridor shimmy: Reginald’s deadpan service' },
+      score: demoScore(8, 7, 'the office shimmy everyone did this month, played straight'),
+    });
     readyDrop(6, 'reginald', 90, 'Two friends film a dance in a car park; a watermark sits in the corner.', {
       slug: 'reginald', star: person('the man on the left'), seconds: 8, start: 0, duration: 11, hooks: ['a', 'b', 'c'], gadgets: [],
     }, 'blocked', {
@@ -581,7 +632,7 @@ export class DemoBackend implements Backend {
     waitingKey.proposal = { ...waitingKey.proposal, make_requested: { at: atMin(60), by: 'owner' } };
     const makingFav = readyDrop(9, 'reginald', 200, 'A man in an apron does the trend in a narrow kitchen.', {
       slug: 'reginald', star: person('the man in the apron'), seconds: 9, start: 1, duration: 16, hooks: ['Dinner is served. Eventually.', 'x', 'y'], gadgets: ['feather duster'],
-    }, 'making', { reason: 'Higgsfield is still working (in_progress): the next run checks again' });
+    }, 'making', { reason: 'Higgsfield is still working (in_progress): the next run checks again', score: demoScore(7, 9, 'a narrow kitchen and a big move: the payoff lands by second 3') });
     makingFav.proposal = { ...makingFav.proposal, make_requested: { at: atMin(50), by: 'owner' } };
     makingFav.status = 'queued';
     link(makingFav, clip('reginald', 'Dinner is served. Eventually.', 'dropin', 'generating', 0, {
@@ -613,12 +664,18 @@ export class DemoBackend implements Backend {
     readyDrop(12, 'franz', 15, 'A dachshund refuses the walk, then betrays himself into a tiny shuffle on a cream rug.', {
       slug: 'franz', star: dog('the dachshund on the cream rug'), seconds: 9, start: 1, duration: 12,
       hooks: ['One does not walk. One arrives.', 'I was stretching to music.', 'Fetch it yourself.'], gadgets: ['tortoiseshell sunglasses'],
-    }, 'ready', { character_by: 'studio', recommended: { slug: 'franz', reason: 'a dachshund refusing the walk: Franz, unimpressed' } }); // "Recommend": the studio chose
+    }, 'ready', {
+      character_by: 'studio', recommended: { slug: 'franz', reason: 'a dachshund refusing the walk: Franz, unimpressed' },
+      score: demoScore(8, 9, DEMO_POTENTIAL.franz),
+    }); // "Recommend": the studio chose
     dropFav(13, 'franz', 6, { state: 'checking' });
     readyDrop(14, 'lenny', 35, 'A man in a suit yells into his phone in a glass office, then hits the trend.', {
       slug: 'lenny', star: person('the man in the navy suit by the window', 0.46), seconds: 8.5, start: 0.5, duration: 11,
       hooks: ['NOON. Not 12:01.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['black smartphone'],
-    }, 'ready', { character_by: 'owner', recommended: { slug: 'lenny', reason: 'a phone tantrum in a glass office: Lenny’s mid-deal call' } }); // the owner chose him: a Ready clip
+    }, 'ready', {
+      character_by: 'owner', recommended: { slug: 'lenny', reason: 'a phone tantrum in a glass office: Lenny’s mid-deal call' },
+      score: demoScore(8, 10, DEMO_POTENTIAL.lenny),
+    }); // the owner chose him: a Ready clip
     // owner 2026-10-06, the drops table: a drop filed with "Recommend" still being checked (the studio picks after the check), the
     // owner's own choice where the star points to another character, and a clip with a caption in its first seconds (the
     // section keeps clear of it: only the section we use is judged)
@@ -626,13 +683,35 @@ export class DemoBackend implements Backend {
     readyDrop(16, 'lenny', 50, 'A man in a tailcoat glides down a grand staircase with a tray, then hits the trend.', {
       slug: 'lenny', star: person('the man in the tailcoat on the stairs', 0.5), seconds: 12, start: 2, duration: 18,
       hooks: ['Stairs are for closers.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['gold watch'],
-    }, 'ready', { character_by: 'owner', recommended: { slug: 'reginald', reason: 'a grand staircase and a tray: Reginald’s home ground' } });
+    }, 'ready', { character_by: 'owner', recommended: { slug: 'reginald', reason: 'a grand staircase and a tray: Reginald’s home ground' } }); // checked before the score existed: unscored
     readyDrop(17, 'reginald', 12, 'A man in a raincoat dances through puddles on a rainy street; a caption sits on the first seconds.', {
       slug: 'reginald', star: person('the man in the raincoat'), seconds: 9, start: 5, duration: 16,
       hooks: ['The umbrella stays closed.', 'Puddles are beneath me.', 'Tea at four regardless.'], gadgets: ['black umbrella'],
     }, 'ready', {
       character_by: 'studio', recommended: { slug: 'reginald', reason: 'a rainy street at dawn: Reginald’s black umbrella' },
-      avoid: [{ start_s: 0, end_s: 4.5, what: 'text' }],
+      avoid: [{ start_s: 0, end_s: 4.5, what: 'text' }], score: demoScore(6, 7, 'puddle steps people copy, but the caption eats the opening'),
+    });
+    // Terminal v3: four more of Reginald's own clips, scored, so "Make these" has a top 3 and a fourth below the cut ...
+    const reginaldReady: [number, number, string, ReturnType<typeof person>, number, number, number, [number, number, string]][] = [
+      [18, 30, 'A man in a waistcoat does the hand-jive at a wedding buffet, never smiling.', person('the man in the waistcoat'), 9, 1, 15, [9, 9, 'the wedding hand-jive everyone knows, deadpan: shares by second 3']],
+      [19, 55, 'A waiter spins a tray through a crowded café and lands the freeze on the drop.', person('the waiter with the tray', 0.55), 8, 2, 12, [6, 8, 'a tray spin and a clean freeze: a classic, a little crowded']],
+      [20, 80, 'A man in a cardigan does the slow-motion walk trend down a library aisle.', person('the man in the cardigan'), 10, 0.5, 18, [7, 9, 'the slow-motion walk is rising: the library makes it his']],
+      [21, 120, 'A man irons a shirt, then breaks into the robot when the beat drops.', person('the man at the ironing board'), 8, 1.5, 11, [5, 8, 'a household chore into the robot: fine, not new']],
+    ];
+    for (const [k, minutesAgo, concept, star, seconds, start, duration, [potential, swap, why]] of reginaldReady) {
+      readyDrop(k, 'reginald', minutesAgo, concept, {
+        slug: 'reginald', star, seconds, start, duration, hooks: DEMO_HOOKS.reginald, gadgets: ['white gloves'],
+      }, 'ready', { character_by: 'owner', recommended: { slug: 'reginald', reason: 'a straight face in a busy room: Reginald' }, score: demoScore(potential, swap, why) });
+    }
+    // ... and one family (spec section 4): Reginald's office shimmy (drop 5) used for Lenny too, the same clip (nothing uploaded
+    // again), a different section of it (17-25.5 s), checked in Lenny's voice with his own score and price.
+    const shimmyCard = shimmy.proposal.drop as Record<string, unknown>;
+    readyDrop(22, 'lenny', 20, shimmy.proposal.concept as string, {
+      slug: 'lenny', star: person('the man in the grey suit in the middle', 0.42), seconds: 8.5, start: 17, duration: 31, landscape: true,
+      hooks: ['Corner office energy.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['black smartphone'],
+    }, 'ready', {
+      character_by: 'owner', copy_of: shimmy.id, source_id: shimmyCard.source_id, recommended: { slug: 'lenny', reason: 'an office shimmy: Lenny between two calls' },
+      score: demoScore(7, 7, 'the same office shimmy, now mid-deal: a second section of it'),
     });
 
     // The run log: a finished scan on the latest scan day, an earlier one, and a day that did not scan.
@@ -704,6 +783,43 @@ export class DemoBackend implements Backend {
     return c;
   }
 
+  /** A family (studio.family_root_id): the root and its versions, skipped picks not counted. */
+  private family(rootId: string) {
+    return this.favs.filter((x) => x.status !== 'skipped' && (copyOfDrop(x) ?? x.id) === rootId && x.proposal.drop);
+  }
+
+  /** The sections the family's other members use (a version's check keeps clear of them when it can). */
+  private familyWindows(rootId: string, except: string) {
+    return this.family(rootId)
+      .filter((x) => x.id !== except)
+      .map((x) => (x.proposal.drop as Record<string, unknown>).window as { start_s: number; length_s: number } | undefined)
+      .filter((w): w is { start_s: number; length_s: number } => Boolean(w));
+  }
+
+  /** v_views_daily (migration 0015): what each character's posts gained per London day. The demo's posts only hold their latest
+   * numbers, so each post's views and follows reach the snapshots over the days from its posting day to today (accrue); the days
+   * of one character add up to what his posts show. */
+  private viewsDaily(now: number): ViewsDay[] {
+    const today = londonDayKey(now);
+    const sums = new Map<string, ViewsDay>();
+    for (const p of this.posts) {
+      const c = this.clips.find((x) => x.id === p.clip_id);
+      const first = londonDayKey(p.scheduled_for);
+      if (!c || p.views == null || first > today) continue;
+      let days = 1;
+      while (addDays(first, days) <= today) days += 1;
+      const views = accrue(p.views, days);
+      const follows = accrue(p.follows ?? 0, days);
+      for (let i = 0; i < days; i += 1) {
+        const day = addDays(first, i);
+        const key = `${c.character_slug}|${day}`;
+        const v = sums.get(key) ?? { character_slug: c.character_slug, day, views: 0, follows: 0 };
+        sums.set(key, { ...v, views: v.views + views[i], follows: v.follows + follows[i] });
+      }
+    }
+    return [...sums.values()].sort((a, b) => b.day.localeCompare(a.day) || a.character_slug.localeCompare(b.character_slug));
+  }
+
   // ---- Backend ------------------------------------------------------------------------------------
 
   /** The demo's cloud jobs, worked out lazily from the time (so tests drive them with the clock): a check requested over 2 s ago
@@ -718,7 +834,7 @@ export class DemoBackend implements Backend {
         // the clip's star: kept from an earlier look (a change of character), else made up (a Recommend drop: a dog or a person)
         let slug = f.character_slug ?? provisional();
         const star: DropCard['star'] = (d.star as DropCard['star']) ?? (
-          (d.character_by === 'studio' ? hashOf(f.id) % 2 === 0 : STARS[slug]?.includes('dog'))
+          (d.character_by === 'studio' ? dogStar(f.id) : STARS[slug]?.includes('dog'))
             ? { kind: 'dog', body: 'quadruped', description: 'the dog in the middle', x_center: 0.5, full_body: true }
             : { kind: 'person', body: 'biped', description: 'the person in the middle', x_center: 0.5, full_body: true });
         const takers = Object.keys(NAMES).filter((s) => active(s) && STARS[s].includes(star!.kind as 'person' | 'dog'));
@@ -738,14 +854,25 @@ export class DemoBackend implements Backend {
         }
         const seconds = 9;
         const hooks = DEMO_HOOKS[slug] ?? DEMO_HOOKS.reginald;
+        // a version keeps its root's clip (the same file: its length and shape) and takes a section the family does not use yet
+        // when the clip has one (studio.drop: the window search first avoids the other members' windows), else the usual one
+        const root = copyOfDrop(f) ? this.favs.find((x) => x.id === copyOfDrop(f)) : undefined;
+        const duration = typeof d.duration_s === 'number' ? d.duration_s : 14;
+        const [width, height] = typeof d.width === 'number' && typeof d.height === 'number' ? [d.width, d.height] : [1080, 1920];
+        const used = root ? this.familyWindows(root.id, f.id) : [];
+        const clean = Array.from({ length: Math.floor((duration - seconds) / 0.5) + 1 }, (_, i) => i * 0.5)
+          .find((at) => !used.some((w) => at < w.start_s + w.length_s && at + seconds > w.start_s));
+        const start = root && clean !== undefined ? clean : Math.min(1, Math.max(0, duration - seconds));
+        const h = hashOf(`${f.id}:${slug}`);
         f.proposal = {
           ...f.proposal, mode: 'dropin', owner_mode: 'dropin', hook: hooks[0],
-          concept: (f.proposal.concept as string) ?? 'SYNTHETIC: your video, checked (the demo makes up what it found)',
+          concept: (f.proposal.concept as string) ?? (root?.proposal.concept as string | undefined) ?? 'SYNTHETIC: your video, checked (the demo makes up what it found)',
           drop: {
-            ...d, state: 'ready', reason: null, at: new Date(now).toISOString(), source_id: (d.source_id as string) ?? uid('sd'), duration_s: 14, width: 1080, height: 1920,
-            window: { start_s: 1, length_s: seconds }, crop_x: null, star, classic: false, part: 'featured', gadgets: [], hooks, hook: hooks[0],
+            ...d, state: 'ready', reason: null, at: new Date(now).toISOString(), source_id: (d.source_id as string) ?? uid('sd'), duration_s: duration, width, height,
+            window: { start_s: start, length_s: seconds }, crop_x: width > (height * 9) / 16 + 1 ? star!.x_center : null, star, classic: false, part: 'featured', gadgets: [], hooks, hook: hooks[0],
             music: 'original', seconds, credits: estimateCredits('dropin', seconds, 'original'), preview_path: `owner/${f.id}/preview.jpg`, recommended,
             max_length_s: Number((16 - (PAUSE_LEAD_S[slug] ?? 0)).toFixed(3)),
+            score: demoScore(5 + (h % 5), 6 + (h % 5), DEMO_POTENTIAL[slug] ?? 'a clip people share'), // every check that ends ready scores it
           },
         };
       }
@@ -791,7 +918,7 @@ export class DemoBackend implements Backend {
         median_outlier_x: median,
         hit_rate: xs.length ? xs.filter((x) => x >= 3).length / xs.length : null,
         measured_clips: xs.length,
-        bar_status: null,
+        bar_status: BARS[`${a.character_slug}:${a.platform}`] ?? null,
         next_slot: upcomingSlot(a.character_slug, now),
         today_posts: mine
           .filter((p) => londonDayKey(p.scheduled_for) === today)
@@ -911,6 +1038,7 @@ export class DemoBackend implements Backend {
           ...Object.fromEntries(this.accounts.filter((a) => a.character_slug === slug).map((a) => [a.platform, a.handle])),
         },
         traits: (traitsJson as Record<string, CharacterTraits>)[slug] ?? null,
+        stars: [...STARS[slug]], // who he replaces, like for like (the seed's copy of refs.json swap.stars)
       },
       accounts: this.accounts.filter((a) => a.character_slug === slug).map((a) => ({ platform: a.platform, handle: a.handle, has_postiz: a.connected, mode: a.mode })),
     })));
@@ -920,7 +1048,15 @@ export class DemoBackend implements Backend {
       .map((f) => this.trackerRow(f, name(f.character_slug)))
       .filter((r) => inTracker(r, now));
 
-    return { channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), tracker, loadedAt: now };
+    // studio.settings.cadence: the demo posts Monday to Friday (CADENCE) at each character's slot
+    const cadence: Record<string, CadenceEntry> = Object.fromEntries(
+      Object.keys(NAMES).map((slug) => [slug, { days: CADENCE.map((d) => d.toLowerCase()), slot: SLOTS[slug] }]),
+    );
+
+    return {
+      channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), tracker,
+      viewsDaily: this.viewsDaily(now), cadence, loadedAt: now,
+    };
   }
 
   /** One v_tracker row (migration 0010): the pick, its newest clip, that clip's latest post (a problem first within a slot), the credits. */
@@ -1249,6 +1385,55 @@ export class DemoBackend implements Backend {
     this.emit('favorites');
     setTimeout(() => this.emit('favorites'), DEMO_JOB_MS + 100); // the board reloads when the demo's job is done
     return { dispatched: true };
+  }
+
+  /** copy_drop of migration 0015, "Use for another character": the same refusals in the same order and words (the demo keeps no
+   * files, so "the clip's file is gone" never happens here), then a version filed at the ROOT, sharing its clip, whose own free
+   * check runs in tick() after 2 s. */
+  async copyDrop(pickId: string, characterSlug: string) {
+    const f = this.favs.find((x) => x.id === pickId);
+    if (!f) throw new DemoError(`unknown pick ${pickId}`);
+    const rootId = copyOfDrop(f) ?? f.id;
+    const root = this.favs.find((x) => x.id === rootId);
+    const d = root?.proposal.drop as Record<string, unknown> | undefined;
+    if (!root || !d || typeof d !== 'object' || Array.isArray(d)) throw new DemoError(`the original clip ${rootId} is gone`);
+    const state = String(d.state);
+    if (root.id !== f.id && ['blocked', 'failed'].includes(state)) throw new DemoError("the original clip can't be used any more");
+    if (root.id !== f.id && ['uploading', 'checking', 'waiting'].includes(state)) {
+      throw new DemoError('the original clip is being checked again: try in a few minutes');
+    }
+    if (!['ready', 'making', 'made'].includes(state) || !d.source_id) throw new DemoError('the clip is not checked yet');
+    const slug = characterSlug.trim();
+    if (!(slug in NAMES)) throw new DemoError(`unknown character '${slug}'`);
+    const family = this.family(root.id);
+    if (family.some((x) => x.character_slug === slug)) throw new DemoError(`${NAMES[slug]} already has a version of this clip`);
+    if (family.length >= 3) throw new DemoError('a clip goes to at most 3 characters');
+    if (!active(slug)) throw new DemoError(`${NAMES[slug]} is paused`);
+    const star = d.star as DropCard['star'];
+    if (star?.kind === 'none') throw new DemoError('nobody to replace: the clip has no clear star');
+    if (!star?.kind || !(STARS[slug] as ReadonlyArray<string>).includes(star.kind)) {
+      const wants = STARS[slug].map((k) => WORDS[k]).join(' or ');
+      throw new DemoError(`the wrong star: ${NAMES[slug]} replaces ${wants}, this clip's star is ${star?.kind ? WORDS[star.kind] ?? star.kind : 'None'}`);
+    }
+    if (!star.body || !BODIES[slug].includes(star.body)) throw new DemoError(`the wrong star: ${NAMES[slug]} has no ${star.body ?? 'None'} body`);
+    const id = uid('fv');
+    const at = new Date(this.now()).toISOString();
+    this.favs.push({
+      id, url: `owner-drop:${id}`, platform: 'drop', creator_handle: root.creator_handle, views: null, outlier_x: null, origin: 'owner',
+      character_slug: slug, scores: {}, total_score: null, note: null, status: 'approved', created_at: at, clip_id: null,
+      proposal: {
+        decision: { decision: 'approve', by: 'owner', reason: "owner's own video", at },
+        drop: {
+          state: 'checking', kind: d.kind ?? 'file', at, reason: null, own_footage: d.own_footage === true, character_by: 'owner',
+          copy_of: root.id, requested: { process: at },
+          // the shared clip (favorites.source_id in the database) and what the demo's check needs of it to look again
+          source_id: d.source_id, duration_s: d.duration_s, width: d.width, height: d.height, has_audio: d.has_audio, star,
+        },
+      },
+    });
+    this.emit('favorites');
+    setTimeout(() => this.emit('favorites'), DEMO_JOB_MS + 100); // the board reloads when the demo's check is done
+    return { pickId: id, dispatched: true };
   }
 
   /** set_drop_footage of migration 0012. */

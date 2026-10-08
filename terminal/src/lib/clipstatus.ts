@@ -141,7 +141,7 @@ export function clipActions(row: TrackerRow, now: number): DropAction[] {
 }
 
 /** When a clip was dropped: the card's own time, else when the pick was approved; null when neither is a valid time. */
-function droppedAt(r: Pick<TrackerRow, 'drop_card' | 'approved_at'>): number | null {
+export function droppedAt(r: Pick<TrackerRow, 'drop_card' | 'approved_at'>): number | null {
   for (const iso of [r.drop_card?.at, r.approved_at]) {
     const t = iso ? Date.parse(iso) : NaN;
     if (Number.isFinite(t)) return t;

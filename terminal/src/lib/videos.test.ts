@@ -38,7 +38,7 @@ const clip = (id: string, state: ClipState, over: Partial<LibraryClip> = {}): Li
   posted_at: null, ...over,
 });
 const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({
-  channels: [], queue: [], library: [], budget: null, health: [], picks: [], history: [], characters: [], runs: [], tracker: [], loadedAt: NOW,
+  channels: [], queue: [], library: [], budget: null, health: [], picks: [], history: [], characters: [], runs: [], tracker: [], viewsDaily: [], cadence: {}, loadedAt: NOW,
   ...over,
 });
 

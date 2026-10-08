@@ -1,5 +1,5 @@
 // Row shapes of the studio views (supabase/migrations/0004_terminal_rpc.sql, 0007_characters_view.sql, 0008_dropin_first.sql, 0009_analyst.sql,
-// 0010_tracker.sql). Numbers that Postgres
+// 0010_tracker.sql, 0015_terminal_v3.sql: v_views_daily and the drop card's score and copy_of). Numbers that Postgres
 // returns as numeric/bigint may arrive as strings over PostgREST; `num()` in data.ts normalises them.
 
 export type Platform = 'tiktok' | 'instagram';
@@ -440,6 +440,25 @@ export interface DropCard {
   /** The longest section Make it takes for this character: 16 s less what his kit adds before the dance (Reginald's pause: 15.6 s).
    * Written by the check; absent on a drop checked before that (16 s). */
   max_length_s?: number;
+  /** The clip's score (terminal v3, studio.drop.drop_score): stored by a check that ends ready. Absent on a clip checked before
+   * the score existed (until `studio drop recheck`), on a blocked or failed check, and while a version or a new character is
+   * checked: every reader treats it as unscored (ranking.scoreOf), never as 0. */
+  score?: DropScore | null;
+  /** A version of another drop (terminal v3, "Use for another character"): the ROOT's pick id, also for a version of a version.
+   * Absent on the root and on any drop that is no version. */
+  copy_of?: string | null;
+}
+
+/** The clip score of the free check: total = round(10 x (0.6 x potential + 0.4 x swap)); reason = the potential's one line. */
+export interface DropScore {
+  /** 0-100: what the ranking sorts by. */
+  total: number;
+  /** 0-10: how likely the clip, with our character in it, gets views (Gemini, with the hit rules). */
+  potential: number;
+  /** 0-10: how easy the swap is (one person, full body, static camera, clear of text, sound, a classic). */
+  swap: number;
+  /** At most 80 characters: why it may get views. */
+  reason: string;
 }
 
 export interface DropRecommendation {
@@ -495,6 +514,11 @@ export interface CharacterSetup {
   traits?: CharacterTraits | null;
   /** Higgsfield job ids of the character sheets, by body: the Genjutsu reference image next to the master. */
   sheets?: { biped?: string | null; quadruped?: string | null } | null;
+  /** Who he replaces, like for like (the seed's copy of refs.json `swap.stars`, terminal v3): 'person', 'dog', 'animal'. Absent on
+   * a character seeded before it: then only his bodies decide (studio.copy_drop). */
+  stars?: string[] | null;
+  /** The key migration 0013 read for the same list (`setup.swap.stars`); copy_drop still honours it after `stars`. */
+  swap?: { stars?: string[] | null } | null;
 }
 
 /** One row of v_characters: every seeded character, whether or not it has accounts yet. */
@@ -529,6 +553,22 @@ export interface RunRow {
   details: { scan?: ScanDetails; vidiq_credits?: number; [k: string]: unknown } | null;
 }
 
+/** One row of v_views_daily (migration 0015): what one character's posts gained on one London day, from the metric snapshots. A
+ * day nobody measured has no row; a recount can make a day negative (readers clamp it at 0 for display). */
+export interface ViewsDay {
+  character_slug: string;
+  /** The London day, YYYY-MM-DD. */
+  day: string;
+  views: number;
+  follows: number;
+}
+
+/** One character's posting days and slot in `studio.settings.cadence` (`studio plan cadence`): days like "tue", the slot "19:00". */
+export interface CadenceEntry {
+  days?: string[] | string | null;
+  slot?: string | null;
+}
+
 export interface Snapshot {
   channels: Channel[];
   queue: QueueClip[];
@@ -541,6 +581,10 @@ export interface Snapshot {
   runs: RunRow[];
   /** "In the works": approved picks until they are posted (v_tracker, migration 0010). */
   tracker: TrackerRow[];
+  /** Views and follows per character and London day (v_views_daily, migration 0015); empty before it or before any measurement. */
+  viewsDaily: ViewsDay[];
+  /** The posting days and slot per character (`studio.settings.cadence`); empty when none is set. */
+  cadence: Record<string, CadenceEntry>;
   loadedAt: number;
 }
 
@@ -601,6 +645,11 @@ export interface Backend {
   setDropCharacter(pickId: string, characterSlug: string): Promise<{ dispatched: boolean }>;
   /** The owner's button (request_job): Checking (process) or Make it (make, with the Adjust). `dispatched` = the cloud job started now. */
   requestJob(pickId: string, kind: 'process' | 'make', adjust?: DropAdjust | null): Promise<{ dispatched: boolean }>;
+  /**
+   * "Use for another character" (copy_drop, migration 0015): files a version of a checked drop for `characterSlug` (asked from the
+   * root or any version: it always points at the root) and starts its free check. Refused with one plain line, nothing written.
+   */
+  copyDrop(pickId: string, characterSlug: string): Promise<{ pickId: string; dispatched: boolean }>;
   /** The drop card's toggle (set_drop_footage, migration 0012): own footage (true) or a downloaded clip (false). */
   setDropFootage(pickId: string, ownFootage: boolean): Promise<void>;
   /** A signed URL of a drop's preview strip in the sources bucket (owner/<pick id>/preview.jpg), or null. */
