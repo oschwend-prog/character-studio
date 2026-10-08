@@ -1786,8 +1786,11 @@ def test_the_hits_job_fields_are_copied_when_the_check_has_them():
     assert (got["trend_stage"], got["days_since_trend_peak"], got["sound_rising"]) == ("rising", 3, True)
     junk = tags({"trend_stage": "huge", "days_since_trend_peak": "3", "sound_rising": "yes"})
     assert (junk["trend_stage"], junk["days_since_trend_peak"], junk["sound_rising"]) == ("none", None, False)
-    classic = tags({"classic": True, "trend_stage": "fading"}, look={**LOOK, "classic": True})
-    assert classic["trend_stage"] == "classic"  # a classic everyone knows never fades
+    classic = tags({"classic": True, "trend_stage": "fading", "days_since_trend_peak": 9}, look={**LOOK, "classic": True})
+    assert (classic["trend_stage"], classic["days_since_trend_peak"]) == ("classic", None)  # a classic never fades
+    no_stage = tags({"days_since_trend_peak": 3})  # days without a stage: no peak to count from
+    assert (no_stage["trend_stage"], no_stage["days_since_trend_peak"]) == ("none", None)
+    assert clips.learn_problems(classic) == clips.learn_problems(no_stage) == []
 
 
 def test_the_hook_used_is_tagged_with_its_pattern_and_who_chose_it():
@@ -1832,3 +1835,34 @@ def test_a_version_is_tagged_with_its_root_and_its_place(world):
     assert drop.family_root_id(store.get_favorite(v2.id)) == root.id
     store.update_favorite(v1.id, status="skipped")  # a skipped version is no member: the next one moves up
     assert drop.version_index(store, store.get_favorite(v2.id)) == 2
+    with pytest.raises(DropError, match="this clip's version was skipped: drop it again"):
+        drop.version_index(store, store.get_favorite(v1.id))  # never an index past the family
+
+
+def test_a_resumed_make_tags_the_hook_it_renders(world, portrait, gen_out, fast_master, monkeypatch):
+    """A master that failed keeps its clip; the owner's new Adjust (a new hook) is what the resumed make renders, so the hook
+    tags and ``hook_text`` follow the hook on screen, not the one the clip was created with."""
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)
+    fast = drop.build_master
+
+    def broken(spec):
+        raise RuntimeError("ffmpeg vanished")
+
+    monkeypatch.setattr(drop, "build_master", broken)
+    out = make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS))
+    assert out.state == "failed" and "the master build failed" in out.reason
+    clip_id = store.get_favorite(pid).proposal["drop"]["make"]["clip_id"]
+    before = store.get_clip(clip_id).features
+    assert (before["hook_text"], before["hook_pattern"], before["hook_index"], before["hook_by"]) == (
+        "The household is unaware.", "understatement", 1, "studio")
+    monkeypatch.setattr(drop, "build_master", fast)
+    tap_make(store, pid, adjust={"hook": "Breakfast is at eight."})  # Try again, with the second hook
+    assert make(store, storage, pid, FakeHF(gen_out), FakeGemini()).state == "made"
+    clip = store.get_clip(clip_id)
+    assert clip.hook == "Breakfast is at eight." and fast_master[-1].hook2 == ["Breakfast is at eight."]
+    f = clip.features
+    assert (f["hook_text"], f["hook_pattern"], f["hook_index"], f["hook_by"]) == (
+        "Breakfast is at eight.", "false-premise", 2, "owner")
+    assert clips.learn_problems(f) == [] and f["length_bucket"] == "under_8"  # the rest of the tags kept

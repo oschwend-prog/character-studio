@@ -466,3 +466,4 @@ def test_a_clip_the_daily_run_makes_writes_every_learning_tag():
         assert f"`{key}`" in create, key
     for value in ("`recreate`", "`owner_saved`", "`auto_filed`", "`test_arms` `{}`"):
         assert value in create, value
+    assert "refuses a clip with `fav_id` or `source_kind` that misses one" in create  # a pick's clip needs them (clips.new_clip)

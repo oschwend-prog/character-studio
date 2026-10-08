@@ -511,9 +511,22 @@ def test_a_drop_clip_needs_the_learning_tags_even_without_source_kind():
 
 
 def test_a_by_hand_clip_that_does_not_opt_in_is_made_as_before():
-    """Legacy and by-hand clips (no ``source_kind``, not a drop's): the eleven required tags are enough."""
+    """Legacy and by-hand clips (no ``source_kind``, no pick, not a drop's): the eleven required tags are enough."""
     store = make_store()
     assert new_clip(store, "biscuit", None, Mode.recreate, FEATURES).features["format_id"] == "B1"
+
+
+def test_every_clip_made_from_a_pick_needs_the_learning_tags():
+    """A clip whose features name its pick (``fav_id``: the daily run's Recreate or Drop-in of a pick) is a made clip to learn
+    from, whatever else it says: without the learning tags it is refused; with them (the daily-run create step) it is made."""
+    store = make_store()
+    with pytest.raises(ValueError, match="missing feature tags: .*hook_index"):
+        new_clip(store, "biscuit", None, Mode.recreate, {**FEATURES, "fav_id": "p1"})
+    assert store.list_clips() == []
+    clip = new_clip(store, "biscuit", None, Mode.recreate, {**LEARN, "fav_id": "p1", "family_id": "p1"})
+    assert clip.features["fav_id"] == "p1" and clip.features["source_kind"] == "recreate"
+    assert clips.needs_learn_tags({"fav_id": "p1"}) and not clips.needs_learn_tags({"fav_id": None})
+    assert not clips.needs_learn_tags(FEATURES)
 
 
 @pytest.mark.parametrize(
@@ -542,6 +555,16 @@ def test_a_by_hand_clip_that_does_not_opt_in_is_made_as_before():
         ({"series": "my_series"}, "series"),
         ({"episode": 0}, "episode"),
         ({"hit_rules_version": ""}, "hit_rules_version"),
+        ({"hit_rules_version": "1"}, "hit_rules_version"),
+        ({"hit_rules_version": "v1.2"}, "hit_rules_version"),
+        ({"hit_rules_version": "V1"}, "hit_rules_version"),
+        ({"hit_rules_version": "v"}, "hit_rules_version"),
+        ({"hit_rules_version": "v1 · 2026-10-08"}, "hit_rules_version"),
+        ({"score_potential": 7}, "score_potential"),  # no score (bucket none): no score numbers either
+        ({"score_swap": 9}, "score_swap"),
+        ({"days_since_trend_peak": 3}, "days_since_trend_peak"),  # trend_stage none: no days since a peak
+        ({"trend_stage": "classic", "days_since_trend_peak": 3}, "days_since_trend_peak"),  # a classic never peaks
+        ({"episode": 2}, "episode"),  # series none: no episode
         ({"source_kind": "scraped"}, "source_kind"),
         ({"test_arms": []}, "test_arms"),
         ({"hook_by": None}, "hook_by"),  # a categorical tag is never null: "none" is a value
@@ -558,6 +581,16 @@ def test_the_score_tags_agree():
     store = make_store()
     scored = {**LEARN, "score_bucket": "65_79", "score_total": 78, "score_potential": 7, "score_swap": 9}
     assert new_clip(store, "biscuit", None, Mode.recreate, scored).features["score_bucket"] == "65_79"
+
+
+def test_the_detail_tags_go_with_their_tag():
+    store = make_store()
+    rising = new_clip(store, "biscuit", None, Mode.recreate, {**LEARN, "trend_stage": "rising", "days_since_trend_peak": 3})
+    assert rising.features["days_since_trend_peak"] == 3
+    episode = new_clip(store, "biscuit", None, Mode.recreate, {**LEARN, "series": "household_unaware", "episode": 2})
+    assert episode.features["episode"] == 2
+    for version in ("none", "v1", "v12"):
+        assert new_clip(store, "biscuit", None, Mode.recreate, {**LEARN, "hit_rules_version": version})
 
 
 @pytest.mark.parametrize(

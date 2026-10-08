@@ -33,11 +33,14 @@ afterwards, so a made clip carries them from creation. ``LEARN_FEATURES`` are th
 ``LEARN_VALUES`` holds the fixed vocabularies (``format_id`` and ``hook_pattern`` among them), so values repeat often enough to
 reach n >= 5. ``"none"`` is a value; a missing tag is an error. ``new_clip`` requires every one of them except the master's own
 two (``MASTER_FEATURES``: ``length_s`` and ``length_bucket``, written by ``set_length`` when the master is attached to the clip,
-``master.upload_master``) for a clip that is a drop's (``drop: True``, written by ``studio drop``) or that opts in by writing
-``source_kind`` (the Recreate path of the daily run): a key absent is "missing", a value outside its vocabulary or of the wrong
-type is refused (``learn_problems``). A categorical tag is never ``None``; only the exact detail of a bucket may be
-(``LEARN_NULLABLE``: ``days_since_trend_peak``, ``episode``, the three ``score_*`` numbers with ``score_bucket`` none). A clip
-made by hand without ``source_kind`` and not a drop's is created exactly as before (legacy). ``review.feature_lifts`` reads them.
+``master.upload_master``) for a clip that is a drop's (``drop: True``, written by ``studio drop``), any clip made from a pick
+(``fav_id``: the daily run's Recreate or Drop-in of a pick) or one that opts in by writing ``source_kind``: a key absent is
+"missing", a value outside its vocabulary or of the wrong type is refused (``learn_problems``). A categorical tag is never
+``None``; only the exact detail of a tag may be (``LEARN_NULLABLE``), and then it goes with its tag both ways: the three
+``score_*`` numbers are None exactly when ``score_bucket`` is none, ``days_since_trend_peak`` is None when ``trend_stage`` is
+none or classic, ``episode`` is None when ``series`` is none. ``hit_rules_version`` is ``v<N>`` or ``none``. A clip made by hand
+with no pick and no ``source_kind`` (and not a drop's) is created exactly as before (legacy). ``set_hook_tags`` re-tags the hook
+when the master renders another one than the clip was created with. ``review.feature_lifts`` reads the tags.
 
 ``transition`` and ``set_fields`` write only ``SETTABLE_FIELDS``. The state never changes through
 ``set_fields`` (or ``store.update_clip`` anywhere else): that is the whole point of the table.
@@ -87,6 +90,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import re
 from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
@@ -178,6 +182,8 @@ LEARN_VALUES: dict[str, tuple[Any, ...]] = {
 }
 LEARN_BOOLS = frozenset({"sound_rising", "explore_pick"})
 LEARN_NULLABLE = frozenset({"days_since_trend_peak", "episode", "score_total", "score_potential", "score_swap"})
+HOOK_TAGS = ("hook_text", "hook_pattern", "hook_index", "hook_by")  # what set_hook_tags may write
+_RULES_VERSION = re.compile(r"v\d+")  # gemini.hit_rules_version: v<N>, or "none"
 _WHOLE_RANGES: dict[str, tuple[int, int | None]] = {  # whole numbers (never a bool) from low to high (None: no top)
     "hook_index": (0, 3), "version_index": (1, 3), "days_since_trend_peak": (0, None), "episode": (1, None),
     "score_total": (0, 100), "score_potential": (0, 10), "score_swap": (0, 10),
@@ -216,8 +222,9 @@ def length_bucket(seconds: float) -> str:
 
 
 def needs_learn_tags(features: Mapping[str, Any]) -> bool:
-    """A drop's clip (``drop: True``) or one that opts in with ``source_kind`` must carry the learning tags."""
-    return features.get("drop") is True or "source_kind" in features
+    """A drop's clip (``drop: True``), any clip made from a pick (``fav_id``) or one that opts in with ``source_kind`` must carry
+    the learning tags."""
+    return features.get("drop") is True or features.get("fav_id") not in (None, "") or "source_kind" in features
 
 
 def _whole(value: Any) -> bool:
@@ -233,33 +240,49 @@ def learn_problems(features: Mapping[str, Any]) -> list[str]:
     if missing:
         p.append(f"missing feature tags: {', '.join(missing)}")
     for key in sorted((LEARN_FEATURES | LEARN_VALUES.keys()) & features.keys()):
-        value = features[key]
-        if value is None:
-            if key not in LEARN_NULLABLE:
-                p.append(f"{key} may not be null (\"none\" is a value where the tag has one)")
-        elif key in LEARN_VALUES:
-            if not isinstance(value, str) or value not in LEARN_VALUES[key]:
-                p.append(f"{key} must be one of {', '.join(LEARN_VALUES[key])}, got {value!r}")
-        elif key in LEARN_BOOLS:
-            if not isinstance(value, bool):
-                p.append(f"{key} must be true or false, got {value!r}")
-        elif key in _WHOLE_RANGES:
-            low, high = _WHOLE_RANGES[key]
-            if not _whole(value) or value < low or (high is not None and value > high):
-                p.append(f"{key} must be a whole number from {low}{'' if high is None else f' to {high}'}, got {value!r}")
-        elif key == "length_s":
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
-                p.append(f"length_s must be a number of seconds, got {value!r}")
-        elif key in ("family_id", "hit_rules_version"):
-            if not isinstance(value, str) or not value.strip():
-                p.append(f"{key} must be a non-empty text, got {value!r}")
-        elif key == "test_arms":
-            if not isinstance(value, Mapping):
-                p.append(f"test_arms must be an object ({{}} until a test runs), got {value!r}")
+        if (problem := _value_problem(key, features[key])) is not None:
+            p.append(problem)
     total = features.get("score_total")
     if "score_bucket" in features and (total is None or _whole(total)) and features["score_bucket"] != score_bucket(total):
         p.append(f"score_bucket must be {score_bucket(total)!r} for score_total {total!r}, got {features['score_bucket']!r}")
+    if features.get("score_bucket") == "none":  # no score, no score numbers
+        late = [k for k in ("score_potential", "score_swap") if features.get(k) is not None]
+        p.extend(f"{k} must be null when score_bucket is none" for k in late)
+    if features.get("days_since_trend_peak") is not None and features.get("trend_stage") in ("none", "classic"):
+        p.append(f"days_since_trend_peak must be null when trend_stage is {features['trend_stage']} (no peak to count from)")
+    if features.get("episode") is not None and features.get("series") == "none":
+        p.append("episode must be null when series is none")
     return p
+
+
+def _value_problem(key: str, value: Any) -> str | None:
+    """What is wrong with one learning tag's value on its own, or None."""
+    if value is None:
+        return None if key in LEARN_NULLABLE else f"{key} may not be null (\"none\" is a value where the tag has one)"
+    if key in LEARN_VALUES:
+        ok = isinstance(value, str) and value in LEARN_VALUES[key]
+        return None if ok else f"{key} must be one of {', '.join(LEARN_VALUES[key])}, got {value!r}"
+    if key in LEARN_BOOLS:
+        return None if isinstance(value, bool) else f"{key} must be true or false, got {value!r}"
+    if key in _WHOLE_RANGES:
+        low, high = _WHOLE_RANGES[key]
+        if not _whole(value) or value < low or (high is not None and value > high):
+            return f"{key} must be a whole number from {low}{'' if high is None else f' to {high}'}, got {value!r}"
+        return None
+    if key == "length_s":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            return f"length_s must be a number of seconds, got {value!r}"
+        return None
+    if key == "family_id":
+        return None if isinstance(value, str) and value.strip() else f"family_id must be a non-empty text, got {value!r}"
+    if key == "hit_rules_version":
+        ok = isinstance(value, str) and (value == "none" or _RULES_VERSION.fullmatch(value) is not None)
+        return None if ok else f"hit_rules_version must be v<N> or none, got {value!r}"
+    if key == "test_arms":
+        return None if isinstance(value, Mapping) else f"test_arms must be an object ({{}} until a test runs), got {value!r}"
+    if key == "hook_text":
+        return None if isinstance(value, str) else f"hook_text must be text, got {value!r}"
+    return None
 
 
 class IllegalTransition(Exception):
@@ -372,6 +395,23 @@ def set_length(store: Store, clip_id: str, seconds: float) -> Clip:
         raise KeyError(clip_id)
     length = round(float(seconds), 2)
     return store.update_clip(clip_id, features={**clip.features, "length_s": length, "length_bucket": length_bucket(length)})
+
+
+def set_hook_tags(store: Store, clip_id: str, tags: Mapping[str, Any]) -> Clip:
+    """Re-tag the hook the master renders (``HOOK_TAGS``: ``hook_text`` and, for a clip with the learning tags, its
+    ``hook_pattern`` / ``hook_index`` / ``hook_by``): a make that resumes after a failed master renders the hook of the owner's
+    latest Adjust, which may not be the one the clip was created with. The other tags are kept. ``KeyError`` for an unknown clip,
+    ``ValueError`` (nothing written) for another key or a value outside its vocabulary."""
+    unknown = sorted(set(tags) - set(HOOK_TAGS))
+    if unknown:
+        raise ValueError(f"set_hook_tags writes only {', '.join(HOOK_TAGS)}, got {', '.join(unknown)}")
+    bad = [problem for key, value in tags.items() if (problem := _value_problem(key, value)) is not None]
+    if bad:
+        raise ValueError("bad hook tag(s): " + "; ".join(bad))
+    clip = store.get_clip(clip_id)
+    if clip is None:
+        raise KeyError(clip_id)
+    return store.update_clip(clip_id, features={**clip.features, **tags})
 
 
 def set_source(store: Store, clip_id: str, source_id: str) -> Clip:

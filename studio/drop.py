@@ -73,7 +73,8 @@ afterwards). The check stores the version of the hit rules it was judged by (``d
 per hook (``hook_patterns``) and the question variant of the first comment (``first_comment_question``). Make it writes every
 tag on the clip (``learn_tags``: the format, the hook used with its pattern, the score, the family, his part, the sound, the
 source...; ``clips.new_clip`` refuses a drop's clip that misses one) and the master writes its real length
-(``master.upload_master``). A drop checked before this build is made with ``none`` where the check gave nothing (``drop recheck
+(``master.upload_master``) and re-tags the hook it renders (``clips.set_hook_tags``: a make resumed after a failed master renders
+the owner's latest Adjust). A drop checked before this build is made with ``none`` where the check gave nothing (``drop recheck
 --all-ready`` gives the ready ones their labels first).
 
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
@@ -1264,7 +1265,8 @@ def learn_tags(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], 
       ``drop.auto_filed``, plan Task 6), else ``owner_saved``.
     - the hook: ``_hook_tags``.
     - ``trend_stage``: ``classic`` for a classic, else the hits job's ``drop.trend_stage`` when it gave one, else ``none``;
-      ``days_since_trend_peak`` and ``sound_rising`` likewise (None and false until then).
+      ``days_since_trend_peak`` likewise, and only with a rising, peak or fading stage (a classic never peaks); ``sound_rising``
+      likewise (None and false until then).
     - ``sound_type``: the clip keeps its own sound (music ``original``): ``own_trend_sound`` with a moment name, ``own_other``
       without, ``none`` when the clip has no sound; ``ai_beat`` / ``in_app`` per the music.
     - the score (``drop.score``, terminal v3) as ``score_bucket`` and its three numbers (``none`` and None for a check made
@@ -1293,7 +1295,8 @@ def learn_tags(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], 
     return {
         "format_id": fmt, **_hook_tags(drop, look, eff["hook"]),
         "caption_line1": "label-first", "first_comment_kind": "vote" if look.get("first_comment") else "none",
-        "trend_stage": stage, "days_since_trend_peak": None if classic else _whole(drop.get("days_since_trend_peak"), 0),
+        "trend_stage": stage,
+        "days_since_trend_peak": _whole(drop.get("days_since_trend_peak"), 0) if stage in ("rising", "peak", "fading") else None,
         "sound_type": sound, "sound_rising": drop.get("sound_rising") is True,
         "score_bucket": clips.score_bucket(total), "score_total": total,
         "score_potential": _whole(score.get("potential"), 0) if total is not None else None,
@@ -1307,12 +1310,14 @@ def learn_tags(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], 
 
 def version_index(store: Store, pick: Favorite) -> int:
     """The pick's place in its family (learning plan tag 11): 1 = the root, 2-3 = its versions by creation order, skipped ones
-    not counted (``family``)."""
+    not counted (``family``). ``DropError`` for a version that is no member any more (it was skipped)."""
     root = family_root_id(pick)
     if root == pick.id:
         return 1
     versions = [m.id for m in family(store, pick) if m.id != root]
-    return (versions.index(pick.id) if pick.id in versions else len(versions)) + 2
+    if pick.id not in versions:
+        raise DropError("this clip's version was skipped: drop it again")
+    return versions.index(pick.id) + 2
 
 
 def _features(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], kind: str, version_index: int) -> dict[str, Any]:
@@ -1773,6 +1778,10 @@ def _master(store: Store, storage: Storage, pick: Favorite, clip: Clip, ref: Map
         reason = f"the master missed the spec: {'; '.join(problems)[:200]}"
         _update(store, pick, now, state="failed", reason=reason)
         return Outcome(pick.id, "failed", reason, ok=False, detail={"clip_id": clip.id})
+    # the hook on screen is the one tagged: a make resumed after a failed master renders the owner's latest Adjust, which may
+    # not be the hook the clip was created with (a clip made before the learning tags keeps its old pattern tags)
+    retag = {"hook_text": hook, **(_hook_tags(drop, look, hook) if "hook_index" in clip.features else {})}
+    clips.set_hook_tags(store, clip.id, retag)
     upload_master(store, storage, clip.id, out)
     kind = clip.features.get("engagement_kind") if clip.features.get("engagement_kind") in ENGAGEMENT_ORDER else ENGAGEMENT_ORDER[0]
     caption = caption_text(pick, look, kind) if look.get("caption") else hook
