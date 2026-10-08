@@ -119,8 +119,16 @@ describe('overviewRows', () => {
 
   it('counts his clips: ready to make, being made, to approve, scheduled, posted', () => {
     const [franz, reginald] = overviewRows(fixture(), NOW);
-    expect(franz).toMatchObject({ readyToMake: 6, beingMade: 2, toApprove: 2, scheduled: 3, posted: 3 });
-    expect(reginald).toMatchObject({ readyToMake: 1, beingMade: 1, toApprove: 1, scheduled: 0, posted: 2 });
+    expect(franz).toMatchObject({ readyToMake: 6, needsYou: 2, beingMade: 2, toApprove: 2, scheduled: 3, posted: 3 });
+    expect(reginald).toMatchObject({ readyToMake: 1, needsYou: 0, beingMade: 1, toApprove: 1, scheduled: 0, posted: 2 });
+  });
+
+  it('counts the clips that wait for his character choice among the ready ones ("6 ready · 2 need your choice")', () => {
+    const [franz, , all] = overviewRows(fixture(), NOW);
+    expect([franz.readyToMake, franz.needsYou]).toEqual([6, 2]); // the studio chose him on 2 of his 6 checked clips
+    expect(all.needsYou).toBe(2);
+    const legacy = overviewRows(fixture({ tracker: [row('franz', card('ready', { character_by: undefined }))] }), NOW)[0];
+    expect([legacy.readyToMake, legacy.needsYou]).toEqual([1, 1]); // a drop from before 0013: still his to confirm
   });
 
   it('works out the runway: ready clips ÷ his posts per week from the cadence, none without a cadence', () => {
@@ -140,10 +148,17 @@ describe('overviewRows', () => {
     for (const none of [undefined, null, {}, { days: [] }, { days: 42 }]) expect(postsPerWeek(none as never)).toBeNull();
   });
 
-  it('adds up his views by London day: today, 7 days, 30 days, all time, a recount counting 0 and a day to come never', () => {
+  it('adds up his views by London day: today, 7 days, 30 days, all time, a recount taken off and a day to come never', () => {
     const [franz, reginald] = overviewRows(fixture(), NOW);
-    expect(franz).toMatchObject({ viewsToday: 100, views7d: 150, views30d: 350, viewsAll: 1350, follows7d: 5, hasViews: true });
+    // v_views_daily telescopes: the -20 corrects an earlier overcount, so the totals are the sums as they are (what the posts show)
+    expect(franz).toMatchObject({ viewsToday: 100, views7d: 130, views30d: 330, viewsAll: 1330, follows7d: 4, hasViews: true });
     expect(reginald).toMatchObject({ viewsToday: 7, views7d: 7, views30d: 47, viewsAll: 47, follows7d: 0, hasViews: true });
+  });
+
+  it('never shows a total below 0, nor a day below 0', () => {
+    const recount = [views('franz', '2026-10-08', -30, -2), views('franz', '2026-10-07', 10, 1), views('franz', '2026-09-01', 100)];
+    const [franz] = overviewRows(fixture({ viewsDaily: recount }), NOW);
+    expect(franz).toMatchObject({ viewsToday: 0, views7d: 0, views30d: 0, viewsAll: 80, follows7d: 0 }); // -30 today; -20 over 7 days
   });
 
   it('takes "today" as the London day, not the UTC one', () => {
@@ -172,6 +187,16 @@ describe('overviewRows', () => {
     expect(noInstagram[0].testStatus).toBeNull();
   });
 
+  it('takes "this week" as the last 7 London days, not the last 7 x 24 hours', () => {
+    const library = [
+      clip('franz', 'posted', { id: 'thu-evening', posted_at: '2026-10-01T19:00:00+01:00', views: 9000 }), // 6 days 17 h ago: last week's Thursday
+      clip('franz', 'posted', { id: 'fri-night', posted_at: '2026-10-02T00:30:00+01:00', views: 800 }), // the first of the 7 days
+      clip('franz', 'posted', { id: 'later-today', posted_at: inHours(5), views: 99_999 }), // a time still to come: never
+    ];
+    const [franz] = overviewRows(fixture({ library }), NOW);
+    expect(franz.bestThisWeek?.clipId).toBe('fri-night');
+  });
+
   it('names the test status in plain words', () => {
     expect(['continue', 'promote', 'kill', 'not_yet', null, 'weird'].map((b) => testStatusOf(b))).toEqual([
       'on_track', 'promote', 'at_risk', 'not_yet', 'not_yet', 'not_yet',
@@ -183,10 +208,10 @@ describe('overviewRows', () => {
     const rows = overviewRows(fixture(), NOW);
     const all = rows.at(-1)!;
     const live = rows.slice(0, -1);
-    for (const key of ['readyToMake', 'beingMade', 'toApprove', 'scheduled', 'posted', 'viewsToday', 'views7d', 'views30d', 'viewsAll', 'follows7d'] as const) {
+    for (const key of ['readyToMake', 'needsYou', 'beingMade', 'toApprove', 'scheduled', 'posted', 'viewsToday', 'views7d', 'views30d', 'viewsAll', 'follows7d'] as const) {
       expect([key, all[key]]).toEqual([key, live.reduce((s, r) => s + r[key], 0)]);
     }
-    expect(all).toMatchObject({ readyToMake: 7, toApprove: 3, viewsToday: 107, viewsAll: 1397, hasViews: true });
+    expect(all).toMatchObject({ readyToMake: 7, toApprove: 3, viewsToday: 107, viewsAll: 1377, hasViews: true });
   });
 
   it('shows zeros and hasViews false before anything is measured', () => {
@@ -196,14 +221,14 @@ describe('overviewRows', () => {
     }
     const empty = overviewRows(snapshot(), NOW);
     expect(empty).toHaveLength(1); // no character live yet: only All, all zeros
-    expect(empty[0]).toMatchObject({ slug: null, readyToMake: 0, viewsAll: 0, hasViews: false, runwayWeeks: null, hitRate: null, bestThisWeek: null });
+    expect(empty[0]).toMatchObject({ slug: null, readyToMake: 0, needsYou: 0, viewsAll: 0, hasViews: false, runwayWeeks: null, hitRate: null, bestThisWeek: null });
   });
 });
 
 describe('viewsSeries', () => {
   const dayAfter = (key: string) => new Date(Date.parse(`${key}T12:00:00Z`) + DAY).toISOString().slice(0, 10);
 
-  it('fills every day of the last 7 London days per character, a gap as 0 and a recount clamped at 0', () => {
+  it('fills every day of the last 7 London days per character, a gap as 0 and a recount day drawn at 0 (the chart only)', () => {
     const s = viewsSeries(VIEWS, '7d', NOW);
     expect(s.days).toEqual(['2026-10-02', '2026-10-03', '2026-10-04', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08']);
     expect(s.lines.map((l) => l.slug)).toEqual(['franz', 'reginald', 'lenny']); // the owner's order
@@ -254,10 +279,11 @@ describe('the demo', () => {
     const month = viewsSeries(snap.viewsDaily, '30d', NOW, rows.filter((r) => r.slug).map((r) => r.slug!));
     const daysWithViews = month.days.filter((_, i) => month.lines.some((l) => l.views[i] > 0));
     expect(daysWithViews.length).toBeGreaterThanOrEqual(25);
-    // the views per day add up to what the library's posts show
-    for (const slug of ['reginald']) {
+    // the views per day add up to what the library's posts show, and so does the total on the board
+    for (const slug of ['reginald', 'lenny']) {
       const library = snap.library.filter((c) => c.character_slug === slug).reduce((s, c) => s + (c.views ?? 0), 0);
       expect(snap.viewsDaily.filter((d) => d.character_slug === slug).reduce((s, d) => s + d.views, 0)).toBe(library);
+      expect(rows.find((r) => r.slug === slug)!.viewsAll).toBe(library);
     }
     expect(Object.keys(snap.cadence).length).toBeGreaterThan(0);
   });

@@ -72,6 +72,12 @@ const asDate = (v: string | number | Date) => (v instanceof Date ? v : new Date(
 export const londonTime = (v: string | number | Date) => timeFmt.format(asDate(v));
 /** "2026-10-07": the London calendar day of a moment. */
 export const londonDayKey = (v: string | number | Date) => dayKeyFmt.format(asDate(v));
+/** The calendar day `n` days after the day key `key` (YYYY-MM-DD), counted on the calendar: a clock change never skips or repeats
+ * a day (24 h steps would, near midnight). */
+export function addDays(key: string, n: number): string {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
 /** "Tue 6 Oct". */
 export const londonDate = (v: string | number | Date) => dateFmt.format(asDate(v)).replace(',', '');
 /** "6 Oct, 19:00". */

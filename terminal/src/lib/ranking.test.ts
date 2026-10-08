@@ -310,9 +310,26 @@ describe('the demo', () => {
     await expect(demo.copyDrop(root.pick_id, 'lenny')).rejects.toThrow('Lenny Gold already has a version of this clip');
     await expect(demo.copyDrop(root.pick_id, 'biscuit')).rejects.toThrow('Biscuit is paused');
     await expect(demo.copyDrop(root.pick_id, 'nobody')).rejects.toThrow("unknown character 'nobody'");
-    await expect(demo.copyDrop(root.pick_id, 'franz')).rejects.toThrow("the wrong star: Franz replaces a dog, this clip's star is a person");
+    const dog = snap.tracker.find((r) => r.drop_card?.state === 'ready' && r.drop_card.star?.kind === 'dog' && r.character_slug === 'franz')!;
+    await expect(demo.copyDrop(dog.pick_id, 'reginald')).rejects.toThrow("the wrong star: Reginald replaces a person, this clip's star is a dog");
     const checking = snap.tracker.find((r) => r.drop_card?.state === 'checking' && !r.drop_card.copy_of)!;
     await expect(demo.copyDrop(checking.pick_id, 'reginald')).rejects.toThrow('the clip is not checked yet');
     await expect(demo.copyDrop('nope', 'reginald')).rejects.toThrow(/unknown pick/);
+  });
+
+  it('offers Franz for the family of two (he replaces a person too, refs.json) and stops at 3 members', async () => {
+    const { DemoBackend } = await import('../demo/backend');
+    const demo = new DemoBackend(() => NOW);
+    const snap = await demo.load();
+    const v = snap.tracker.find((r) => r.drop_card?.copy_of)!;
+    const root = snap.tracker.find((r) => r.pick_id === v.drop_card!.copy_of)!;
+    expect(familyOf(root, snap.tracker).map((r) => r.character_slug)).toEqual(['reginald', 'lenny']);
+    expect(reuseTargets(root, snap.characters, snap.tracker)).toEqual([{ slug: 'franz', name: 'Franz' }]);
+    await demo.copyDrop(v.pick_id, 'franz'); // asked from the version: the third member, at the root
+    const after = await demo.load();
+    expect(familyOf(root, after.tracker).map((r) => r.character_slug)).toEqual(['reginald', 'lenny', 'franz']);
+    expect(after.tracker.filter((r) => r.drop_card?.copy_of === root.pick_id)).toHaveLength(MAX_FAMILY - 1);
+    expect(reuseTargets(root, after.characters, after.tracker)).toEqual([]);
+    await expect(demo.copyDrop(root.pick_id, 'biscuit')).rejects.toThrow('a clip goes to at most 3 characters'); // counted before paused, as the SQL does
   });
 });

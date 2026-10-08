@@ -312,7 +312,8 @@ describe('the demo: Recommend and the character menu', () => {
       ids.push(pickId);
     }
     let rows = (await demo.load()).tracker.filter((r) => ids.includes(r.pick_id));
-    expect(rows.every((r) => r.character_slug === 'lenny' && r.drop_card?.character_by === 'studio')).toBe(true);
+    // the provisional character: the first by slug who replaces a person (studio.drop.provisional, add_drop of 0015): Franz
+    expect(rows.every((r) => r.character_slug === 'franz' && r.drop_card?.character_by === 'studio')).toBe(true);
     now += 2_500;
     rows = (await demo.load()).tracker.filter((r) => ids.includes(r.pick_id));
     for (const r of rows) {
@@ -345,12 +346,13 @@ describe('the demo: Recommend and the character menu', () => {
     r = (await demo.load()).tracker.find((x) => x.pick_id === ready.pick_id)!;
     expect(r.drop_card?.state).toBe('ready');
     expect(r.drop_card?.hooks).toContain('Call my assistant.'); // Lenny's voice now
-    // a person's clip put on the dog character is checked, and blocked like for like, with the star pointing back
-    await demo.setDropCharacter(ready.pick_id, 'franz');
+    // a dog's clip put on a character who replaces people only is checked, and blocked like for like, with the star pointing back
+    const dog = snap.tracker.find((x) => x.drop_card?.state === 'ready' && x.drop_card.star?.kind === 'dog' && x.drop_card.character_by !== 'studio')!;
+    await demo.setDropCharacter(dog.pick_id, 'reginald');
     now += 2_500;
-    r = (await demo.load()).tracker.find((x) => x.pick_id === ready.pick_id)!;
-    expect(r.drop_card).toMatchObject({ state: 'blocked', recommended: { slug: 'reginald' } });
-    expect(r.drop_card?.reason).toMatch(/the wrong star: Franz replaces a dog/);
+    r = (await demo.load()).tracker.find((x) => x.pick_id === dog.pick_id)!;
+    expect(r.drop_card).toMatchObject({ state: 'blocked', recommended: { slug: 'franz' } });
+    expect(r.drop_card?.reason).toMatch(/the wrong star: Reginald replaces a person, this clip’s star is a dog/);
     // the same character again only records his choice
     const studio = (await demo.load()).tracker.find((x) => x.drop_card?.character_by === 'studio' && x.drop_card.state === 'ready')!;
     expect(await demo.setDropCharacter(studio.pick_id, studio.character_slug!)).toEqual({ dispatched: false });

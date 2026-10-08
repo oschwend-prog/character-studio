@@ -3,7 +3,7 @@
 // per day by period. Pure functions over the snapshot: v_tracker (the clips), v_queue, v_library, v_channels, v_views_daily
 // (migration 0015) and the cadence of studio.settings. Days are London days, counted on the calendar. No browser.
 import { clipChip } from './clipstatus';
-import { londonDayKey } from './format';
+import { addDays, londonDayKey } from './format';
 import { orderRoster } from './roster';
 import type { CadenceEntry, Channel, LibraryClip, Snapshot, TrackerRow, ViewsDay } from './types';
 
@@ -11,14 +11,7 @@ import type { CadenceEntry, Channel, LibraryClip, Snapshot, TrackerRow, ViewsDay
 export const OVERVIEW_ALL = 'All';
 
 const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-const DAY_MS = 86_400_000;
 const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/;
-
-/** The calendar day `n` days after the London day `key` (YYYY-MM-DD): a clock change never skips or repeats a day. */
-export function addDays(key: string, n: number): string {
-  const [y, m, d] = key.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
-}
 
 /** Every day from `first` to `last`, both included. */
 function dayRange(first: string, last: string): string[] {
@@ -70,8 +63,9 @@ const count = (v: unknown): number => {
 };
 
 /**
- * v_views_daily by character and London day, each day clamped at 0 (a recount can make a day negative: it shows as 0, never as a
- * dip below the axis). A day after today (a clock ahead) or a malformed day is left out.
+ * v_views_daily by character and London day, as measured (a day can be negative: a recount correcting an earlier overcount). A day
+ * after today (a clock ahead) or a malformed day is left out. The view telescopes (each day is the latest snapshot less the one
+ * before), so a window's raw sum is the truth: totals clamp the sum at 0, only the chart clamps each day.
  */
 function byDay(rows: ReadonlyArray<ViewsDay>, today: string): Map<string, Map<string, DayValue>> {
   const raw = new Map<string, Map<string, DayValue>>();
@@ -82,9 +76,6 @@ function byDay(rows: ReadonlyArray<ViewsDay>, today: string): Map<string, Map<st
     const v = days.get(day) ?? { views: 0, follows: 0 };
     days.set(day, { views: v.views + count(r.views), follows: v.follows + count(r.follows) });
     raw.set(r.character_slug, days);
-  }
-  for (const days of raw.values()) {
-    for (const [day, v] of days) days.set(day, { views: Math.max(0, v.views), follows: Math.max(0, v.follows) });
   }
   return raw;
 }
@@ -111,6 +102,9 @@ export interface OverviewRow {
   name: string;
   /** Checked clips filed for him, no Make it yet (the Ready and the Pick a character chips). */
   readyToMake: number;
+  /** Of those, the ones whose character the studio chose and that wait for the owner's choice (the Pick a character chip):
+   * "6 ready · 2 need your choice". */
+  needsYou: number;
   /** Make it tapped, or his clip is being generated, checked or built. */
   beingMade: number;
   /** Finished videos waiting for the owner's OK (the queue). */
@@ -118,12 +112,15 @@ export interface OverviewRow {
   /** Approved or booked videos. */
   scheduled: number;
   posted: number;
+  /** The views gained today. Every views and follows total is the window's sum, never below 0: a recount is taken off, so the
+   * sum is what his posts show. */
   viewsToday: number;
   /** Today and the 6 days before. */
   views7d: number;
   /** Today and the 29 days before. */
   views30d: number;
   viewsAll: number;
+  /** The follows gained today and the 6 days before, never below 0. */
   follows7d: number;
   /** Something was measured for him (v_views_daily has a day): before that the views are zeros and the screen says why. */
   hasViews: boolean;
@@ -136,6 +133,7 @@ export interface OverviewRow {
   testStatus: TestStatus | null;
   /** Share of his measured clips at 3x or more, weighted by the clips each channel measured; null before any is measured. */
   hitRate: number | null;
+  /** His most viewed video posted in the last 7 London days (today and the 6 before), not one still to come. */
   bestThisWeek: BestVideo | null;
 }
 
@@ -166,12 +164,13 @@ function better(a: BestVideo | null, b: BestVideo | null): BestVideo | null {
   return d > 0 ? b : a;
 }
 
-function bestOf(library: ReadonlyArray<LibraryClip>, now: number): BestVideo | null {
+function bestOf(library: ReadonlyArray<LibraryClip>, today: string, now: number): BestVideo | null {
+  const first = addDays(today, -6);
   let best: BestVideo | null = null;
   for (const c of library) {
     const at = ts(c.posted_at);
     const views = c.views == null ? NaN : Number(c.views);
-    if (!Number.isFinite(at) || at < now - 7 * DAY_MS || at > now || !Number.isFinite(views)) continue;
+    if (!Number.isFinite(at) || at > now || londonDayKey(at) < first || !Number.isFinite(views)) continue;
     best = better(best, { clipId: c.id, slug: c.character_slug, hook: c.hook, views, postedAt: c.posted_at!, masterPath: c.master_path });
   }
   return best;
@@ -203,13 +202,16 @@ function characterRow(slug: string, name: string, data: OverviewData, days: Map<
   const library = data.library.filter((c) => c.character_slug === slug);
   const channels = data.channels.filter((ch) => ch.character_slug === slug);
   const readyToMake = tracker.filter((r: TrackerRow) => r.drop_card && READY_CHIPS.has(clipChip(r))).length;
-  const sum = (from: string, key: keyof DayValue) => [...(days ?? new Map<string, DayValue>())].reduce((s, [d, v]) => (d >= from ? s + v[key] : s), 0);
+  // the raw days of the window added up, then never below 0 (days after today were left out by byDay)
+  const sum = (from: string, key: keyof DayValue) =>
+    Math.max(0, [...(days ?? new Map<string, DayValue>())].reduce((s, [d, v]) => (d >= from ? s + v[key] : s), 0));
   const perWeek = postsPerWeek(data.cadence?.[slug]);
   const instagram = channels.find((ch) => ch.platform === 'instagram');
   return {
     slug,
     name,
     readyToMake,
+    needsYou: tracker.filter((r) => r.drop_card && clipChip(r) === 'pick').length,
     beingMade: tracker.filter((r) => clipChip(r) === 'making').length,
     toApprove: data.queue.filter((q) => q.character_slug === slug).length,
     scheduled: library.filter((c) => c.state === 'approved' || c.state === 'scheduled').length,
@@ -225,11 +227,11 @@ function characterRow(slug: string, name: string, data: OverviewData, days: Map<
     runwayWeeks: perWeek ? round1(readyToMake / perWeek) : null,
     testStatus: instagram ? testStatusOf(instagram.bar_status) : null,
     hitRate: hitRateOf(channels),
-    bestThisWeek: bestOf(library, now),
+    bestThisWeek: bestOf(library, today, now),
   };
 }
 
-const SUMMED = ['readyToMake', 'beingMade', 'toApprove', 'scheduled', 'posted', 'viewsToday', 'views7d', 'views30d', 'viewsAll', 'follows7d'] as const;
+const SUMMED = ['readyToMake', 'needsYou', 'beingMade', 'toApprove', 'scheduled', 'posted', 'viewsToday', 'views7d', 'views30d', 'viewsAll', 'follows7d'] as const;
 
 /**
  * The studio at a glance (spec 5.1): a row per live character in the owner's order, then the All row. All adds up the live rows
@@ -272,7 +274,8 @@ export const VIEWS_PERIODS: ReadonlyArray<{ id: ViewsPeriod; label: string }> = 
 export interface ViewsSeries {
   /** Every London day of the period, oldest first, today last. */
   days: string[];
-  /** One line per character: the views of each day (a day not measured is 0, a recount below 0 is 0). */
+  /** One line per character: the views of each day (a day not measured is 0; a recount day below 0 is drawn at 0: the chart only,
+   * the totals take it off). */
   lines: { slug: string; views: number[] }[];
   /** Something was measured for these characters (on any day): false = the chart's empty state. */
   hasViews: boolean;
@@ -295,7 +298,7 @@ export function viewsSeries(rows: ReadonlyArray<ViewsDay>, period: ViewsPeriod, 
   const days = dayRange(first, today);
   return {
     days,
-    lines: scope.map((slug) => ({ slug, views: days.map((d) => views.get(slug)?.get(d)?.views ?? 0) })),
+    lines: scope.map((slug) => ({ slug, views: days.map((d) => Math.max(0, views.get(slug)?.get(d)?.views ?? 0)) })),
     hasViews: measured.length > 0,
   };
 }

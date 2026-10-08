@@ -8,8 +8,7 @@ import { canonicalVideoUrl, AUTOPILOT_MIN_APPROVED, PROPS_MAX, PROP_MAX_CHARS, S
 import { validateAdjust } from '../lib/drop';
 import { velocityPerDay } from '../lib/analyst';
 import { decisionTime, inTracker } from '../lib/tracker';
-import { londonDayKey, londonWallToIso } from '../lib/format';
-import { addDays } from '../lib/overview';
+import { addDays, londonDayKey, londonWallToIso } from '../lib/format';
 import { orderRoster } from '../lib/roster';
 import type {
   Backend, Budget, CadenceEntry, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, DropScore, Engagement, HealthRow, LibraryClip, OwnerMusic,
@@ -38,7 +37,8 @@ const SLOTS: Record<string, string> = { franz: '19:00', reginald: '19:30', lenny
 const STATUS: Record<string, string> = { franz: 'live', reginald: 'live', lenny: 'live', biscuit: 'paused' };
 /** The weekly review's bar per account (v_channels.bar_status; none = no review yet): Reginald's Instagram test is on track. */
 const BARS: Record<string, string> = { 'reginald:instagram': 'continue', 'biscuit:instagram': 'kill' };
-const BODIES: Record<string, string[]> = { franz: ['quadruped'], reginald: ['biped'], lenny: ['biped'], biscuit: ['biped', 'quadruped'] };
+// Franz like refs.json (owner 2026-10-07, "franz not only replaces dogs"): his upright body takes a person too.
+const BODIES: Record<string, string[]> = { franz: ['biped', 'quadruped'], reginald: ['biped'], lenny: ['biped'], biscuit: ['biped', 'quadruped'] };
 /** The handles each character's social kit plans (characters/<slug>/social.md), for the ones with no account yet. */
 const PLANNED: Record<string, Record<string, string>> = {
   franz: { instagram: 'franz.dachshund', tiktok: '@franz.dachshund' },
@@ -97,7 +97,10 @@ const MUSIC_ARMS = ['in_app', 'original', 'ai_beat'];
 const DEMO_JOB_MS = 2_000; // how long the demo's "cloud job" takes
 
 // Who each character replaces (refs.json `swap.stars`: like for like) and what the demo's "check" writes in his voice.
-const STARS: Record<string, ReadonlyArray<'person' | 'dog' | 'animal'>> = { franz: ['dog'], reginald: ['person'], lenny: ['person'], biscuit: ['dog', 'animal'] };
+const STARS: Record<string, ReadonlyArray<'person' | 'dog' | 'animal'>> = { franz: ['dog', 'person'], reginald: ['person'], lenny: ['person'], biscuit: ['dog', 'animal'] };
+/** Who the demo's check recommends for a kind of star, best fit first: Franz for a dog; for a person Reginald, then Lenny, Franz's
+ * upright body last (SYNTHETIC: the real check asks Gemini who fits). */
+const FIT: Record<string, ReadonlyArray<string>> = { dog: ['franz', 'biscuit'], person: ['reginald', 'lenny', 'franz'], animal: ['biscuit'] };
 const DEMO_HOOKS: Record<string, string[]> = {
   franz: ['One does not walk. One arrives.', 'I was stretching to music.', 'Fetch it yourself.'],
   reginald: ['The household is unaware.', 'Breakfast is at eight.', 'Kindly do not tell the Duchess.'],
@@ -838,7 +841,9 @@ export class DemoBackend implements Backend {
             ? { kind: 'dog', body: 'quadruped', description: 'the dog in the middle', x_center: 0.5, full_body: true }
             : { kind: 'person', body: 'biped', description: 'the person in the middle', x_center: 0.5, full_body: true });
         const takers = Object.keys(NAMES).filter((s) => active(s) && STARS[s].includes(star!.kind as 'person' | 'dog'));
-        const pick = takers.includes(slug) ? slug : star!.kind === 'dog' ? 'franz' : takers.includes('reginald') ? 'reginald' : takers[0] ?? slug;
+        // the owner's own character stays recommended when he takes this star; a Recommend drop gets the best fit
+        const best = (FIT[star!.kind] ?? []).find((s) => takers.includes(s)) ?? takers[0];
+        const pick = d.character_by !== 'studio' && takers.includes(slug) ? slug : best ?? slug;
         const recommended = { slug: pick, reason: DEMO_REASONS[pick] ?? 'the best fit' };
         if (d.character_by === 'studio' && pick !== slug) f.character_slug = slug = pick; // the studio's own move, then a look in his voice
         if (!STARS[slug]?.includes(star!.kind as 'person' | 'dog')) {

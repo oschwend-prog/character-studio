@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addDays,
   characterCode,
   clipCode,
   formatAge,
@@ -81,6 +82,14 @@ describe('London time', () => {
   it('keys the London calendar day, not the UTC one', () => {
     expect(londonDayKey('2026-10-06T23:30:00Z')).toBe('2026-10-07');
     expect(londonDayKey('2026-11-03T23:30:00Z')).toBe('2026-11-03');
+  });
+  it('steps a day key on the calendar: across months, years and the clock changes, never skipping or repeating a day', () => {
+    expect(addDays('2026-10-08', -6)).toBe('2026-10-02');
+    expect(addDays('2026-10-25', 1)).toBe('2026-10-26'); // the clocks go back
+    expect(addDays('2026-03-29', -1)).toBe('2026-03-28'); // the clocks go forward
+    expect(addDays('2026-12-31', 1)).toBe('2027-01-01');
+    expect(addDays('2026-03-01', -1)).toBe('2026-02-28');
+    expect(addDays('2026-10-08', 0)).toBe('2026-10-08');
   });
 });
 
