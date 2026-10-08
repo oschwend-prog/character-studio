@@ -39,6 +39,7 @@ OBJECT_SWAP_MIN_PIXELS = 409_600  # Higgsfield's Object swap: at least this many
 PROXY_LONG_SIDE = 640
 PREVIEW_SIZE = (540, 960)  # the owner's watch copy and cover of a section: 9:16, small enough for a phone (Task 11)
 COVER_QUALITY = 82
+WATCH_TIMEOUT_S = 120  # the check never waits long for a picture or a watch copy (_ffmpeg's default is 900 s)
 _SLACK = 0.15  # a window may overshoot the end of the file by a frame or two of container rounding
 _FFMPEG = "ffmpeg"
 
@@ -224,7 +225,7 @@ def preview_video(
             "-ss", f"{start:.3f}", "-t", f"{length:.3f}", "-i", src, "-vf", framing,
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-pix_fmt", "yuv420p",
             *(["-c:a", "aac", "-b:a", "96k", "-ar", "48000"] if report.has_audio else ["-an"]),
-            "-movflags", "+faststart", work,
+            "-movflags", "+faststart", work, timeout=WATCH_TIMEOUT_S,
         )  # fmt: skip
         return _finish(work, out)
 
@@ -247,7 +248,10 @@ def cover_frame(
     framing = _watch_framing(report.width, report.height, crop_x, size)
     with tempfile.TemporaryDirectory(prefix="studio-cover-") as tmp:
         frame = Path(tmp) / "frame.png"
-        _ffmpeg("-ss", f"{min(at, max(0.0, report.duration_s - 0.1)):.3f}", "-i", src, "-vf", framing, "-frames:v", "1", frame)
+        _ffmpeg(
+            "-ss", f"{min(at, max(0.0, report.duration_s - 0.1)):.3f}", "-i", src, "-vf", framing, "-frames:v", "1", frame,
+            timeout=WATCH_TIMEOUT_S,
+        )
         if not frame.is_file():
             raise ClipworkError(f"ffmpeg wrote no frame at {at:g} s")
         work = Path(tmp) / "cover.jpg"
@@ -285,6 +289,6 @@ def mux_source_audio(video: Path | str, source: Path | str, out: Path | str, sta
 
 
 __all__ = [
-    "COVER_QUALITY", "ClipworkError", "OBJECT_SWAP_MIN_PIXELS", "PREVIEW_SIZE", "QAError", "TRIM_MAX_SECONDS", "cover_frame",
-    "mux_source_audio", "preview_video", "proxy_clip", "trim_clip", "upscaled_size",
+    "COVER_QUALITY", "ClipworkError", "OBJECT_SWAP_MIN_PIXELS", "PREVIEW_SIZE", "QAError", "TRIM_MAX_SECONDS", "WATCH_TIMEOUT_S",
+    "cover_frame", "mux_source_audio", "preview_video", "proxy_clip", "trim_clip", "upscaled_size",
 ]

@@ -309,3 +309,40 @@ def test_the_cover_is_one_540x960_jpeg_frame(tmp_path, source, landscape_source)
         assert img.size == (540, 960)
     with pytest.raises(ValueError, match="ends at"):
         clipwork.cover_frame(source, tmp_path / "late.jpg", 12.0)
+
+
+def test_the_watch_files_give_ffmpeg_120_s_not_the_default_900(tmp_path, source, monkeypatch):
+    """Fix round 1: the check never waits a quarter of an hour for a picture or a watch copy of the section."""
+    assert clipwork.WATCH_TIMEOUT_S == 120
+    seen: list[float] = []
+    real = clipwork._ffmpeg
+
+    def spy(*args, timeout=900):
+        seen.append(timeout)
+        return real(*args, timeout=timeout)
+
+    monkeypatch.setattr(clipwork, "_ffmpeg", spy)
+    clipwork.preview_video(source, tmp_path / "preview.mp4", 1.0, 3.0)
+    clipwork.cover_frame(source, tmp_path / "cover.jpg", 2.0)
+    assert seen == [120, 120]
+    clipwork.trim_clip(source, tmp_path / "t.mp4", 1.0, 3.0)  # the other jobs keep the long default
+    assert seen[-1] == 900
+
+
+def test_a_watch_file_that_times_out_is_a_clipwork_error_the_check_can_catch(tmp_path, source, monkeypatch):
+    import subprocess
+
+    real_run = subprocess.run
+
+    def slow(cmd, **kw):
+        if str(cmd[0]).endswith("ffmpeg"):  # ffprobe (the probe before it) runs as always
+            assert kw["timeout"] == 120
+            raise subprocess.TimeoutExpired(cmd, kw["timeout"])
+        return real_run(cmd, **kw)
+
+    monkeypatch.setattr(clipwork.subprocess, "run", slow)
+    with pytest.raises(clipwork.ClipworkError, match="timed out after 120 s"):
+        clipwork.preview_video(source, tmp_path / "p.mp4", 1.0, 3.0)
+    with pytest.raises(clipwork.ClipworkError, match="timed out after 120 s"):
+        clipwork.cover_frame(source, tmp_path / "c.jpg", 2.0)
+    assert not (tmp_path / "p.mp4").exists() and not (tmp_path / "c.jpg").exists()
