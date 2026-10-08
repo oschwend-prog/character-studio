@@ -3,7 +3,9 @@
 // one-line reason, the price and a Top pick badge on the first three scored ones (an unscored clip is "not scored yet"), then
 // what is on its way and done, the blocked and failed folded into one closed row. Each Ready clip has a tick box (the MakeBar
 // below adds them up and asks before anything is spent) and "Use for another character" (a version for a like-for-like
-// character, free: studio.copy_drop). `compact` is Today's "Make these": his top 3 Ready clips only.
+// character, free: studio.copy_drop). Under his Ready clips, "Worth saving": his top 5 new hits of the daily cloud pull (spec 10,
+// Hits.tsx). A clip not made yet has the Keep toggle (retention never deletes a kept clip). `compact` is Today's "Make these": his
+// top 3 Ready clips only.
 import { ArrowRight, CircleAlert } from 'lucide-react';
 import { useState } from 'react';
 import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipChip } from '../lib/clipstatus';
@@ -15,6 +17,8 @@ import { activeRoster, nameOf, type RosterEntry } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import type { TrackerRow } from '../lib/types';
 import { CharacterCell, DropThumb } from './DropsTable';
+import { WorthSaving } from './Hits';
+import { KeepToggle } from './KeepToggle';
 import { Avatar, Spinner } from './ui';
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -127,7 +131,8 @@ function CharacterSection({
 
       {empty && (
         <p className="small muted pick-sec-empty">
-          No clips for {g.name} yet. Save a video to the clips folder or add one above: each is checked for free.
+          No clips for {g.name} yet. Save a video to the clips folder, add one above or use one of his hits below: each is checked for
+          free.
         </p>
       )}
 
@@ -154,6 +159,8 @@ function CharacterSection({
       ) : (
         !empty && <p className="small muted pick-sec-empty">Nothing ready to make for {g.name}.</p>
       )}
+
+      <WorthSaving slug={g.slug} name={g.name} readyCount={g.ready.length} now={now} />
 
       {g.onTheWay.length > 0 && (
         <div className="pick-group">
@@ -249,6 +256,7 @@ function ReadyItem({
         </span>
         {versions && <span className="small muted">{versions}</span>}
         {!compact && <ReuseMenu row={row} title={title} />}
+        {!compact && <KeepToggle row={row} />}
       </div>
     </li>
   );
@@ -288,10 +296,11 @@ function ReuseMenu({ row, title }: { row: TrackerRow; title: string }) {
         <div className="reuse-confirm" role="group" aria-label={`Use this clip for ${pending.name}?`}>
           <span className="small">Use this clip for {pending.name} too? It is checked again for him, free.</span>
           <span className="reuse-buttons">
-            <button type="button" className="btn line" autoFocus disabled={working} aria-busy={working} onClick={() => void copy(pending)}>
+            <button type="button" className="btn line" disabled={working} aria-busy={working} onClick={() => void copy(pending)}>
               {working && <Spinner />} Yes
             </button>
-            <button type="button" className="btn ghost" disabled={working} onClick={() => setPending(null)}>
+            {/* the focus lands on Cancel: Enter on a mis-picked name must not take one of the family's 3 places */}
+            <button type="button" className="btn ghost" autoFocus disabled={working} onClick={() => setPending(null)}>
               Cancel
             </button>
           </span>
@@ -352,6 +361,7 @@ function NeedsYouItem({ row, roster }: { row: TrackerRow; roster: ReadonlyArray<
         <div className="needs-choice">
           <CharacterCell row={row} menu={menu} confirm={characterConfirm(row, roster)} working={working} onChoose={choose} />
         </div>
+        <KeepToggle row={row} />
       </div>
     </li>
   );
@@ -375,6 +385,7 @@ function QuietItem({ row, now, versions }: { row: TrackerRow; now: number; versi
         {row.clip_state === 'awaiting_approval' && row.clip_id && (
           <a className="btn line rank-review" href={href('videos', row.clip_id)}>Review in Videos</a>
         )}
+        <KeepToggle row={row} />
       </div>
     </li>
   );

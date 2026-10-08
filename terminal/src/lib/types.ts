@@ -1,5 +1,6 @@
 // Row shapes of the studio views (supabase/migrations/0004_terminal_rpc.sql, 0007_characters_view.sql, 0008_dropin_first.sql, 0009_analyst.sql,
-// 0010_tracker.sql, 0015_terminal_v3.sql: v_views_daily and the drop card's score and copy_of). Numbers that Postgres
+// 0010_tracker.sql, 0015_terminal_v3.sql: v_views_daily and the drop card's score and copy_of; 0016_hits.sql: v_hits and the drop
+// card's keep). Numbers that Postgres
 // returns as numeric/bigint may arrive as strings over PostgREST; `num()` in data.ts normalises them.
 
 export type Platform = 'tiktok' | 'instagram';
@@ -447,6 +448,12 @@ export interface DropCard {
   /** A version of another drop (terminal v3, "Use for another character"): the ROOT's pick id, also for a version of a version.
    * Absent on the root and on any drop that is no version. */
   copy_of?: string | null;
+  /** The owner's Keep (set_drop_keep, migration 0016): retention never deletes a kept clip's file. Absent = not kept. */
+  keep?: boolean;
+  /** Filed by the hits job on its own (migration 0016, studio.hits.auto_file); absent on everything else. */
+  auto_filed?: boolean;
+  /** The hit the job filed it from: its id and lane (a character's slug, or `general`). */
+  hit?: { id?: string; lane?: string } | null;
 }
 
 /** The clip score of the free check: total = round(10 x (0.6 x potential + 0.4 x swap)); reason = the potential's one line. */
@@ -563,6 +570,49 @@ export interface ViewsDay {
   follows: number;
 }
 
+/** Where a hit is (studio.hits.status, migration 0016): new until the owner uses it ("Use this clip": dropped) or says "Not for
+ * us" (dismissed); the hits job marks the ones it files itself dropped too. */
+export type HitStatus = 'new' | 'dropped' | 'dismissed';
+
+/**
+ * One row of v_hits (migration 0016, terminal v3 spec section 10): a TikTok or Instagram post the daily cloud hits job kept
+ * (metadata only, never downloaded), new and posted in the last 14 days (or with no known date), best first. A number the
+ * platform did not give is null, never 0. `character_slug` is the character it was searched for; null = the general lane (hot,
+ * whatever its topic: any character may take it).
+ */
+export interface Hit {
+  hit_id: string;
+  platform: 'tiktok' | 'instagram';
+  /** The canonical post link (unique): a TikTok video or an Instagram Reel. */
+  url: string;
+  creator_handle: string | null;
+  followers: number | null;
+  views: number | null;
+  likes: number | null;
+  comments: number | null;
+  shares: number | null;
+  saves: number | null;
+  posted_at: string | null;
+  /** At most 300 characters. */
+  caption: string | null;
+  sound: string | null;
+  duration_s: number | null;
+  /** A platform CDN link, stored, never fetched by us (it may have expired: the card shows a placeholder then). */
+  thumbnail_url: string | null;
+  /** What it was found for; null for a trending feed. */
+  keyword: string | null;
+  character_slug: string | null;
+  character_name: string | null;
+  /** views ÷ the creator's followers; null without both. */
+  reach: number | null;
+  /** 0-100 from views, reach and freshness (studio.hits.hit_score): how hot it is. */
+  score: number;
+  first_seen: string;
+  last_seen: string;
+  /** Not a column of v_hits (it lists new hits only): absent = new. The demo and the helpers may carry it. */
+  status?: HitStatus;
+}
+
 /** One character's posting days and slot in `studio.settings.cadence` (`studio plan cadence`): days like "tue", the slot "19:00". */
 export interface CadenceEntry {
   days?: string[] | string | null;
@@ -585,6 +635,8 @@ export interface Snapshot {
   viewsDaily: ViewsDay[];
   /** The posting days and slot per character (`studio.settings.cadence`); empty when none is set. */
   cadence: Record<string, CadenceEntry>;
+  /** The new hits of the last 14 days, best first (v_hits, migration 0016); empty before it or before the first pull. */
+  hits: Hit[];
   loadedAt: number;
 }
 
@@ -652,6 +704,11 @@ export interface Backend {
   copyDrop(pickId: string, characterSlug: string): Promise<{ pickId: string; dispatched: boolean }>;
   /** The drop card's toggle (set_drop_footage, migration 0012): own footage (true) or a downloaded clip (false). */
   setDropFootage(pickId: string, ownFootage: boolean): Promise<void>;
+  /** A hit's buttons (set_hit_status, migration 0016): "Use this clip" marks it dropped (after addDrop of its link), "Not for us"
+   * dismissed; `new` puts it back. Refused with one plain line. */
+  setHitStatus(hitId: string, status: HitStatus): Promise<void>;
+  /** The clip card's Keep (set_drop_keep, migration 0016): retention never deletes a kept clip. */
+  setDropKeep(pickId: string, keep: boolean): Promise<void>;
   /** A signed URL of a drop's preview strip in the sources bucket (owner/<pick id>/preview.jpg), or null. */
   previewUrl(path: string): Promise<string | null>;
   signedUrl(path: string): Promise<string | null>;

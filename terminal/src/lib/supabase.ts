@@ -4,11 +4,13 @@
 // v_tracker (migration 0010) feeds "In the works"; a database without it yet shows that tab empty instead of failing the load.
 // Terminal v3 (migration 0015): v_views_daily feeds the studio at a glance (the same tolerance: no views before it), the cadence
 // of studio.settings gives each character's posts per week, and copy_drop files a version of a clip for another character.
+// The cloud hits job (migration 0016): v_hits feeds "Hot right now" and each character's "Worth saving" (the same tolerance: no
+// hits before it), set_hit_status marks a hit used or not for us, set_drop_keep is the clip card's Keep.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { orderRoster } from './roster';
 import { checkClipBasics, ownerClipPath } from './rules';
-import type { Backend, CadenceEntry, ChangeKind, ClipFile, DecideExtras, DropAdjust, Snapshot } from './types';
+import type { Backend, CadenceEntry, ChangeKind, ClipFile, DecideExtras, DropAdjust, HitStatus, Snapshot } from './types';
 
 const URL_ = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const KEY = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -116,7 +118,7 @@ export class LiveBackend implements Backend {
 
   private async loadOnce(): Promise<Snapshot> {
     const sb = this.sb;
-    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings] = await Promise.all([
+    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings, hits] = await Promise.all([
       sb.from('v_channels').select('*'),
       sb.from('v_queue').select('*').order('created_at'),
       sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(300),
@@ -131,10 +133,13 @@ export class LiveBackend implements Backend {
       // newest first: should the API's row cap ever cut the list, the oldest days go
       sb.from('v_views_daily').select('character_slug,day,views,follows').order('day', { ascending: false }),
       sb.from('settings').select('cadence').eq('id', 1).maybeSingle(),
+      // the view's own order (best first); 100 is far more than the top 10 + 5 per character the screens show
+      sb.from('v_hits').select('*').order('score', { ascending: false }).order('last_seen', { ascending: false }).limit(100),
     ]);
     for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings]) fail(r.error);
     if (!isMissingRelation(tracker.error)) fail(tracker.error);
     if (!isMissingRelation(viewsDaily.error)) fail(viewsDaily.error);
+    if (!isMissingRelation(hits.error)) fail(hits.error);
     const num = [
       'views', 'outlier_x', 'total_score', 'virality', 'reach', 'freshness', 'fit', 'feasibility', 'saturation', 'velocity', 'saturation_count',
       'recognisability', 'original_views', 'est_credits',
@@ -159,6 +164,9 @@ export class LiveBackend implements Backend {
         ...r, day: String(r.day).slice(0, 10), views: n(r.views) ?? 0, follows: n(r.follows) ?? 0,
       })),
       cadence: cadenceOf(settings.data?.cadence),
+      hits: (hits.error ? [] : hits.data ?? []).map((r) => ({
+        ...normalise(r, ['followers', 'views', 'likes', 'comments', 'shares', 'saves', 'duration_s', 'reach']), score: n(r.score) ?? 0,
+      })),
       loadedAt: Date.now(),
     } as Snapshot;
   }
@@ -244,6 +252,13 @@ export class LiveBackend implements Backend {
   }
   async setDropFootage(pickId: string, ownFootage: boolean) {
     await this.rpc('set_drop_footage', { pick_id: pickId, own_footage: ownFootage });
+  }
+  async setHitStatus(hitId: string, status: HitStatus) {
+    // "Use this clip" (dropped, after addDrop of its link) and "Not for us" (dismissed), migration 0016
+    await this.rpc('set_hit_status', { hit_id: hitId, status });
+  }
+  async setDropKeep(pickId: string, keep: boolean) {
+    await this.rpc('set_drop_keep', { pick_id: pickId, keep });
   }
   async previewUrl(path: string) {
     // a drop's preview strip lives under sources/owner/<pick id>/ (the owner may read there: storage policy of 0008)

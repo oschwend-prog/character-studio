@@ -10,8 +10,9 @@ import { velocityPerDay } from '../lib/analyst';
 import { decisionTime, inTracker } from '../lib/tracker';
 import { addDays, londonDayKey, londonWallToIso } from '../lib/format';
 import { orderRoster } from '../lib/roster';
+import { offeredHits } from '../lib/hits';
 import type {
-  Backend, Budget, CadenceEntry, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, DropScore, Engagement, HealthRow, LibraryClip, OwnerMusic,
+  Backend, Budget, CadenceEntry, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, DropScore, Engagement, HealthRow, Hit, HitStatus, LibraryClip, OwnerMusic,
   Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow, ViewsDay,
 } from '../lib/types';
 
@@ -70,6 +71,9 @@ function upcomingSlot(slug: string, now: number): string {
 }
 
 class DemoError extends Error {}
+
+/** The demo's hit posted 20 days ago with the best score of all: v_hits must never list it (a hit weeks old is never offered). */
+export const DEMO_OLD_HIT_ID = 'demo-hit-old';
 
 /** A 9:16 stand-in picture for a demo pick (an inline SVG: the demo makes no network request and stores no media). */
 function demoThumb(label: string, hue: number): string {
@@ -199,6 +203,8 @@ export class DemoBackend implements Backend {
   private posts: Post[] = [];
   private favs: Fav[] = [];
   private runs: RunRow[] = [];
+  /** studio.hits (migration 0016): every hit the demo's "pull" kept, whatever its status; load() lists them as v_hits does. */
+  private hits: Hit[] = [];
   private cap = 6000;
   private kill = false;
   private settled: Record<string, number> = {}; // clip id -> credits settled this month
@@ -677,8 +683,8 @@ export class DemoBackend implements Backend {
       hooks: ['NOON. Not 12:01.', 'Call my assistant.', 'You’re welcome.'], gadgets: ['black smartphone'],
     }, 'ready', {
       character_by: 'owner', recommended: { slug: 'lenny', reason: 'a phone tantrum in a glass office: Lenny’s mid-deal call' },
-      score: demoScore(8, 10, DEMO_POTENTIAL.lenny),
-    }); // the owner chose him: a Ready clip
+      score: demoScore(8, 10, DEMO_POTENTIAL.lenny), keep: true,
+    }); // the owner chose him: a Ready clip, and he marked it Keep (retention never deletes it)
     // owner 2026-10-06, the drops table: a drop filed with "Recommend" still being checked (the studio picks after the check), the
     // owner's own choice where the star points to another character, and a clip with a caption in its first seconds (the
     // section keeps clear of it: only the section we use is judged)
@@ -717,6 +723,8 @@ export class DemoBackend implements Backend {
       score: demoScore(7, 7, 'the same office shimmy, now mid-deal: a second section of it'),
     });
 
+    this.seedHits(now);
+
     // The run log: a finished scan on the latest scan day, an earlier one, and a day that did not scan.
     const scanDays = SCAN_DAYS;
     const at0800 = (back: number) => londonWallToIso(`${londonDayKey(now - back * DAY)}T08:00`);
@@ -742,6 +750,65 @@ export class DemoBackend implements Backend {
     }
     const noScan = past.find((iso) => !scanDays.includes(weekday(iso)));
     if (noScan) this.runs.push(run(noScan, 22, {}, 'SYNTHETIC: 1 clip made'));
+  }
+
+  /**
+   * studio.hits (migration 0016), SYNTHETIC like every number here: what the daily cloud pull keeps. Several new hits for each live
+   * character (his keywords) and a general lane of 11 (trending feeds and broad searches: "Hot right now" shows the top 10); one
+   * TikTok hit with no thumbnail (the card's placeholder), Instagram search hits with likes but no play count, one general hit
+   * posted 20 days ago with the best score (never listed), one the owner already dismissed and one already used.
+   */
+  private seedHits(now: number) {
+    const hour = 3_600_000;
+    type Seed = [lane: string | null, platform: 'tiktok' | 'instagram', handle: string, followers: number | null, views: number | null, likes: number,
+      hoursAgo: number, keyword: string | null, caption: string, score: number, extra?: Partial<Hit>];
+    const seeds: Seed[] = [
+      ['franz', 'tiktok', '@sausage.sundays', 8_200, 412_000, 51_000, 30, 'dachshund', 'He heard the treat bag from three rooms away 🌭', 88],
+      ['franz', 'tiktok', '@biscuit.and.bean', 41_000, 960_000, 120_000, 52, 'dog dance', 'teaching my dog the new trend (he did not consent)', 81],
+      ['franz', 'instagram', 'little.lord.wiener', 15_000, null, 22_000, 70, 'dog trend', 'the zoomies but make it choreography', 72, { thumbnail_url: null }],
+      ['franz', 'tiktok', '@pupperparade', 120_000, 1_800_000, 240_000, 110, 'dog dance', 'when the beat drops and so does the dignity', 66],
+      ['franz', 'tiktok', '@daxie.diaries', 3_100, 38_000, 4_200, 9, 'dachshund', 'tiny legs, big stage', 58],
+      ['franz', 'instagram', 'the.wiener.walk', null, null, 9_800, 160, 'dog trend', 'strut like nobody is watching', 41],
+      ['reginald', 'tiktok', '@corridor.king', 6_400, 288_000, 30_000, 20, 'deadpan dance', 'did the trend at work, nobody looked up', 85],
+      ['reginald', 'tiktok', '@silverservice', 52_000, 640_000, 71_000, 60, 'butler', 'the butler has moves (do not tell the house)', 77],
+      ['reginald', 'instagram', 'stillface.steps', 22_000, null, 31_000, 44, 'dance trend', 'straight face, perfect footwork', 69],
+      ['reginald', 'tiktok', '@mopandglide', 900, 15_000, 1_600, 5, 'deadpan dance', 'mopping in time with the radio', 54],
+      ['reginald', 'tiktok', '@grandstair', 210_000, 1_100_000, 99_000, 200, 'dance trend', 'the staircase was made for this', 47],
+      ['lenny', 'tiktok', '@cornerofficeceo', 18_000, 530_000, 64_000, 26, 'boss on the phone', 'boss on the phone, then the beat drops', 86],
+      ['lenny', 'instagram', 'deskdance.daily', 9_000, null, 14_000, 36, 'office dance', 'quarterly review choreography', 70],
+      ['lenny', 'tiktok', '@mondaymotivation', 75_000, 400_000, 38_000, 90, 'dance challenge', 'the challenge, in a suit, at 9 am', 61],
+      ['lenny', 'tiktok', '@sales.floor.sam', 2_500, 21_000, 2_800, 14, 'office dance', 'closing deals and closing moves', 52],
+      [null, 'tiktok', '@stepbystep.uk', 14_000, 2_400_000, 310_000, 18, null, 'the shoulder-shimmy trend everyone is doing this week', 93],
+      [null, 'tiktok', '@kitchen.kicks', 4_000, 380_000, 47_000, 8, 'viral dance', 'did it in the kitchen before the kettle boiled', 89],
+      [null, 'instagram', 'trend.radar.daily', 31_000, null, 88_000, 28, null, 'the robot is back and it is better', 84],
+      [null, 'tiktok', '@parkpivot', 66_000, 1_300_000, 150_000, 40, 'dance trend', 'park bench pivot, one take', 80],
+      [null, 'tiktok', '@grandma.grooves', 210_000, 3_900_000, 610_000, 75, 'funny dance', 'grandma learned it faster than me', 78, { thumbnail_url: null }],
+      [null, 'tiktok', '@puppy.pivot', 9_500, 220_000, 30_000, 22, 'viral dance', 'my puppy does the trend better than me', 75, { keyword: 'puppy trend' }],
+      [null, 'tiktok', '@rooftop.rhythm', 48_000, 300_000, 26_000, 100, 'trend challenge', 'rooftop at sunset, the slow walk', 68],
+      [null, 'instagram', 'subway.steps', 12_000, null, 19_000, 60, null, 'the subway freeze, nobody blinked', 63],
+      [null, 'tiktok', '@office.freeze', 150_000, 610_000, 52_000, 130, 'trend challenge', 'the office freeze challenge, round two', 57],
+      [null, 'tiktok', '@wedding.wobble', 5_200, 64_000, 7_100, 150, 'funny dance', 'the uncle at every wedding', 49],
+      [null, 'tiktok', '@late.night.loop', 33_000, 90_000, 8_000, 260, 'viral dance', 'last week’s loop, still going', 38],
+      [null, 'tiktok', '@old.but.gold', 400_000, 9_000_000, 1_200_000, 20 * 24, 'viral dance', 'the trend from last month (too old to offer)', 99, { hit_id: DEMO_OLD_HIT_ID }],
+      [null, 'tiktok', '@nope.not.us', 7_000, 260_000, 30_000, 12, 'funny dance', 'a prank that would not suit any of us', 91, { status: 'dismissed' }],
+      ['franz', 'tiktok', '@already.saved', 5_000, 150_000, 20_000, 30, 'dog dance', 'a hit the owner already used', 90, { status: 'dropped' }],
+    ];
+    const names: Record<string, string> = NAMES;
+    this.hits = seeds.map(([lane, platform, handle, followers, views, likes, hoursAgo, keyword, caption, score, extra], i) => {
+      const n = String(i + 1).padStart(2, '0');
+      const url = platform === 'tiktok'
+        ? `https://www.tiktok.com/${handle}/video/77100000000000000${n}`
+        : `https://www.instagram.com/reel/DEMOhit${n}/`;
+      return {
+        hit_id: `demo-hit-${n}`, platform, url, creator_handle: handle, followers, views, likes, comments: Math.round(likes / 40),
+        shares: Math.round(likes / 25), saves: Math.round(likes / 30), posted_at: new Date(now - hoursAgo * hour).toISOString(),
+        caption, sound: 'original sound', duration_s: 9 + (i % 6), thumbnail_url: demoThumb(`HIT ${n}`, (i * 47) % 360),
+        keyword, character_slug: lane, character_name: lane ? names[lane] ?? lane : null,
+        reach: views != null && followers ? views / followers : null, score,
+        first_seen: new Date(now - Math.min(hoursAgo, 24) * hour).toISOString(), last_seen: new Date(now - 2 * hour).toISOString(),
+        status: 'new' as HitStatus, ...extra,
+      };
+    });
   }
 
   // ---- helpers mirroring the SQL ------------------------------------------------------------------
@@ -1061,6 +1128,11 @@ export class DemoBackend implements Backend {
     return {
       channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), tracker,
       viewsDaily: this.viewsDaily(now), cadence, loadedAt: now,
+      // v_hits: the new hits of the last 14 days, best first, without the status column
+      hits: offeredHits(this.hits, now).map(({ status: _s, ...h }) => {
+        void _s;
+        return { ...h };
+      }),
     };
   }
 
@@ -1449,6 +1521,28 @@ export class DemoBackend implements Backend {
     const d = f.proposal.drop;
     if (!d || typeof d !== 'object') throw new DemoError(`pick ${pickId} is not a dropped video`);
     f.proposal = { ...f.proposal, drop: { ...(d as Record<string, unknown>), own_footage: ownFootage } };
+    this.emit('favorites');
+  }
+
+  /** set_hit_status of migration 0016 (the same refusals in the same words): "Use this clip" (dropped), "Not for us" (dismissed),
+   * or back to new. */
+  async setHitStatus(hitId: string, status: HitStatus) {
+    const s = typeof status === 'string' ? status.trim() : '';
+    if (!['new', 'dropped', 'dismissed'].includes(s)) throw new DemoError(`a hit is new, dropped or dismissed, not ${s ? `'${s}'` : 'nothing'}`);
+    const h = this.hits.find((x) => x.hit_id === hitId);
+    if (!h) throw new DemoError(`unknown hit ${hitId}`);
+    h.status = s as HitStatus;
+    this.emit('favorites');
+  }
+
+  /** set_drop_keep of migration 0016: the clip card's Keep (drop.keep), refused on a pick that is not a drop. */
+  async setDropKeep(pickId: string, keep: boolean) {
+    if (typeof keep !== 'boolean') throw new DemoError('keep must be true or false');
+    const f = this.favs.find((x) => x.id === pickId);
+    if (!f) throw new DemoError(`unknown pick ${pickId}`);
+    const d = f.proposal.drop;
+    if (!d || typeof d !== 'object' || Array.isArray(d)) throw new DemoError(`pick ${pickId} is not a dropped video`);
+    f.proposal = { ...f.proposal, drop: { ...(d as Record<string, unknown>), keep } };
     this.emit('favorites');
   }
 

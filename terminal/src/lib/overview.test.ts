@@ -53,7 +53,7 @@ const views = (slug: string, day: string, v: number, follows = 0): ViewsDay => (
 
 const snapshot = (over: Partial<Snapshot> = {}): Snapshot => ({
   channels: [], queue: [], library: [], budget: null, health: [], picks: [], history: [], characters: [], runs: [], tracker: [],
-  viewsDaily: [], cadence: {}, loadedAt: NOW, ...over,
+  viewsDaily: [], cadence: {}, hits: [], loadedAt: NOW, ...over,
 });
 
 const CHARACTERS = [

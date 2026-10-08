@@ -1,14 +1,16 @@
 // Clips (terminal v2, owner 2026-10-07: "the terminal should be structured around the clips I download and put into a folder"; this
 // replaces "In the works"; v3 2026-10-07: "show per character what clips are a good choice ... rank them"). At the top the Add clips
 // box (DropBox), then one of two views, kept in the address. By character (the default, `#/clips`, `#/clips?c=franz` opens on his
-// section): a section per live character, Needs you first, his Ready clips ranked by score with tick boxes and the Make bar, then
-// what is on its way and done (RankedClips). All clips (`#/clips?v=all`): the long list, one row per clip he dropped, with its
+// section): "Hot right now" (the cloud hits job's general lane, Hits.tsx), then a section per live character, Needs you first, his
+// Ready clips ranked by score with tick boxes and the Make bar, his "Worth saving" hits, then what is on its way and done
+// (RankedClips). All clips (`#/clips?v=all`): the long list, one row per clip he dropped, with its
 // one-word status, the studio's ★ suggestion and the character menu, the price and Make it (DropsTable); the chips filter it (All,
 // Pick a character, Ready, Making, Done, Blocked or failed), newest drop first, and the filter lives in the address too
 // (`#/clips?v=all&f=problems`; an address with only `f` is All clips as well). A clip that is made moves on to Videos.
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { DropBox } from '../components/DropBox';
 import { DropsTable } from '../components/DropsTable';
+import { HotRightNow } from '../components/Hits';
 import { MakeBar, useTicks } from '../components/MakeBar';
 import { RankedClips } from '../components/RankedClips';
 import { ViewSwitch } from '../components/ViewSwitch';
@@ -136,8 +138,9 @@ export function Clips() {
 }
 
 /**
- * By character (spec 6): a section per live character with his clips ranked, and the Make bar under them. Nothing is ticked at
- * first; a tick that is no longer Ready (made, removed, checked again) drops out of the bar by itself.
+ * By character (spec 6): "Hot right now" first (spec 10: the general lane's top 10 hits, any character), then a section per live
+ * character with his clips ranked and his "Worth saving" hits, and the Make bar under them. Nothing is ticked at first; a tick that
+ * is no longer Ready (made, removed, checked again) drops out of the bar by itself.
  */
 function ByCharacter({ rows, now }: { rows: ReadonlyArray<TrackerRow>; now: number }) {
   const { data } = useStudio();
@@ -148,9 +151,11 @@ function ByCharacter({ rows, now }: { rows: ReadonlyArray<TrackerRow>; now: numb
   const selected = liveSelection(ticked, makeable);
   return (
     <div className="make-scope stack">
+      <HotRightNow now={now} />
       <p className="hint" style={{ margin: 0 }}>
         Score: the free check’s guess at how likely the clip gets views with him in it (0-100); the best three are Top picks. Tick the
-        ones to make: the total shows in the bar and you confirm it before anything is spent.
+        ones to make: the total shows in the bar and you confirm it before anything is spent. A clip nobody makes is deleted after a
+        while (30 days for a hit, 60 for your own) unless you switch Keep on.
       </p>
       <RankedClips rows={rows} characters={live} ticked={ticked} onTick={toggle} now={now} />
       <MakeBar rows={rows} selected={selected} budget={data.budget} onSent={untick} onClear={clear} />

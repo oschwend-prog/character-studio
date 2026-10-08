@@ -4,7 +4,8 @@
 // ignore: set_drop_character, migration 0013, then the free check again in that voice), the section and its price, where it is
 // (one plain chip: Adding, Checking, Pick a character, Ready, Making, Done, Blocked, Failed; lib/clipstatus.ts), and the buttons the
 // drop card had (Make it, Adjust, Try again, Remove). The chevron opens the rest of the card: the five-frame strip, the facts, the
-// moments with text on screen, own footage. Nothing is paid before Make it. The Clips page passes the rows its filter keeps.
+// moments with text on screen, own footage, Keep (a clip not made yet: retention never deletes a kept one). Nothing is paid before
+// Make it. The Clips page passes the rows its filter keeps.
 import { AlertTriangle, ChevronRight, SlidersHorizontal } from 'lucide-react';
 import { Fragment, useEffect, useState, type ReactNode } from 'react';
 import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipActions, clipChip, makeTotal } from '../lib/clipstatus';
@@ -19,6 +20,7 @@ import { useStudio } from '../lib/store';
 import { trackerStep } from '../lib/tracker';
 import type { Budget, DropAdjust, TrackerRow } from '../lib/types';
 import { AdjustSheet } from './AdjustSheet';
+import { KeepToggle } from './KeepToggle';
 import { PickThumb } from './PickThumb';
 import { Spinner } from './ui';
 
@@ -369,6 +371,7 @@ function DropDetail({ row }: { row: TrackerRow }) {
             </div>
             <span className="hint">Own footage: your recording, or footage you may use. For the records; it does not change the video.</span>
           </div>
+          <KeepToggle row={row} idPrefix="dt-keep" />
         </div>
       </td>
     </tr>
