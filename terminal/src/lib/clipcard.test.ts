@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { DemoBackend } from '../demo/backend';
 import {
-  MAKE_TOGGLE, cardPrice, isOwnerMediaPath, mediaFragment, originalLink, pictureSources, playableFor, shouldLoopBack, withFragment,
+  MAKE_TOGGLE, afterPictureError, cardPrice, isOwnerMediaPath, mediaFragment, originalLink, pictureSources, playableFor, removeStep,
+  sectionNote, shouldLoopBack, withFragment,
 } from './clipcard';
 import type { DropCard } from './types';
 
@@ -18,7 +19,7 @@ const TIKTOK = 'https://www.tiktok.com/@dancer.one/video/7688386199270001953';
 describe('what a clip card plays (playableFor)', () => {
   it('1. plays the watch copy of the section the check wrote, whole (it is the section)', () => {
     expect(playableFor({ url: TIKTOK, platform: 'tiktok', owner_clip_path: `owner/${PICK}/1759700000000.mp4`, drop_card: READY })).toEqual({
-      kind: 'file', path: `owner/${PICK}/preview.mp4`, from: 'preview', start: 0, end: null,
+      kind: 'file', path: `owner/${PICK}/preview.mp4`, from: 'preview', start: 0, end: null, note: null,
     });
   });
 
@@ -26,7 +27,7 @@ describe('what a clip card plays (playableFor)', () => {
     const card: DropCard = { ...READY, preview_video_path: null };
     const upload = `owner/${PICK}/1759700000000.mp4`;
     expect(playableFor({ url: `owner-drop:${PICK}`, platform: 'drop', owner_clip_path: upload, drop_card: card })).toEqual({
-      kind: 'file', path: upload, from: 'upload', start: 1.5, end: 10.5,
+      kind: 'file', path: upload, from: 'upload', start: 1.5, end: 10.5, note: null,
     });
     expect(playableFor({ owner_clip_path: upload, drop_card: { ...card, adjust: { start_s: 3, length_s: 8 } } })).toMatchObject({ start: 3, end: 11 });
     // not checked yet: no section, the whole upload
@@ -55,6 +56,14 @@ describe('what a clip card plays (playableFor)', () => {
     expect(isOwnerMediaPath(`owner/${PICK}/preview.mp4`)).toBe(true);
     expect(isOwnerMediaPath(`owner/${PICK}/cover.jpg`)).toBe(true);
     expect(isOwnerMediaPath(`owner/${PICK}/a/b.mp4`)).toBe(false);
+    expect(isOwnerMediaPath(`owner/${PICK}/..`)).toBe(false);
+    expect(isOwnerMediaPath(`owner/${PICK}/.`)).toBe(false);
+    expect(isOwnerMediaPath(`owner/${PICK}/%2e%2e`)).toBe(false);
+    expect(isOwnerMediaPath(`owner/${PICK}/%2E%2E%2Fx.mp4`)).toBe(false);
+    expect(isOwnerMediaPath(`owner/${PICK}/.hidden.mp4`)).toBe(false);
+    expect(isOwnerMediaPath(`owner/${PICK}/my clip.mp4`)).toBe(false);
+    expect(isOwnerMediaPath(`owner/${PICK}/1759700000000.mp4`)).toBe(true);
+    expect(isOwnerMediaPath(`owner/${PICK}/preview_2-b.v2.mp4`)).toBe(true);
     expect(isOwnerMediaPath('owner/p1/preview.mp4')).toBe(false);
     expect(isOwnerMediaPath(null)).toBe(false);
   });
@@ -62,6 +71,40 @@ describe('what a clip card plays (playableFor)', () => {
   it('the live backend signs the same paths (its regex is this one)', () => {
     const src = readFileSync(new URL('./supabase.ts', import.meta.url), 'utf8');
     expect(src).toMatch(/async previewUrl\(path: string\) \{[\s\S]*?if \(!isOwnerMediaPath\(path\)\) return null;/);
+  });
+});
+
+describe('when the owner’s Adjust moved the section (the video must be the section that will be made)', () => {
+  const upload = `owner/${PICK}/1759700000000.mp4`;
+  const moved: DropCard = { ...READY, adjust: { start_s: 4, length_s: 8 } }; // the check chose 1.5–10.5 s; Make it will use 4–12 s
+
+  it('plays his own file at the effective section when it exists (it wins over the watch copy)', () => {
+    expect(playableFor({ owner_clip_path: upload, drop_card: moved })).toEqual({
+      kind: 'file', path: upload, from: 'upload', start: 4, end: 12, note: null,
+    });
+    // only a new length is enough, and only a new start too
+    expect(playableFor({ owner_clip_path: upload, drop_card: { ...READY, adjust: { length_s: 7 } } })).toMatchObject({ from: 'upload', start: 1.5, end: 8.5 });
+    expect(playableFor({ owner_clip_path: upload, drop_card: { ...READY, adjust: { start_s: 2 } } })).toMatchObject({ from: 'upload', start: 2, end: 11 });
+  });
+
+  it('else plays the watch copy and says in one muted line which section it shows and which is his', () => {
+    const p = playableFor({ url: TIKTOK, platform: 'tiktok', drop_card: moved });
+    expect(p).toEqual({
+      kind: 'file', path: `owner/${PICK}/preview.mp4`, from: 'preview', start: 0, end: null,
+      note: 'This shows the section the check chose (1.5–10.5 s); yours is 4–12 s.',
+    });
+    expect(sectionNote({ start: 1.5, length: 9 }, { start: 4, length: 8 })).toBe(p.kind === 'file' ? p.note : '');
+  });
+
+  it('does not say it when his Adjust left the section as the check chose it (other fields, or the same numbers)', () => {
+    for (const adjust of [{ hook: 'a new hook' }, { star: 'the man in the waistcoat' }, { start_s: 1.5, length_s: 9 }, { start_s: 1.52 }, {}]) {
+      expect(playableFor({ owner_clip_path: upload, drop_card: { ...READY, adjust } })).toMatchObject({ from: 'preview', note: null });
+    }
+  });
+
+  it('a hit or a clip not checked yet has no section to differ from', () => {
+    expect(playableFor({ owner_clip_path: upload, drop_card: { state: 'checking', adjust: { start_s: 3, length_s: 8 } } })).toMatchObject({ from: 'upload', note: null });
+    expect(playableFor({ url: TIKTOK })).toMatchObject({ kind: 'link' });
   });
 });
 
@@ -108,6 +151,29 @@ describe('the card’s picture and lines', () => {
     expect(originalLink('owner-drop:abc')).toBeNull();
     expect(originalLink('javascript:alert(1)')).toBeNull();
     expect(originalLink('https://tiktok.com.evil.example/x')).toBeNull();
+  });
+});
+
+describe('a picture that fails to load', () => {
+  it('is signed once more (a URL may have expired), then gives way to the next file', () => {
+    const first = afterPictureError({ step: 0, resigned: false });
+    expect(first).toEqual({ step: 0, resigned: true });
+    expect(afterPictureError(first)).toEqual({ step: 1, resigned: false });
+    expect(afterPictureError({ step: 1, resigned: false })).toEqual({ step: 1, resigned: true });
+  });
+});
+
+describe('Remove a clip, in two steps', () => {
+  it('the first tap only asks, only the second removes', () => {
+    const asked = removeStep('idle', 'ask');
+    expect(asked).toEqual({ step: 'asking', remove: false });
+    expect(removeStep(asked.step, 'confirm')).toEqual({ step: 'idle', remove: true });
+  });
+
+  it('"Keep it" goes back without removing, and a confirm nobody asked for removes nothing', () => {
+    expect(removeStep('asking', 'cancel')).toEqual({ step: 'idle', remove: false });
+    expect(removeStep('idle', 'cancel')).toEqual({ step: 'idle', remove: false });
+    expect(removeStep('idle', 'confirm')).toEqual({ step: 'asking', remove: false });
   });
 });
 

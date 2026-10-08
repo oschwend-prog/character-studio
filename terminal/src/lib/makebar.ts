@@ -79,7 +79,7 @@ export function confirmFacts(rows: ReadonlyArray<Pick<TrackerRow, 'pick_id' | 'd
   let blocked: string | null = null;
   if (count === 0) blocked = 'None of these clips has a price yet: they are still being checked.';
   else if (budget?.kill_switch) blocked = 'The kill switch is on: nothing is made until you resume it (More, Budget).';
-  else if (left != null && credits > left) blocked = `That is more than the ${formatCredits(left)} left this month. Untick some clips.`;
+  else if (left != null && credits > left) blocked = `That is more than the ${formatCredits(left)} left this month. Take some clips out of your list.`;
   return { count, credits, left, cap: budget?.cap ?? null, leftAfter, blocked };
 }
 
