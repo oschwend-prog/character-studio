@@ -233,7 +233,10 @@ def test_drop_secrets_reach_only_the_job_that_needs_them():
     assert "POSTIZ_API_KEY" not in text("studio-drop")  # nothing here posts
     for block in blocks[1:-1]:
         names = set(re.findall(r"secrets\.([A-Z_]+)", block))
-        assert names <= {"DATABASE_URL"}, block[:60]  # the pending count reads the database, nothing else
+        assert names <= {"DATABASE_URL", "SCRAPECREATORS_API_KEY"}, block[:60]  # the pending count: the database, and the key
+    pending = next(b for b in blocks if b.startswith("name: Anything pending"))
+    # the count sees the key as the sweep does: a waiting auto-filed link counts only while the day's downloads allow
+    assert set(re.findall(r"secrets\.([A-Z_]+)", pending)) == {"DATABASE_URL", "SCRAPECREATORS_API_KEY"}
     assert "env:" not in text("studio-drop").split("    steps:")[0].split("jobs:")[1]
     assert set(re.findall(r"secrets\.([A-Z_]+)", text("studio-drop"))) == set(DROP_SECRETS)
 

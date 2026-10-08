@@ -716,10 +716,18 @@ def test_redirects_are_followed_by_hand_three_at_most_each_a_public_https_hop(tm
 
 def test_the_hosted_copys_download_has_a_total_deadline(tmp_path):
     api = FakeAPI()
-    api.media = b"x" * (3 * 1024 * 1024)  # three chunks
-    api.answer(IG_POST, fixture("instagram_post"))
-    ticks = iter([0.0, 100.0, 200.0, 301.0, 400.0])
+    api.media = b"x" * 1024
+    api.answer(IG_POST, fixture("instagram_post"), fixture("instagram_post"))
+    ticks = iter([0.0, 100.0, 301.0])  # the start, the hop, the network read that ends past 300 s
     client = api.client(clock=lambda: next(ticks))
     with pytest.raises(ScrapeCreatorsError, match="took over 300 s"):
         client.download_post("https://www.instagram.com/reel/DLDXI0fylTC/", "instagram", tmp_path / "a.mp4")
     assert not (tmp_path / "a.mp4").exists() and not list(tmp_path.glob(".*.part"))
+    # a slow redirect: the deadline is checked at the top of every hop, before the next address is even asked
+    start = fixture("instagram_post")["data"]["xdt_shortcode_media"]["video_url"]
+    api.media_routes[start] = httpx.Response(302, headers={"location": "https://cdn-slow.example.com/1.mp4"})
+    ticks = iter([0.0, 10.0, 301.0])  # the start, the first hop, the second hop
+    client = api.client(clock=lambda: next(ticks))
+    with pytest.raises(ScrapeCreatorsError, match="took over 300 s"):
+        client.download_post("https://www.instagram.com/reel/DLDXI0fylTC/", "instagram", tmp_path / "b.mp4")
+    assert not any(r.url.host == "cdn-slow.example.com" for r in api.requests) and not (tmp_path / "b.mp4").exists()

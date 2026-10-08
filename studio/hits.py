@@ -55,8 +55,9 @@ job filed, after yt-dlp failed): ``GET /v2/tiktok/video`` or ``/v1/instagram/pos
 when the media is found, 1 otherwise) answers with a hosted copy of that one post; it is downloaded (https only, a timeout,
 at most 200 MB, our key never sent to it) and ingested exactly like a yt-dlp result. Never a batch, never a third-party
 downloader site. The drop job hands fetch a ``DownloadBudget``: at most ``hits.download_cap_per_day`` (2) downloads a London
-day and never past ``hits.daily_credit_cap``; over either, the download is refused and the drop waits as before (the Mac's
-daily run tries yt-dlp again). The budget is a read, then the call, then an increment of the day's record: one job at a time
+day and never past ``hits.daily_credit_cap``; over either, the download is refused and the drop waits: an AUTO-FILED drop is
+tried again in the cloud on a later London day and dropped after 3 days (it never goes to the Mac); only the owner's own links
+wait for the Mac's daily run (yt-dlp from the Mac). The budget is a read, then the call, then an increment of the day's record: one job at a time
 is what the drop job's concurrency gives (one run per pick, the sweeps in one group), so at worst two jobs at the same instant
 each take the last download.
 
@@ -244,13 +245,16 @@ class ScrapeCreators:
 
     def _download(self, url: str, dest: Path) -> int:
         """The hosted copy to ``dest``: no key, no cookies; at most ``MAX_REDIRECTS`` redirects, followed by hand, every hop a
-        public https address (``_public_https``); at most ``MEDIA_MAX_BYTES`` and ``MEDIA_DEADLINE_S`` seconds in all."""
+        public https address (``_public_https``); at most ``MEDIA_MAX_BYTES`` and ``MEDIA_DEADLINE_S`` seconds in all (checked at
+        every hop and after every network read)."""
         dest.parent.mkdir(parents=True, exist_ok=True)
         part = dest.with_name(f".{dest.name}.part")
         deadline = self._clock() + MEDIA_DEADLINE_S
         current = url
         try:
             for hop in range(MAX_REDIRECTS + 1):
+                if self._clock() > deadline:
+                    raise ScrapeCreatorsError(f"the copy's download took over {MEDIA_DEADLINE_S:.0f} s")
                 if _public_https(current) is None:
                     raise ScrapeCreatorsError("the copy's address is not a public https link")
                 with self._http.stream("GET", current, timeout=_MEDIA_TIMEOUT, follow_redirects=False) as response:
@@ -264,7 +268,7 @@ class ScrapeCreators:
                         raise ScrapeCreatorsError(f"the copy's download answered HTTP {response.status_code}", response.status_code)
                     size = 0
                     with part.open("wb") as out:
-                        for chunk in response.iter_bytes(1024 * 1024):
+                        for chunk in response.iter_bytes():  # one block per network read: the deadline is checked after each
                             size += len(chunk)
                             if size > MEDIA_MAX_BYTES:
                                 raise ScrapeCreatorsError(f"the copy is over {MEDIA_MAX_BYTES // (1024 * 1024)} MB")

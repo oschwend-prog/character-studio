@@ -15,7 +15,8 @@
 # HF_KEY (the whole id:secret value; or HF_API_KEY_ID + HF_API_KEY_SECRET) and GEMINI_API_KEY (until they exist the jobs record "waiting for the key" and the daily run
 # on the Mac does those steps by hand). Until DATABASE_URL exists the job prints a notice and every later step is skipped.
 # SCRAPECREATORS_API_KEY (plan 2026-10-07 terminal v3, task 6): a dropped or auto-filed link yt-dlp cannot fetch from the cloud
-# is taken from ScrapeCreators' copy of that ONE post (download_media, 10 credits); without it such a link waits as before.
+# is taken from ScrapeCreators' copy of that ONE post (download_media, 10 credits); without it such a link waits as before. The
+# pending count reads it too, so it counts a waiting auto-filed link only when the sweep would try it (the day's downloads allow).
 #
 # One job per pick: the concurrency group is the pick id (every sweep shares the group `studio-drop-sweep`); `studio drop` also
 # takes a lease on the pick, so a sweep and a dispatched job never work on the same drop at once. Nothing is ever cancelled
@@ -95,6 +96,7 @@ jobs:
         if: steps.gate.outputs.configured == 'true' && steps.job.outputs.command == 'sweep'
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
         run: echo "count=$(uv run studio drop pending --count)" >> "$GITHUB_OUTPUT"
       - name: Install ffmpeg, fonts and yt-dlp
         if: steps.gate.outputs.configured == 'true' && steps.job.outputs.command != 'check-keys' && (steps.job.outputs.command != 'sweep' || steps.pending.outputs.count != '0')
