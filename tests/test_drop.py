@@ -1733,10 +1733,12 @@ def test_a_made_drop_clip_carries_every_learning_tag_from_its_vocabulary(world, 
     tap_make(store, pid)
     assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
     f = store.get_clip(store.get_favorite(pid).clip_id).features
-    assert clips.LEARN_FEATURES | clips.REQUIRED_FEATURES <= f.keys()  # the master wrote its length too
+    # the master wrote its length too; the publisher's two tags (first_comment_posted, trial_reel) come when it is posted
+    assert (clips.LEARN_FEATURES - clips.PUBLISH_FEATURES) | clips.REQUIRED_FEATURES <= f.keys()
+    assert not clips.PUBLISH_FEATURES & f.keys()
     assert clips.learn_problems(f) == []  # every value from its vocabulary
     score = d["score"]
-    assert {k: f[k] for k in sorted(clips.LEARN_FEATURES - {"length_s"})} == {
+    assert {k: f[k] for k in sorted(clips.LEARN_FEATURES - clips.PUBLISH_FEATURES - {"length_s"})} == {
         "caption_line1": "label-first", "days_since_trend_peak": None, "episode": None, "explore_pick": False,
         "family_id": pid, "first_comment_kind": "vote", "hit_rules_version": gemini.hit_rules_version(), "hook_by": "studio",
         "hook_index": 1, "length_bucket": "under_8", "part": "featured", "score_bucket": clips.score_bucket(score["total"]),

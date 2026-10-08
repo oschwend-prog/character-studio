@@ -459,10 +459,10 @@ def test_the_weekly_reviews_length_buckets_are_the_tags():
 def test_a_clip_the_daily_run_makes_writes_every_learning_tag():
     """Learning plan section 2, "the Recreate path writes the same vocabulary": the create step names every tag ``new_clip``
     requires once ``source_kind`` is written (the master writes the length itself)."""
-    from studio.clips import LEARN_FEATURES, MASTER_FEATURES
+    from studio.clips import LEARN_FEATURES, MASTER_FEATURES, PUBLISH_FEATURES
 
     create = text("daily-run").split("## 5. Create", 1)[1].split("\n2. ", 1)[0]
-    for key in sorted(LEARN_FEATURES - MASTER_FEATURES):
+    for key in sorted(LEARN_FEATURES - MASTER_FEATURES - PUBLISH_FEATURES):  # the publisher writes its two after the post
         assert f"`{key}`" in create, key
     for value in ("`recreate`", "`owner_saved`", "`auto_filed`", "`test_arms` `{}`"):
         assert value in create, value

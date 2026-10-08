@@ -1,5 +1,6 @@
 """The caption playbook (owner 2026-10-05): at most 5 hashtags and none of the dead ones, the first comment stored on the clip,
-the terminal's mirror of the post text (parity-cases.json `captions`) and the formula in the character bibles."""
+the terminal's mirror of the post text (parity-cases.json `captions`), the formula in the character bibles and the character's
+series tag (terminal v3 spec section 11: it joins the hashtags at publish time when there is room)."""
 
 import json
 from pathlib import Path
@@ -8,7 +9,15 @@ import pytest
 from typer.testing import CliRunner
 
 from studio import clips
-from studio.captions import AI_DISCLOSURE, BANNED_HASHTAGS, HASHTAG_LIMIT, caption_length, compose_content
+from studio.captions import (
+    AI_DISCLOSURE,
+    BANNED_HASHTAGS,
+    HASHTAG_LIMIT,
+    caption_length,
+    check_series_tag,
+    compose_content,
+    with_series_tag,
+)
 from studio.cli import app
 from studio.clips import FIRST_COMMENT_MAX_CHARS, new_clip, set_first_comment, validate_first_comment
 from studio.models import Body, Character
@@ -163,3 +172,53 @@ def test_each_bible_has_its_search_keywords_the_post_formula_and_the_first_comme
 def test_reginalds_sentences_never_mention_dancing_but_his_title_may():
     voice = (ROOT / "characters" / "reginald" / "bible.md").read_text().split("## Voice (captions)", 1)[1].split("\n## ", 1)[0]
     assert "never mentions dancing directly" in voice and "line 1 may: it is a label" in voice
+
+
+# ---- the series tag (terminal v3 spec section 11, item 3) ---------------------------------------------------------
+
+
+def test_the_series_tag_joins_the_hashtags_when_there_is_room():
+    tags = ["#singleladies", "#dachshund", "#dogdance", "#oddeyes"]
+    assert with_series_tag("x", tags, "#sausagecomingthrough") == [*tags, "#sausagecomingthrough"]
+    assert compose_content("x", with_series_tag("x", tags, "#sausagecomingthrough")).endswith("#oddeyes #sausagecomingthrough")
+    assert with_series_tag("x", [], "#asyouwere") == ["#asyouwere"]
+
+
+def test_the_series_tag_is_never_a_sixth_hashtag():
+    five = ["#a", "#b", "#c", "#d", "#oddeyes"]
+    assert with_series_tag("x", five, "#yourewelcome") == five
+    assert with_series_tag("x", ["#a", "#b", "#c", "#d", "#e", "#A"], "#yourewelcome") == ["#a", "#b", "#c", "#d", "#e", "#A"]  # 5 once cleaned
+
+
+def test_the_series_tag_is_not_added_twice_whatever_the_case():
+    assert with_series_tag("x", ["#AsYouWere", "#oddeyes"], "#asyouwere") == ["#AsYouWere", "#oddeyes"]
+    assert with_series_tag("x", ["asyouwere"], "#asyouwere") == ["asyouwere"]
+
+
+def test_the_series_tag_never_pushes_the_post_past_the_length_limit():
+    fixed = caption_length(compose_content("", ["#oddeyes"]))  # the disclosure, the blank lines and the tag
+    caption = "x" * (2200 - fixed - len("\n\n"))  # the composed text is exactly 2,200 characters
+    assert caption_length(compose_content(caption, ["#oddeyes"])) == 2200
+    assert with_series_tag(caption, ["#oddeyes"], "#asyouwere") == ["#oddeyes"]  # no room: the clip's own tags
+    shorter = caption[: -len(" #asyouwere")]
+    assert with_series_tag(shorter, ["#oddeyes"], "#asyouwere") == ["#oddeyes", "#asyouwere"]
+    assert caption_length(compose_content(shorter, ["#oddeyes", "#asyouwere"])) == 2200  # exactly the limit is fine
+
+
+def test_no_series_tag_or_a_refused_one_leaves_the_hashtags_alone():
+    assert with_series_tag("x", ["#oddeyes"], None) == ["#oddeyes"]
+    assert with_series_tag("x", ["#oddeyes"], "") == ["#oddeyes"]
+    assert with_series_tag("x", ["#oddeyes"], "#fyp") == ["#oddeyes"]  # a dead tag is never added
+    assert with_series_tag("x", ["#fyp"], "#asyouwere") == ["#fyp"]  # the clip's own refusal stays the publisher's error
+
+
+@pytest.mark.parametrize("tag", ["#sausagecomingthrough", "#asyouwere", "#yourewelcome", "#Odd_Eyes2"])
+def test_a_series_tag_is_one_hashtag(tag):
+    assert check_series_tag(tag) == tag
+
+
+@pytest.mark.parametrize("bad", ["asyouwere", "#", "#as you were", "#as-you-were", "#asyouwere #oddeyes", "#viral", "#FYP", 7, None,
+                                 "#" + "x" * 61])
+def test_a_series_tag_that_is_not_one_hashtag_is_refused(bad):
+    with pytest.raises(ValueError, match="series_tag"):
+        check_series_tag(bad)

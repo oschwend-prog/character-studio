@@ -467,8 +467,11 @@ def test_the_learning_tags_are_the_plans():
         "hook_index", "hook_by", "caption_line1", "first_comment_kind", "trend_stage", "days_since_trend_peak", "sound_type",
         "sound_rising", "length_s", "length_bucket", "score_bucket", "score_total", "score_potential", "score_swap", "part",
         "family_id", "version_index", "series", "episode", "hit_rules_version", "source_kind", "test_arms", "explore_pick",
+        "first_comment_posted", "trial_reel",
     }
     assert clips.MASTER_FEATURES == {"length_s", "length_bucket"} < clips.LEARN_FEATURES  # the master writes these two
+    assert clips.PUBLISH_FEATURES == {"first_comment_posted", "trial_reel"} < clips.LEARN_FEATURES  # the publisher, these two
+    assert {"first_comment_posted", "trial_reel"} <= clips.LEARN_BOOLS
     assert not clips.LEARN_FEATURES & REQUIRED_FEATURES  # format_id and hook_pattern stay required for every clip
     v = clips.LEARN_VALUES
     assert v["format_id"] == ("swap_trend", "swap_classic", "swap_other", "recreate", "own_footage")
@@ -575,6 +578,33 @@ def test_a_learning_tag_outside_its_vocabulary_refuses_new_clip(change, problem)
     with pytest.raises(ValueError, match=problem):
         new_clip(store, "biscuit", None, Mode.recreate, {**LEARN, **change})
     assert store.list_clips() == []
+
+
+def test_the_publishers_tags_are_not_needed_at_creation_but_are_checked_when_present():
+    store = make_store()
+    assert "trial_reel" not in LEARN and "first_comment_posted" not in LEARN  # LEARN is a full set at creation
+    with pytest.raises(ValueError, match="trial_reel"):
+        new_clip(store, "biscuit", None, Mode.recreate, {**LEARN, "trial_reel": "yes"})
+    clip = new_clip(store, "biscuit", None, Mode.recreate, {**LEARN, "first_comment_posted": False})
+    assert clips.learn_problems(clip.features) == []
+
+
+def test_set_publish_tags_writes_the_publishers_learning_tags():
+    """Terminal v3 spec section 11 (learning plan tags 5 and 12): written by the publisher after a post, true or false."""
+    store = make_store()
+    clip = new_clip(store, "biscuit", None, Mode.recreate, LEARN)
+    out = clips.set_publish_tags(store, clip.id, {"first_comment_posted": True, "trial_reel": False})
+    assert (out.features["first_comment_posted"], out.features["trial_reel"]) == (True, False)
+    assert out.features["hook_index"] == 0 and clips.learn_problems(out.features) == []  # the other tags are kept
+    # only_missing: a TikTok post never undoes what the Instagram Reel recorded
+    out = clips.set_publish_tags(store, clip.id, {"first_comment_posted": False, "trial_reel": False}, only_missing=True)
+    assert out.features["first_comment_posted"] is True
+    for bad, message in (({"trial_reel": "yes"}, "trial_reel"), ({"hook_index": 1}, "first_comment_posted, trial_reel")):
+        with pytest.raises(ValueError, match=message):
+            clips.set_publish_tags(store, clip.id, bad)
+    with pytest.raises(KeyError):
+        clips.set_publish_tags(store, "missing", {"trial_reel": True})
+    assert store.get_clip(clip.id).features["trial_reel"] is False  # the refusals wrote nothing
 
 
 def test_the_score_tags_agree():

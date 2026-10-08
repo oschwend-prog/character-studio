@@ -17,9 +17,19 @@ and never one of ``BANNED_HASHTAGS`` (#fyp, #foryou, #foryoupage, #viral, #explo
 Both raise ``ValueError`` naming the limit or the tag; ``clip set`` turns it into exit 2 like the length. The terminal
 mirrors this rule (``composeContent`` in terminal/src/lib/captions.ts; terminal/src/lib/parity-cases.json ``captions`` holds
 the cases both sides must agree on).
+
+**The series tag** (terminal v3 spec section 11, item 3): each character has his own series hashtag (``characters/<slug>/refs.json``
+``style.series_tag``: Franz ``#sausagecomingthrough``, Reginald ``#asyouwere``, Lenny ``#yourewelcome``; ``check_series_tag``
+is the one rule for it, the seed uses it). ``with_series_tag(caption, hashtags, tag)`` is what the publisher posts: the clip's
+hashtags plus the series tag at the end, only when there is room: never a sixth hashtag, never past ``CAPTION_LIMIT``, never
+twice (case-insensitive), never a refused one; otherwise the clip's hashtags exactly as they are. ``compose_content`` itself is
+unchanged (the terminal mirrors it), so the clip's own text and the terminal's preview stay the owner's.
 """
 
 from __future__ import annotations
+
+import re
+from typing import Any
 
 # Every post carries a visible AI disclosure, whatever the platform: on Instagram it is the only one
 # (the label is not an API setting there); on TikTok it backs up ``video_made_with_ai``.
@@ -28,6 +38,7 @@ AI_DISCLOSURE = "AI-generated character 🤖"
 CAPTION_LIMIT = 2200
 HASHTAG_LIMIT = 5  # Instagram's cap
 BANNED_HASHTAGS = frozenset({"fyp", "foryou", "foryoupage", "viral", "explore"})
+SERIES_TAG = re.compile(r"#[A-Za-z0-9_]{1,60}")  # one hashtag: #, then letters, digits or _ (no spaces, no second tag)
 
 
 def caption_length(text: str) -> int:
@@ -72,3 +83,31 @@ def compose_content(caption: str, hashtags: list[str]) -> str:
             f"{CAPTION_LIMIT} limit: shorten the caption by {n - CAPTION_LIMIT} or more"
         )
     return content
+
+
+def check_series_tag(tag: Any) -> str:
+    """A character's series tag (``refs.json`` ``style.series_tag``), trimmed: ONE hashtag (``#`` then 1-60 letters, digits or
+    ``_``) that is not one of ``BANNED_HASHTAGS``; else ``ValueError`` naming ``series_tag``."""
+    clean = tag.strip() if isinstance(tag, str) else None
+    if clean is None or not SERIES_TAG.fullmatch(clean):
+        raise ValueError(f"series_tag must be one hashtag such as #asyouwere (# then letters, digits or _), got {tag!r:.70}")
+    if clean[1:].lower() in BANNED_HASHTAGS:
+        raise ValueError(f"series_tag {clean} is refused: it reaches nobody")
+    return clean
+
+
+def with_series_tag(caption: str, hashtags: list[str], series_tag: str | None) -> list[str]:
+    """The hashtags to post: ``hashtags`` plus ``series_tag`` at the end when there is room (see the module docstring), else
+    ``hashtags`` as they are. Never raises: a clip whose own text is refused keeps that refusal for ``compose_content``."""
+    if not series_tag:
+        return list(hashtags)
+    tags = clean_tags(hashtags)
+    key = series_tag.strip().lstrip("#").lower()
+    if len(tags) >= HASHTAG_LIMIT or any(t[1:].lower() == key for t in tags):
+        return list(hashtags)
+    candidate = [*hashtags, series_tag]
+    try:
+        compose_content(caption, candidate)  # the limit, the dead tags and the hashtag cap, exactly as they will be posted
+    except ValueError:
+        return list(hashtags)
+    return candidate

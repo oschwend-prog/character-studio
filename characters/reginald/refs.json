@@ -23,7 +23,8 @@
     "pill": {"fill": "#0E0F12", "text": "#F2F0EA", "border": ["#E8E6E1", 2], "font": "CormorantSC-Medium.ttf", "weight": null, "case": "smallcaps", "tracking": 3, "radius": 6},
     "entrance": "none",
     "hook_edit": "pause",
-    "tone": "cool"
+    "tone": "cool",
+    "series_tag": "#asyouwere"
   },
   "traits": {
     "energy": "calm and dignified: a big man with light feet and a straight face that never cracks",

@@ -20,6 +20,14 @@
     "watches_per_character": 0,
     "_note": "One Instagram + TikTok outlier search each weekday (5 credits a call) = 25 a week, about 108 a month of the 150-credit plan. No watches: `breakdowns_per_week` and `watches_per_character` are 0 because the free local `bin/studio source analyze` of an approved pick's clip replaces the vidIQ breakdown. The search is skipped when vidiq_balance is under `balance_floor` (the run logs `vidiq: skipped, balance N, refills <date>`)."
   },
+  "reach": {
+    "_doc": "The reach pack (terminal v3 spec section 11; studio/publish/reach.py reads this block, studio publish due uses it). `trial_reels`: per Instagram account handle, true = every Reel of that account goes out as an Instagram Trial Reel (is_trial_reel + graduation_strategy SS_PERFORMANCE: shown to non-followers first, shared with the followers if it performs; the clip records trial_reel). Off for every account: proposed to the owner for a new account with few followers, never switched on by the build. A Reel with collaborators is never a Trial Reel (Instagram takes no collaborators on one). A value that is not true or false stops the publish run (exit 2) with nothing posted.",
+    "trial_reels": {
+      "franz.unimpressed": false,
+      "reginald.thebutler": false,
+      "lennygold.agent": false
+    }
+  },
   "hits": {
     "_doc": "The cloud hits job (terminal v3 spec section 10; .github/workflows/studio-hits.yml, daily 06:30 London): `studio hits pull` asks ScrapeCreators' API (metadata only: no Mac, no browser, no download) for each live character's `keywords` (at most 3) on TikTok (this week, most liked) and Instagram (last week), plus the general lane: TikTok's trending feed in `general.tiktok_regions`, Instagram's trending reels, and the broad `general.keywords` on TikTok by likes this week (no character filter: any character may take a general hit). Then the best new hits are filed as drops: at most `auto_file_per_character` a day per live character and `auto_file_general` from the general lane. A filed link yt-dlp cannot fetch from the cloud is taken from ScrapeCreators' copy of that one post (10 credits): at most `download_cap_per_day` such downloads a London day. `daily_credit_cap` covers the London day's searches (each call usually 1 credit) and downloads together (studio.hits_spend keeps the day's spend): the searches stop at the cap less the room kept for the day's downloads (45 - 2 x 10 = 25), a second run the same day starts from what the first spent. studio/hits.py reads this block.",
     "daily_credit_cap": 45,

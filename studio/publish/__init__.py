@@ -6,8 +6,9 @@ The logic lives in ``studio.publish.base`` (claim, cap, retry, stale handling) a
 ``studio publish due`` prints the run summary as JSON on stdout. Exit 0 when the run did its job
 (posts that failed or need a check are in the summary, and ``studio health`` raises them); exit 1 when
 an outcome could not be recorded (the post stays ``posting`` and becomes ``needs_check``); exit 2 for
-something the caller must fix (no ``DATABASE_URL``, Supabase or ``POSTIZ_API_KEY``, no ``postiz`` CLI).
-``--dry-run`` claims and writes nothing, needs neither Storage nor Postiz, and prints what would go.
+something the caller must fix (no ``DATABASE_URL``, Supabase or ``POSTIZ_API_KEY``, no ``postiz`` CLI, a broken reach pack
+config: ``config/scan.json`` ``reach.trial_reels`` or a character's ``style.series_tag``, ``studio.publish.reach.load_reach``).
+``--dry-run`` claims and writes nothing, needs neither Storage nor Postiz, and prints what would go (with each post's reach pack).
 With the kill switch on, ``due`` claims nothing and prints ``"paused": true``.
 
 ``studio publish resolve <post>`` settles a ``needs_check`` / ``failed`` post by hand, with exactly one
@@ -35,6 +36,7 @@ from studio.publish.base import (
     publish_due,
 )
 from studio.publish.postiz import PostizError, PostizPublisher
+from studio.publish.reach import load_reach
 from studio.publish.resolve import resolve_drop, resolve_live, resolve_retry
 
 __all__ = [
@@ -65,8 +67,12 @@ def due_command(
     """Post every due, scheduled post (at most 2 per account per London day)."""
     store = open_store()
     now = now_london()
+    try:
+        reach = load_reach()  # read before anything is claimed: a broken switch stops the run with nothing touched
+    except ValueError as e:
+        fail(str(e))
     if dry_run:
-        emit(preview_due(store, now))
+        emit(preview_due(store, now, reach=reach))
         return
     storage = open_storage()
     if not load().postiz_api_key:
@@ -76,7 +82,7 @@ def due_command(
         )
     if which("postiz") is None:
         fail("the postiz CLI is not on PATH. Install it with: npm i -g postiz")
-    summary = publish_due(store, storage, PostizPublisher(), now)
+    summary = publish_due(store, storage, PostizPublisher(), now, reach=reach)
     emit(summary)
     if summary["errors"]:
         raise typer.Exit(1)

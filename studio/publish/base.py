@@ -35,9 +35,13 @@
      The day of a posted post is the London date of its ``claimed_at`` (the posts table has no
      ``posted_at``), falling back to ``scheduled_for``;
    * the master's signed URL goes to ``publisher.publish(..., ai_label=True)`` (never without the AI
-     label);
-   * success: the post is ``posted`` with the platform id and URL, and the clip moves to ``posted``
-     (through ``clips.transition``) once **all** its posts are ``posted``;
+     label), with the post's **reach pack** (``studio.publish.reach.plan_post``, terminal v3 spec section 11): the hashtags
+     with the character's series tag when there is room and, for an Instagram Reel, the clip's first comment, its
+     collaborators and the account's Trial Reel switch;
+   * success: the post is ``posted`` with the platform id and URL; the clip's learning tags ``first_comment_posted`` and
+     ``trial_reel`` are written (``clips.set_publish_tags``: an Instagram Reel writes both, a TikTok post only the ones the clip
+     does not carry yet, so it never undoes its Reel's); an Instagram Reel is followed by its **Story** (below); and the clip
+     moves to ``posted`` (through ``clips.transition``) once **all** its posts are ``posted``;
    * an exception: ``attempts + 1``, back to ``scheduled`` with ``claimed_at = None`` while
      ``attempts < 3``, else ``failed``; the error text is kept (500 characters);
    * ``UncertainPublish``: the platform may have accepted the post, so it goes to ``needs_check`` at
@@ -49,12 +53,33 @@ is reported under ``errors`` and leaves the post in ``posting``: 30 minutes late
 ``needs_check``. That is the whole crash story: a post can be late or need a human, never be posted
 twice. One post's failure never stops the others.
 
-``publish_due`` returns a JSON-friendly summary: ``paused`` (the kill switch is on), ``stale``, ``posted``, ``retry``, ``failed``,
-``rescheduled``, ``needs_check`` (each a list of dicts with a ``post_id``), ``clips_posted`` (clip
-ids, reconciled ones included) and ``errors`` (outcomes that could not be recorded, each with a
-``post_id`` or a ``clip_id``; the CLI exits 1 on any).
+**The Story after a Reel** (terminal v3 spec section 11, item 2). Right after an Instagram Reel is recorded ``posted``,
+``publisher.publish_story`` posts the same master as a Story (the AI disclosure is its text; it reuses the Reel's upload,
+``PublishResult.media_ref``). The Story is not a post row (``posts`` holds one row per clip and account): it is recorded on the
+clip as ``features['story']`` = ``{post_id (the Reel's), status, at, ...}``, and that record is what keeps it to one:
+
+* it is **claimed first**: ``status: posting`` is written before Postiz is asked, and only when the clip has no ``story`` yet.
+  A clip that already has one (any status) never gets another; a claim that cannot be written means no Story at all;
+* then ``posted`` (with ``platform_post_id`` / ``url``), ``failed`` (Postiz refused, or anything else that raised: the error is
+  kept) or ``needs_check`` (``UncertainPublish``: it may exist). **A failed Story is never retried**, on this run or a later one:
+  a Story lives 24 hours, a late one is worth little, and a resend could double one that went out after all. A claim left in
+  ``posting`` (the process died) stays as it is, like a stale post: a human looks;
+* ``skipped`` (with the ``reason``) for a silent master (``music: in_app``: the owner adds the song to the Reel in the app; a
+  Story of it would go out silent on autopilot);
+* it is **not counted** toward the 2-a-day cap (it is not a feed post: ``_posted_counts`` reads post rows only), and **a Story
+  never fails, retries or holds up its Reel**: whatever happens to it lands in the summary's ``stories``, never in ``errors``.
+  No Story follows a Reel that failed, is uncertain or whose ``posted`` write was lost, a TikTok post, or a Reel settled by hand
+  (``studio publish resolve --live``): a Story is only ever sent right after its Reel, in the same run.
+
+``publish_due`` returns a JSON-friendly summary: ``paused`` (the kill switch is on), ``stale``, ``posted`` (each with its
+``reach``: what went with it), ``retry``, ``failed``, ``rescheduled``, ``needs_check`` (each a list of dicts with a ``post_id``),
+``stories`` (one per Instagram Reel posted: ``post_id`` of the Reel, ``clip_id``, ``status`` and its details), ``clips_posted``
+(clip ids, reconciled ones included) and ``errors`` (outcomes that could not be recorded, each with a ``post_id`` or a
+``clip_id``; the CLI exits 1 on any).
 ``preview_due(store, now)`` is the read-only twin behind ``--dry-run``: same decisions, nothing
-claimed or written, no storage or publisher needed.
+claimed or written, no storage or publisher needed; each post it would send shows its hashtags and its ``reach``.
+Both take ``reach`` (``studio.publish.reach.ReachConfig``), read from ``config/scan.json`` and the characters' ``refs.json``
+(``load_reach``) when it is not given.
 """
 
 from __future__ import annotations
@@ -64,10 +89,11 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any, Protocol, runtime_checkable
 
-from studio.clips import transition
+from studio.clips import set_publish_tags, transition
 from studio.config import LONDON
 from studio.models import Account, Clip, ClipState, Platform, Post, PostStatus
 from studio.planning import family_days, free_slot, taken_days
+from studio.publish.reach import NO_REACH, PostPlan, Reach, ReachConfig, load_reach, plan_post
 from studio.storage import Storage
 from studio.store import Store, require_aware
 
@@ -89,6 +115,7 @@ class UncertainPublish(Exception):
 class PublishResult:
     platform_post_id: str
     url: str | None = None
+    media_ref: str | None = None  # the publisher's own handle on the uploaded master (Postiz: the upload's path), for the Story
 
 
 @runtime_checkable
@@ -102,6 +129,11 @@ class Publisher(Protocol):
         caption: str,
         hashtags: list[str],
         ai_label: bool,
+        reach: Reach = NO_REACH,
+    ) -> PublishResult: ...
+
+    def publish_story(
+        self, *, integration_id: str, media_url: str, ai_label: bool, media_ref: str | None = None
     ) -> PublishResult: ...
 
 
@@ -206,13 +238,17 @@ def _short(error: BaseException | str) -> str:
 
 
 def publish_due(
-    store: Store, storage: Storage, publisher: Publisher, now: datetime
+    store: Store, storage: Storage, publisher: Publisher, now: datetime, *, reach: ReachConfig | None = None
 ) -> dict[str, Any]:
-    """Run the publish job once; see the module docstring for the rules. Returns the summary."""
+    """Run the publish job once; see the module docstring for the rules. Returns the summary.
+
+    ``reach`` is the reach pack's config (``load_reach()`` from the repo's files when not given): read before anything is
+    claimed, so a broken one (``ValueError``) stops the run with nothing touched."""
     require_aware(now, "publish_due(now)")
+    config = load_reach() if reach is None else reach
     out: dict[str, Any] = {
         "paused": False, "stale": [], "posted": [], "retry": [], "failed": [],
-        "rescheduled": [], "needs_check": [], "clips_posted": [], "errors": [],
+        "rescheduled": [], "needs_check": [], "stories": [], "clips_posted": [], "errors": [],
     }  # fmt: skip
 
     _reconcile_clips(store, out)
@@ -239,7 +275,7 @@ def publish_due(
     for post in store.claim_due_posts(now):
         try:
             _publish_one(
-                store, storage, publisher, post, accounts, cadence, today, counts, deferred_days, out
+                store, storage, publisher, post, accounts, cadence, today, counts, deferred_days, out, config, now
             )
         except Exception as e:  # noqa: BLE001 - one post must never stop the rest
             # Whatever happened, the post is still `posting`: it becomes needs_check, never a retry.
@@ -258,6 +294,8 @@ def _publish_one(
     counts: Counter[str],
     deferred_days: dict[str, set[date]],
     out: dict[str, Any],
+    config: ReachConfig,
+    now: datetime,
 ) -> None:
     account = accounts.get(post.account_id)
     clip = store.get_clip(post.clip_id)
@@ -276,18 +314,22 @@ def _publish_one(
         out["rescheduled"].append({"post_id": post.id, "to": target, "reason": why})
         return
 
+    media_url = ""
     try:
+        plan = plan_post(clip, account, accounts.values(), config)  # pure; were it to raise, nothing was sent: one attempt
         if not account.postiz_integration_id:
             raise ValueError(f"{account.handle} has no postiz_integration_id")
         if not clip.master_path:
             raise ValueError(f"clip {clip.id} has no master_path")
+        media_url = storage.signed_url(MASTER_BUCKET, clip.master_path)
         result = publisher.publish(
             platform=account.platform,
             integration_id=account.postiz_integration_id,
-            media_url=storage.signed_url(MASTER_BUCKET, clip.master_path),
+            media_url=media_url,
             caption=clip.caption or "",
-            hashtags=list(clip.hashtags),
+            hashtags=plan.hashtags,
             ai_label=True,
+            reach=plan.reach,
         )
     except UncertainPublish as e:
         counts[account.id] += 1  # it may be live: counted before the write, which may fail
@@ -318,11 +360,76 @@ def _publish_one(
         error=None,
     )
     out["posted"].append(
-        {"post_id": post.id, "platform_post_id": result.platform_post_id, "url": result.url}
+        {"post_id": post.id, "platform_post_id": result.platform_post_id, "url": result.url, "reach": plan.summary()}
     )
+    _record_reach(store, clip, account, plan, out)
+    if account.platform is Platform.instagram:
+        out["stories"].append(_follow_with_story(store, publisher, post, clip, account, plan, media_url, result, now))
     if _all_posted(store, clip.id):
         transition(store, clip.id, ClipState.posted)
         out["clips_posted"].append(clip.id)
+
+
+def _record_reach(store: Store, clip: Clip, account: Account, plan: PostPlan, out: dict[str, Any]) -> None:
+    """The publisher's learning tags on the clip (see the module docstring); a lost write is reported, the post stays posted."""
+    reel = account.platform is Platform.instagram
+    tags = {"first_comment_posted": reel and plan.reach.first_comment is not None, "trial_reel": reel and plan.reach.trial_reel}
+    try:
+        set_publish_tags(store, clip.id, tags, only_missing=not reel)
+    except Exception as e:  # noqa: BLE001 - the post is live: only the tag is lost
+        out["errors"].append({"clip_id": clip.id, "error": _short(f"the learning tags were not written: {_short(e)}")})
+
+
+def _story_marker(store: Store, clip_id: str, marker: dict[str, Any], *, claim: bool) -> bool:
+    """Write ``features['story']``. ``claim``: only when the clip has none yet (False when it has one: never a second Story)."""
+    with store.transaction():
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(clip_id)
+        if claim and clip.features.get("story") is not None:
+            return False
+        store.update_clip(clip_id, features={**clip.features, "story": marker})
+        return True
+
+
+def _follow_with_story(
+    store: Store,
+    publisher: Publisher,
+    post: Post,
+    clip: Clip,
+    account: Account,
+    plan: PostPlan,
+    media_url: str,
+    reel: PublishResult,
+    now: datetime,
+) -> dict[str, Any]:
+    """The Story of a Reel that was just posted (see the module docstring). Never raises: the summary line says what happened."""
+    entry: dict[str, Any] = {"post_id": post.id, "clip_id": clip.id}
+    stamp = {"post_id": post.id, "at": now.isoformat()}
+    try:
+        if plan.story_skip is not None:
+            if _story_marker(store, clip.id, {**stamp, "status": "skipped", "reason": plan.story_skip}, claim=True):
+                return {**entry, "status": "skipped", "reason": plan.story_skip}
+            return {**entry, "status": "skipped", "reason": "a Story of this clip is already recorded: never a second one"}
+        if not _story_marker(store, clip.id, {**stamp, "status": "posting"}, claim=True):
+            return {**entry, "status": "skipped", "reason": "a Story of this clip is already recorded: never a second one"}
+    except Exception as e:  # noqa: BLE001 - without its claim a Story could be sent twice: none is sent
+        return {**entry, "status": "failed", "error": _short(f"the Story could not be claimed, so none was sent: {_short(e)}")}
+
+    try:
+        story = publisher.publish_story(
+            integration_id=account.postiz_integration_id or "", media_url=media_url, ai_label=True, media_ref=reel.media_ref
+        )
+        outcome: dict[str, Any] = {"status": "posted", "platform_post_id": story.platform_post_id, "url": story.url}
+    except UncertainPublish as e:  # it may exist: a human looks, never a resend
+        outcome = {"status": "needs_check", "error": _short(e)}
+    except Exception as e:  # noqa: BLE001 - a failed Story never fails its Reel, and is never retried
+        outcome = {"status": "failed", "error": _short(e)}
+    try:
+        _story_marker(store, clip.id, {**stamp, **outcome}, claim=False)
+    except Exception as e:  # noqa: BLE001 - the claim stays "posting": it is never sent again, a human looks
+        outcome = {**outcome, "record_error": _short(e)}
+    return {**entry, **outcome}
 
 
 def _reconcile_clips(store: Store, out: dict[str, Any]) -> None:
@@ -363,12 +470,15 @@ def _row(post: Post, account: Account | None, clip: Clip | None) -> dict[str, An
     }
 
 
-def preview_due(store: Store, now: datetime) -> dict[str, Any]:
+def preview_due(store: Store, now: datetime, *, reach: ReachConfig | None = None) -> dict[str, Any]:
     """What ``publish_due`` would do right now, without claiming or writing anything.
 
-    With the kill switch on it reports ``paused: true`` and nothing would be posted, deferred or failed.
+    With the kill switch on it reports ``paused: true`` and nothing would be posted, deferred or failed. A post that would go
+    out shows the hashtags it would carry and its ``reach`` (``PostPlan.summary``; ``story`` is the reason when a Reel would get
+    none). ``reach`` as in ``publish_due``.
     """
     require_aware(now, "preview_due(now)")
+    config = load_reach() if reach is None else reach
     today = _day(now)
     settings = store.get_settings()
     cadence = settings.cadence
@@ -402,5 +512,6 @@ def preview_due(store: Store, now: datetime) -> dict[str, Any]:
             out["would_reschedule"].append({**row, "to": target, "reason": why})
         else:
             counts[post.account_id] += 1
-            out["would_post"].append(row)
+            plan = plan_post(clip, account, accounts.values(), config)
+            out["would_post"].append({**row, "hashtags": plan.hashtags, "reach": plan.summary()})
     return out

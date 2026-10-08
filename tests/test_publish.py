@@ -24,8 +24,11 @@ from studio.config import LONDON
 from studio.models import Account, Character, Clip, ClipState, Favorite, Platform, Post, PostStatus, Snapshot
 from studio.publish import base, postiz
 from studio.publish.base import PublishResult, Publisher, UncertainPublish, preview_due, publish_due
+from studio.publish.reach import NO_REACH, Reach, ReachConfig, load_reach
 from studio.publish.postiz import (
+    INSTAGRAM_SETTING_KEYS,
     INSTAGRAM_SETTINGS,
+    STORY_DELAY,
     TIKTOK_SETTINGS,
     CAPTION_LIMIT,
     PostizError,
@@ -47,11 +50,15 @@ MASTER = b"\x00\x00\x00 ftypmp42 pretend-master-bytes"
 
 
 class FakePublisher:
-    """Records every call; raises ``fail`` when set; ids are ``pz-1``, ``pz-2``..."""
+    """Records every call; raises ``fail`` when set (``story_fail`` for a Story); ids are ``pz-1``, ``pz-2``...
 
-    def __init__(self, fail: Exception | None = None) -> None:
+    ``calls`` are the posts (Reels and TikToks), ``stories`` the Stories that followed a Reel."""
+
+    def __init__(self, fail: Exception | None = None, story_fail: Exception | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
+        self.stories: list[dict[str, Any]] = []
         self.fail = fail
+        self.story_fail = story_fail
 
     def publish(
         self,
@@ -62,6 +69,7 @@ class FakePublisher:
         caption: str,
         hashtags: list[str],
         ai_label: bool,
+        reach: Reach = NO_REACH,
     ) -> PublishResult:
         self.calls.append(
             dict(
@@ -71,12 +79,25 @@ class FakePublisher:
                 caption=caption,
                 hashtags=hashtags,
                 ai_label=ai_label,
+                reach=reach,
             )
         )
         if self.fail is not None:
             raise self.fail
         n = len(self.calls)
-        return PublishResult(platform_post_id=f"pz-{n}", url=f"https://example.test/v/{n}")
+        return PublishResult(
+            platform_post_id=f"pz-{n}", url=f"https://example.test/v/{n}", media_ref=f"https://uploads.test/{n}.mp4"
+        )
+
+    def publish_story(
+        self, *, integration_id: str, media_url: str, ai_label: bool, media_ref: str | None = None
+    ) -> PublishResult:
+        self.stories.append(
+            dict(integration_id=integration_id, media_url=media_url, ai_label=ai_label, media_ref=media_ref)
+        )
+        if self.story_fail is not None:
+            raise self.story_fail
+        return PublishResult(platform_post_id=f"story-{len(self.stories)}")
 
 
 class Rig:
@@ -133,8 +154,9 @@ class Rig:
     def get(self, post: Post) -> Post:
         return self.store.list_posts(id=post.id)[0]
 
-    def run(self, publisher: Publisher, now: datetime = NOW) -> dict[str, Any]:
-        return publish_due(self.store, self.storage, publisher, now)
+    def run(self, publisher: Publisher, now: datetime = NOW, reach: ReachConfig | None = None) -> dict[str, Any]:
+        """One publish run; ``reach`` is the reach pack's config (default: none of it, so a test reads no repo file)."""
+        return publish_due(self.store, self.storage, publisher, now, reach=reach or ReachConfig())
 
 
 @pytest.fixture
@@ -936,13 +958,13 @@ def stored_master(tmp_path: Path) -> tuple[LocalStorage, str]:
     return storage, storage.signed_url("clips", "masters/pz.mp4")
 
 
-def publish_via_postiz(tmp_path, run, platform=Platform.tiktok, integration="int-bis-tt", **kw):
+def publish_via_postiz(tmp_path, run, platform=Platform.tiktok, integration="int-bis-tt", reach=NO_REACH, **kw):
     _, url = stored_master(tmp_path)
     clock = lambda: datetime(2026, 10, 6, 18, 5, 9, tzinfo=timezone.utc)  # noqa: E731
     publisher = PostizPublisher(run, clock=clock, **kw)
     return publisher.publish(
         platform=platform, integration_id=integration, media_url=url,
-        caption="the right eye is ice-blue", hashtags=["oddeyes", "#biscuit"], ai_label=True,
+        caption="the right eye is ice-blue", hashtags=["oddeyes", "#biscuit"], ai_label=True, reach=reach,
     )  # fmt: skip
 
 
@@ -968,7 +990,8 @@ def test_postiz_tiktok_uses_direct_post(tmp_path):
     content = run.option("posts:create", "-c")
     assert content == "the right eye is ice-blue\n\nAI-generated character 🤖\n\n#oddeyes #biscuit"
     assert run.option("posts:create", "-s") == "2026-10-06T18:05:09Z"
-    assert result == PublishResult(platform_post_id="pz-post-9", url=None)
+    # the uploaded path comes back too: the Story after a Reel reuses it instead of uploading the master again
+    assert result == PublishResult(platform_post_id="pz-post-9", url=None, media_ref="https://uploads.postiz.test/abc.mp4")
 
 
 def test_postiz_downloads_the_master_to_a_temp_file_and_cleans_up(tmp_path):
@@ -1657,3 +1680,543 @@ def test_cli_due_without_database_url_is_a_caller_error(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     r = invoke("due")
     assert r.exit_code == 2 and "DATABASE_URL" in r.stderr
+
+
+def test_cli_due_with_a_bad_reach_config_is_a_caller_error(cli, monkeypatch):
+    """config/scan.json ``reach`` is read before anything is claimed: a broken switch stops the run with exit 2, nothing posted."""
+    p = cli.post()
+
+    def broken():
+        raise ValueError("config/scan.json reach.trial_reels.franz.unimpressed must be true or false, got 'yes'")
+
+    monkeypatch.setattr(publish, "load_reach", broken)
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: pytest.fail("a publisher was made"))
+    r = invoke("due")
+    assert r.exit_code == 2 and "trial_reels" in r.stderr
+    assert cli.get(p).status is PostStatus.scheduled
+    assert invoke("due", "--dry-run").exit_code == 2
+
+
+# ---- the reach pack (terminal v3 spec section 11) ----------------------------------------------------------------------
+
+VOTE = "Next move: 🅰️ the moonwalk or 🅱️ the worm? Vote below 👇"
+
+
+def reach_rig(tmp_path: Path) -> Rig:
+    """Biscuit on TikTok and Instagram, and Reginald on Instagram too (a possible collaborator); every account in approval mode."""
+    rig = Rig(tmp_path, instagram=True)
+    rig.store.upsert_account(
+        Account(character_slug="reginald", platform="instagram", handle="reginald.thebutler", postiz_integration_id="int-reg-ig")
+    )
+    return rig
+
+
+def ig_reel(rig: Rig, when: datetime = SLOT, **features: Any) -> tuple[Clip, Post]:
+    """A scheduled clip of Biscuit's with ``features`` and its due Instagram post."""
+    clip = rig.store.update_clip(rig.clip().id, features=dict(features))
+    return clip, rig.post("@biscuit.ig", clip=clip, when=when)
+
+
+def creates(run: FakeRun) -> list[list[str]]:
+    return [c for c in run.calls if c[1] == "posts:create"]
+
+
+def values(argv: list[str], flag: str) -> list[str]:
+    """Every value of a repeatable flag (``-c``, ``-m``) in one argv, in order."""
+    return [argv[i + 1] for i, a in enumerate(argv) if a == flag]
+
+
+# -- 1. the first comment: the second ``-c`` -------------------------------------------------------------------------
+
+
+def test_postiz_sends_the_first_comment_as_the_second_content(tmp_path):
+    run = FakeRun(create=(0, '[{"postId": "pz-ig"}]', ""))
+    publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=Reach(first_comment=VOTE))
+    [argv] = creates(run)
+    post, comment = values(argv, "-c")
+    assert post == f"the right eye is ice-blue\n\n{AI}\n\n#oddeyes #biscuit" and comment == VOTE
+    # one -m: the CLI pairs the n-th -m with the n-th -c, so the master goes with the Reel and the comment has none
+    assert values(argv, "-m") == ["https://uploads.postiz.test/abc.mp4"]
+    assert "-d" not in argv  # Postiz posts the comment as soon as the Reel is live
+
+
+def test_postiz_without_a_first_comment_sends_one_content(tmp_path):
+    for platform, integration in ((Platform.instagram, "int-bis-ig"), (Platform.tiktok, "int-bis-tt")):
+        run = FakeRun()
+        publish_via_postiz(tmp_path, run, platform, integration)
+        [argv] = creates(run)
+        assert len(values(argv, "-c")) == 1 and len(values(argv, "-m")) == 1
+
+
+def test_the_reel_carries_the_clips_first_comment_and_the_clip_records_it(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, first_comment=VOTE)
+    pub = FakePublisher()
+
+    summary = rig.run(pub)
+
+    [call] = pub.calls
+    assert call["reach"] == Reach(first_comment=VOTE)
+    f = rig.store.get_clip(clip.id).features
+    assert (f["first_comment_posted"], f["trial_reel"]) == (True, False)  # the learning tags (plan tags 5 and 12)
+    assert summary["posted"][0]["reach"]["first_comment"] is True
+    assert rig.get(post).status is PostStatus.posted
+
+
+def test_without_a_first_comment_nothing_is_sent_and_the_clip_says_so(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig)
+    pub = FakePublisher()
+    rig.run(pub)
+    assert pub.calls[0]["reach"].first_comment is None
+    assert rig.store.get_clip(clip.id).features["first_comment_posted"] is False
+
+
+def test_an_unusable_first_comment_is_left_out_and_the_reel_still_goes(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, first_comment="two\nlines")  # never written through clip set: it refuses this
+    pub = FakePublisher()
+    rig.run(pub)
+    assert pub.calls[0]["reach"].first_comment is None and rig.get(post).status is PostStatus.posted
+    assert rig.store.get_clip(clip.id).features["first_comment_posted"] is False
+
+
+def test_the_first_comment_goes_with_the_instagram_reel_only(tmp_path):
+    """Postiz turns a second content into Instagram's first comment; it has no comments for TikTok."""
+    rig = reach_rig(tmp_path)
+    clip = rig.store.update_clip(rig.clip().id, features={"first_comment": VOTE, "collab": ["reginald.thebutler"]})
+    rig.post("@biscuit.ig", clip=clip, when=SLOT)
+    rig.post("@biscuit.tt", clip=clip, when=SLOT + timedelta(minutes=1))  # TikTok goes second
+    pub = FakePublisher()
+
+    rig.run(pub, reach=ReachConfig(trial_reels={"biscuit.tt": True, "biscuit.ig": False}))
+
+    by = {c["platform"]: c["reach"] for c in pub.calls}
+    assert by[Platform.instagram] == Reach(first_comment=VOTE, collaborators=("reginald.thebutler",))
+    assert by[Platform.tiktok] == NO_REACH  # no comment, no collaborators, no trial: Instagram levers only
+    f = rig.store.get_clip(clip.id).features
+    assert (f["first_comment_posted"], f["trial_reel"]) == (True, False)  # the TikTok post did not undo the Reel's tag
+
+
+def test_a_tiktok_only_clip_records_no_first_comment_and_no_trial_reel(rig):
+    p = rig.post(clip=rig.store.update_clip(rig.clip().id, features={"first_comment": VOTE}))
+    pub = FakePublisher()
+    rig.run(pub)
+    assert pub.calls[0]["reach"] == NO_REACH
+    f = rig.store.get_clip(p.clip_id).features
+    assert (f["first_comment_posted"], f["trial_reel"]) == (False, False)
+
+
+# -- 2. every Reel also as a Story -----------------------------------------------------------------------------------
+
+
+def test_a_published_reel_is_followed_by_a_story_of_the_same_master(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig)
+    pub = FakePublisher()
+
+    summary = rig.run(pub)
+
+    [reel] = pub.calls
+    [story] = pub.stories
+    assert story == {
+        "integration_id": "int-bis-ig", "media_url": reel["media_url"], "ai_label": True,
+        "media_ref": "https://uploads.test/1.mp4",  # the Reel's upload, not a second one
+    }  # fmt: skip
+    marker = rig.store.get_clip(clip.id).features["story"]
+    assert (marker["post_id"], marker["status"], marker["platform_post_id"]) == (post.id, "posted", "story-1")
+    [entry] = summary["stories"]
+    assert (entry["post_id"], entry["clip_id"], entry["status"], entry["platform_post_id"]) == (post.id, clip.id, "posted", "story-1")
+    assert rig.get(post).status is PostStatus.posted and rig.store.get_clip(clip.id).state is ClipState.posted
+    assert summary["errors"] == []
+
+
+@pytest.mark.parametrize("fail", [RuntimeError("API Error (400): bad"), UncertainPublish("posts:create timed out")])
+def test_no_story_follows_a_reel_that_did_not_go_out(tmp_path, fail):
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig)
+    pub = FakePublisher(fail=fail)
+    summary = rig.run(pub)
+    assert len(pub.calls) == 1 and pub.stories == [] and summary["stories"] == []
+    assert "story" not in rig.store.get_clip(clip.id).features
+    assert "first_comment_posted" not in rig.store.get_clip(clip.id).features  # nothing went out: no tag either
+
+
+def test_a_story_failure_leaves_the_reel_posted_and_is_never_retried(tmp_path):
+    """A failed Story is recorded as failed on the clip and never sent again: a Story only lives 24 hours, and a resend could
+    double one that went out after all."""
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig)
+    pub = FakePublisher(story_fail=RuntimeError("API Error (400): story refused"))
+
+    summary = rig.run(pub)
+
+    assert rig.get(post).status is PostStatus.posted and rig.store.get_clip(clip.id).state is ClipState.posted
+    assert summary["errors"] == [] and summary["retry"] == [] and summary["failed"] == []
+    assert [x["post_id"] for x in summary["posted"]] == [post.id]
+    [entry] = summary["stories"]
+    assert entry["status"] == "failed" and "story refused" in entry["error"]
+    assert rig.store.get_clip(clip.id).features["story"]["status"] == "failed"
+    rig.run(pub, NOW + timedelta(minutes=15))
+    rig.run(pub, NOW + timedelta(hours=3))
+    assert len(pub.stories) == 1 and len(pub.calls) == 1
+
+
+def test_an_uncertain_story_is_left_for_a_human_and_never_retried(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig)
+    pub = FakePublisher(story_fail=UncertainPublish("postiz posts:create timed out after 180 s: the post may exist"))
+    summary = rig.run(pub)
+    assert rig.get(post).status is PostStatus.posted and summary["errors"] == []
+    assert summary["stories"][0]["status"] == "needs_check"
+    assert rig.store.get_clip(clip.id).features["story"]["status"] == "needs_check"
+    rig.run(pub, NOW + timedelta(minutes=45))
+    assert len(pub.stories) == 1
+
+
+def test_no_story_on_tiktok(rig):
+    p = rig.post()
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert len(pub.calls) == 1 and pub.stories == [] and summary["stories"] == []
+    assert "story" not in rig.store.get_clip(p.clip_id).features
+
+
+def test_a_silent_in_app_reel_gets_no_story(tmp_path):
+    """The owner adds the song to the Reel in the app (he approved that); a Story of the silent master would go out silent on
+    autopilot (CLAUDE.md: never post a silent in_app clip on autopilot). Recorded as skipped, with the reason."""
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, music="in_app")  # an approval account: the Reel goes out as the owner approved it
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert len(pub.calls) == 1 and pub.stories == [] and rig.get(post).status is PostStatus.posted
+    marker = rig.store.get_clip(clip.id).features["story"]
+    assert marker["status"] == "skipped" and "in_app" in marker["reason"]
+    assert summary["stories"][0]["status"] == "skipped"
+
+
+def test_a_story_is_never_posted_twice(tmp_path):
+    """A clip whose Story is already recorded (in any state) gets no other, e.g. a Reel sent again after `publish resolve --retry`."""
+    rig = reach_rig(tmp_path)
+    earlier = {"post_id": "earlier", "status": "posting"}
+    clip, post = ig_reel(rig, story=earlier)
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert len(pub.calls) == 1 and pub.stories == [] and rig.get(post).status is PostStatus.posted
+    assert rig.store.get_clip(clip.id).features["story"] == earlier  # untouched
+    assert summary["stories"][0]["status"] == "skipped" and "already" in summary["stories"][0]["reason"]
+
+
+class StoryClaimFlakyStore(MemoryStore):
+    """Loses the write that claims a Story on the clip."""
+
+    def update_clip(self, id, /, **kw):
+        if (kw.get("features") or {}).get("story", {}).get("status") == "posting":
+            raise RuntimeError("db went away")
+        return super().update_clip(id, **kw)
+
+
+def test_no_story_is_sent_when_its_claim_cannot_be_written(tmp_path):
+    """The Story is claimed on the clip before Postiz is asked: without that record it could be sent twice, so it is not sent."""
+    rig = reach_rig(tmp_path)
+    rig.store = StoryClaimFlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    clip, post = ig_reel(rig)
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    assert pub.stories == [] and rig.get(post).status is PostStatus.posted
+    assert summary["stories"][0]["status"] == "failed" and "db went away" in summary["stories"][0]["error"]
+    assert summary["errors"] == []  # the Reel's outcome is recorded: the CLI still exits 0
+
+
+def test_stories_do_not_count_toward_the_two_posts_a_day_cap(tmp_path):
+    rig = reach_rig(tmp_path)
+    reels = [ig_reel(rig, when=SLOT + timedelta(minutes=i))[1] for i in range(3)]
+    pub = FakePublisher()
+
+    summary = rig.run(pub)
+
+    assert len(pub.calls) == 2 and len(pub.stories) == 2  # two Reels, each with its Story: the Stories took no place
+    assert [x["post_id"] for x in summary["posted"]] == [reels[0].id, reels[1].id]
+    assert [x["post_id"] for x in summary["rescheduled"]] == [reels[2].id]  # the third Reel waits for a free day
+
+
+# -- 3. the series tag -----------------------------------------------------------------------------------------------
+
+
+def test_the_characters_series_tag_joins_the_hashtags_when_there_is_room(rig):
+    cfg = ReachConfig(series_tags={"biscuit": "#sausagecomingthrough"})
+    p = rig.post()
+    full = rig.store.update_clip(rig.clip().id, hashtags=["#a", "#b", "#c", "#d", "#oddeyes"])
+    rig.post(clip=full, when=SLOT + timedelta(minutes=1))
+    pub = FakePublisher()
+
+    rig.run(pub, reach=cfg)
+
+    assert pub.calls[0]["hashtags"] == ["oddeyes", "#ai", "#sausagecomingthrough"]
+    assert pub.calls[1]["hashtags"] == ["#a", "#b", "#c", "#d", "#oddeyes"]  # never a sixth
+    assert rig.store.get_clip(p.clip_id).hashtags == ["oddeyes", "#ai"]  # the clip itself is not rewritten
+
+
+def test_another_characters_series_tag_never_joins(rig):
+    p = rig.post("@reginald.tt")
+    pub = FakePublisher()
+    rig.run(pub, reach=ReachConfig(series_tags={"biscuit": "#sausagecomingthrough"}))
+    assert pub.calls[0]["hashtags"] == ["oddeyes", "#ai"] and rig.get(p).status is PostStatus.posted
+
+
+# -- 4. collaborators: only from the clip's features, only our other characters --------------------------------------
+
+
+def test_collaborators_come_only_from_the_clips_collab_and_only_our_other_characters(tmp_path):
+    rig = reach_rig(tmp_path)
+    collab = ["@Reginald.TheButler", "someone.famous", "@biscuit.ig", "reginald.thebutler", 7]
+    clip, _ = ig_reel(rig, collab=collab)
+    pub = FakePublisher()
+    summary = rig.run(pub)
+    # as our own account row writes it, once; a stranger, Biscuit himself and a non-handle are dropped
+    assert pub.calls[0]["reach"].collaborators == ("reginald.thebutler",)
+    assert summary["posted"][0]["reach"]["collaborators"] == ["reginald.thebutler"]
+    assert summary["posted"][0]["reach"]["collab_dropped"] == ["someone.famous", "@biscuit.ig", "7"]
+
+
+@pytest.mark.parametrize("collab", [None, [], "reginald.thebutler", {"reginald": "reginald.thebutler"}])
+def test_no_collab_list_no_collaborators(tmp_path, collab):
+    rig = reach_rig(tmp_path)
+    ig_reel(rig, **({} if collab is None else {"collab": collab}))
+    pub = FakePublisher()
+    rig.run(pub)
+    assert pub.calls[0]["reach"].collaborators == ()
+
+
+def test_postiz_collaborators_are_labels(tmp_path):
+    run = FakeRun()
+    reach = Reach(collaborators=("reginald.thebutler", "lennygold.agent"))
+    publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=reach)
+    assert json.loads(run.option("posts:create", "--settings")) == {
+        "post_type": "post", "collaborators": [{"label": "reginald.thebutler"}, {"label": "lennygold.agent"}],
+    }  # fmt: skip
+
+
+# -- 5. the Trial Reels switch -----------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("switches", "trial"),
+    [({}, False), ({"biscuit.ig": False}, False), ({"reginald.thebutler": True}, False), ({"biscuit.ig": True}, True),
+     ({"@Biscuit.IG": True}, True)],
+)
+def test_a_trial_reel_only_when_the_accounts_switch_is_on(tmp_path, switches, trial):
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig)
+    pub = FakePublisher()
+    summary = rig.run(pub, reach=ReachConfig(trial_reels=switches))
+    assert pub.calls[0]["reach"].trial_reel is trial
+    assert rig.store.get_clip(clip.id).features["trial_reel"] is trial
+    assert summary["posted"][0]["reach"]["trial_reel"] is trial
+
+
+def test_a_collab_reel_is_never_a_trial_reel(tmp_path):
+    """Instagram takes no collaborators on a Trial Reel: the clip's own collab wins over the account's switch."""
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig, collab=["reginald.thebutler"])
+    pub = FakePublisher()
+    rig.run(pub, reach=ReachConfig(trial_reels={"biscuit.ig": True}))
+    assert pub.calls[0]["reach"] == Reach(collaborators=("reginald.thebutler",), trial_reel=False)
+    assert rig.store.get_clip(clip.id).features["trial_reel"] is False
+
+
+def test_postiz_trial_reel_settings(tmp_path):
+    run = FakeRun()
+    publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=Reach(trial_reel=True))
+    assert json.loads(run.option("posts:create", "--settings")) == {
+        "post_type": "post", "is_trial_reel": True, "graduation_strategy": "SS_PERFORMANCE",
+    }  # fmt: skip
+
+
+def test_postiz_refuses_a_trial_reel_with_collaborators(tmp_path):
+    run = FakeRun()
+    with pytest.raises(ValueError, match="collaborators"):
+        publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=Reach(collaborators=("a",), trial_reel=True))
+    assert run.calls == []
+
+
+@pytest.mark.parametrize("reach", [Reach(first_comment="x"), Reach(collaborators=("a",)), Reach(trial_reel=True)])
+def test_postiz_refuses_instagram_levers_on_tiktok(tmp_path, reach):
+    run = FakeRun()
+    with pytest.raises(ValueError, match="Instagram"):
+        publish_via_postiz(tmp_path, run, reach=reach)
+    assert run.calls == []  # nothing fetched, uploaded or posted
+
+
+# -- 6. every Postiz key pinned to the CLI's settings schema -----------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "reach",
+    [NO_REACH, Reach(first_comment=VOTE), Reach(trial_reel=True), Reach(collaborators=("reginald.thebutler",)),
+     Reach(first_comment=VOTE, collaborators=("a", "b"))],
+)
+def test_the_instagram_settings_carry_only_keys_of_the_postiz_schema(tmp_path, reach):
+    """postiz integrations:settings <instagram id> (CLI 2.0.16, 2026-10-08); an unknown key would be dropped without a word."""
+    assert INSTAGRAM_SETTING_KEYS == {"post_type", "is_trial_reel", "graduation_strategy", "collaborators", "audio"}
+    run = FakeRun()
+    publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=reach)
+    settings = json.loads(run.option("posts:create", "--settings"))
+    assert set(settings) <= INSTAGRAM_SETTING_KEYS and settings["post_type"] == "post"
+    assert settings.get("graduation_strategy") in (None, "MANUAL", "SS_PERFORMANCE")
+    assert all(set(c) == {"label"} and isinstance(c["label"], str) for c in settings.get("collaborators", []))
+    story = FakeRun()
+    PostizPublisher(story).publish_story(integration_id="int-bis-ig", media_url="unused", ai_label=True, media_ref="p")
+    assert json.loads(story.option("posts:create", "--settings")) == {"post_type": "story"}
+
+
+# -- the Story through the Postiz adapter -------------------------------------------------------------------------------
+
+
+def test_postiz_story_reuses_the_reels_upload_and_carries_the_disclosure(tmp_path):
+    run = FakeRun(create=(0, '[{"postId": "pz-story"}]', ""))
+    clock = lambda: datetime(2026, 10, 6, 18, 5, 9, tzinfo=timezone.utc)  # noqa: E731
+    publisher = PostizPublisher(run, clock=clock, fetch=lambda url, dest: pytest.fail("the master was fetched again"))
+
+    result = publisher.publish_story(
+        integration_id="int-bis-ig", media_url="https://signed.test/m.mp4", ai_label=True,
+        media_ref="https://uploads.postiz.test/abc.mp4",
+    )  # fmt: skip
+
+    assert [c[1] for c in run.calls] == ["posts:create"]  # no upload: the Reel's media is reused
+    [argv] = creates(run)
+    assert values(argv, "-c") == [AI]  # Postiz needs a text; a Story shows none, so it is the AI disclosure alone
+    assert values(argv, "-m") == ["https://uploads.postiz.test/abc.mp4"]  # exactly one attachment: the master
+    assert run.option("posts:create", "-i") == "int-bis-ig"
+    assert STORY_DELAY == timedelta(minutes=5)
+    assert run.option("posts:create", "-s") == "2026-10-06T18:10:09Z"  # 5 minutes after the Reel: it is live by then
+    assert result.platform_post_id == "pz-story"
+
+
+def test_postiz_story_without_a_media_ref_uploads_the_master(tmp_path):
+    run = FakeRun()
+    _, url = stored_master(tmp_path)
+    PostizPublisher(run).publish_story(integration_id="int-bis-ig", media_url=url, ai_label=True)
+    assert [c[1] for c in run.calls] == ["upload", "posts:create"] and run.uploaded_bytes == MASTER
+
+
+def test_postiz_story_refuses_without_the_ai_label_or_an_integration(tmp_path):
+    run = FakeRun()
+    with pytest.raises(ValueError, match="AI label"):
+        PostizPublisher(run).publish_story(integration_id="int-bis-ig", media_url="u", ai_label=False, media_ref="p")
+    with pytest.raises(ValueError, match="integration"):
+        PostizPublisher(run).publish_story(integration_id="", media_url="u", ai_label=True, media_ref="p")
+    assert run.calls == []
+
+
+def test_postiz_story_errors_follow_the_reels_rules(tmp_path):
+    refused = FakeRun(create=(1, "", "❌ Failed to create post: Request failed: API Error (400): x"))
+    with pytest.raises(PostizError):
+        PostizPublisher(refused).publish_story(integration_id="i", media_url="u", ai_label=True, media_ref="p")
+    unsure = FakeRun(create=(1, "", "❌ Failed to create post: Request failed: API Error (502): x"))
+    with pytest.raises(UncertainPublish):
+        PostizPublisher(unsure).publish_story(integration_id="i", media_url="u", ai_label=True, media_ref="p")
+
+
+def test_publish_due_sends_the_reel_its_comment_and_its_story_through_postiz(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, first_comment=VOTE)
+    run = FakeRun()
+
+    summary = rig.run(PostizPublisher(run))
+
+    assert [c[1] for c in run.calls] == ["upload", "posts:create", "posts:create"]  # one upload for the Reel and its Story
+    reel, story = creates(run)
+    assert json.loads(reel[reel.index("--settings") + 1]) == {"post_type": "post"}
+    assert values(reel, "-c")[1] == VOTE
+    assert json.loads(story[story.index("--settings") + 1]) == {"post_type": "story"}
+    assert values(story, "-m") == values(reel, "-m") == ["https://uploads.postiz.test/abc.mp4"]
+    assert rig.get(post).status is PostStatus.posted and summary["stories"][0]["status"] == "posted"
+    assert rig.store.get_clip(clip.id).features["first_comment_posted"] is True and summary["errors"] == []
+
+
+def test_a_story_refused_by_postiz_leaves_the_reel_posted_end_to_end(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig)
+
+    def create(argv):
+        if json.loads(argv[argv.index("--settings") + 1])["post_type"] == "story":
+            return 1, "", "❌ Failed to create post: Request failed: API Error (400): story"
+        return 0, CREATE_OUT, ""
+
+    run = FakeRun(create=create)
+    summary = rig.run(PostizPublisher(run))
+    rig.run(PostizPublisher(run), NOW + timedelta(minutes=15))
+    assert rig.get(post).status is PostStatus.posted and rig.store.get_clip(clip.id).state is ClipState.posted
+    assert summary["stories"][0]["status"] == "failed" and summary["errors"] == []
+    assert len(creates(run)) == 2  # the Reel and one Story attempt, never another
+
+
+# -- the dry run and the committed config --------------------------------------------------------------------------------
+
+
+def test_the_dry_run_shows_the_reach_pack_and_writes_nothing(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, first_comment=VOTE, collab=["reginald.thebutler"])
+    tt = rig.post("@biscuit.tt", clip=clip, when=SLOT + timedelta(minutes=1))
+    cfg = ReachConfig(series_tags={"biscuit": "#sausagecomingthrough"})
+
+    out = preview_due(rig.store, NOW, reach=cfg)
+
+    ig_row, tt_row = out["would_post"]
+    assert ig_row["hashtags"] == tt_row["hashtags"] == ["oddeyes", "#ai", "#sausagecomingthrough"]
+    assert ig_row["reach"] == {"first_comment": True, "collaborators": ["reginald.thebutler"], "collab_dropped": [],
+                               "trial_reel": False, "story": True}  # fmt: skip
+    assert tt_row["reach"] == {"first_comment": False, "collaborators": [], "collab_dropped": [], "trial_reel": False,
+                               "story": False}  # fmt: skip
+    assert rig.store.get_clip(clip.id).features == {"first_comment": VOTE, "collab": ["reginald.thebutler"]}
+    assert rig.get(post).status is PostStatus.scheduled and rig.get(tt).status is PostStatus.scheduled
+
+
+def test_the_dry_run_names_why_a_story_would_be_skipped(tmp_path):
+    rig = reach_rig(tmp_path)
+    ig_reel(rig, music="in_app")
+    [row] = preview_due(rig.store, NOW, reach=ReachConfig())["would_post"]
+    assert "in_app" in row["reach"]["story"]
+
+
+def test_the_committed_reach_config_has_every_switch_off_and_the_three_series_tags():
+    cfg = load_reach()
+    assert cfg.trial_reels == {"franz.unimpressed": False, "reginald.thebutler": False, "lennygold.agent": False}
+    assert cfg.series_tags == {"franz": "#sausagecomingthrough", "reginald": "#asyouwere", "lenny": "#yourewelcome"}
+    scan = json.loads((Path(base.__file__).resolve().parents[2] / "config" / "scan.json").read_text())
+    assert "never switched on by the build" in scan["reach"]["_doc"]
+
+
+@pytest.mark.parametrize(
+    ("block", "message"),
+    [
+        ({"trial_reels": {"franz.unimpressed": "yes"}}, r"reach\.trial_reels\.franz\.unimpressed must be true or false"),
+        ({"trial_reels": {"franz.unimpressed": 1}}, "must be true or false"),
+        ({"trial_reels": ["franz.unimpressed"]}, r"reach\.trial_reels must be an object"),
+        ("on", r"reach must be an object"),
+    ],
+)
+def test_a_bad_reach_block_is_refused(tmp_path, block, message):
+    scan = tmp_path / "scan.json"
+    scan.write_text(json.dumps({"reach": block}))
+    with pytest.raises(ValueError, match=message):
+        load_reach(scan, tmp_path / "no-characters")
+
+
+def test_no_reach_block_means_every_switch_off(tmp_path):
+    scan = tmp_path / "scan.json"
+    scan.write_text(json.dumps({"_doc": "x", "reach": {"_doc": "y", "trial_reels": {"_doc": "z"}}}))
+    cfg = load_reach(scan, tmp_path / "no-characters")
+    assert cfg.trial_reels == {} and cfg.series_tags == {}
+    scan.write_text("{}")
+    assert load_reach(scan, tmp_path / "no-characters") == ReachConfig()
+
+
+def test_a_bad_series_tag_in_refs_json_is_refused_naming_the_file(tmp_path):
+    scan = tmp_path / "scan.json"
+    scan.write_text("{}")
+    (tmp_path / "chars" / "franz").mkdir(parents=True)
+    (tmp_path / "chars" / "franz" / "refs.json").write_text(json.dumps({"slug": "franz", "style": {"series_tag": "#fyp"}}))
+    with pytest.raises(ValueError, match=r"franz/refs\.json.*series_tag"):
+        load_reach(scan, tmp_path / "chars")

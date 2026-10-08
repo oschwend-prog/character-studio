@@ -34,7 +34,8 @@
     "pill": {"fill": "#E8B931", "fill_alpha": 255, "text": "#141414", "font": "Oswald-Variable.ttf", "weight": "Bold", "case": "upper", "radius": 16},
     "entrance": "slam",
     "hook_edit": "punch_in",
-    "tone": "golden"
+    "tone": "golden",
+    "series_tag": "#yourewelcome"
   },
   "traits": {
     "energy": "manic and loud: a power-walking, finger-jabbing agent mid-deal, phone glued to his ear, who never waits and never hangs up first",

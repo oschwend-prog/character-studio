@@ -41,6 +41,10 @@ two (``MASTER_FEATURES``: ``length_s`` and ``length_bucket``, written by ``set_l
 none or classic, ``episode`` is None when ``series`` is none. ``hit_rules_version`` is ``v<N>`` or ``none``. A clip made by hand
 with no pick and no ``source_kind`` (and not a drop's) is created exactly as before (legacy). ``set_hook_tags`` re-tags the hook
 when the master renders another one than the clip was created with. ``review.feature_lifts`` reads the tags.
+Two more are the publisher's (``PUBLISH_FEATURES``, terminal v3 spec section 11, learning plan tags 5 and 12): ``first_comment_posted``
+(the clip's first comment went out with its Instagram Reel) and ``trial_reel`` (the Reel went out as a Trial Reel), both true or
+false, written by ``set_publish_tags`` after a successful post (``studio.publish.base``); like the master's two they are not needed at
+creation and are checked when present.
 
 ``transition`` and ``set_fields`` write only ``SETTABLE_FIELDS``. The state never changes through
 ``set_fields`` (or ``store.update_clip`` anywhere else): that is the whole point of the table.
@@ -162,9 +166,12 @@ LEARN_FEATURES = frozenset(
         "source_kind",
         "test_arms",  # what each running test assigned ({} until a test runs)
         "explore_pick",  # true / false (test A)
+        "first_comment_posted",  # true / false: the first comment went out with the Instagram Reel (the publisher)
+        "trial_reel",  # true / false: the Reel went out as an Instagram Trial Reel (the publisher)
     }
 )
 MASTER_FEATURES = frozenset({"length_s", "length_bucket"})  # written by the master (set_length), not at creation
+PUBLISH_FEATURES = frozenset({"first_comment_posted", "trial_reel"})  # written by the publisher after a post (set_publish_tags)
 LEARN_VALUES: dict[str, tuple[Any, ...]] = {
     "format_id": ("swap_trend", "swap_classic", "swap_other", "recreate", "own_footage"),
     # the 7 patterns; "owner" = the owner's own line (none of the check's hooks), "none" = a hook nobody labelled
@@ -180,7 +187,7 @@ LEARN_VALUES: dict[str, tuple[Any, ...]] = {
     "series": ("sausage_vs_trend", "household_unaware", "on_hold", "classics", "halloween_countdown", "none"),
     "source_kind": ("owner_saved", "auto_filed", "own_footage", "recreate"),
 }
-LEARN_BOOLS = frozenset({"sound_rising", "explore_pick"})
+LEARN_BOOLS = frozenset({"sound_rising", "explore_pick", "first_comment_posted", "trial_reel"})
 LEARN_NULLABLE = frozenset({"days_since_trend_peak", "episode", "score_total", "score_potential", "score_swap"})
 HOOK_TAGS = ("hook_text", "hook_pattern", "hook_index", "hook_by")  # what set_hook_tags may write
 _RULES_VERSION = re.compile(r"v\d+")  # gemini.hit_rules_version: v<N>, or "none"
@@ -232,11 +239,11 @@ def _whole(value: Any) -> bool:
 
 
 def learn_problems(features: Mapping[str, Any]) -> list[str]:
-    """What is wrong with the learning tags of ``features`` (empty = fine): every key of ``LEARN_FEATURES`` but the master's
-    must be there (the master's are checked when present), each value from its vocabulary or of its type; ``score_bucket`` must
-    be the bucket of ``score_total``. ``format_id`` and ``hook_pattern`` are checked against their vocabularies too."""
+    """What is wrong with the learning tags of ``features`` (empty = fine): every key of ``LEARN_FEATURES`` but the master's and
+    the publisher's must be there (those are checked when present), each value from its vocabulary or of its type; ``score_bucket``
+    must be the bucket of ``score_total``. ``format_id`` and ``hook_pattern`` are checked against their vocabularies too."""
     p: list[str] = []
-    missing = sorted(k for k in LEARN_FEATURES - MASTER_FEATURES if k not in features)
+    missing = sorted(k for k in LEARN_FEATURES - MASTER_FEATURES - PUBLISH_FEATURES if k not in features)
     if missing:
         p.append(f"missing feature tags: {', '.join(missing)}")
     for key in sorted((LEARN_FEATURES | LEARN_VALUES.keys()) & features.keys()):
@@ -397,6 +404,27 @@ def set_length(store: Store, clip_id: str, seconds: float) -> Clip:
     return store.update_clip(clip_id, features={**clip.features, "length_s": length, "length_bucket": length_bucket(length)})
 
 
+def set_publish_tags(store: Store, clip_id: str, tags: Mapping[str, Any], *, only_missing: bool = False) -> Clip:
+    """Write the publisher's learning tags (``PUBLISH_FEATURES``: ``first_comment_posted``, ``trial_reel``, each true or false) on
+    the clip, keeping every other feature. ``only_missing`` writes only the ones the clip does not carry yet (a TikTok post never
+    undoes what its Instagram Reel recorded). ``KeyError`` for an unknown clip, ``ValueError`` (nothing written) for another key or a
+    value that is not true or false."""
+    unknown = sorted(set(tags) - PUBLISH_FEATURES)
+    if unknown:
+        raise ValueError(f"set_publish_tags writes only {', '.join(sorted(PUBLISH_FEATURES))}, got {', '.join(unknown)}")
+    bad = [problem for key, value in tags.items() if (problem := _value_problem(key, value)) is not None]
+    if bad:
+        raise ValueError("bad publish tag(s): " + "; ".join(bad))
+    with store.transaction():
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(clip_id)
+        new = {k: v for k, v in tags.items() if not (only_missing and k in clip.features)}
+        if not new:
+            return clip
+        return store.update_clip(clip_id, features={**clip.features, **new})
+
+
 def set_hook_tags(store: Store, clip_id: str, tags: Mapping[str, Any]) -> Clip:
     """Re-tag the hook the master renders (``HOOK_TAGS``: ``hook_text`` and, for a clip with the learning tags, its
     ``hook_pattern`` / ``hook_index`` / ``hook_by``): a make that resumes after a failed master renders the hook of the owner's
@@ -456,7 +484,7 @@ def new_clip(
         raise ValueError("features['rerolls'] is managed by the state machine; leave it out")
     missing = sorted(k for k in REQUIRED_FEATURES if features.get(k) is None)
     if needs_learn_tags(features):
-        missing = sorted({*missing, *(k for k in LEARN_FEATURES - MASTER_FEATURES if k not in features)})
+        missing = sorted({*missing, *(k for k in LEARN_FEATURES - MASTER_FEATURES - PUBLISH_FEATURES if k not in features)})
     if missing:
         raise ValueError(f"missing feature tags: {', '.join(missing)}")
     if needs_learn_tags(features) and (bad := learn_problems(features)):

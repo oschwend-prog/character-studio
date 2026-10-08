@@ -79,7 +79,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 - [ ] Genjutsu multi-body test with 3 dancers: decides the held picks D1, D3, B4, B5, B6.
 - [ ] Quiff Butler dance on the slick driver; generate Reginald's close-up and set `closeup` in his refs.json, re-seed.
 - [ ] (Biscuit is retired, 2026-10-06: his debut re-render is no longer needed.)
-- [ ] `postiz integrations:settings <id>` for one TikTok and one Instagram channel: compare with `TIKTOK_SETTINGS` / `INSTAGRAM_SETTINGS` in `studio/publish/postiz.py` (unknown keys are silently dropped).
+- [ ] `postiz integrations:settings <id>` for one TikTok and one Instagram channel: compare with `TIKTOK_SETTINGS` / `INSTAGRAM_SETTINGS` and the reach pack's `INSTAGRAM_SETTING_KEYS` (`post_type` post | story, `is_trial_reel`, `graduation_strategy`, `collaborators`) in `studio/publish/postiz.py` (unknown keys are silently dropped).
 - [ ] `postiz analytics:post <id> -d 7` on a real post: compare with `POSTIZ_METRIC_LABELS` / `POSTIZ_SERIES_MODE` in `studio/metrics.py` (cumulative or per-day).
 - [ ] vidIQ Instagram insights (connect the 2 Instagram accounts to vidIQ first): compare the keys with the `IG_*` constants and check the `platform_post_id` match.
 - [ ] Integration tests: `DATABASE_URL_TEST="$(security find-generic-password -s cs-database-url -w)" uv run pytest tests/integration -v` (builds and drops its own `studio_test` schema; never touches `studio`).

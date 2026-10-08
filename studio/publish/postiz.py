@@ -5,8 +5,24 @@
 1. fetches the master from its signed URL into a private temp folder (Postiz only accepts media it
    hosted itself, so the file has to pass through ``postiz upload``; Rule 2 of the postiz skill),
 2. ``postiz upload <file>`` and reads the ``path`` it returns, then deletes the temp folder,
-3. ``postiz posts:create -c <caption + hashtags> -s <now> -i <integration> -m <path> --settings
+3. ``postiz posts:create -c <caption + hashtags> -m <path> [-c <first comment>] -s <now> -i <integration> --settings
    <json>``, with the per-platform settings below, and reads the Postiz post id from its output.
+
+**The reach pack** (terminal v3 spec section 11; ``studio.publish.reach`` decides, this adapter only writes it down):
+
+* the first comment is the second ``-c`` (Postiz turns every content after the first into a comment; on Instagram the first
+  comment). The CLI pairs the n-th ``-m`` with the n-th ``-c``, so the one ``-m`` stays the Reel's and the comment has no media.
+  No first comment: one ``-c``, as before;
+* the Instagram settings are pinned to the CLI's schema (``postiz integrations:settings <id>``, CLI 2.0.16, checked 2026-10-08):
+  ``post_type`` post | story, ``is_trial_reel``, ``graduation_strategy`` MANUAL | SS_PERFORMANCE, ``collaborators`` (a list of
+  ``{label}``) and ``audio`` (never sent). ``INSTAGRAM_SETTING_KEYS`` holds them; Postiz drops an unknown key without a word, so
+  nothing else is ever written. A Trial Reel with collaborators, or any Instagram lever on TikTok, is a ``ValueError`` before
+  anything is fetched;
+* ``publish_story`` posts a Story: ``post_type: story``, exactly one attachment (the master: Instagram takes one media on a Story),
+  the AI disclosure as its text (the CLI needs a text; a Story shows none, so nothing else goes in), scheduled ``STORY_DELAY``
+  after now so the Reel created a moment before is live first. It reuses the Reel's upload (``PublishResult.media_ref``, the
+  ``path`` the upload returned) instead of fetching and uploading the master again. Its ``posts:create`` fails like a Reel's: a
+  definite 4xx is ``PostizError``, anything that may have created it is ``UncertainPublish``.
 
 The posts are scheduled for *now*: the publish job (every 15 minutes in the evening window) decides when a post is due, Postiz
 just sends it. ``posted`` in our database therefore means "Postiz accepted it", and the
@@ -38,7 +54,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -55,6 +71,7 @@ from studio.captions import (  # noqa: F401 - re-exported: the text rules live i
 )
 from studio.models import Platform
 from studio.publish.base import PublishResult, UncertainPublish
+from studio.publish.reach import NO_REACH, Reach
 
 # Rule 3 of the postiz skill: DIRECT_POST publishes; UPLOAD only drops a draft in the TikTok inbox
 # while Postiz still reports success. Rule 4: a key the integration does not know is silently
@@ -73,9 +90,16 @@ TIKTOK_SETTINGS: dict[str, Any] = {
 }
 
 # Postiz publishes a single video with post_type "post" as a Reel (media_type=REELS); the only other
-# value is "story". The Instagram AI label is account-level (set when the account is created).
+# value is "story". Postiz carries no per-post AI flag for Instagram (Task 9: Instagram's own API); the caption's AI line and the
+# profile's AI label stay on every post.
 # VERIFY at go-live (Task 16): postiz integrations:settings <id>
 INSTAGRAM_SETTINGS: dict[str, Any] = {"post_type": "post"}
+INSTAGRAM_STORY_SETTINGS: dict[str, Any] = {"post_type": "story"}
+# Every key of Postiz's Instagram settings schema (postiz integrations:settings <instagram id>, CLI 2.0.16, 2026-10-08); "audio" is
+# in the schema but never sent. Anything else would be dropped by Postiz without a word.
+INSTAGRAM_SETTING_KEYS = frozenset({"post_type", "is_trial_reel", "graduation_strategy", "collaborators", "audio"})
+GRADUATION_STRATEGY = "SS_PERFORMANCE"  # a Trial Reel is shared with the followers when it performs (the other value: MANUAL)
+STORY_DELAY = timedelta(minutes=5)  # the Story is scheduled this long after its Reel, so the Reel is live first
 
 PLATFORM_SETTINGS: dict[Platform, dict[str, Any]] = {
     Platform.tiktok: TIKTOK_SETTINGS,
@@ -96,6 +120,28 @@ _FETCH_TIMEOUT = httpx.Timeout(30.0, read=600.0)
 
 class PostizError(RuntimeError):
     """A Postiz CLI step or the media fetch failed before anything was published."""
+
+
+def platform_settings(platform: Platform, reach: Reach = NO_REACH) -> dict[str, Any]:
+    """The ``--settings`` of a post (a new dict, only keys of the provider's schema). ``ValueError`` for a lever the platform has
+    no key for (a first comment, collaborators or a Trial Reel on TikTok) or a Trial Reel with collaborators."""
+    if platform is not Platform.instagram:
+        if reach != NO_REACH:
+            raise ValueError(
+                "the first comment, collaborators and Trial Reels are Instagram levers: Postiz has none of them for "
+                f"{platform.value}"
+            )
+        return dict(PLATFORM_SETTINGS[platform])
+    if reach.trial_reel and reach.collaborators:
+        raise ValueError("a Trial Reel cannot have collaborators (Instagram refuses them): send one or the other")
+    settings = dict(INSTAGRAM_SETTINGS)
+    if reach.trial_reel:
+        settings.update(is_trial_reel=True, graduation_strategy=GRADUATION_STRATEGY)
+    if reach.collaborators:
+        settings["collaborators"] = [{"label": handle} for handle in reach.collaborators]
+    if unknown := sorted(set(settings) - INSTAGRAM_SETTING_KEYS):  # never: Postiz would drop it without a word
+        raise ValueError(f"not keys of Postiz's Instagram settings: {', '.join(unknown)}")
+    return settings
 
 
 def download_media(
@@ -176,6 +222,7 @@ class PostizPublisher:
         caption: str,
         hashtags: list[str],
         ai_label: bool,
+        reach: Reach = NO_REACH,
     ) -> PublishResult:
         platform = Platform(platform)
         if not ai_label:
@@ -185,13 +232,29 @@ class PostizPublisher:
         if not caption.strip() and not clean_tags(hashtags):
             raise ValueError("nothing to post: caption and hashtags are empty")
         content = compose_content(caption, hashtags)  # ValueError when over the limit: nothing sent
-        settings = PLATFORM_SETTINGS[platform]  # never mutated, only serialised
+        settings = platform_settings(platform, reach)  # ValueError for a lever the platform has no key for: nothing sent
+        comments = [reach.first_comment] if reach.first_comment and reach.first_comment.strip() else []
+        uploaded = self._upload_master(media_url)
+        return self._create([content, *comments], integration_id, uploaded, settings, self._clock())
 
+    def publish_story(
+        self, *, integration_id: str, media_url: str, ai_label: bool, media_ref: str | None = None
+    ) -> PublishResult:
+        """An Instagram Story of the master (see the module docstring); ``media_ref`` is the Reel's upload, reused when given."""
+        if not ai_label:
+            raise ValueError("refusing to publish without the AI label")
+        if not integration_id:
+            raise ValueError("no Postiz integration id for this account")
+        uploaded = media_ref or self._upload_master(media_url)
+        when = self._clock() + STORY_DELAY
+        return self._create([AI_DISCLOSURE], integration_id, uploaded, dict(INSTAGRAM_STORY_SETTINGS), when)
+
+    def _upload_master(self, media_url: str) -> str:
+        """Fetch the master into a private temp folder, ``postiz upload`` it, delete the folder; the path Postiz returned."""
         with tempfile.TemporaryDirectory(prefix="studio-publish-") as tmp:
             local = Path(tmp) / f"master{Path(urlparse(media_url).path).suffix.lower() or '.mp4'}"
             self._fetch(media_url, local)
-            uploaded = self._upload(local)
-        return self._create(content, integration_id, uploaded, settings)
+            return self._upload(local)
 
     # ---- the two CLI steps ----------------------------------------------------------------
 
@@ -225,14 +288,17 @@ class PostizPublisher:
         return path
 
     def _create(
-        self, content: str, integration_id: str, media_path: str, settings: dict[str, Any]
+        self, contents: list[str], integration_id: str, media_path: str, settings: dict[str, Any], when: datetime
     ) -> PublishResult:
+        """``posts:create``: ``contents[0]`` is the post (with the one media), each further one a comment (no media)."""
+        comments = [arg for comment in contents[1:] for arg in ("-c", comment)]
         argv = [
             self._exe, "posts:create",
-            "-c", content,
-            "-s", self._clock().astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "-i", integration_id,
+            "-c", contents[0],
             "-m", media_path,
+            *comments,
+            "-s", when.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "-i", integration_id,
             "--settings", json.dumps(settings),
         ]  # fmt: skip
         try:
@@ -254,4 +320,4 @@ class PostizPublisher:
             raise UncertainPublish(
                 f"postiz posts:create exited 0 but returned no post id: {_tail(proc)}"
             )
-        return PublishResult(platform_post_id=post_id, url=url)
+        return PublishResult(platform_post_id=post_id, url=url, media_ref=media_path)

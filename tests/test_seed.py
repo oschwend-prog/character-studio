@@ -416,6 +416,10 @@ def test_a_valid_style_block_loads_untouched(tmp_path):
         ({"pill": "dark"}, r"style\.pill"),
         ("dark", "style"),
         ([], "style"),
+        ({**FRANZ_KIT, "series_tag": "sausagecomingthrough"}, r"style\.series_tag"),  # no #
+        ({**FRANZ_KIT, "series_tag": "#sausage coming through"}, r"style\.series_tag"),  # one hashtag, no spaces
+        ({**FRANZ_KIT, "series_tag": "#viral"}, r"style\.series_tag"),  # a dead tag
+        ({**FRANZ_KIT, "series_tag": ["#asyouwere"]}, r"style\.series_tag"),
     ],
 )
 def test_style_block_is_validated(tmp_path, style, message):
@@ -432,21 +436,28 @@ def test_a_kit_may_name_only_some_of_its_parts():
     assert seed.validate_style({}, Path("x/refs.json")) == {}
 
 
+def test_a_kit_may_carry_the_characters_series_tag():
+    """Terminal v3 spec section 11: the series tag joins the hashtags at publish time (studio.publish.reach reads it)."""
+    ok = seed.validate_style({**FRANZ_KIT, "series_tag": "#sausagecomingthrough"}, Path("x/refs.json"))
+    assert ok["series_tag"] == "#sausagecomingthrough" and "series_tag" in seed.STYLE_KEYS
+
+
 def test_the_roster_kits_load():
     """Franz, Reginald and Lenny carry their kit in refs.json, the DJ's (parked, no refs.json) sits in characters/dj/style.json."""
     loaded = {r["slug"]: r for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
     assert "dj" not in loaded, "no refs.json: the seed ignores the DJ's folder"
     assert "style" not in loaded["biscuit"], "retired Biscuit keeps today's pill"
     f, r, ln = (loaded[s]["style"] for s in ("franz", "reginald", "lenny"))
-    assert f == FRANZ_KIT  # cream card, navy ExtraBold sans, round corners; slams in; quick punch-in; warm
+    # cream card, navy ExtraBold sans, round corners; slams in; quick punch-in; warm; his series tag (spec section 11)
+    assert f == {**FRANZ_KIT, "series_tag": "#sausagecomingthrough"}
     assert r == {
         "pill": {"fill": "#0E0F12", "text": "#F2F0EA", "border": ["#E8E6E1", 2], "font": "CormorantSC-Medium.ttf", "weight": None,
                  "case": "smallcaps", "tracking": 3, "radius": 6},
-        "entrance": "none", "hook_edit": "pause", "tone": "cool",
+        "entrance": "none", "hook_edit": "pause", "tone": "cool", "series_tag": "#asyouwere",
     }
     assert ln == {
         "pill": {"fill": "#E8B931", "fill_alpha": 255, "text": "#141414", "font": "Oswald-Variable.ttf", "weight": "Bold", "case": "upper", "radius": 16},
-        "entrance": "slam", "hook_edit": "punch_in", "tone": "golden",
+        "entrance": "slam", "hook_edit": "punch_in", "tone": "golden", "series_tag": "#yourewelcome",
     }
     dj_path = seed.DEFAULT_CHARACTERS_DIR / "dj" / "style.json"
     dj = seed.validate_style(json.loads(dj_path.read_text()), dj_path)
