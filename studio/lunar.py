@@ -28,7 +28,9 @@ counted (it is not a metered tool call as far as the capture of 8 Oct showed) an
 column when the table has no TikTok column), the mean centred on the day (a day at an end of the series has one neighbour, so the
 peak is the day it happened on, not a day later). Days missing between two rows count as nothing posted. LunarCrush tracks a
 sample of posts (4-11 TikTok posts a day for "single ladies"), which is why the mean is taken. The latest day is the last full
-day of the series (today's part day is not in it). Stages, in this order:
+day (``as_of``, yesterday in London: today's part day is not in it). A series whose last row is more than ``STALE_DAYS`` (2)
+before it has stopped (a dead small trend gets no row on the days nobody posted about it), so the days up to ``as_of`` count as
+nothing posted; a last row 2 days behind is only LunarCrush's usual lag. Stages, in this order:
 
 - ``rising``: the latest day is at 90% of the peak or more (``NEAR_PEAK``) and the last 3 days climb;
 - ``peak``: otherwise, the peak is on the latest day or the day before;
@@ -77,6 +79,7 @@ PEAK_DAYS = 1  # peak: the peak day is the latest day or the day before
 FADING_DAYS = 7  # fading: the peak was this many days ago or fewer (P5 (a))
 FADING_RATIO = 0.5  # fading: the latest day is at least this share of the peak (P5 (b))
 MIN_DAYS = 3  # fewer days than this give no curve
+STALE_DAYS = 2  # a last row this many days before the latest full day is LunarCrush's usual lag; older, the series has stopped
 STAGES = ("rising", "peak", "fading", "dead")
 UNKNOWN = "unknown"
 
@@ -258,9 +261,14 @@ def source_of(rows: Iterable[Row]) -> str:
     return "tiktok" if any(r.tiktok is not None for r in rows) else "total"
 
 
-def trend_curve(rows: Iterable[Row]) -> Curve | None:
+def trend_curve(rows: Iterable[Row], as_of: date | None = None) -> Curve | None:
     """The stage of a trend from its daily rows (see the module doc), or None when the rows give no curve: fewer than
-    ``MIN_DAYS`` days with a number, or no signal at all (nothing is not a dead trend, it is unknown)."""
+    ``MIN_DAYS`` days with a number, or no signal at all (nothing is not a dead trend, it is unknown).
+
+    ``as_of`` is the latest full day (yesterday, London). A trend nobody posts about any more has no rows after its last post, so
+    reading the series "as of its last row" would call a dead small trend a peak. When the last row is more than ``STALE_DAYS``
+    before ``as_of`` the series has stopped: the days up to ``as_of`` are days of nothing posted. A last row at most that many
+    days behind is LunarCrush's usual lag and changes nothing; without ``as_of`` the series is read as of its last row."""
     rows = list(rows)
     source = source_of(rows)
     by_day: dict[date, int] = {}
@@ -271,6 +279,8 @@ def trend_curve(rows: Iterable[Row]) -> Curve | None:
     if len(by_day) < MIN_DAYS:
         return None
     first, last = min(by_day), max(by_day)
+    if as_of is not None and (as_of - last).days > STALE_DAYS:
+        last = as_of
     days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
     values = [float(by_day.get(d, 0)) for d in days]
     smoothed = []
@@ -563,21 +573,22 @@ class TrendGate:
     def enabled(self) -> bool:
         return self.client is not None
 
-    def read(self, key: str) -> Reading:
-        """The trend ``key``'s stage and days since its peak, or ``unknown`` with the reason."""
+    def read(self, key: str, as_of: date | None = None) -> Reading:
+        """The trend ``key``'s stage and days since its peak, or ``unknown`` with the reason. ``as_of`` is the latest full day
+        (``trend_curve``); a key is read once per run, so the first ``as_of`` it was asked with stands."""
         key = _clean(key or "")
         if self.client is None:
             return Reading(UNKNOWN, reason=f"{KEY_ENV} is not set: the trend gate is off")
         if not key:
             return Reading(UNKNOWN, reason="no trend key")
         if key not in self._cache:
-            self._cache[key] = self._check(self.client, key)
+            self._cache[key] = self._check(self.client, key, as_of)
         return self._cache[key]
 
-    def _check(self, client: LunarCrush, key: str) -> Reading:
+    def _check(self, client: LunarCrush, key: str, as_of: date | None = None) -> Reading:
         try:
             rows = parse_keyword_series(client.keyword_time_series(key))
-            curve = trend_curve(rows)
+            curve = trend_curve(rows, as_of)
         except LunarParseError as e:
             log.warning("LunarCrush %r: the answer is not a table this job can read: %s", key, client.scrub(e.head))
             return Reading(UNKNOWN, reason="the answer could not be read")

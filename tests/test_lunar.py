@@ -133,6 +133,22 @@ def test_gaps_in_the_days_count_as_nothing_posted():
     assert curve.peak_day == D0 + timedelta(days=10) and len(curve.smoothed) == 11
 
 
+def test_a_series_that_stops_long_before_yesterday_is_read_as_of_yesterday_so_a_dead_small_trend_is_not_a_peak():
+    rows = series([100, 200, 5000, 30_000, 12_000, 6000])  # 8 to 13 Sep, the peak on 11 and 12 Sep; nothing sampled since
+    assert (trend_curve(rows).stage, trend_curve(rows).days_since_peak) == ("peak", 1)  # as of its last row: the old reading
+    curve = trend_curve(rows, as_of=date(2026, 10, 6))  # read on 7 Oct: yesterday is 6 Oct
+    assert curve.stage == "dead" and curve.days_since_peak == 24 and curve.peak_day == date(2026, 9, 12) and curve.ratio < 0.01
+    assert curve.smoothed[-1][0] == date(2026, 10, 6)  # padded with days of nothing up to yesterday
+
+
+def test_a_lag_of_two_days_is_not_stale_but_three_days_is():
+    values = [1000, 1100, 1200, 1500, 2500, 4000, 7000, 11_000, 16_000, 24_000]
+    assert D0 + timedelta(days=len(values) - 1) == date(2026, 9, 17)  # the last row
+    assert trend_curve(series(values), as_of=date(2026, 9, 19)) == trend_curve(series(values))  # two days behind: LunarCrush's usual lag
+    assert trend_curve(series(values), as_of=date(2026, 9, 20)).stage != "rising"  # three days: the trend has stopped being sampled
+    assert trend_curve(series(values), as_of=date(2026, 9, 1)) == trend_curve(series(values))  # an as_of before the series changes nothing
+
+
 def test_the_summed_total_stands_in_when_the_answer_has_no_tiktok_column():
     curve = trend_curve(series([1000, 1100, 1200, 1500, 2500, 4000, 7000, 11_000, 16_000, 24_000], total=True))
     assert curve.source == "total" and curve.stage == "rising"

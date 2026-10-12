@@ -816,6 +816,12 @@ def trend_names(cfg: Mapping[str, Any], character: str | None, events: Sequence[
     return list(dict.fromkeys([*own, *events, *cfg["general_keywords"]]))
 
 
+def trend_as_of(now: datetime) -> date:
+    """The latest full day of a trend's series: yesterday in London (``lunar.trend_curve`` reads a series that stopped earlier as
+    days of nothing posted)."""
+    return london_day(now) - timedelta(days=1)
+
+
 def read_trend(hit: Hit, now: datetime, names: Sequence[str], gate: lunar.TrendGate) -> dict[str, Any]:
     """The drop's trend keys for a hit (see the module doc): ``trend_stage``, ``days_since_trend_peak`` (only when measured) and
     ``sound_rising``. ``classic`` for a classic (no call), ``unknown`` without a trend key to ask about or when the gate has no
@@ -826,7 +832,7 @@ def read_trend(hit: Hit, now: datetime, names: Sequence[str], gate: lunar.TrendG
     if found is None:
         return {"trend_stage": lunar.UNKNOWN, "sound_rising": False}
     key, kind = found
-    reading = gate.read(key)
+    reading = gate.read(key, as_of=trend_as_of(now))
     out: dict[str, Any] = {"trend_stage": reading.stage, "sound_rising": kind == "sound" and reading.stage == "rising"}
     if reading.days_since_peak is not None:
         out["days_since_trend_peak"] = reading.days_since_peak

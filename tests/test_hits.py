@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -820,13 +820,15 @@ class StubGate(lunar.TrendGate):
         super().__init__(None)
         self.readings = readings or {}
         self.asked: list[str] = []
+        self.as_ofs: list[date | None] = []
 
     @property
     def enabled(self) -> bool:
         return True
 
-    def read(self, key: str) -> lunar.Reading:
+    def read(self, key: str, as_of: date | None = None) -> lunar.Reading:
         self.asked.append(key)
+        self.as_ofs.append(as_of)
         return self.readings.get(key, lunar.Reading("unknown", reason="stub"))
 
     def summary(self):
@@ -959,6 +961,34 @@ def test_a_key_is_checked_once_for_the_run_however_many_hits_ride_it():
     assert client.asked == ["single ladies"] and client.calls == 1
     assert {drop_of(store, f)["trend_stage"] for f in run["filed"]} == {"fading"} and run["trend"]["keys"] == 1
     assert {drop_of(store, f)["days_since_trend_peak"] for f in run["filed"]} == {4}
+
+
+def test_a_trend_whose_series_stopped_weeks_ago_is_read_as_of_yesterday_and_so_is_dead_not_a_peak():
+    class Client:
+        calls = 1
+
+        def keyword_time_series(self, keyword):  # 8 to 13 Sep, a peak on 11-12 Sep, nothing since
+            rows = "".join(f"| 2026-09-{8 + i:02d} | {v} |\n" for i, v in enumerate([100, 200, 5000, 30_000, 12_000, 6000]))
+            return "| time | tiktok_interactions |\n|---|---|\n" + rows
+
+        def scrub(self, text):
+            return text
+
+    store = roster_store()
+    stored(store, 1, "reginald", 90, sound="Small Dance")
+    gate = lunar.TrendGate(Client())
+    run = hits.file_hits(store, CONFIG, NOW, gate=gate)  # NOW is 8 Oct: the latest full day is 7 Oct
+    assert run["skipped_dead"] == 1 and run["filed"] == [] and run["trend"]["stages"] == {"dead": 1}
+
+
+def test_the_gate_is_asked_as_of_yesterday_in_london():
+    store = roster_store()
+    stored(store, 1, "reginald", 90, sound="Small Dance")
+    gate = StubGate()
+    hits.file_hits(store, CONFIG, NOW, gate=gate)
+    assert gate.as_ofs == [date(2026, 10, 7)]
+    assert hits.trend_as_of(datetime(2026, 10, 8, 0, 30, tzinfo=LONDON)) == date(2026, 10, 7)
+    assert hits.trend_as_of(datetime(2026, 10, 7, 23, 30, tzinfo=timezone.utc)) == date(2026, 10, 7)  # 00:30 on 8 Oct in London (BST)
 
 
 def lunar_fixture(name: str) -> str:
