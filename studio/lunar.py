@@ -618,7 +618,7 @@ class TrendGate:
         except LunarError as e:
             log.warning("LunarCrush %r: %s", key, client.scrub(str(e)))
             return Reading(UNKNOWN, reason=client.scrub(str(e))[:_BODY_CHARS])
-        except (ValueError, TypeError, OverflowError) as e:  # an odd table never stops the filing
+        except Exception as e:  # noqa: BLE001 - whatever an odd answer does (an OSError from a huge day cell), it never stops the filing
             log.warning("LunarCrush %r: unreadable (%s)", key, type(e).__name__)
             return Reading(UNKNOWN, reason="the answer could not be read")
         if curve is None:

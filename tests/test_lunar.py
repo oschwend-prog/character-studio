@@ -483,6 +483,21 @@ def test_a_refusal_is_logged_without_the_key(caplog):
     assert "nope" in caplog.text and KEY not in caplog.text
 
 
+def test_a_day_cell_the_clock_cannot_hold_is_unknown_not_an_exception(caplog):
+    server = McpServer()
+    server.answers.append(rpc_text("| time | tiktok_interactions |\n|---|---|\n| 99999999999999999999 | 5 |\n"))  # OSError in fromtimestamp
+    with caplog.at_level(logging.WARNING, logger="studio.lunar"):
+        reading = gate_for(server).read("a")
+    assert reading.stage == "unknown" and "could not be read" in reading.reason
+    assert "99999999999999999999" not in caplog.text  # the type of the error, never the answer
+
+
+def test_whatever_goes_wrong_while_reading_an_answer_is_unknown(monkeypatch):
+    server = McpServer()
+    monkeypatch.setattr(lunar, "trend_curve", lambda rows, as_of=None: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert gate_for(server).read("a").stage == "unknown"
+
+
 def test_the_summary_counts_stages_and_calls():
     server = McpServer()
     server.answers += [rpc_text(fixture("keyword_time_series_single_ladies")), rpc_text(fixture("keyword_time_series_patient_zero"))]

@@ -98,6 +98,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import logging
 import math
 import os
 import time
@@ -119,6 +120,8 @@ from studio.config import LONDON, now_london
 from studio.favorites import default_tier, is_drop, parse_video_url
 from studio.models import HIT_CAPTION_MAX, Hit, HitSpend
 from studio.store import HIT_REFRESHED, Store
+
+log = logging.getLogger("studio.hits")
 
 API_ROOT = "https://api.scrapecreators.com"
 KEY_ENV = "SCRAPECREATORS_API_KEY"
@@ -886,7 +889,11 @@ def file_hits(
                 break
             trend = None
             if gate is not None:
-                trend = read_trend(hit, now, trend_names(cfg, hit.character_slug, events), gate)
+                try:
+                    trend = read_trend(hit, now, trend_names(cfg, hit.character_slug, events), gate)
+                except Exception as e:  # noqa: BLE001 - the gate fails open: an error of any kind is an unknown reading
+                    log.warning("the trend gate failed (%s): the hit is filed with the stage unknown", type(e).__name__)
+                    trend = {"trend_stage": lunar.UNKNOWN, "sound_rising": False}
                 if trend["trend_stage"] == "dead":
                     run["skipped_dead"] += 1
                     continue

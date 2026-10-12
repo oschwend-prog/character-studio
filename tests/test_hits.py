@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -890,6 +891,20 @@ def test_no_gate_at_all_leaves_the_drop_exactly_as_it_was():
     (f,) = hits.auto_file(store, CONFIG, NOW)
     d = drop_of(store, f)
     assert not ({"trend_stage", "days_since_trend_peak", "sound_rising"} & set(d))
+
+
+def test_a_gate_that_raises_anything_never_stops_the_filing(caplog):
+    class Broken(StubGate):
+        def read(self, key, as_of=None):
+            raise OSError(84, "Value too large to be stored in data type")
+
+    store = roster_store()
+    for n in (1, 2):
+        stored(store, n, "reginald", 90 - n, sound=f"Sound {n}")
+    with caplog.at_level(logging.WARNING, logger="studio.hits"):
+        run = hits.file_hits(store, CONFIG, NOW, gate=Broken())
+    assert len(run["filed"]) == 2 and run["skipped_dead"] == 0
+    assert {drop_of(store, f)["trend_stage"] for f in run["filed"]} == {"unknown"} and "OSError" in caplog.text
 
 
 def test_a_reading_that_failed_files_the_hit_with_the_stage_unknown():
