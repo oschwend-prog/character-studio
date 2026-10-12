@@ -32,7 +32,8 @@ Instagram's own API (plan Task 9) or the Mac's vidIQ ingest, so until then they 
                     "decided": {"20": {look, label, rho, span, ..., "clip_ids"}, "40": {...}}},   # test A; a look taken is frozen
      "floors": {"computed", "basis", "fixed_on": {metric: day|null}, "studio": {...}, "characters": {slug: {...}}},   # plan 3.8
      "proposals": [{"kind": "hit_rule" | "arm_retire" | "playbook", ...its numbers and clip ids...}],
-     "proposal_url": "https://github.com/.../compare/build/slice1...weekly/<monday>?expand=1" | null,
+     "proposal_pending_url": "https://github.com/.../compare/build/slice1...weekly/<monday>?expand=1" | null,   # the review sets it with the files
+     "proposal_url": null | the same address,   # what the Today card links: null until the propose job has pushed the branch (confirm_proposal)
      "candidates": [...],                       # rule candidates waiting for their second look (4.3)
      "arms": [...], "warnings": [...], "notes": [...], "playbooks": {slug: {"changed", "path", ...}}, "generated_at": iso}
 
@@ -56,7 +57,9 @@ shows 1.2x. An arm is proposed for retirement after 10 tallied uses with 20 % wi
 less (no rule exists for adding one). ``characters/<slug>/playbook.md`` is regenerated from the data (a rule needs 5 posts behind it,
 fewer goes under Watching; each rule keeps the day it entered). Under ``--out-dir`` the run writes the changed playbooks and
 ``docs/weekly/<monday>.md`` (the digest and the proposals with their numbers and clip ids), only when a playbook changed or a NEW
-proposal exists, and sets ``proposal_url``; otherwise nothing is written and ``proposal_url`` is null. ``config/hit_rules.md`` is never
+proposal exists, and sets ``proposal_pending_url`` (``proposal_url`` stays null: the card must not link a compare page before the branch
+is on GitHub, and the propose job can fail after the review; the confirm job calls ``studio review confirm-proposal`` once the propose
+job succeeded, which copies the address into ``proposal_url``); otherwise nothing is written and both are null. ``config/hit_rules.md`` is never
 edited by code: a ready rule is a proposal with its numbers, and the owner (or a Claude session) writes the rule text.
 """
 
@@ -65,6 +68,7 @@ from __future__ import annotations
 import json
 import re
 import statistics
+import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
@@ -1434,7 +1438,7 @@ def run_weekly(
     details: dict[str, Any] = {
         "week": monday.isoformat(),
         "digest": {"header": header, "characters": [{k: b[k] for k in ("slug", "name", "bar", "bar_status", "title", "lines")} for b in blocks]},
-        "score_test": score, "floors": floors, "proposals": proposals, "proposal_url": url,
+        "score_test": score, "floors": floors, "proposals": proposals, "proposal_url": None, "proposal_pending_url": url,
         "candidates": candidates, "arms": standings, "warnings": warnings, "notes": notes, "playbooks": playbooks,
         "generated_at": now.isoformat(),
     }
@@ -1459,6 +1463,40 @@ def run_weekly(
         result["files"] = sorted(files)
     result["run_id"] = store.add_run(Run(kind=RunKind.weekly, status=status, started_at=now, finished_at=now, summary=summary, details=details)).id
     return result
+
+
+def confirm_proposal(store: Store, run_id: str) -> dict[str, Any]:
+    """Publish a weekly run's pull request link: copy its ``proposal_pending_url`` into ``proposal_url``, which is what the terminal's
+    Today card links. The cloud job calls this only after the propose job succeeded, so the card never links a compare page that does
+    not exist. ``ValueError`` (the caller's error) for a value that is not a run id, an unknown run, a run that is not a weekly review,
+    or one with no pending address of this repository's compare page. Already confirmed: nothing is written (``confirmed`` false)."""
+    try:
+        wanted = str(uuid.UUID(run_id))
+    except ValueError:
+        raise ValueError(f"{run_id!r:.40} is not a run id") from None
+    runs = store.list_runs()
+    run = next((r for r in runs if r.id == wanted), None)
+    if run is None:
+        raise ValueError(f"no such run: {wanted}")
+    if run.kind != RunKind.weekly:
+        raise ValueError(f"run {wanted} is not a weekly run")
+    pending = run.details.get("proposal_pending_url")
+    if not isinstance(pending, str) or not pending.startswith(f"{PROPOSAL_REPO}/compare/"):
+        raise ValueError(f"run {wanted} has no pending proposal link")
+    if run.details.get("proposal_url") == pending:
+        return {"run_id": wanted, "proposal_url": pending, "confirmed": False}
+    store.update_run(wanted, details={**run.details, "proposal_url": pending})
+    return {"run_id": wanted, "proposal_url": pending, "confirmed": True}
+
+
+def confirm_proposal_command(
+    run_id: Annotated[str, typer.Option("--run-id", help="The weekly run: the `run_id` that `studio review weekly` printed.")],
+) -> None:
+    """Link the weekly pull request on Today (the cloud job, after the proposal branch is on GitHub). Prints JSON."""
+    try:
+        emit(confirm_proposal(open_store(), run_id))
+    except ValueError as e:
+        fail(str(e))
 
 
 def weekly_command(

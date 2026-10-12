@@ -50,6 +50,7 @@ app.add_typer(master.app, name="master")
 app.add_typer(publish.app, name="publish")
 app.add_typer(metrics.app, name="metrics")
 review.app.command("weekly")(weekly.weekly_command)  # the Monday cloud review (studio-weekly.yml)
+review.app.command("confirm-proposal")(weekly.confirm_proposal_command)  # links the weekly PR on Today once its branch is pushed
 app.add_typer(review.app, name="review")
 app.add_typer(seed.app, name="seed")
 app.add_typer(golive.app, name="golive")

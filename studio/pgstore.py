@@ -505,6 +505,9 @@ class PostgresStore:
     def add_run(self, r: Run) -> Run:
         return self._insert(_RUNS, r)
 
+    def update_run(self, id: str, /, **kw: Any) -> Run:
+        return self._update(_RUNS, id, kw)
+
     def list_runs(self, **filters: Any) -> list[Run]:
         return self._list(_RUNS, filters, ["started_at", "id"])
 

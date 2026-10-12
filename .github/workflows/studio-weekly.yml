@@ -21,11 +21,15 @@
 #    open pull request (never another prefix, never the branch of this run, never one whose pull requests could not be checked).
 #    Merging that PR is the owner's approval: the rules reach the check only through a merged file. If the repository setting "Allow
 #    GitHub Actions to create and approve pull requests" is off (it is today), `gh pr create` fails: the branch is pushed anyway and the
-#    step prints the compare link into the run's summary (the terminal's Today card links the same address) and passes.
+#    step prints the compare link into the run's summary and passes (the terminal's Today card links the same address).
+# 3. Job `confirm` (only when the propose job succeeded): `studio review confirm-proposal --run-id <the review's run>` copies the
+#    run's pending compare address into `proposal_url`, which is what the Today card links. The review itself stores the address as
+#    `proposal_pending_url` only, because the propose job can fail after it and the card must not link a page that does not exist.
+#    The job has no write access to the repository.
 #
-# Secrets (repo secret): DATABASE_URL only, in the two steps that need it (the gate and the review). Until it exists the job prints a
-# notice and every later step is skipped, so the schedule never fails (and never emails) before go-live. The input `week` reaches the
-# script only through the environment.
+# Secrets (repo secret): DATABASE_URL only, in the three steps that need it (the gate, the review and the proposal link). Until it
+# exists the job prints a notice and every later step is skipped, so the schedule never fails (and never emails) before go-live. The
+# input `week` reaches the script only through the environment.
 name: studio-weekly
 
 on:
@@ -51,6 +55,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       propose: ${{ steps.review.outputs.propose }}
+      run_id: ${{ steps.review.outputs.run_id }}
     steps:
       - name: Check secrets
         id: gate
@@ -81,6 +86,8 @@ jobs:
           if [ -n "${WEEK:-}" ]; then week=(--week "$WEEK"); fi
           uv run studio review weekly --out-dir weekly-out ${week[@]+"${week[@]}"} > "$RUNNER_TEMP/weekly.json"
           cat "$RUNNER_TEMP/weekly.json"
+          run_id="$(jq -r '.run_id // empty' "$RUNNER_TEMP/weekly.json" 2>/dev/null || true)"
+          if [[ "$run_id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then echo "run_id=$run_id" >> "$GITHUB_OUTPUT"; fi
           if [ -n "$(find weekly-out -type f 2>/dev/null | head -n 1)" ]; then
             echo "propose=true" >> "$GITHUB_OUTPUT"
           else
@@ -163,3 +170,24 @@ jobs:
             { echo "### Weekly review $monday"; echo; echo "The branch \`$branch\` is pushed. Open the pull request: $compare"; } >> "$GITHUB_STEP_SUMMARY"
           fi
           prune_old_weekly_branches || echo "::notice::pruning the old weekly branches failed: nothing else is affected"
+
+  # Records the pull request link for the terminal's Today card, and only once the branch is on GitHub: the review stores the compare
+  # address as pending (the propose job can still fail after the review) and this job, which runs only when the propose job succeeded,
+  # makes it the card's link. After the review it is the one place with the database secret; it has no write access to the repository.
+  confirm:
+    needs: [review, propose]
+    if: ${{ !cancelled() && needs.propose.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - name: Record the proposal link
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RUN_ID: ${{ needs.review.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          uv run studio review confirm-proposal --run-id "$RUN_ID"

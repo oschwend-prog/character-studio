@@ -18,8 +18,8 @@ talks to a ``Store``. ``studio.pgstore.PostgresStore`` is the production impleme
   its identity refreshed (``handle``, ``postiz_integration_id``). Its ``mode`` and ``dropin_share`` are
   operational state (the terminal's autopilot toggle, the weekly review's Instagram guard) and a
   re-seed must not undo them, so they are kept.
-* ``add_run(r)`` appends a line to the scheduled-run log (``started_at`` defaults to now);
-  ``list_runs`` is ordered by ``started_at``. ``upsert_review(r)`` matches a review on
+* ``add_run(r)`` appends a line to the scheduled-run log (``started_at`` defaults to now); ``update_run(id, details=...)`` rewrites
+  a run's fields (the weekly review's confirmed proposal link); ``list_runs`` is ordered by ``started_at``. ``upsert_review(r)`` matches a review on
   ``(week, character_slug)``: a new one is inserted, an existing one gets the new ``report_md`` and
   ``bar_status`` and keeps its ``id`` and ``created_at``, so saving a week's report twice leaves one row.
   ``list_reviews`` is ordered by ``week``, then ``character_slug``.
@@ -154,6 +154,7 @@ class Store(Protocol):
 
     # scheduled-run log and weekly reviews
     def add_run(self, r: Run) -> Run: ...
+    def update_run(self, id: str, /, **kw: Any) -> Run: ...
     def list_runs(self, **filters: Any) -> list[Run]: ...
     def upsert_review(self, r: Review) -> Review: ...
     def list_reviews(self, **filters: Any) -> list[Review]: ...
@@ -465,6 +466,10 @@ class MemoryStore:
             if stored.started_at is None:
                 stored.started_at = _now()
             return self._insert(self._runs, stored)
+
+    def update_run(self, id: str, /, **kw: Any) -> Run:
+        with self._lock:
+            return self._update(self._runs, id, kw)
 
     def list_runs(self, **filters: Any) -> list[Run]:
         with self._lock:

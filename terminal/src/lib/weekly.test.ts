@@ -61,6 +61,12 @@ describe('parseWeekly', () => {
     }
   });
 
+  it('does not link a proposal the cloud job has not confirmed: the pending address is not a link (the propose job may still fail)', () => {
+    const url = 'https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-12?expand=1';
+    expect(parseWeekly(run({ week: '2026-10-12', digest, proposal_url: null, proposal_pending_url: url }))!.proposalUrl).toBeNull();
+    expect(parseWeekly(run({ week: '2026-10-12', digest, proposal_url: url, proposal_pending_url: url }))!.proposalUrl).toBe(url); // confirmed
+  });
+
   it('shows a run that ended in error too: the digest is there, with the notes', () => {
     const w = parseWeekly(run({ week: '2026-10-12', digest }, { status: 'error' }));
     expect(w).not.toBeNull();

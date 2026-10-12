@@ -450,6 +450,17 @@ def test_add_run_refuses_a_naive_time_and_returns_copies():
         store.list_runs(nope=1)
 
 
+def test_update_run_replaces_its_details_and_refuses_an_unknown_run_or_field():
+    store = MemoryStore()
+    run = store.add_run(Run(kind="weekly", status="ok", details={"week": "2026-10-12", "proposal_url": None}))
+    got = store.update_run(run.id, details={"week": "2026-10-12", "proposal_url": "https://example.test/x"})
+    assert got.details["proposal_url"] == "https://example.test/x" and store.list_runs()[0].details == got.details and got.summary is None
+    with pytest.raises(KeyError):
+        store.update_run("nope", details={})
+    with pytest.raises(TypeError):
+        store.update_run(run.id, nope=1)
+
+
 WEEK = date(2026, 10, 5)
 
 

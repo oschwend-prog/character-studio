@@ -355,7 +355,7 @@ def test_postgres_store_has_the_same_surface_as_the_protocol_and_memory_store():
     proto_methods = [
         n for n, v in inspect.getmembers(Store, inspect.isfunction) if not n.startswith("_")
     ]
-    assert len(proto_methods) == 38  # 37 data methods (6 for the hits and the day's spend of migration 0016) + transaction()
+    assert len(proto_methods) == 39  # 38 data methods (6 for the hits and the day's spend of migration 0016, update_run for the weekly proposal link) + transaction()
     for name in proto_methods:
         expected = inspect.signature(getattr(Store, name))
         for impl in (MemoryStore, PostgresStore):
@@ -474,6 +474,17 @@ def test_add_run_carries_the_structured_details_as_jsonb(db):
     _, params = db.statements[0]
     assert isinstance(params[-1], Jsonb) and params[-1].obj == scan
     assert got.details == scan
+
+
+def test_update_run_binds_the_details_as_jsonb_and_returns_the_run(db):
+    details = {"week": "2026-10-12", "proposal_url": "https://example.test/x"}
+    db.queue([run_row(kind="weekly", details=details)])
+    rid = str(uuid.uuid4())
+    got = PostgresStore(DSN).update_run(rid, details=details)
+    query, params = db.statements[0]
+    assert query.startswith('update "studio"."runs" set "details" = %s where id = %s')
+    assert isinstance(params[0], Jsonb) and params[0].obj == details
+    assert got.kind == RunKind.weekly and got.details == details
 
 
 def test_add_run_sends_started_at_when_given_and_refuses_a_naive_time(db):

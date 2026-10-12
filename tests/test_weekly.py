@@ -1140,7 +1140,7 @@ def test_the_first_monday_run_builds_the_digest_saves_the_reviews_and_logs_one_r
     (run_row,) = w.store.list_runs(kind="weekly")
     assert run_row.status.value == "ok" and run_row.summary == out["summary"] and run_row.id == out["run_id"]
     d = run_row.details
-    assert {"week", "digest", "score_test", "floors", "proposals", "proposal_url"} <= set(d)
+    assert {"week", "digest", "score_test", "floors", "proposals", "proposal_url", "proposal_pending_url"} <= set(d)
     assert d["week"] == "2026-10-12" and d["digest"]["header"] == header and d["score_test"]["label"] == "unproven"
     json.dumps(d)  # strict JSON: nothing the database could not store
     assert out["summary"].startswith(header[0]) and franz["title"] in out["summary"]
@@ -1422,7 +1422,8 @@ def test_a_rule_candidate_waits_a_week_and_becomes_a_proposal_when_the_next_week
     assert (rule["n"], rule["n_others"], rule["hits"]) == (7, 6, 7) and len(rule["clip_ids"]) == 7 and rule["since_week"] == "2026-10-12"
     assert second["digest"]["header"][1].endswith("Proposals waiting: 1 hit rule, 1 playbook")
     assert "docs/weekly/2026-10-19.md" in second["files"]
-    assert second["proposal_url"] == "https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-19?expand=1"
+    assert second["proposal_pending_url"] == "https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-19?expand=1"
+    assert second["proposal_url"] is None  # the card links it only once the propose job has pushed the branch (confirm_proposal)
 
 
 def test_a_ready_hit_rule_is_named_once_on_the_first_live_characters_needs_you(tmp_path):
@@ -1460,13 +1461,13 @@ def test_the_proposal_files_are_the_changed_playbooks_and_the_weekly_doc_and_not
     assert not (out / "characters/reginald").exists() and not (out / "characters/lenny").exists()  # nothing to say: no file
     doc = (out / "docs/weekly/2026-10-12.md").read_text(encoding="utf-8")
     assert doc.startswith("# Weekly review: week of 12 Oct\n") and "Franz · week of 12 Oct" in doc and "## Proposals" in doc
-    assert first["proposal_url"] and first["proposal_url"].endswith("weekly/2026-10-12?expand=1")
+    assert first["proposal_pending_url"].endswith("weekly/2026-10-12?expand=1") and first["proposal_url"] is None
     # the owner merged the PR: the playbook is in the repo now. The same data again changes nothing, so no files and no URL
     repo = tmp_path / "repo"
     (repo / "characters/franz").mkdir(parents=True)
     (repo / "characters/franz/playbook.md").write_text(playbook, encoding="utf-8")
     quiet = run(w, tmp_path, out_dir=tmp_path / "out2", repo_root=repo, monday=date(2026, 10, 19), now=WEEK2_NOW)
-    assert quiet["files"] == [] and quiet["proposal_url"] is None and not (tmp_path / "out2").exists()
+    assert quiet["files"] == [] and quiet["proposal_pending_url"] is None and not (tmp_path / "out2").exists()
     assert quiet["playbooks"]["franz"]["changed"] is False
     assert "Proposals waiting: none" in quiet["digest"]["header"][1]
 
@@ -1493,12 +1494,12 @@ def test_a_proposal_that_was_made_last_week_and_is_still_waiting_does_not_open_a
     repo = tmp_path / "repo"
     (repo / "characters/franz").mkdir(parents=True)
     second = run(w, tmp_path, out_dir=tmp_path / "out2", repo_root=repo, monday=date(2026, 10, 19), now=WEEK2_NOW)
-    assert second["proposal_url"]
+    assert second["proposal_pending_url"]
     (repo / "characters/franz/playbook.md").write_text((tmp_path / "out2/characters/franz/playbook.md").read_text(encoding="utf-8"), encoding="utf-8")
     third = run(w, tmp_path, out_dir=tmp_path / "out3", repo_root=repo, monday=date(2026, 10, 26), now=datetime(2026, 11, 2, 6, 15, tzinfo=LONDON))
     (rule,) = [p for p in third["proposals"] if p["kind"] == "hit_rule"]
     assert rule["repeat"] is True  # still waiting ...
-    assert third["files"] == [] and third["proposal_url"] is None  # ... but nothing new to put in front of him
+    assert third["files"] == [] and third["proposal_pending_url"] is None  # ... but nothing new to put in front of him
     assert "Proposals waiting: 1 hit rule" in third["digest"]["header"][1]
 
 
@@ -1596,6 +1597,57 @@ def test_the_command_without_a_database_is_a_caller_error(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     r = CliRunner().invoke(app, ["review", "weekly"])
     assert r.exit_code == 2 and "DATABASE_URL" in r.output
+
+
+# ---- the pull request link is confirmed once the branch is pushed (Task 16 parked, Task 20) ---------------------------------------------
+
+
+COMPARE_12_OCT = "https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-12?expand=1"
+
+
+def test_the_run_keeps_the_proposal_link_pending_and_confirm_proposal_publishes_it_once_the_branch_is_pushed(tmp_path):
+    w = measured_world()
+    out = run(w, tmp_path)
+    (stored,) = w.store.list_runs(kind="weekly")
+    assert stored.details["proposal_url"] is None and stored.details["proposal_pending_url"] == COMPARE_12_OCT  # what the Today card reads: no link yet
+    done = weekly.confirm_proposal(w.store, out["run_id"])
+    assert done == {"run_id": out["run_id"], "proposal_url": COMPARE_12_OCT, "confirmed": True}
+    (after,) = w.store.list_runs(kind="weekly")
+    assert after.details["proposal_url"] == COMPARE_12_OCT and after.details["week"] == "2026-10-12" and after.details["digest"] == stored.details["digest"]
+    assert weekly.confirm_proposal(w.store, out["run_id"])["confirmed"] is False  # a rerun of the job changes nothing
+
+
+def test_confirm_proposal_refuses_what_is_not_a_run_with_a_pending_link():
+    from studio.models import Run, RunKind, RunStatus
+
+    store = World().store
+
+    def add(kind: RunKind, details: dict) -> str:
+        return store.add_run(Run(kind=kind, status=RunStatus.ok, started_at=NOW, details=details)).id
+
+    cases = {
+        "not a run id": "not-a-uuid",
+        "no such run": "00000000-0000-4000-8000-000000000000",
+        "not a weekly run": add(RunKind.daily, {"proposal_pending_url": COMPARE_12_OCT}),
+        "no pending proposal link": add(RunKind.weekly, {"proposal_pending_url": None, "proposal_url": None}),
+    }
+    forged = add(RunKind.weekly, {"proposal_pending_url": "https://evil.example/x"})  # only this repository's compare page is ever linked
+    for why, run_id in [*cases.items(), ("no pending proposal link", forged)]:
+        with pytest.raises(ValueError, match=why):
+            weekly.confirm_proposal(store, run_id)
+    assert all(r.details.get("proposal_url") is None for r in store.list_runs())
+
+
+def test_the_confirm_command_prints_json_and_a_bad_run_is_a_caller_error(monkeypatch, tmp_path):
+    w = measured_world()
+    run_id = run(w, tmp_path)["run_id"]
+    monkeypatch.setattr(weekly, "open_store", lambda: w.store)
+    r = CliRunner().invoke(app, ["review", "confirm-proposal", "--run-id", run_id])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout) == {"run_id": run_id, "proposal_url": COMPARE_12_OCT, "confirmed": True}
+    assert w.store.list_runs(kind="weekly")[0].details["proposal_url"] == COMPARE_12_OCT
+    bad = CliRunner().invoke(app, ["review", "confirm-proposal", "--run-id", "nope"])
+    assert bad.exit_code == 2 and "not a run id" in bad.output
 
 
 # ---- the pre-registered numbers are pinned ---------------------------------------------------------------------------------------------

@@ -396,7 +396,7 @@ def weekly_steps(job: str) -> list[str]:
 
 
 def weekly_step(name: str) -> str:
-    return next(b for job in ("review", "propose") for b in weekly_steps(job) if b.startswith(f"name: {name}"))
+    return next(b for job in ("review", "propose", "confirm") for b in weekly_steps(job) if b.startswith(f"name: {name}"))
 
 
 def test_weekly_runs_on_monday_morning_utc_and_by_hand_with_an_optional_week_one_run_at_a_time():
@@ -409,7 +409,7 @@ def test_weekly_runs_on_monday_morning_utc_and_by_hand_with_an_optional_week_one
     assert "repository_dispatch" not in t
     assert re.search(r"(?m)^concurrency:\n  group: studio-weekly\n  cancel-in-progress: false$", t)
     assert re.search(r"(?m)^permissions:\n  contents: read\n\njobs:", t)  # the workflow itself writes nothing
-    assert re.findall(r"(?m)^  ([a-z]+):$", t.split("\njobs:\n", 1)[1]) == ["review", "propose"]
+    assert re.findall(r"(?m)^  ([a-z]+):$", t.split("\njobs:\n", 1)[1]) == ["review", "propose", "confirm"]
     assert re.search(r"(?m)^    runs-on: ubuntu-24\.04$", weekly_job("review")) and "astral-sh/setup-uv@" in weekly_job("review")
 
 
@@ -433,20 +433,20 @@ def test_weekly_review_runs_the_command_into_weekly_out_and_says_whether_there_i
     upload = weekly_step("Keep the proposal files")
     assert "steps.review.outputs.propose == 'true'" in upload and "uses: actions/upload-artifact@" in upload
     assert "name: weekly-out" in upload and "path: weekly-out" in upload and "secrets." not in upload
-    for job in ("review", "propose"):
+    for job in ("review", "propose", "confirm"):
         for block in weekly_steps(job):
             run = block.split("run:", 1)[1] if "run:" in block else ""
             assert "${{" not in run, block[:60]  # nothing reaches a script but through env
 
 
-def test_weekly_secret_reaches_only_the_gate_and_the_review_step():
+def test_weekly_secret_reaches_only_the_gate_the_review_step_and_the_link_step():
     t = text("studio-weekly")
     assert set(re.findall(r"secrets\.([A-Z_]+)", t)) == {"DATABASE_URL"}  # not even the Supabase keys: the review reads the database only
     assert "env:" not in t.split("\njobs:\n")[0]  # no workflow-level env
-    for job in ("review", "propose"):
+    for job in ("review", "propose", "confirm"):
         assert "env:" not in weekly_job(job).split("    steps:")[0]  # no job-level env
-    holders = [b.split("\n", 1)[0] for job in ("review", "propose") for b in weekly_steps(job) if "secrets." in b]
-    assert holders == ["name: Check secrets", "name: Review the week"]
+    holders = [b.split("\n", 1)[0] for job in ("review", "propose", "confirm") for b in weekly_steps(job) if "secrets." in b]
+    assert holders == ["name: Check secrets", "name: Review the week", "name: Record the proposal link"]
     for block in weekly_steps("review"):
         if block.startswith("uses:"):
             assert "secrets." not in block
@@ -534,6 +534,25 @@ def test_weekly_propose_script_is_valid_bash():
     script = run_block(weekly_step("Open the pull request"))
     done = subprocess.run(["bash", "-n"], input=script, capture_output=True, text=True, check=False)
     assert done.returncode == 0, done.stderr
+
+
+def test_weekly_the_review_hands_its_run_id_on_and_the_link_is_recorded_only_after_the_branch_is_pushed():
+    review = weekly_step("Review the week")
+    assert 'jq -r \'.run_id // empty\' "$RUNNER_TEMP/weekly.json"' in review and 'echo "run_id=$run_id" >> "$GITHUB_OUTPUT"' in review
+    assert "[0-9a-f]{8}-[0-9a-f]{4}" in review  # only a UUID reaches the output
+    assert "run_id: ${{ steps.review.outputs.run_id }}" in weekly_job("review")
+    confirm = weekly_job("confirm")
+    assert re.search(r"(?m)^    needs: \[review, propose\]$", confirm)
+    assert "if: ${{ !cancelled() && needs.propose.result == 'success' }}" in confirm  # a failed or skipped propose job: no link
+    assert "permissions:" not in confirm and "astral-sh/setup-uv@" in confirm  # contents read only (the workflow's); no push right
+    checkout = next(b for b in weekly_steps("confirm") if b.startswith("uses: actions/checkout@"))
+    assert re.search(r"(?m)^        with:\n          persist-credentials: false$", checkout)
+    step = weekly_step("Record the proposal link")
+    assert "DATABASE_URL: ${{ secrets.DATABASE_URL }}" in step and "RUN_ID: ${{ needs.review.outputs.run_id }}" in step
+    assert 'uv run studio review confirm-proposal --run-id "$RUN_ID"' in step and "${{" not in run_block(step)
+    assert "git " not in run_block(step) and "gh " not in run_block(step)
+    # the propose job stays the only one that writes to the repository and still has no secret
+    assert "confirm-proposal" not in weekly_job("propose") and "confirm-proposal" not in weekly_job("review")
 
 
 def test_weekly_propose_prunes_old_weekly_branches_after_the_push_and_touches_only_weekly_refs():
