@@ -39,7 +39,7 @@ from typing import Any
 
 from studio.config import LONDON
 from studio.models import HOOK_PATTERNS
-from studio.store import Store
+from studio.store import Store, require_aware
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS_PATH = ROOT / "config" / "experiments.json"
@@ -81,7 +81,9 @@ class Registry:
         return self.tests[test_id]
 
     def active(self, now: datetime) -> list[Experiment]:
-        """The tests that assign at ``now``: ``on``, and the registry's ``start`` day (London) has come."""
+        """The tests that assign at ``now``: ``on``, and the registry's ``start`` day (London) has come. ``ValueError`` for a naive
+        ``now`` (never read as machine-local time)."""
+        require_aware(now, "Registry.active(now)")
         if now.astimezone(LONDON).date() < self.start:
             return []
         return [t for t in self.tests.values() if t.on]

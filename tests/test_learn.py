@@ -526,6 +526,33 @@ def test_an_adjust_that_never_touched_the_hook_leaves_it_to_the_bandit(experimen
     assert not drop.owner_chose_hook(drop.drop_of(store.get_favorite(pick.id)))
 
 
+@pytest.mark.parametrize("broken", ["bandit_state", "choose_hook"])
+def test_a_fault_in_the_hook_bandit_never_blocks_a_make(experiments_on, monkeypatch, caplog, broken):
+    """Minor 1: the clip is made with the check's first hook (hook_by studio) and the other tests still assign."""
+    def boom(*a, **k):
+        raise ValueError("the bandit broke")
+
+    monkeypatch.setattr(learn, broken, boom)
+    store = World().store
+    pick = add_pick(store)
+    with caplog.at_level("WARNING", logger="studio.drop"):
+        f = store.get_clip(made(store, pick).id).features
+    assert (f["hook_by"], f["hook_index"], f["hook_text"]) == ("studio", 1, HOOKS[0])
+    assert "hook" not in f["test_arms"] and isinstance(f["test_arms"]["trial"], bool)
+    assert "hook bandit failed" in caplog.text and "bandit" not in (drop.drop_of(store.get_favorite(pick.id)).get("make") or {})
+
+
+def test_the_registry_and_the_draw_refuse_a_naive_time(experiments_on):
+    """Minor 6: a naive `now` is never read as machine-local time."""
+    naive = datetime(2026, 10, 12, 12, 0)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        reg().active(naive)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        reg().is_active("B", naive)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        choose(World(), now=naive)
+
+
 def test_a_check_with_no_arm_pattern_keeps_the_first_hook_and_draws_nothing(experiments_on):
     store = World().store
     look = {**LOOK, "hook_patterns": ["mid-deal", "ego-claim", "myth-bust"]}  # none of Reginald's arms

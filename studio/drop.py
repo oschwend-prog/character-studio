@@ -1712,6 +1712,18 @@ def _tests_at_make(
     return arms, explore
 
 
+# What a fault inside the hook bandit can raise (pure computation on the clips' tags): a database error is not among them, since it
+# would leave the open transaction aborted, so it still stops the make.
+_BANDIT_FAILURES = (ValueError, TypeError, KeyError, IndexError, ArithmeticError, StopIteration)
+
+
+def _bandit_warning(pick: Favorite, error: Exception) -> None:
+    log.warning(
+        "drop %s: the hook bandit failed (%s: %s); the check's first hook stays (hook_by studio)",
+        pick.id, type(error).__name__, str(error)[:140],
+    )
+
+
 def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part: str | None = None) -> Clip:
     drop = drop_of(pick)
     clip_id = (drop.get("make") or {}).get("clip_id")
@@ -1721,14 +1733,25 @@ def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part:
             return clip
     registry = experiments.load_experiments()  # a broken registry stops the make here, before anything is reserved or paid
     look = drop.get("deconstruct") or {}
-    state = learn.bandit_state(store, registry) if registry.is_active("B", now) and not owner_chose_hook(drop) else None
+    state = None
+    if registry.is_active("B", now) and not owner_chose_hook(drop):
+        try:
+            state = learn.bandit_state(store, registry)
+        except _BANDIT_FAILURES as e:  # the bandit only chooses among hooks already checked: a fault in it never blocks a make
+            _bandit_warning(pick, e)
     with store.transaction():
         store.get_settings()  # the settings row lock: two makes of one character never read the same place in a test's block
         arms, explore = _tests_at_make(store, pick, now, registry)
-        choice = None if state is None else learn.choose_hook(
-            store, registry, pick.character_slug, pick.id, list(look.get("hooks") or drop.get("hooks") or []),
-            list(look.get("hook_patterns") or []), moment=bool((look.get("moment_name") or "").strip()), now=now, state=state,
-        )  # the hook bandit (test B): the owner's own hook is never drawn over
+        choice = None
+        if state is not None:  # the hook bandit (test B): the owner's own hook is never drawn over
+            try:
+                choice = learn.choose_hook(
+                    store, registry, pick.character_slug, pick.id, list(look.get("hooks") or drop.get("hooks") or []),
+                    list(look.get("hook_patterns") or []), moment=bool((look.get("moment_name") or "").strip()), now=now,
+                    state=state,
+                )
+            except _BANDIT_FAILURES as e:  # the check's first hook stays (hook_by studio)
+                _bandit_warning(pick, e)
         extra: dict[str, Any] = {}
         if choice is not None:
             extra = {"bandit": choice.as_dict()}

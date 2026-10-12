@@ -80,9 +80,9 @@ export function RankedClips({
                 <span className="small muted num sec-count">{readyWithChoice(g.ready.length, g.needsYou.length)}</span>
               </header>
               {top.length ? (
-                <ClipGrid label={`${g.name}’s best ready clips, best first`}>
+                <ClipGrid label={top.some((t) => t.explore) ? `${g.name}’s best ready clips, best first, and one below his median to try` : `${g.name}’s best ready clips, best first`}>
                   {top.map(({ row: r, explore }, i) => (
-                    <ReadyCard key={r.pick_id} row={r} rank={i + 1} top={!explore && isTopPick(r, i)} explore={explore}
+                    <ReadyCard key={r.pick_id} row={r} rank={explore ? null : i + 1} top={!explore && isTopPick(r, i)} explore={explore}
                       ticked={ticked.has(r.pick_id)} onTick={onTick} compact versions={versionsLine(r, data?.tracker ?? rows, names)} />
                   ))}
                 </ClipGrid>
@@ -239,7 +239,7 @@ function ReadyCard({
   row, rank, top, explore = false, ticked, onTick, versions, compact = false,
 }: {
   row: TrackerRow;
-  rank: number;
+  rank: number | null; // null for the Explore clip: its real rank is lower, and the card says why it is there
   top: boolean;
   explore?: boolean;
   ticked: boolean;
