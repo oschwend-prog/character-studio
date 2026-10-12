@@ -19,12 +19,14 @@ first real call is ``bin/studio hits lunar-probe "<keyword>"``, which prints the
 cannot read.
 
 **Free-tier limits** (research 3.1): 4 calls a minute and 100 a day, shared with the owner's other uses of the key, and a refused
-call still counts. So: calls are ``CALL_SPACING_S`` (16 s) apart; a refused call is never retried in the same minute (the next
-call waits 60 s from the refusal, or the 429's ``Retry-After`` when longer, up to 5 minutes) and two refusals in a row stop the
-client for the run. A refusal is an HTTP 429, a JSON-RPC error or an ``isError`` result that says rate limit, or an ordinary answer
-with no table that says so (the exact form is not known); ``hits.lunar_daily_cap`` (40 by default)
-calls at most per run (the job runs once a London day), leaving 60 of the 100 for the owner's MCP use. The handshake is not
-counted (it is not a metered tool call as far as the capture of 8 Oct showed) and not paced.
+call still counts. So: requests are ``CALL_SPACING_S`` (16 s) apart, measured from the END of the previous request (a slow answer
+cannot bunch the next ones into a minute); the handshake is paced like a call (the first call waits 16 s after it) but not counted
+(it is not a metered tool call as far as the capture of 8 Oct showed). A refused call is never retried in the same minute (the
+next request waits 60 s from the refusal, or the 429's ``Retry-After`` when longer, up to 5 minutes) and two refusals in a row stop
+the client for the run; a refused handshake counts as a refusal too. A refusal is an HTTP 429, a JSON-RPC error or an ``isError``
+result that says rate limit, or an ordinary answer with no table that says so (the exact form is not known). The client's ``cap``
+is the calls it may make: ``hits.lunar_daily_cap`` (40 by default) less what earlier runs of the London day made (the pull logs each
+run's calls as a ``hits`` run), leaving 60 of the 100 for the owner's MCP use.
 
 **The curve** (``trend_curve``, research 3.2 step 3): the 3-day mean of ``tiktok_interactions`` (the summed ``interactions``
 column when the table has no TikTok column), the mean centred on the day (a day at an end of the series has one neighbour, so the
@@ -446,6 +448,8 @@ class LunarCrush:
             response = self._http.post(self._endpoint, content=json.dumps(payload), headers=self._headers())
         except httpx.HTTPError as e:
             raise LunarError(f"LunarCrush: no answer ({type(e).__name__})") from None
+        finally:
+            self._last_call = self._clock()  # the spacing runs from the end of the request, however long its answer took
         if not response.is_success:
             body = self.scrub(response.text.strip()[:_BODY_CHARS])
             status = response.status_code
@@ -534,14 +538,13 @@ class LunarCrush:
         if self._stopped is not None:
             raise LunarError(f"LunarCrush stopped for this run: {self._stopped}")
         if self.calls >= self.cap:
-            raise LunarError(f"LunarCrush: this run's cap of {self.cap} calls is used (hits.lunar_daily_cap)")
+            raise LunarError(f"LunarCrush: this run's cap of {self.cap} calls is used (hits.lunar_daily_cap less the day's earlier runs)")
         try:
             self._handshake()
         except LunarError as e:  # a 429 on `initialize` is a refusal like any other: counted, cooled down, never retried at once
             self._account(e)
             raise
         self._wait()
-        self._last_call = self._clock()
         self.calls += 1  # counted before it is sent: a refused call still counts
         id_ = self._next_id()
         try:

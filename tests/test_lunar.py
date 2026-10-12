@@ -238,6 +238,7 @@ class McpServer:
         self.call_times: list[float] = []
         self.init_answers: list = []  # answers for `initialize`, first come first served (an int HTTP status, an httpx.Response)
         self.init_times: list[float] = []
+        self.delay = 0.0  # seconds an answer takes on the fake clock
         self.clock = clock
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -248,6 +249,7 @@ class McpServer:
         if method == "initialize":
             if self.clock is not None:
                 self.init_times.append(self.clock.now)
+                self.clock.now += self.delay
             if self.init_answers:
                 answer = self.init_answers.pop(0)
                 return httpx.Response(answer, json={"error": "nope"}) if isinstance(answer, int) else answer
@@ -258,6 +260,7 @@ class McpServer:
         assert method == "tools/call", method
         if self.clock is not None:
             self.call_times.append(self.clock.now)
+            self.clock.now += self.delay
         answer = self.answers.pop(0) if self.answers else rpc_text(TABLE)
         if callable(answer):
             answer = answer(request)
@@ -309,10 +312,42 @@ def test_calls_are_16_seconds_apart_so_that_four_make_a_minute():
     for word in ("a", "b", "c", "d"):
         client.keyword_time_series(word)
     gaps = [b - a for a, b in zip(server.call_times, server.call_times[1:])]
-    assert gaps == [16.0, 16.0, 16.0] and clock.slept == [16.0, 16.0, 16.0]  # the first call waits for nothing
+    assert gaps == [16.0, 16.0, 16.0] and clock.slept == [16.0] * 4  # the handshake went first, so even the first call waits 16 s
     clock.now += 100  # a long pause between two calls needs no extra wait
     client.keyword_time_series("e")
-    assert clock.slept == [16.0, 16.0, 16.0]
+    assert clock.slept == [16.0] * 4
+
+
+def test_the_spacing_is_measured_from_the_end_of_the_previous_request_so_a_slow_answer_cannot_bunch_the_next_ones():
+    clock = Clock()
+    server = McpServer(clock)
+    server.delay = 7.0  # every answer takes 7 s
+    client = server.client(clock)
+    for word in ("a", "b", "c"):
+        client.keyword_time_series(word)
+    gaps = [b - a for a, b in zip(server.call_times, server.call_times[1:])]
+    assert gaps == [23.0, 23.0]  # 7 s of answer, then the 16 s: start to start would have been 16
+
+
+def test_the_handshake_is_paced_like_a_call_and_the_first_call_waits_for_it():
+    clock = Clock()
+    server = McpServer(clock)
+    server.delay = 3.0
+    client = server.client(clock)
+    client.keyword_time_series("a")
+    assert server.call_times[0] - (server.init_times[0] + 3.0) == 16.0  # 16 s after the handshake's answer
+    assert client.calls == 1  # the handshake itself is not a counted call
+
+
+def test_a_second_handshake_after_a_failed_one_waits_the_spacing_too():
+    clock = Clock()
+    server = McpServer(clock)
+    server.init_answers.append(503)  # not a refusal: only the spacing applies
+    client = server.client(clock)
+    with pytest.raises(LunarError):
+        client.keyword_time_series("a")
+    client.keyword_time_series("a")
+    assert server.init_times[1] - server.init_times[0] == 16.0
 
 
 def test_the_daily_cap_stops_the_calls_before_the_endpoint_is_asked_again():
