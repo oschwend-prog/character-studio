@@ -6,6 +6,7 @@ workflow a clean no-op until the owner adds the secrets, and the command each on
 """
 
 import re
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -365,3 +366,107 @@ def test_hits_secrets_reach_only_the_steps_that_need_them():
     for block in hits_steps("hits"):
         if block.startswith("uses:"):
             assert "secrets." not in block
+
+
+# ---- studio-weekly: the weekly review in the cloud (learning plan build item 10, Task 16) -------------------------------------------------
+
+
+def weekly_job(job: str) -> str:
+    """One job of studio-weekly.yml, as raw text (from its `  <job>:` line to the next job or the end)."""
+    body = text("studio-weekly").split("\njobs:\n", 1)[1]
+    parts = re.split(r"(?m)^  (?=[a-z]+:$)", body)
+    return next(p for p in parts if p.startswith(f"{job}:"))
+
+
+def weekly_steps(job: str) -> list[str]:
+    body = weekly_job(job).split("    steps:\n", 1)[1]
+    return [b for b in re.split(r"(?m)^      - ", body) if b.strip()]
+
+
+def weekly_step(name: str) -> str:
+    return next(b for job in ("review", "propose") for b in weekly_steps(job) if b.startswith(f"name: {name}"))
+
+
+def test_weekly_runs_on_monday_morning_utc_and_by_hand_with_an_optional_week_one_run_at_a_time():
+    t = text("studio-weekly")
+    assert re.search(r"(?m)^name: studio-weekly$", t)
+    assert re.findall(r"- cron: '([^']+)'", t) == ["15 6 * * 1"]  # Monday 06:15 UTC
+    assert "07:15 London in British Summer Time" in t and "GMT" in t  # the winter shift is written down
+    dispatch = t.split("  workflow_dispatch:\n", 1)[1].split("\nconcurrency:", 1)[0]
+    assert re.search(r"(?m)^      week:\n        description: .*\n        required: false\n        default: ''$", dispatch)
+    assert "repository_dispatch" not in t
+    assert re.search(r"(?m)^concurrency:\n  group: studio-weekly\n  cancel-in-progress: false$", t)
+    assert re.search(r"(?m)^permissions:\n  contents: read\n\njobs:", t)  # the workflow itself writes nothing
+    assert re.findall(r"(?m)^  ([a-z]+):$", t.split("\njobs:\n", 1)[1]) == ["review", "propose"]
+    assert re.search(r"(?m)^    runs-on: ubuntu-24\.04$", weekly_job("review")) and "astral-sh/setup-uv@" in weekly_job("review")
+
+
+def test_weekly_review_job_is_gated_on_the_database_secret_and_its_checkout_keeps_no_credentials():
+    blocks = weekly_steps("review")
+    gate, rest = blocks[0], blocks[1:]
+    assert "id: gate" in gate and '[ -z "${DATABASE_URL:-}" ]' in gate and "exit 1" not in gate
+    assert 'echo "secrets not configured — skipping"' in gate
+    assert rest and all("steps.gate.outputs.configured == 'true'" in b for b in rest)
+    checkout = next(b for b in blocks if b.startswith("uses: actions/checkout@"))
+    assert re.search(r"(?m)^        with:\n          persist-credentials: false$", checkout)
+    assert "permissions:" not in weekly_job("review")  # the job with the secret: contents read only (the workflow's)
+
+
+def test_weekly_review_runs_the_command_into_weekly_out_and_says_whether_there_is_anything_to_propose():
+    review = weekly_step("Review the week")
+    assert "id: review" in review and "uv run studio review weekly --out-dir weekly-out" in review
+    assert "WEEK: ${{ inputs.week }}" in review and '--week "$WEEK"' in review  # the input reaches the script only through env
+    assert "find weekly-out -type f" in review and 'echo "propose=true" >> "$GITHUB_OUTPUT"' in review and 'echo "propose=false" >> "$GITHUB_OUTPUT"' in review
+    assert "propose: ${{ steps.review.outputs.propose }}" in weekly_job("review")
+    upload = weekly_step("Keep the proposal files")
+    assert "steps.review.outputs.propose == 'true'" in upload and "uses: actions/upload-artifact@" in upload
+    assert "name: weekly-out" in upload and "path: weekly-out" in upload and "secrets." not in upload
+    for job in ("review", "propose"):
+        for block in weekly_steps(job):
+            run = block.split("run:", 1)[1] if "run:" in block else ""
+            assert "${{" not in run, block[:60]  # nothing reaches a script but through env
+
+
+def test_weekly_secret_reaches_only_the_gate_and_the_review_step():
+    t = text("studio-weekly")
+    assert set(re.findall(r"secrets\.([A-Z_]+)", t)) == {"DATABASE_URL"}  # not even the Supabase keys: the review reads the database only
+    assert "env:" not in t.split("\njobs:\n")[0]  # no workflow-level env
+    for job in ("review", "propose"):
+        assert "env:" not in weekly_job(job).split("    steps:")[0]  # no job-level env
+    holders = [b.split("\n", 1)[0] for job in ("review", "propose") for b in weekly_steps(job) if "secrets." in b]
+    assert holders == ["name: Check secrets", "name: Review the week"]
+    for block in weekly_steps("review"):
+        if block.startswith("uses:"):
+            assert "secrets." not in block
+
+
+def test_only_the_propose_job_may_write_and_it_has_no_secret_and_no_database():
+    propose = weekly_job("propose")
+    assert re.search(r"(?m)^    needs: review$", propose)
+    assert "if: ${{ !cancelled() && needs.review.outputs.propose == 'true' }}" in propose
+    assert re.search(r"(?m)^    permissions:\n      contents: write\n      pull-requests: write\n    steps:", propose)  # its whole token
+    assert "secrets." not in propose and "DATABASE_URL" not in propose and "setup-uv" not in propose and "uv run" not in propose
+    names = [b.split("\n", 1)[0] for b in weekly_steps("propose")]
+    assert names[:2] == ["uses: actions/checkout@v4", "uses: actions/download-artifact@v4"] and names[2] == "name: Open the pull request"
+    assert re.search(r"(?m)^        with:\n          ref: build/slice1$", weekly_steps("propose")[0])  # the PR is made against the working branch
+    assert "name: weekly-out" in weekly_steps("propose")[1]
+
+
+def test_weekly_propose_commits_as_the_bot_on_a_branch_per_week_and_opens_the_pull_request_with_the_digest():
+    step = weekly_step("Open the pull request")
+    assert "GH_TOKEN: ${{ github.token }}" in step and "GH_REPO: ${{ github.repository }}" in step
+    assert 'git config user.name "github-actions[bot]"' in step and "41898282+github-actions[bot]@users.noreply.github.com" in step
+    assert 'branch="weekly/$monday"' in step and 'git checkout -B "$branch"' in step and 'git push --force origin "$branch"' in step
+    assert "cp -R weekly-out/. ." in step and "git add docs/weekly" in step
+    assert 'gh pr create --base build/slice1 --head "$branch"' in step and '--body-file "docs/weekly/$monday.md"' in step
+    assert "git push origin main" not in step and "--base main" not in step
+
+
+def test_weekly_a_refused_pull_request_prints_the_compare_link_and_the_job_still_passes():
+    step = weekly_step("Open the pull request")
+    after = step.split("gh pr create", 1)[1]
+    assert "else" in after and "compare/build/slice1...${branch}?expand=1" in step  # the same address the digest's proposal_url holds
+    assert '>> "$GITHUB_STEP_SUMMARY"' in after and "exit 1" not in after and "exit 1" not in step
+    from studio import weekly as weekly_module
+
+    assert weekly_module.proposal_url(date(2026, 10, 12)) == "https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-12?expand=1"

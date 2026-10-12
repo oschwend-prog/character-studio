@@ -1,0 +1,134 @@
+# The weekly review in the cloud (learning plan docs/launch/measurement-and-learning-plan.md, build item 10; plan 4.2 "Weekly (Monday,
+# cloud)"): once a week the numbers, the digest the owner reads on the terminal's Today page, the score test, the floors and the proposals
+# come from deterministic code (`studio review weekly`, studio/weekly.py): no Claude, no Mac, no browser. The Mac skill
+# (.claude/skills/weekly-review) only adds the trend read and the mentions on top, when the owner runs it.
+#
+# Schedule: 06:15 UTC every Monday = 07:15 London in British Summer Time and 06:15 London in winter (GMT, from the last Sunday of
+# October). The run reviews the week that just ended (Monday to Sunday, London), so a late start never changes which week it is.
+# GitHub's schedule is best-effort (a run can start late or be skipped): rerun it by hand, a rerun of the same week rewrites that
+# week's reviews and logs another run. A manual run: `gh workflow run studio-weekly.yml` (optionally `-f week=2026-W42` or a date).
+#
+# Steps:
+# 1. Job `review` (contents: read): `uv run studio review weekly --out-dir weekly-out`. It applies the binding Instagram guard, saves
+#    one review per live character, logs one `weekly` run (the terminal reads it) and, only when a playbook changed or a NEW proposal
+#    exists (a hit-rule or hook-arm proposal), writes the files of the proposal into `weekly-out/` (characters/<slug>/playbook.md and
+#    docs/weekly/<monday>.md). The files are uploaded as an artifact; the output `propose` says whether there are any.
+# 2. Job `propose` (only when `propose` is true): no secret, no database. It copies the files into a checkout of build/slice1, commits
+#    them on the branch `weekly/<monday>` as github-actions[bot], pushes it and opens a pull request with the digest as its body.
+#    Merging that PR is the owner's approval: the rules reach the check only through a merged file. If the repository setting "Allow
+#    GitHub Actions to create and approve pull requests" is off (it is today), `gh pr create` fails: the branch is pushed anyway and the
+#    step prints the compare link into the run's summary (the terminal's Today card links the same address) and passes.
+#
+# Secrets (repo secret): DATABASE_URL only, in the two steps that need it (the gate and the review). Until it exists the job prints a
+# notice and every later step is skipped, so the schedule never fails (and never emails) before go-live. The input `week` reaches the
+# script only through the environment.
+name: studio-weekly
+
+on:
+  schedule:
+    - cron: '15 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      week:
+        description: 'Week to review: an ISO week like 2026-W42 or any date in it (empty: the last finished week)'
+        required: false
+        default: ''
+
+concurrency:
+  group: studio-weekly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      propose: ${{ steps.review.outputs.propose }}
+    steps:
+      - name: Check secrets
+        id: gate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -z "${DATABASE_URL:-}" ]; then
+            echo "secrets not configured — skipping"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.configured == 'true'
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        if: steps.gate.outputs.configured == 'true'
+      - name: Review the week
+        id: review
+        if: steps.gate.outputs.configured == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WEEK: ${{ inputs.week }}
+        run: |
+          set -euo pipefail
+          week=()
+          if [ -n "${WEEK:-}" ]; then week=(--week "$WEEK"); fi
+          uv run studio review weekly --out-dir weekly-out ${week[@]+"${week[@]}"} > "$RUNNER_TEMP/weekly.json"
+          cat "$RUNNER_TEMP/weekly.json"
+          if [ -n "$(find weekly-out -type f 2>/dev/null | head -n 1)" ]; then
+            echo "propose=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "propose=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Keep the proposal files
+        if: steps.gate.outputs.configured == 'true' && steps.review.outputs.propose == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: weekly-out
+          path: weekly-out
+          if-no-files-found: error
+          retention-days: 14
+
+  propose:
+    needs: review
+    if: ${{ !cancelled() && needs.review.outputs.propose == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: build/slice1
+      - uses: actions/download-artifact@v4
+        with:
+          name: weekly-out
+          path: weekly-out
+      - name: Open the pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          doc="$(find weekly-out/docs/weekly -name '*.md' | sort | tail -n 1)"
+          monday="$(basename "$doc" .md)"
+          branch="weekly/$monday"
+          compare="https://github.com/${GH_REPO}/compare/build/slice1...${branch}?expand=1"
+          cp -R weekly-out/. .
+          rm -rf weekly-out
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add docs/weekly
+          if [ -d characters ]; then git add characters; fi
+          git commit -m "chore: weekly review $monday (playbooks and proposals)"
+          git push --force origin "$branch"
+          if gh pr create --base build/slice1 --head "$branch" --title "Weekly review $monday" --body-file "docs/weekly/$monday.md"; then
+            echo "pull request opened for $branch"
+          else
+            echo "::notice::gh pr create failed (the setting that lets Actions create pull requests is off?): open it by hand"
+            { echo "### Weekly review $monday"; echo; echo "The branch \`$branch\` is pushed. Open the pull request: $compare"; } >> "$GITHUB_STEP_SUMMARY"
+          fi
