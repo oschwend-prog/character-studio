@@ -25,7 +25,11 @@ in its CHECK (reason "the look at the clip failed ...") again when ``transient_k
 (Gemini timed out, answered 5xx, was busy or the network dropped: at most ``AUTO_RETRY_MAX`` automatic retries) or ``quota`` (HTTP
 429 "exceeded your current quota": only once the quota has reset, i.e. after the latest 08:00 London, and at most
 ``AUTO_RETRY_QUOTA_MAX`` times, one a London day). ``drop.auto_retries`` counts them (both kinds in one count) and
-``drop.auto_retry_at`` stamps the last; the owner's Try again (``requested.process`` after that stamp) starts the count over. Three
+``drop.auto_retry_at`` stamps the last; the owner's Try again (``requested.process`` after that stamp) starts the count over. A 429
+is told apart where ``studio.gemini`` raises it (``GeminiQuota``: the day's quota or a per-minute limit; the quota id sits beyond the
+140 characters a raw reason keeps) and ``check_failed_reason`` writes it in plain words with a tag (``[quota:day]``,
+``[quota:minute]``: a per-minute 429 is retaken on the next sweep, not held until 08:00); while the retake is booked the outcome
+carries ``will_retry`` and the run exits 0 (``Outcome.red``: red means a real problem). Three
 sweep workers list the same failed drop: only the first retakes it, the others find it has moved on (``drop.at`` or
 ``drop.auto_retry_at`` differs from the listed row: ``failure_stamp``), so one sweep spends one retry per drop. A failed MAKE is
 never retried by itself (it spends credits): the owner taps Make it again.
@@ -226,6 +230,7 @@ CHECK_FAILED = "the look at the clip failed"  # how the reason of a failed CHECK
 AUTO_RETRY_MAX = 2  # a timeout / 5xx / busy failure of a check is taken again by the sweep this many times, then the owner's Try again
 AUTO_RETRY_QUOTA_MAX = 3  # a daily-quota failure: one retry a London day (after the reset), at most this many (same drop.auto_retries)
 QUOTA_RESET_HOUR = 8  # Google resets the daily quota at midnight Pacific = 08:00 London (07:00 in the weeks the clocks differ)
+QUOTA_DAY, QUOTA_MINUTE = (f"[{gemini.QUOTA_TAGS[w]}]" for w in ("day", "minute"))  # the tags a 429 reason carries (studio.gemini)
 PARTS = ("cameo", "featured", "star")
 ADJUST_KEYS = ("star", "part", "gadgets", "hook", "start_s", "length_s", "crop_x")
 WINDOW_CLASSIC = (12.0, 15.0)  # owner 2026-10-05: a classic keeps its whole recognisable section
@@ -1050,6 +1055,12 @@ class Outcome:
     ok: bool = True
     detail: dict[str, Any] | None = None
 
+    @property
+    def red(self) -> bool:
+        """A real problem, which a run answers with a non-zero exit: not ok, and not a Gemini quota 429 the sweep takes again by
+        itself (``detail.will_retry``, set by ``check_failed_reason``'s caller): that one is failed and says so, but is no alarm."""
+        return not self.ok and not (self.detail or {}).get("will_retry")
+
     def json(self) -> dict[str, Any]:
         return {"pick_id": self.pick_id, "state": self.state, "reason": self.reason, "ok": self.ok, **(self.detail or {})}
 
@@ -1316,9 +1327,10 @@ def _process(
                 _unready(store, _still(store, pick.id, slug), now, state="blocked", reason=reason, **basics)
                 return Outcome(pick.id, "blocked", reason)
             except gemini.GeminiError as e:
-                reason = f"{CHECK_FAILED} ({str(e)[:140]}): tap Try again"
-                _unready(store, _still(store, pick.id, slug), now, state="failed", reason=reason, **basics)
-                return Outcome(pick.id, "failed", reason, ok=False)
+                pick = _still(store, pick.id, slug)
+                reason, retries = check_failed_reason(e, drop_of(pick))
+                _unready(store, pick, now, state="failed", reason=reason, **basics)
+                return Outcome(pick.id, "failed", reason, ok=False, detail={"will_retry": True} if retries else None)
         pick = _still(store, pick.id, slug)
         sources.record_checks(  # anywhere in the clip: the section's own flags are set when it is cut (_child)
             store, src.id, has_watermark=look["watermark"] or bool(look["watermark_spans"]),
@@ -2173,11 +2185,17 @@ def transient_kind(reason: str) -> str | None:
     ``WriteError``, ``RemoteProtocolError``, "connection", "network"); ``None`` for anything else (a refused key, a clip Gemini would not look at, an error of ours). The
     reason is the one the drop recorded ("the look at the clip failed (...): tap Try again"). Pure: it reads the text only.
     A 429 that names a per-minute limit is busy even with the quota wording (the day's quota is not gone: a retry in two hours
-    works); the 140 characters the reason keeps usually cut that name off, so the plain wording stays the daily quota."""
+    works). ``studio.gemini`` tells the two apart when it raises (``GeminiQuota``) and ``check_failed_reason`` writes the tag
+    (``[quota:day]``, ``[quota:minute]``) into the reason, which this reads first; a reason from before that (the raw text, cut
+    at 140 characters before the quota id) falls back to its wording, where the plain quota wording stays the daily quota."""
     if not isinstance(reason, str):
         return None
+    if QUOTA_DAY in reason:  # a 429 the client told apart at raise time (studio.gemini.GeminiQuota): its tag is the answer
+        return "quota"
+    if QUOTA_MINUTE in reason:
+        return "busy"
     low = reason.lower()
-    if "exceeded your current quota" in low and not re.search(r"per[ _-]?minute", low):
+    if "exceeded your current quota" in low and not re.search(r"per[ _-]?minute", low):  # an older reason, cut before the quota id
         return "quota"
     if re.search(r"http (429|5\d\d)\b", low):  # an answer with a status comes first: a 504 "gateway timeout" is Gemini's, busy
         return "busy"
@@ -2186,6 +2204,22 @@ def transient_kind(reason: str) -> str | None:
     if any(w in low for w in ("busy", "high demand", "overloaded", "connecterror", "readerror", "writeerror", "remoteprotocolerror", "connection", "network")):
         return "busy"
     return None
+
+
+def check_failed_reason(error: gemini.GeminiError, d: Mapping[str, Any]) -> tuple[str, bool]:
+    """``(the reason, whether the sweep takes this failed check again by itself)`` for a check that Gemini failed. Every error
+    reads ``the look at the clip failed (<its text>): tap Try again``, except an HTTP 429 that ``studio.gemini`` told apart: that
+    one is said in plain words with its tag (``transient_kind`` reads the tag) and, while the automatic retries are not used up
+    (``auto_retries_used`` of the drop ``d``: ``AUTO_RETRY_QUOTA_MAX`` for the day's quota, ``AUTO_RETRY_MAX`` for a per-minute
+    limit), that the sweep tries again by itself; after them, that it is the owner's Try again."""
+    if not isinstance(error, gemini.GeminiQuota):
+        return f"{CHECK_FAILED} ({str(error)[:140]}): tap Try again", False
+    day = error.window == "day"
+    what = f"Gemini's daily free quota is used up {QUOTA_DAY}" if day else f"Gemini's per-minute limit {QUOTA_MINUTE}"
+    if auto_retries_used(d) >= (AUTO_RETRY_QUOTA_MAX if day else AUTO_RETRY_MAX):
+        return f"{CHECK_FAILED} ({what}): its automatic retries are used up: tap Try again", False
+    when = f"after {QUOTA_RESET_HOUR:02d}:00 London" if day else "on the next sweep"
+    return f"{CHECK_FAILED} ({what}): it tries again {when} by itself", True
 
 
 def last_quota_reset(now: datetime) -> datetime:
@@ -2347,7 +2381,7 @@ def _finish(outcome: Outcome) -> None:
     emit(outcome.json())
     if (outcome.detail or {}).get("refused"):
         raise typer.Exit(EXIT_REFUSED)
-    if not outcome.ok:
+    if outcome.red:
         raise typer.Exit(EXIT_FAILED)
 
 
@@ -2618,7 +2652,8 @@ def sweep_command(
 ) -> None:
     """Run every pending drop job, one after another (the 2-hourly safety net; the cloud runs three of these workers side by
     side, ``STUDIO_WORKER``, and the lease keeps them off each other's drop). Exit 1 when one of them stopped on a failure: a
-    drop another worker holds (busy) or has already moved on is none."""
+    drop another worker holds (busy) or has already moved on is none, and neither is a check that Gemini's quota (HTTP 429) failed
+    and the sweep takes again by itself (``Outcome.red``)."""
     store, storage = open_store(), open_storage()
     hf, client, media = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env(), _media(store)
     results: list[dict[str, Any]] = []
@@ -2639,7 +2674,7 @@ def sweep_command(
             else:
                 outcome = make_drop(store, storage, row["pick_id"], hf=hf, gemini_client=client)
             results.append({"job": row["job"], **outcome.json()})
-            failed = failed or not outcome.ok
+            failed = failed or outcome.red
         except (KeyError, DropError, StorageError, ValueError) as e:
             results.append({"job": row["job"], "pick_id": row["pick_id"], "ok": False, "error": str(e)[:300]})
             failed = True

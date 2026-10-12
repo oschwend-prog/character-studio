@@ -2482,6 +2482,10 @@ _TRANSIENT_REASONS = [  # the strings process_drop really records, and what the 
     # the daily wording, but the reason names a per-minute limit: still not the day's quota
     ("the look at the clip failed (Gemini answered HTTP 429: You exceeded your current quota ... GenerateRequestsPerMinutePerProject"
      "PerModel-FreeTier): tap Try again", "busy"),
+    # a 429 the client told apart at raise time (final review M5): plain words, the tag the retry logic reads
+    ("the look at the clip failed (Gemini's daily free quota is used up [quota:day]): it tries again after 08:00 London by itself", "quota"),
+    ("the look at the clip failed (Gemini's per-minute limit [quota:minute]): it tries again on the next sweep by itself", "busy"),
+    ("the look at the clip failed (Gemini's daily free quota is used up [quota:day]): its automatic retries are used up: tap Try again", "quota"),
     # the network dropped (httpx.NetworkError / ProtocolError): the sweep asks again
     ("the look at the clip failed (the Gemini call failed (ConnectError)): tap Try again", "busy"),
     ("the look at the clip failed (the Gemini call failed (RemoteProtocolError)): tap Try again", "busy"),
@@ -2916,6 +2920,142 @@ def test_the_reasons_the_real_client_writes_are_classified(world, portrait, erro
     assert out.state == "failed" and out.reason.startswith(drop.CHECK_FAILED), out.reason
     assert drop.transient_kind(out.reason) == kind, out.reason
     assert (drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(days=1)) == kind)
+
+
+def google_429(quota_id: str) -> dict:
+    """What Google sends with an HTTP 429 RESOURCE_EXHAUSTED: the quota text, then the violation with its quota id."""
+    metric = "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+    return {"error": {
+        "code": 429,
+        "message": (
+            "You exceeded your current quota, please check your plan and billing details. For more information on this error, head "
+            "to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. "
+            f"\n* Quota exceeded for metric: {metric}, limit: 20, model: gemini-3.8-flash\nPlease retry in 27.7s."
+        ),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+                {"quotaMetric": metric, "quotaId": quota_id, "quotaDimensions": {"location": "global", "model": "gemini-3.8-flash"}}
+            ]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "27s"},
+        ],
+    }}
+
+
+QUOTA_BODIES = {
+    "day": google_429("GenerateRequestsPerDayPerProjectPerModel-FreeTier"),
+    "minute": google_429("GenerateRequestsPerMinutePerProjectPerModel-FreeTier"),
+}
+
+
+def quota_client(window: str) -> gemini.GeminiClient:
+    import httpx
+
+    body = QUOTA_BODIES[window]
+    return gemini.GeminiClient("k", transport=httpx.MockTransport(lambda request: httpx.Response(429, json=body)), sleep=lambda s: None)
+
+
+@pytest.mark.parametrize(("window", "kind", "words"), [("day", "quota", "08:00 London"), ("minute", "busy", "next sweep")])
+def test_a_429_reason_is_plain_short_and_still_read_by_the_retry_logic(world, portrait, window, kind, words):
+    """Final review M5 and the controller's 4b: the failed check of 12 Oct read 'Gemini answered HTTP 429: {\\n "error": ...' cut in the
+    middle and 'tap Try again'. The window is told at raise time (the quota id sits beyond the 140 characters the reason keeps)."""
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    out = process_drop(store, storage, pid, gemini_client=quota_client(window), now=NOW, job="t")
+    assert out.state == "failed" and not out.ok and out.reason.startswith(drop.CHECK_FAILED)
+    assert f"[quota:{window}]" in out.reason and words in out.reason and "by itself" in out.reason
+    assert "{" not in out.reason and "HTTP" not in out.reason and "tap Try again" not in out.reason and len(out.reason) <= 140
+    assert drop.transient_kind(out.reason) == kind
+    assert store.get_favorite(pid).proposal["drop"]["reason"] == out.reason
+    again = drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(days=1))
+    assert again == kind  # a per-minute 429 is retaken on the next sweep (it is not held for the 08:00 reset)
+    right_away = drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(minutes=5))
+    assert right_away == ("busy" if window == "minute" else None)  # the day's quota waits for the reset
+    assert [p["pick_id"] for p in pending(store, now=NOW + timedelta(minutes=5))] == ([pid] if window == "minute" else [])
+
+
+@pytest.mark.parametrize(("window", "used"), [("day", 3), ("minute", 2)])
+def test_a_429_whose_retries_are_used_up_says_so_and_stays_red(world, portrait, window, used):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "auto_retries": used}})
+    out = process_drop(store, storage, pid, gemini_client=quota_client(window), now=NOW, job="t")
+    assert not out.ok and "by itself" not in out.reason and out.reason.endswith("tap Try again") and f"[quota:{window}]" in out.reason
+    assert out.red and not (out.detail or {}).get("will_retry")
+    assert drop.transient_kind(out.reason) == ("quota" if window == "day" else "busy")
+
+
+def test_other_check_failures_keep_their_text():
+    """The reasons of everything but a told-apart 429 are what they were: the cut error text and 'tap Try again'."""
+    for err in (gemini.GeminiError("Gemini answered HTTP 503: high demand", 503), gemini.GeminiError("Gemini answered HTTP 429: rate limited", 429)):
+        reason, again = drop.check_failed_reason(err, {})
+        assert reason == f"{drop.CHECK_FAILED} ({str(err)[:140]}): tap Try again" and again is False
+
+
+def test_a_sweep_whose_only_failures_are_quota_429s_that_retry_by_themselves_exits_0(monkeypatch, tmp_path, portrait):
+    """4c: red should mean a real problem. The drop is failed and says so (and its retry is booked), but the run is green."""
+    for window in ("day", "minute"):
+        store, storage = sweep_world(monkeypatch, tmp_path / window)
+        pid = drop_file(store, storage, portrait)
+        monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: quota_client(window)))
+        r = CliRunner().invoke(app, ["drop", "sweep"])
+        assert r.exit_code == 0, (window, r.output)
+        (row,) = json.loads(r.output)["results"]
+        assert row["pick_id"] == pid and row["state"] == "failed" and row["ok"] is False and row["will_retry"] is True
+        assert store.get_favorite(pid).proposal["drop"]["state"] == "failed"
+
+
+def test_a_sweep_keeps_exit_1_for_every_other_failure_even_next_to_a_quota_429(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    quota = drop_file(store, storage, portrait)
+    other = drop_file(store, storage, portrait)
+    errors = {quota: quota_client("day"), other: FakeGemini(gemini.GeminiError("Gemini answered HTTP 503: high demand", 503))}
+    seen = []
+
+    def run(store_, storage_, pick_id, **kw):
+        seen.append(pick_id)
+        return real(store_, storage_, pick_id, **{**kw, "gemini_client": errors[pick_id]})
+
+    real = drop.process_drop
+    monkeypatch.setattr(drop, "process_drop", run)
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 1 and sorted(seen) == sorted([quota, other])
+    rows = {x["pick_id"]: x for x in json.loads(r.output)["results"]}
+    assert rows[quota]["will_retry"] is True and rows[other]["ok"] is False and "will_retry" not in rows[other]
+
+
+def test_a_quota_429_whose_retries_are_used_up_keeps_exit_1(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = drop_file(store, storage, portrait)
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "auto_retries": drop.AUTO_RETRY_QUOTA_MAX}})
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: quota_client("day")))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 1 and "will_retry" not in json.loads(r.output)["results"][0]  # the owner's to look at: red
+
+
+def test_a_503_alone_keeps_exit_1(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    drop_file(store, storage, portrait)
+    busy = gemini.GeminiError("Gemini answered HTTP 503: high demand", 503)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: FakeGemini(busy)))
+    assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 1
+
+
+def test_a_single_process_run_that_hits_a_retrying_quota_429_exits_0_and_any_other_failure_1(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = drop_file(store, storage, portrait)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: quota_client("minute")))
+    r = CliRunner().invoke(app, ["drop", "process", pid])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["state"] == "failed" and out["ok"] is False and out["will_retry"] is True
+    pid2 = drop_file(store, storage, portrait)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: FakeGemini(
+        gemini.GeminiError("Gemini answered HTTP 403: API key not valid", 403))))
+    r = CliRunner().invoke(app, ["drop", "process", pid2])
+    assert r.exit_code == 1 and "will_retry" not in json.loads(r.output)
 
 
 # ---- tests G and H at the master: the clip's coins become the spec's edits; the master says what it applied ----------------------------
