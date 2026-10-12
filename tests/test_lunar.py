@@ -334,6 +334,45 @@ def test_a_refused_call_still_counts_is_not_retried_and_the_next_call_waits_out_
     assert server.call_times[1] - server.call_times[0] == 60.0  # the next call is a minute on, not 16 s
 
 
+def test_a_rate_limit_that_arrives_as_an_ordinary_answer_is_a_refusal_too():
+    clock = Clock()
+    server = McpServer(clock)
+    server.answers.append(rpc_text("Rate limit exceeded. Please wait a minute before asking again."))  # a 200, not isError, no table
+    client = server.client(clock)
+    with pytest.raises(LunarError) as e:
+        client.keyword_time_series("a")
+    assert e.value.refused is True and client.calls == 1
+    client.keyword_time_series("b")
+    assert server.call_times[1] - server.call_times[0] == 60.0  # the minute is waited out, as for any refusal
+
+
+def test_two_such_answers_in_a_row_stop_the_client_and_the_gate_says_unknown():
+    server = McpServer()
+    server.answers += [rpc_text("Too many requests, slow down"), rpc_text("Rate limit exceeded")]
+    gate = gate_for(server)
+    assert gate.read("a").stage == "unknown" and gate.read("b").stage == "unknown" and gate.read("c").stage == "unknown"
+    assert len(server.tool_calls()) == 2 and "stopped" in gate.read("d").reason  # the third key is not even asked
+
+
+def test_an_answer_with_a_table_that_mentions_the_rate_limit_is_not_a_refusal():
+    server = McpServer()
+    server.answers.append(rpc_text("Rate Limit Minute: 3/4\nRate Limit Day: 12/100\n\n" + TABLE))
+    client = server.client()
+    assert "Rate Limit Day" in client.keyword_time_series("a") and client._refusals == 0
+
+
+@pytest.mark.parametrize("header, waited", [("120", 120.0), ("5", 60.0), ("99999", 300.0), ("soon", 60.0), (None, 60.0)])
+def test_a_429_with_retry_after_waits_that_long_never_less_than_a_minute_and_never_more_than_five(header, waited):
+    clock = Clock()
+    server = McpServer(clock)
+    server.answers.append(httpx.Response(429, json={"error": "slow"}, headers={"Retry-After": header} if header else {}))
+    client = server.client(clock)
+    with pytest.raises(LunarError):
+        client.keyword_time_series("a")
+    client.keyword_time_series("b")
+    assert server.call_times[1] - server.call_times[0] == waited
+
+
 def test_two_refusals_in_a_row_stop_the_client_for_the_run():
     server = McpServer()
     server.answers += [429, 429]

@@ -20,7 +20,9 @@ cannot read.
 
 **Free-tier limits** (research 3.1): 4 calls a minute and 100 a day, shared with the owner's other uses of the key, and a refused
 call still counts. So: calls are ``CALL_SPACING_S`` (16 s) apart; a refused call is never retried in the same minute (the next
-call waits 60 s from the refusal) and two refusals in a row stop the client for the run; ``hits.lunar_daily_cap`` (40 by default)
+call waits 60 s from the refusal, or the 429's ``Retry-After`` when longer, up to 5 minutes) and two refusals in a row stop the
+client for the run. A refusal is an HTTP 429, a JSON-RPC error or an ``isError`` result that says rate limit, or an ordinary answer
+with no table that says so (the exact form is not known); ``hits.lunar_daily_cap`` (40 by default)
 calls at most per run (the job runs once a London day), leaving 60 of the 100 for the owner's MCP use. The handshake is not
 counted (it is not a metered tool call as far as the capture of 8 Oct showed) and not paced.
 
@@ -69,6 +71,7 @@ INTERVAL = "1m"  # daily rows for the last month
 NETWORK = "tiktok"  # the free answers carried every network anyway (research 3.1); the TikTok column is the one read
 CALL_SPACING_S = 16.0  # 4 calls a minute
 REFUSAL_COOLDOWN_S = 60.0  # a refused call is not retried in the same minute
+RETRY_AFTER_MAX_S = 300.0  # a 429's Retry-After is honoured up to this (the job has 30 minutes)
 REFUSALS_STOP = 2  # refused this often in a row: no more calls this run
 DEFAULT_CAP = 40  # hits.lunar_daily_cap
 KEY_MAX = 80  # the longest trend key asked for
@@ -90,13 +93,27 @@ _BODY_CHARS = 200
 _RATE_LIMITED = re.compile(r"rate.?limit|too many requests|quota|limit (?:reached|exceeded)|\b429\b", re.I)
 
 
+def _retry_after(value: str | None) -> float | None:
+    """A ``Retry-After`` header in seconds (the HTTP-date form is not read), or None."""
+    try:
+        seconds = float((value or "").strip())
+    except ValueError:
+        return None
+    return seconds if math.isfinite(seconds) and seconds > 0 else None
+
+
+def _has_table(text: str) -> bool:
+    return any(line.lstrip().startswith("|") for line in text.splitlines())
+
+
 class LunarError(RuntimeError):
     """A LunarCrush call failed. ``status`` is the HTTP status when there was one (401/403: the key is refused); ``refused`` is
-    true when the account's rate limit said no (a refused call still counts against the day)."""
+    true when the account's rate limit said no (a refused call still counts against the day); ``retry_after`` is the seconds a 429
+    asked us to wait (None when it said nothing usable)."""
 
-    def __init__(self, message: str, *, status: int | None = None, refused: bool = False) -> None:
+    def __init__(self, message: str, *, status: int | None = None, refused: bool = False, retry_after: float | None = None) -> None:
         super().__init__(message)
-        self.status, self.refused = status, refused
+        self.status, self.refused, self.retry_after = status, refused, retry_after
 
 
 class LunarParseError(ValueError):
@@ -434,7 +451,8 @@ class LunarCrush:
             status = response.status_code
             if status in (401, 403):
                 self._stopped = "the key is refused"
-            raise LunarError(f"LunarCrush answered HTTP {status}: {body}", status=status, refused=status == 429)
+            retry = _retry_after(response.headers.get("retry-after")) if status == 429 else None
+            raise LunarError(f"LunarCrush answered HTTP {status}: {body}", status=status, refused=status == 429, retry_after=retry)
         return response
 
     def _message(self, response: httpx.Response, id_: int) -> dict[str, Any]:
@@ -495,9 +513,11 @@ class LunarCrush:
         if due > now:
             self._sleep(due - now)
 
-    def _refused(self) -> None:
+    def _refused(self, retry_after: float | None = None) -> None:
+        """A call was refused: no more calls this minute (longer when the refusal said so, up to ``RETRY_AFTER_MAX_S``)."""
         self._refusals += 1
-        self._cool_until = self._clock() + REFUSAL_COOLDOWN_S
+        wait = min(max(retry_after or 0.0, REFUSAL_COOLDOWN_S), RETRY_AFTER_MAX_S)
+        self._cool_until = self._clock() + wait
         if self._refusals >= REFUSALS_STOP:
             self._stopped = f"refused {self._refusals} times in a row"
 
@@ -518,7 +538,7 @@ class LunarCrush:
             message = self._message(response, id_)
         except LunarError as e:
             if e.refused or _RATE_LIMITED.search(str(e)):
-                self._refused()
+                self._refused(e.retry_after)
                 e.refused = True
             raise
         if "error" in message:
@@ -535,6 +555,9 @@ class LunarCrush:
             if refused:
                 self._refused()
             raise LunarError(f"LunarCrush: {self.scrub(text.strip()[:_BODY_CHARS])}", refused=refused)
+        if _RATE_LIMITED.search(text) and not _has_table(text):  # a refusal that came back as an ordinary answer: the same path
+            self._refused()
+            raise LunarError(f"LunarCrush: {self.scrub(text.strip()[:_BODY_CHARS])}", refused=True)
         self._refusals = 0
         return text
 
