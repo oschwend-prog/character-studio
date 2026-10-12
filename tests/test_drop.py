@@ -2450,13 +2450,14 @@ def test_an_auto_filed_link_is_never_offered_to_the_mac(world):
 
 def test_the_cloud_tries_a_waiting_auto_filed_link_on_later_days_while_downloads_allow_then_drops_it(world):
     store, _ = world
-    pick = auto_link(store, NOW, tried=[NOW.date().isoformat()])
+    morning = NOW.replace(hour=9, minute=0, second=0, microsecond=0)  # NOW is the wall clock: after 21:00, +3 h is tomorrow
+    pick = auto_link(store, morning, tried=[morning.date().isoformat()])
     jobs = lambda at, retry=True: [(p["pick_id"], p["job"]) for p in pending(store, now=at, auto_retry=retry)]  # noqa: E731
-    assert jobs(NOW + timedelta(hours=3)) == []  # the same London day: not again
-    assert jobs(NOW + timedelta(days=1)) == [(pick.id, "process")]
-    assert jobs(NOW + timedelta(days=1), retry=False) == []  # today's one-post downloads are used: it waits for another day
-    assert jobs(NOW + timedelta(days=2)) == [(pick.id, "process")]
-    assert jobs(NOW + timedelta(days=3)) == jobs(NOW + timedelta(days=3), retry=False) == [(pick.id, "expire")]
+    assert jobs(morning + timedelta(hours=3)) == []  # the same London day: not again
+    assert jobs(morning + timedelta(days=1)) == [(pick.id, "process")]
+    assert jobs(morning + timedelta(days=1), retry=False) == []  # today's one-post downloads are used: it waits for another day
+    assert jobs(morning + timedelta(days=2)) == [(pick.id, "process")]
+    assert jobs(morning + timedelta(days=3)) == jobs(morning + timedelta(days=3), retry=False) == [(pick.id, "expire")]
 
 
 def test_an_auto_filed_link_that_fails_waits_for_the_cloud_not_the_mac_and_counts_its_days(world):
