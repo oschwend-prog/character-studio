@@ -15,7 +15,10 @@ feature lift              reported only for a value used by >= 5 clips (``min_n`
 character                 evaluated after 20 posts OR 4 weeks since its first post, whichever
                           comes first (else ``not_yet``). promote: median views per post >=
                           5,000 on either platform OR any post >= 100,000. kill: median < 500 on
-                          BOTH platforms AND no post >= 10,000. Otherwise continue
+                          BOTH platforms AND no post >= 10,000. Otherwise continue. Until the
+                          character's TikTok is connected (an account with a Postiz id, or a
+                          posted TikTok post) the kill reads Instagram alone, same thresholds
+                          (owner, 12 Oct 2026, before any 7-day figure)
 Instagram guard           an Instagram account's non-follower reach % down >= 40 % week-on-week
                           sets that account's ``dropin_share`` to 0.20
 ========================  ====================================================================
@@ -308,6 +311,11 @@ def character_evidence(store: Store, slug: str, now: datetime) -> CharacterEvide
     age = now - first if first is not None else None
     medians = {p: _median(v) for p, v in mature.items()}
     best = max(peaks, default=None)
+    tiktok_connected = any(
+        a.platform is Platform.tiktok and bool(a.postiz_integration_id) for a in accounts
+    ) or any(platform_of[p.account_id] is Platform.tiktok for p in posts)
+    # the owner's Instagram-only kill until TikTok is connected (12 Oct 2026); from then on, both platforms as written
+    kill_platforms = tuple(Platform) if tiktok_connected else (Platform.instagram,)
 
     bar: Bar
     if len(posts) < CHARACTER_MIN_POSTS and (age is None or age < CHARACTER_MIN_AGE):
@@ -316,7 +324,7 @@ def character_evidence(store: Store, slug: str, now: datetime) -> CharacterEvide
         best is not None and best >= PROMOTE_ANY_VIEWS
     ):
         bar = "promote"
-    elif all(m is not None and m < KILL_MEDIAN_VIEWS for m in medians.values()) and not (
+    elif all(medians[p] is not None and medians[p] < KILL_MEDIAN_VIEWS for p in kill_platforms) and not (
         best is not None and best >= KILL_ANY_VIEWS
     ):
         bar = "kill"

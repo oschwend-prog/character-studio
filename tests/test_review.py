@@ -428,6 +428,27 @@ def test_character_bar_never_kills_on_one_platform_of_evidence(rig):
     assert character_bar(rig.store, "biscuit", NOW) == "continue"
 
 
+def test_character_bar_kills_on_instagram_alone_until_tiktok_is_connected(rig):
+    rig.fill(tiktok=[], instagram=[499] * 20)  # the owner's rule of 12 Oct: no TikTok yet, same thresholds
+    assert character_bar(rig.store, "biscuit", NOW) == "kill"
+
+
+def test_character_bar_instagram_alone_at_500_or_a_10000_post_is_not_a_kill():
+    rig = Rig()
+    rig.fill(tiktok=[], instagram=[500] * 20)
+    assert character_bar(rig.store, "biscuit", NOW) == "continue"
+    rig = Rig()
+    rig.fill(tiktok=[], instagram=[100] * 19 + [10_000])
+    assert character_bar(rig.store, "biscuit", NOW) == "continue"
+
+
+def test_character_bar_a_connected_tiktok_brings_back_both_platforms(rig):
+    rig.fill(tiktok=[], instagram=[499] * 20)
+    tiktok = rig.account("@biscuit.tt")
+    rig.store.update_account(tiktok.id, postiz_integration_id="pz-tt")  # connected, nothing posted yet: no TikTok median
+    assert character_bar(rig.store, "biscuit", NOW) == "continue"
+
+
 def test_character_bar_medians_are_seven_day_views_so_young_posts_never_kill(rig):
     # 20 posts, every one younger than 7 days with a low reading: no mature figure, no verdict
     for i in range(20):
