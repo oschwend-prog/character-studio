@@ -424,11 +424,14 @@ def set_story_path(store: Store, clip_id: str, key: str | None) -> Clip:
         return store.update_clip(clip_id, features=features)
 
 
-def set_publish_tags(store: Store, clip_id: str, tags: Mapping[str, Any], *, only_missing: bool = False) -> Clip:
+def set_publish_tags(
+    store: Store, clip_id: str, tags: Mapping[str, Any], *, only_missing: bool = False, trial_refused: str | None = None
+) -> Clip:
     """Write the publisher's learning tags (``PUBLISH_FEATURES``: ``first_comment_posted``, ``trial_reel``, each true or false) on
     the clip, keeping every other feature. ``only_missing`` writes only the ones the clip does not carry yet (a TikTok post never
-    undoes what its Instagram Reel recorded). ``KeyError`` for an unknown clip, ``ValueError`` (nothing written) for another key or a
-    value that is not true or false."""
+    undoes what its Instagram Reel recorded). ``trial_refused``: when Postiz refused the clip's Trial Reel and a normal Reel went
+    out instead, the reason (kept as ``features['trial_refused']``, a note, not a learning tag; written in the same update).
+    ``KeyError`` for an unknown clip, ``ValueError`` (nothing written) for another key or a value that is not true or false."""
     unknown = sorted(set(tags) - PUBLISH_FEATURES)
     if unknown:
         raise ValueError(f"set_publish_tags writes only {', '.join(sorted(PUBLISH_FEATURES))}, got {', '.join(unknown)}")
@@ -440,6 +443,8 @@ def set_publish_tags(store: Store, clip_id: str, tags: Mapping[str, Any], *, onl
         if clip is None:
             raise KeyError(clip_id)
         new = {k: v for k, v in tags.items() if not (only_missing and k in clip.features)}
+        if trial_refused is not None:
+            new["trial_refused"] = trial_refused.strip()[:500]
         if not new:
             return clip
         return store.update_clip(clip_id, features={**clip.features, **new})

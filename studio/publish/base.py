@@ -37,7 +37,13 @@
    * the master's signed URL goes to ``publisher.publish(..., ai_label=True)`` (never without the AI
      label), with the post's **reach pack** (``studio.publish.reach.plan_post``, terminal v3 spec section 11): the clip's hashtags
      as stored (its series tag was written into them when the clip was made) and, for an Instagram Reel, the clip's first
-     comment, its collaborators (live characters only, at most 3) and the account's Trial Reel switch;
+     comment, its collaborators (live characters only, at most 3) and the Trial Reel decision (the account's switch is the
+     eligibility; while test C is on, the clip's coin decides on an eligible account, ``reach.ReachConfig.trial_for``);
+   * a Trial Reel that Postiz refuses synchronously (a definite 4xx: nothing was created) is posted once more, in the same
+     publisher call, as a normal Reel (``PublishResult.trial_refused`` carries the reason): the post is recorded with
+     ``trial_reel`` false, the reason lands on the clip (``features['trial_refused']``) and in the summary's ``posted`` entry, and
+     the plan is made again as a normal Reel. It is one attempt and one post: an uncertain outcome of the second call is
+     ``needs_check`` like any other, never a resend;
    * success: the post is ``posted`` with the platform id and URL; the clip's learning tags ``first_comment_posted`` and
      ``trial_reel`` are written (``clips.set_publish_tags``: an Instagram Reel writes both, a TikTok post only the ones the clip
      does not carry yet, so it never undoes its Reel's); an Instagram Reel is followed by its **Story** (below); and the clip
@@ -119,6 +125,7 @@ class UncertainPublish(Exception):
 class PublishResult:
     platform_post_id: str
     url: str | None = None
+    trial_refused: str | None = None  # the platform refused the Trial Reel (a definite 4xx): the reason; a normal Reel went out instead
 
 
 @runtime_checkable
@@ -362,6 +369,8 @@ def _publish_one(
     # The platform said yes. From here nothing may send the post back to `scheduled`, and the post
     # counts toward the cap even if the write below fails.
     counts[account.id] += 1
+    if result.trial_refused is not None:  # the Trial Reel was refused and a normal Reel went out: record and plan what went out
+        plan = plan_post(clip, account, accounts.values(), config, live=live, normal_reel=True)
     store.update_post(
         post.id,
         status=PostStatus.posted,
@@ -369,10 +378,11 @@ def _publish_one(
         url=result.url,
         error=None,
     )
-    out["posted"].append(
-        {"post_id": post.id, "platform_post_id": result.platform_post_id, "url": result.url, "reach": plan.summary()}
-    )
-    _record_reach(store, clip, account, plan, out)
+    entry = {"post_id": post.id, "platform_post_id": result.platform_post_id, "url": result.url, "reach": plan.summary()}
+    if result.trial_refused is not None:
+        entry["trial_refused"] = _short(result.trial_refused)
+    out["posted"].append(entry)
+    _record_reach(store, clip, account, plan, out, trial_refused=result.trial_refused)
     if account.platform is Platform.instagram:
         out["stories"].append(_follow_with_story(store, storage, publisher, post, clip, account, plan, now))
     if _all_posted(store, clip.id):
@@ -380,12 +390,15 @@ def _publish_one(
         out["clips_posted"].append(clip.id)
 
 
-def _record_reach(store: Store, clip: Clip, account: Account, plan: PostPlan, out: dict[str, Any]) -> None:
-    """The publisher's learning tags on the clip (see the module docstring); a lost write is reported, the post stays posted."""
+def _record_reach(
+    store: Store, clip: Clip, account: Account, plan: PostPlan, out: dict[str, Any], *, trial_refused: str | None = None
+) -> None:
+    """The publisher's learning tags on the clip (see the module docstring), and the reason a refused Trial Reel went out as a
+    normal one; a lost write is reported, the post stays posted."""
     reel = account.platform is Platform.instagram
     tags = {"first_comment_posted": reel and plan.reach.first_comment is not None, "trial_reel": reel and plan.reach.trial_reel}
     try:
-        set_publish_tags(store, clip.id, tags, only_missing=not reel)
+        set_publish_tags(store, clip.id, tags, only_missing=not reel, trial_refused=trial_refused)
     except Exception as e:  # noqa: BLE001 - the post is live: only the tag is lost
         out["errors"].append({"clip_id": clip.id, "error": _short(f"the learning tags were not written: {_short(e)}")})
 

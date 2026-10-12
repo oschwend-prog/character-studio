@@ -18,6 +18,11 @@
   ``{label}``) and ``audio`` (never sent). ``INSTAGRAM_SETTING_KEYS`` holds them; Postiz drops an unknown key without a word, so
   nothing else is ever written. A Trial Reel with collaborators, or any Instagram lever on TikTok, is a ``ValueError`` before
   anything is fetched;
+* **a Trial Reel that is refused is posted as a normal Reel.** When ``posts:create`` of a Trial Reel ends in a definite 4xx (nothing
+  was created; the account may not be able to post Trial Reels), ``publish`` posts the same Reel once more without the trial
+  settings, from the file already uploaded, and returns the result with ``PublishResult.trial_refused`` set to the refusal
+  (``publish_due`` records ``trial_reel`` false and the reason). Any other ending of the first call (an uncertain one included)
+  is not retried; an uncertain ending of the second call is ``UncertainPublish`` like any other;
 * ``publish_story`` posts a Story: ``post_type: story``, exactly one attachment (Instagram takes one media on a Story): the file it
   is given, the clip's labelled Story video (the master with the AI label burned in: a Story shows no caption, so the Reel's
   upload of the plain master is never reused), fetched and uploaded like a Reel's master; the AI disclosure as its text (the CLI
@@ -55,6 +60,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -236,7 +242,17 @@ class PostizPublisher:
         settings = platform_settings(platform, reach)  # ValueError for a lever the platform has no key for: nothing sent
         comments = [reach.first_comment] if reach.first_comment and reach.first_comment.strip() else []
         uploaded = self._upload_media(media_url)
-        return self._create([content, *comments], integration_id, uploaded, settings, self._clock())
+        try:
+            return self._create([content, *comments], integration_id, uploaded, settings, self._clock())
+        except PostizError as refusal:
+            if not reach.trial_reel:
+                raise
+            # A definite 4xx on a Trial Reel (``_create`` raises PostizError only for one): Postiz or Instagram refused the
+            # request and nothing was created, so the same Reel goes out once more as a normal one, from the file already
+            # uploaded. Never a lost post, never two: an uncertain answer of this second call is UncertainPublish as usual.
+            normal = platform_settings(platform, replace(reach, trial_reel=False))
+            result = self._create([content, *comments], integration_id, uploaded, normal, self._clock())
+            return replace(result, trial_refused=str(refusal)[:_OUTPUT_CHARS])
 
     def publish_story(self, *, integration_id: str, media_url: str, ai_label: bool) -> PublishResult:
         """An Instagram Story of ``media_url``, the clip's labelled Story video (see the module docstring)."""

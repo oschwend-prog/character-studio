@@ -22,14 +22,20 @@
    (``PostPlan.collab_dropped``), never invented, never the character himself; at most ``MAX_COLLABORATORS`` (3, Instagram's
    limit) are kept, in the clip's order, and the rest are listed in ``collab_dropped`` too. Not a list: no collaborators.
 5. **Trial Reels** (Instagram only): ``config/scan.json`` ``reach.trial_reels``, a map of Instagram handle -> true / false (off
-   for every account; proposed to the owner for new accounts with few followers, never switched on by the build). On: the Reel
+   for every account; the owner's tick that the account can post Trial Reels, never switched on by the build). On: the Reel
    goes out with ``is_trial_reel`` + ``graduation_strategy: SS_PERFORMANCE``. A Reel with collaborators is never a Trial Reel
-   (Instagram takes no collaborators on one): the clip's own collab wins over the account's switch. **While test C is ``on``**
-   (``config/experiments.json``, learning plan 3.4; ``ReachConfig.trial_test``) the clip's own coin decides instead: a clip made
-   under the test carries ``features['test_arms']['trial']`` (true / false, a block coin of 2 and 2 in every 4 per character,
-   ``studio.experiments``) and its Reel goes out as a Trial Reel exactly when that is true, whatever the account's switch says. A
-   clip with no such arm (made before the test, or a Recreate), or one whose arm is not true / false, falls back to the account's
-   switch (all off): the test never turns a Trial Reel on by a guess. The collaborator rule still wins.
+   (Instagram takes no collaborators on one): the clip's own collab wins over the account's switch. **The switch is also the
+   eligibility for test C** (``config/experiments.json``, learning plan 3.4; ``ReachConfig.trial_test``): while test C is ``on``
+   a clip made under it carries ``features['test_arms']['trial']`` (true / false, a block coin of 2 and 2 in every 4 per
+   character, ``studio.experiments``) and its Reel goes out as a Trial Reel exactly when the account is ELIGIBLE (its switch is
+   true) AND that arm is true. On an account that is not eligible the Reel is a normal one (``trial_reel`` false) and the arm
+   stays recorded on the clip: the test never reaches an account the owner has not cleared. A clip with no such arm (made
+   before the test, or a Recreate), or one whose arm is not true / false, falls back to the account's switch alone. The
+   collaborator rule still wins.
+   **A refusal is never a lost post** (``PostizPublisher.publish``): when Postiz refuses a Trial Reel synchronously (a definite
+   4xx, nothing was created) the same Reel is posted once more as a normal one; ``PublishResult.trial_refused`` carries the
+   reason, ``publish_due`` plans the post again with ``normal_reel=True`` (``trial_reel`` false, no Trial Story skip) and
+   records the reason on the clip (``features['trial_refused']``).
 
 ``load_reach()`` reads ``config/scan.json`` ``reach`` (``stories`` and ``trial_reels``) and the test registry
 (``config/experiments.json``, whether test C is on) and refuses, naming the key, a switch that is not true or false, a
@@ -98,13 +104,15 @@ class ReachConfig:
         return any(on is True and handle_key(name) == key for name, on in self.trial_reels.items())
 
     def trial_for(self, features: Mapping[str, Any], handle: str | None) -> bool:
-        """Does this clip's Reel go out as a Trial Reel? Test C on and the clip carries its coin (``test_arms.trial`` true or
-        false): the coin. Otherwise the account's switch."""
+        """Does this clip's Reel go out as a Trial Reel? The account's switch is the eligibility (the owner's tick that it can
+        post Trial Reels). Test C on and the clip carries its coin (``test_arms.trial`` true or false): eligible AND the coin;
+        an account that is not eligible never gets a Trial Reel from the coin. Otherwise the account's switch alone."""
+        eligible = self.trial_reel_on(handle)
         arms = features.get("test_arms")
         arm = arms.get("trial") if isinstance(arms, Mapping) else None
         if self.trial_test and isinstance(arm, bool):
-            return arm
-        return self.trial_reel_on(handle)
+            return eligible and arm
+        return eligible
 
 
 @dataclass(frozen=True)
@@ -166,17 +174,19 @@ def _collaborators(
 
 
 def plan_post(
-    clip: Clip, account: Account, accounts: Iterable[Account], config: ReachConfig, *, live: Collection[str]
+    clip: Clip, account: Account, accounts: Iterable[Account], config: ReachConfig, *, live: Collection[str],
+    normal_reel: bool = False,
 ) -> PostPlan:
     """What the post of ``clip`` on ``account`` goes out with: its hashtags exactly as stored (the series tag is part of them since
     the clip was made) and, for an Instagram Reel, the first comment, the collaborators (``live``: the slugs of the characters
-    who are live, the only possible partners), the Trial Reel switch and the Story that follows."""
+    who are live, the only possible partners), the Trial Reel switch and the Story that follows. ``normal_reel``: the Trial Reel
+    was refused and the Reel went out as a normal one, so plan it as one (no Trial Reel, no Trial Story skip)."""
     features = clip.features or {}
     hashtags = list(clip.hashtags)
     if account.platform is not Platform.instagram:
         return PostPlan(hashtags=hashtags)
     collaborators, dropped = _collaborators(features, account, accounts, live)
-    trial = config.trial_for(features, account.handle) and not collaborators
+    trial = config.trial_for(features, account.handle) and not collaborators and not normal_reel
     reach = Reach(first_comment=_first_comment(features), collaborators=collaborators, trial_reel=trial)
     video = features.get("story_path")
     video = video if isinstance(video, str) and video.strip() else None

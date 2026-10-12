@@ -605,6 +605,9 @@ def test_set_publish_tags_writes_the_publishers_learning_tags():
     with pytest.raises(KeyError):
         clips.set_publish_tags(store, "missing", {"trial_reel": True})
     assert store.get_clip(clip.id).features["trial_reel"] is False  # the refusals wrote nothing
+    # a refused Trial Reel: the reason is kept next to the tags, in the same update (a note, not a learning tag)
+    out = clips.set_publish_tags(store, clip.id, {"first_comment_posted": True, "trial_reel": False}, trial_refused="  API Error (400)  ")
+    assert out.features["trial_refused"] == "API Error (400)" and clips.learn_problems(out.features) == []
 
 
 def test_set_story_path_records_and_clears_the_labelled_story_video():

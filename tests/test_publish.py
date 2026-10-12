@@ -2190,18 +2190,34 @@ TEST_C = ReachConfig(trial_test=True)
 
 @pytest.mark.parametrize(
     ("switches", "arm", "trial"),
-    [({}, True, True),  # the coin says Trial although the account's switch is off
-     ({"biscuit.ig": True}, False, False),  # the coin says normal although the account's switch is on: the clip's coin decides
-     ({"biscuit.ig": True}, True, True), ({}, False, False)],
+    [({}, True, False),  # the coin says Trial but the account is not eligible (its switch is off): a normal Reel
+     ({"biscuit.ig": False}, True, False), ({"reginald.thebutler": True}, True, False),  # another account's tick is no tick
+     ({"biscuit.ig": True}, False, False),  # eligible, but the coin says normal: the clip's coin decides
+     ({"biscuit.ig": True}, True, True),  # eligible and the coin says Trial: a Trial Reel
+     ({"@Biscuit.IG": True}, True, True), ({}, False, False)],
 )
-def test_while_test_c_is_on_the_clips_coin_decides_its_trial_reel(tmp_path, switches, arm, trial):
+def test_while_test_c_is_on_a_trial_reel_needs_an_eligible_account_and_the_clips_coin(tmp_path, switches, arm, trial):
+    """C1: the account's switch is the owner's tick that it can post Trial Reels; the coin applies only on such an account."""
     rig = reach_rig(tmp_path)
     clip, _ = ig_reel(rig, test_arms={"trial": arm})
     pub = FakePublisher()
     summary = rig.run(pub, reach=ReachConfig(trial_reels=switches, trial_test=True))
     assert pub.calls[0]["reach"].trial_reel is trial
-    assert rig.store.get_clip(clip.id).features["trial_reel"] is trial  # the publisher records what went out
+    features = rig.store.get_clip(clip.id).features
+    assert features["trial_reel"] is trial  # the publisher records what went out
+    assert features["test_arms"] == {"trial": arm}  # the arm stays recorded on the clip, whatever went out
     assert summary["posted"][0]["reach"]["trial_reel"] is trial
+
+
+def test_an_account_that_is_not_eligible_posts_normal_reels_whatever_the_coin_says(tmp_path):
+    """Every handle is off today, so test C changes nothing until the owner ticks one; the AI label and first comment still go."""
+    rig = reach_rig(tmp_path)
+    clips = [ig_reel(rig, test_arms={"trial": arm}, first_comment=VOTE)[0] for arm in (True, True, False, True)]
+    pub = FakePublisher()
+    rig.run(pub, reach=ReachConfig(trial_reels={"biscuit.ig": False, "franz.unimpressed": True}, trial_test=True))
+    assert [c["reach"].trial_reel for c in pub.calls] == [False, False]  # the daily cap of 2 sends the rest on
+    assert all(c["ai_label"] is True and c["reach"].first_comment == VOTE for c in pub.calls)
+    assert all(rig.store.get_clip(c.id).features.get("trial_reel", False) is False for c in clips)
 
 
 @pytest.mark.parametrize("arms", [None, {}, {"hook": "ego-claim"}, {"trial": "yes"}, {"trial": 1}, {"trial": None}, "trial", ["trial"]])
@@ -2238,13 +2254,125 @@ def test_a_trial_coin_never_reaches_a_tiktok_post_and_a_collab_reel_stays_a_norm
     assert by[Platform.tiktok] == NO_REACH
 
 
-def test_the_dry_run_shows_the_coins_trial_reel(tmp_path):
+def test_the_dry_run_shows_the_coins_trial_reel_on_an_eligible_account_only(tmp_path):
     rig = reach_rig(tmp_path)
     ig_reel(rig, test_arms={"trial": True})
-    [row] = preview_due(rig.store, NOW, reach=TEST_C)["would_post"]
+    eligible = ReachConfig(trial_reels={"biscuit.ig": True}, trial_test=True)
+    [row] = preview_due(rig.store, NOW, reach=eligible)["would_post"]
     assert row["reach"]["trial_reel"] is True
+    [row] = preview_due(rig.store, NOW, reach=TEST_C)["would_post"]  # the account is not cleared: a normal Reel
+    assert row["reach"]["trial_reel"] is False
     [row] = preview_due(rig.store, NOW, reach=ReachConfig())["would_post"]
     assert row["reach"]["trial_reel"] is False
+
+
+# -- 5c. a Trial Reel that Postiz refuses is posted once more as a normal Reel (C1) ------------------------------------------
+
+
+REFUSED_400 = "❌ Failed to create post: Request failed: API Error (400): trial reels are not available for this account"
+ELIGIBLE_C = ReachConfig(trial_reels={"biscuit.ig": True}, trial_test=True)
+
+
+def trial_create(first, second=(0, CREATE_OUT, "")):
+    """A ``posts:create`` answer: ``first`` for a request with the trial flag, ``second`` for one without."""
+
+    def answer(argv):
+        return first if json.loads(argv[argv.index("--settings") + 1]).get("is_trial_reel") else second
+
+    return answer
+
+
+def test_postiz_posts_a_refused_trial_reel_once_more_as_a_normal_reel(tmp_path):
+    run = FakeRun(create=trial_create((1, "", REFUSED_400)))
+    result = publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=Reach(first_comment=VOTE, trial_reel=True))
+    assert [c[1] for c in run.calls] == ["upload", "posts:create", "posts:create"]  # one upload: the file is reused
+    trial, normal = creates(run)
+    assert json.loads(trial[trial.index("--settings") + 1])["is_trial_reel"] is True
+    assert json.loads(normal[normal.index("--settings") + 1]) == {"post_type": "post"}
+    assert values(trial, "-m") == values(normal, "-m") == ["https://uploads.postiz.test/abc.mp4"]
+    assert values(trial, "-c") == values(normal, "-c")  # the text and the first comment are unchanged
+    assert values(normal, "-c")[1] == VOTE
+    assert (result.platform_post_id, result.trial_refused is not None and "API Error (400)" in result.trial_refused) == ("pz-post-9", True)
+
+
+def test_postiz_a_trial_reel_refused_twice_is_a_plain_failed_attempt(tmp_path):
+    run = FakeRun(create=(1, "", REFUSED_400))
+    with pytest.raises(PostizError, match="400") as e:
+        publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=Reach(trial_reel=True))
+    assert not isinstance(e.value, UncertainPublish) and len(creates(run)) == 2
+
+
+@pytest.mark.parametrize("stderr", ["API Error (502): Bad Gateway", "API Error (408): timeout", "socket hang up"])
+def test_postiz_an_uncertain_trial_reel_is_never_posted_again(tmp_path, stderr):
+    """The first call may have created the post: no second one (the fallback is for a definite refusal only)."""
+    run = FakeRun(create=(1, "", f"Request failed: {stderr}"))
+    with pytest.raises(UncertainPublish):
+        publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=Reach(trial_reel=True))
+    assert len(creates(run)) == 1
+
+
+def test_postiz_a_normal_reel_refused_is_not_posted_again(tmp_path):
+    run = FakeRun(create=(1, "", REFUSED_400))
+    with pytest.raises(PostizError):
+        publish_via_postiz(tmp_path, run, Platform.instagram, "int-bis-ig", reach=Reach(first_comment=VOTE))
+    assert len(creates(run)) == 1
+
+
+def test_publish_due_records_a_refused_trial_reel_as_a_normal_one(tmp_path):
+    """Eligible account, coin says Trial, Postiz refuses the trial flag: the Reel goes out once, normal; AI label, first comment kept."""
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, test_arms={"trial": True}, first_comment=VOTE)
+    run = FakeRun(create=trial_create((1, "", REFUSED_400)))
+    summary = rig.run(PostizPublisher(run), reach=ELIGIBLE_C)
+    rig.run(PostizPublisher(run), NOW + timedelta(minutes=15), reach=ELIGIBLE_C)  # a later run posts nothing more
+    assert [json.loads(c[c.index("--settings") + 1]).get("is_trial_reel") for c in creates(run)] == [True, None]
+    assert all(AI in values(c, "-c")[0] and values(c, "-c")[1] == VOTE for c in creates(run))
+    assert rig.get(post).status is PostStatus.posted and rig.get(post).platform_post_id == "pz-post-9"
+    f = rig.store.get_clip(clip.id).features
+    assert (f["trial_reel"], f["first_comment_posted"], f["test_arms"]) == (False, True, {"trial": True})
+    assert "API Error (400)" in f["trial_refused"]
+    [entry] = summary["posted"]
+    assert entry["reach"]["trial_reel"] is False and "API Error (400)" in entry["trial_refused"] and summary["errors"] == []
+    assert rig.store.get_clip(clip.id).state is ClipState.posted
+
+
+def test_a_refused_trial_reel_is_no_longer_a_trial_story_skip(tmp_path):
+    """The Story was planned for a Trial Reel (skipped); the Reel that went out is a normal one, so it gets its Story."""
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, test_arms={"trial": True})
+    run = FakeRun(create=trial_create((1, "", REFUSED_400)))
+    summary = rig.run(PostizPublisher(run), reach=ReachConfig(trial_reels={"biscuit.ig": True}, trial_test=True, stories=True))
+    assert summary["stories"][0]["status"] == "posted" and len(creates(run)) == 3  # trial refused, normal Reel, Story
+
+
+def test_a_trial_reel_that_goes_through_is_recorded_as_one_without_a_refusal(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig, test_arms={"trial": True})
+    run = FakeRun()
+    summary = rig.run(PostizPublisher(run), reach=ELIGIBLE_C)
+    f = rig.store.get_clip(clip.id).features
+    assert f["trial_reel"] is True and "trial_refused" not in f and "trial_refused" not in summary["posted"][0]
+    assert len(creates(run)) == 1
+
+
+def test_an_uncertain_second_call_of_a_refused_trial_reel_ends_in_needs_check_and_is_never_resent(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, test_arms={"trial": True})
+    run = FakeRun(create=trial_create((1, "", REFUSED_400), (1, "", "Request failed: API Error (502): Bad Gateway")))
+    rig.run(PostizPublisher(run), reach=ELIGIBLE_C)
+    rig.run(PostizPublisher(run), NOW + timedelta(minutes=15), reach=ELIGIBLE_C)
+    got = rig.get(post)
+    assert (got.status, got.attempts) == (PostStatus.needs_check, 0) and len(creates(run)) == 2
+
+
+def test_a_trial_reel_refused_twice_is_retried_like_any_failed_attempt(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, post = ig_reel(rig, test_arms={"trial": True})
+    run = FakeRun(create=(1, "", REFUSED_400))
+    summary = rig.run(PostizPublisher(run), reach=ELIGIBLE_C)
+    got = rig.get(post)
+    assert (got.status, got.attempts) == (PostStatus.scheduled, 1) and summary["retry"][0]["post_id"] == post.id
+    assert "trial_reel" not in rig.store.get_clip(clip.id).features  # nothing was posted, nothing is tagged
 
 
 def test_load_reach_reads_whether_test_c_is_on(experiments_on):
