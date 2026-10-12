@@ -43,7 +43,7 @@ def deconstruct(**over) -> dict:
         "setting": "an office corridor", "what_happens": "a man in a suit does the shoulder shimmy down the corridor",
         "classic": False, "moment_name": "shoulder shimmy", "suggested_part": "featured", "gadgets": ["black umbrella"],
         "hooks": ["The household is unaware.", "Breakfast is at eight.", "Kindly do not tell the Duchess."],
-        "hook_patterns": ["understatement", "false-premise", "understatement"],
+        "hook_patterns": ["understatement", "false-premise", "trend-label"],  # Reginald's three arms, once each (a test with B on checks it)
         "caption": {"title": "Shoulder shimmy · butler edition", "joke": "The corridor has been informed.",
                     "send": "Send this to your butler.", "question": "Which eye did you notice first?", "tease": "Next week: the stairs."},
         "first_comment": "Requests for next week may be left below. Within reason.",
