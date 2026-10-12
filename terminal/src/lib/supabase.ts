@@ -126,7 +126,9 @@ export class LiveBackend implements Backend {
       sb.from('v_queue').select('*').order('created_at'),
       sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(300),
       sb.from('v_budget').select('*').maybeSingle(),
-      sb.from('v_health').select('*'),
+      // the daily-run row is left out: the owner turned the Mac's daily run off (12 Oct 2026), like `studio health` without
+      // --daily-run; drop this filter when the daily run is on again
+      sb.from('v_health').select('*').neq('kind', 'daily_run'),
       sb.from('v_picks').select('*').order('total_score', { ascending: false, nullsFirst: false }).order('created_at'),
       sb.from('v_pick_history').select('*').order('created_at', { ascending: false }).limit(100),
       sb.from('v_characters').select('*').order('slug'),
