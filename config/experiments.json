@@ -36,7 +36,7 @@
     },
     "C": {
       "name": "Trial Reels on half the Instagram posts",
-      "status": "on",
+      "status": "off",
       "assignment": "block_coin",
       "key": "trial",
       "question": "does a Trial Reel get more views in 72 h than a normal Reel on an account under 1,000 followers, without cutting follows?",

@@ -1,9 +1,11 @@
 """The test registry (``config/experiments.json``), its block coins and test A's exploration tag, and the make path that writes them
 on a clip (learning plan sections 3.0-3.4, build item 7).
 
-The registry file itself is pinned: the owner's decisions of Mon 12 Oct 2026 (A, B and C on; D, E and F off) are the file's, and a
-change to them is a new dated version of the plan. Everything else runs on ``MemoryStore`` and tmp registries; ``conftest`` points
-every other test at an all-off copy.
+The registry file itself is pinned: the owner's decisions of Mon 12 Oct 2026 (A and B on; C off since the owner chose normal Reels
+for every post; D, E and F off) are the file's, and a change to them is a new dated version of the plan. Everything else runs on
+``MemoryStore`` and tmp registries; ``conftest`` points every other test at an all-off copy. The tests of test C's mechanics (the
+block coin, its place in the block, the trial arm on a made clip) build their own registry with C on (``c_on_registry`` /
+``c_on``): they keep testing the coin although the repo's file has it off.
 """
 
 from __future__ import annotations
@@ -30,6 +32,7 @@ from studio.experiments import (
     parse_experiments,
 )
 from studio.models import Body, Character, Clip, ClipState, Favorite, HOOK_PATTERNS
+from studio.publish.reach import load_reach
 from studio.store import MemoryStore
 
 REPO_REGISTRY = Path(__file__).resolve().parents[1] / "config" / "experiments.json"
@@ -56,23 +59,41 @@ def edit(path: str, value: Any) -> dict[str, Any]:
     return data
 
 
+def c_on_data() -> dict[str, Any]:
+    """The repo's registry data with test C switched on: the file has it off (owner 12 Oct), its mechanics are still tested."""
+    return edit("tests.C.status", "on")
+
+
+def c_on_registry() -> Registry:
+    return parse_experiments(c_on_data())
+
+
+@pytest.fixture
+def c_on(tmp_path, monkeypatch) -> Registry:
+    """The make path reads a tmp copy of the repo's registry with test C on (A and B stay on, D-F off)."""
+    path = tmp_path / "experiments.json"
+    path.write_text(json.dumps(c_on_data()), encoding="utf-8")
+    monkeypatch.setattr(experiments, "EXPERIMENTS_PATH", path)
+    return load_experiments(path)
+
+
 # ---- the file in the repo ------------------------------------------------------------------------------------------------------------
 
 
 def test_the_repos_registry_loads_and_holds_the_owners_decisions_of_12_oct():
     reg = load_experiments(REPO_REGISTRY)
     assert reg.version == 1 and str(reg.start) == "2026-10-12" and reg.seed
-    assert {t: reg.test(t).status for t in "ABCDEF"} == {"A": "on", "B": "on", "C": "on", "D": "off", "E": "off", "F": "off"}
+    assert {t: reg.test(t).status for t in "ABCDEF"} == {"A": "on", "B": "on", "C": "off", "D": "off", "E": "off", "F": "off"}
     assert {t: reg.test(t).assignment for t in "ABCDEF"} == {
         "A": "tag", "B": "bandit", "C": "block_coin", "D": "block_coin", "E": "block_coin", "F": "block_coin",
     }
-    assert [t.id for t in reg.active(START)] == ["A", "B", "C"]
+    assert [t.id for t in reg.active(START)] == ["A", "B"]
     assert {t: reg.test(t).key for t in "BCDEF"} == {"B": "hook", "C": "trial", "D": "own_series", "E": "length", "F": "comment"}
 
 
 def test_the_default_path_is_the_repos_file(experiments_on):
     assert Path(experiments.EXPERIMENTS_PATH) == REPO_REGISTRY
-    assert load_experiments().test("C").on
+    assert not load_experiments().test("C").on  # the owner posts every video as a normal Reel
 
 
 def test_the_hook_arms_are_the_plans_fits_column():
@@ -183,10 +204,11 @@ def test_a_test_off_is_valid_and_assigns_nothing():
 
 
 def test_a_test_starts_on_its_start_day_london_and_not_before():
-    reg = load_experiments(REPO_REGISTRY)
+    reg = c_on_registry()
     before = datetime(2026, 10, 11, 22, 0, tzinfo=timezone.utc)  # 23:00 on the 11th in London (BST)
     after = datetime(2026, 10, 11, 23, 30, tzinfo=timezone.utc)  # 00:30 on the 12th in London
     assert reg.active(before) == [] and [t.id for t in reg.active(after)] == ["A", "B", "C"]
+    assert [t.id for t in load_experiments(REPO_REGISTRY).active(after)] == ["A", "B"]  # the file has C off
     assert reg.active(datetime(2026, 10, 5, 12, 0, tzinfo=LONDON)) == []
 
 
@@ -301,12 +323,12 @@ def test_every_clip_that_ever_got_the_arm_keeps_its_place_whatever_became_of_it(
 
 
 def test_assign_blocks_gives_the_arm_of_the_next_place_and_only_for_active_block_coin_tests():
-    reg, store = load_experiments(REPO_REGISTRY), world()
+    reg, store = c_on_registry(), world()
     c = reg.test("C")
     got = []
     for _ in range(8):
         arms = assign_blocks(store, reg, "franz", START)
-        assert set(arms) == {"trial"}  # A is a tag, B the bandit, D-F are off
+        assert set(arms) == {"trial"}  # A is a tag, B the bandit, D-F are off (C is on in this registry)
         got.append(arms["trial"])
         clip_with(store, "franz", arms)
     assert got == [block_arm(reg, c, "franz", i) for i in range(8)]
@@ -317,11 +339,12 @@ def test_assign_blocks_gives_the_arm_of_the_next_place_and_only_for_active_block
 
 
 def test_assign_blocks_assigns_nothing_before_the_start_or_for_an_off_test():
-    reg, store = load_experiments(REPO_REGISTRY), world()
+    reg, store = c_on_registry(), world()
     assert assign_blocks(store, reg, "franz", datetime(2026, 10, 11, 12, 0, tzinfo=LONDON)) == {}
     off = registry(tests={t: {**v, "status": "off"} for t, v in DATA["tests"].items()})
     assert assign_blocks(store, off, "franz", START) == {}
-    on = registry(tests={**DATA["tests"], "F": {**DATA["tests"]["F"], "status": "on"}})
+    assert assign_blocks(store, load_experiments(REPO_REGISTRY), "franz", START) == {}  # the file has C off: no trial arm
+    on = registry(tests={**c_on_data()["tests"], "F": {**DATA["tests"]["F"], "status": "on"}})
     assert set(assign_blocks(store, on, "franz", START)) == {"trial", "comment"}  # a test turned on assigns by its own coin
     assert assign_blocks(store, on, "franz", START)["comment"] in ("vote", "question")
 
@@ -371,7 +394,7 @@ def make_clip(store: MemoryStore, pick: Favorite, now: datetime = START) -> Clip
     return drop._new_or_current_clip(store, store.get_favorite(pick.id), now)
 
 
-def test_a_made_clip_carries_its_coin_and_the_explore_tag(experiments_on):
+def test_a_made_clip_carries_its_coin_and_the_explore_tag(c_on):
     store = world()
     for s in (90, 80, 70, 60, 50):
         add_pick(store, "franz", s)
@@ -430,7 +453,7 @@ def test_a_clip_with_no_score_is_never_an_exploration_pick_and_a_lone_clip_neith
     assert store.get_clip(make_clip(store, lone).id).features["explore_pick"] is False
 
 
-def test_the_coin_follows_the_block_across_several_makes_of_one_character(experiments_on):
+def test_the_coin_follows_the_block_across_several_makes_of_one_character(c_on):
     store, reg = world(), load_experiments(REPO_REGISTRY)
     got = []
     for i in range(8):
@@ -440,7 +463,7 @@ def test_the_coin_follows_the_block_across_several_makes_of_one_character(experi
     assert Counter(got[:4]) == {True: 2, False: 2} == Counter(got[4:])
 
 
-def test_making_the_same_pick_again_reuses_its_clip_and_its_place(experiments_on):
+def test_making_the_same_pick_again_reuses_its_clip_and_its_place(c_on):
     store = world()
     pick = add_pick(store, "franz", 70, state="making")
     first = make_clip(store, pick)
@@ -449,7 +472,7 @@ def test_making_the_same_pick_again_reuses_its_clip_and_its_place(experiments_on
     assert len(store.list_clips()) == 1
 
 
-def test_a_rejected_clip_keeps_its_place_so_the_next_clip_gets_a_new_one(experiments_on):
+def test_a_rejected_clip_keeps_its_place_so_the_next_clip_gets_a_new_one(c_on):
     store, reg = world(), load_experiments(REPO_REGISTRY)
     first = make_clip(store, add_pick(store, "franz", 70, state="making"))
     store.update_clip(first.id, state=ClipState.rejected)
@@ -457,7 +480,7 @@ def test_a_rejected_clip_keeps_its_place_so_the_next_clip_gets_a_new_one(experim
     assert store.get_clip(second.id).features["test_arms"]["trial"] is block_arm(reg, reg.test("C"), "franz", 1)
 
 
-def test_a_rejection_in_the_middle_never_repeats_a_position_and_every_block_holds_two_and_two(experiments_on):
+def test_a_rejection_in_the_middle_never_repeats_a_position_and_every_block_holds_two_and_two(c_on):
     """The reviewer's probe (I1): clips made at positions 0, 1, 2; the second is rejected; five more are made. Every position is
     handed out once, so every block of 4 holds 2 trial and 2 normal (the rejected clip's arm included)."""
     store, reg = world(), load_experiments(REPO_REGISTRY)
@@ -468,6 +491,33 @@ def test_a_rejection_in_the_middle_never_repeats_a_position_and_every_block_hold
     assert arms == [block_arm(reg, reg.test("C"), "franz", i) for i in range(8)]  # positions 0..7, none twice
     assert Counter(arms[:4]) == {True: 2, False: 2} == Counter(arms[4:])
     assert block_position(store, "franz", "trial") == 8
+
+
+def test_with_the_repos_registry_a_made_clip_gets_no_trial_arm_but_keeps_the_explore_tag(experiments_on):
+    """Test C is off in the file (every post is a normal Reel): no coin, no place in a block, test A's tag as before."""
+    store = world()
+    for s in (90, 80, 70, 60, 50):
+        add_pick(store, "franz", s)
+    f = store.get_clip(make_clip(store, add_pick(store, "franz", 40, state="making")).id).features
+    assert f["explore_pick"] is True and "trial" not in f["test_arms"] and f["test_arms"] == {}
+    assert block_position(store, "franz", "trial") == 0
+    assert clips.learn_problems(f) == []
+
+
+def test_an_account_with_trial_reels_ticked_still_gets_no_trial_arm_while_test_c_is_off(experiments_on, tmp_path):
+    """The owner's per-account Trial Reel tick (config/scan.json reach.trial_reels) does not bring the coin back: with C off the
+    reach pack reads no coin (``trial_test`` false) and the made clip carries none."""
+    scan, chars = tmp_path / "scan.json", tmp_path / "chars"
+    scan.write_text(json.dumps({"reach": {"trial_reels": {"franz.unimpressed": True}}}), encoding="utf-8")
+    (chars / "franz").mkdir(parents=True)
+    (chars / "franz" / "refs.json").write_text(
+        json.dumps({"slug": "franz", "accounts": [{"platform": "instagram", "handle": "franz.unimpressed"}]}), encoding="utf-8"
+    )
+    cfg = load_reach(scan, chars)
+    assert cfg.trial_reel_on("franz.unimpressed") and cfg.trial_test is False  # eligible account, test C off
+    store = world()
+    f = store.get_clip(make_clip(store, add_pick(store, "franz", 70, state="making")).id).features
+    assert "trial" not in f["test_arms"]
 
 
 def test_with_every_test_off_a_clip_is_made_exactly_as_before():

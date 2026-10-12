@@ -1,8 +1,9 @@
 """The hook bandit (learning plan section 3.3, test B): the tally from the data, the draw with its guard rails, the choice at Make
 it and ``studio learn arms``.
 
-Everything runs on ``MemoryStore`` and tmp registries; the live registry (A, B and C on from 12 Oct 2026) comes in through the
-``experiments_on`` fixture. The simulations are seeded, so every statistical check here is deterministic.
+Everything runs on ``MemoryStore`` and tmp registries; the live registry (A and B on from 12 Oct 2026, C off: every post is a normal
+Reel) comes in through the ``experiments_on`` fixture, and ``c_on`` is a tmp copy with test C switched on for the tests that need a
+trial arm beside the hook. The simulations are seeded, so every statistical check here is deterministic.
 """
 
 from __future__ import annotations
@@ -48,6 +49,16 @@ EPS = 1e-9
 
 def reg():
     return load_experiments(REPO_REGISTRY)
+
+
+@pytest.fixture
+def c_on(tmp_path, monkeypatch):
+    """A tmp copy of the repo's registry with test C on (the file has it off): the make path then draws the Trial Reel coin too."""
+    data = json.loads(REPO_REGISTRY.read_text())
+    data["tests"]["C"]["status"] = "on"
+    path = tmp_path / "experiments.json"
+    path.write_text(json.dumps(data))
+    monkeypatch.setattr(experiments, "EXPERIMENTS_PATH", path)
 
 
 def bandit_test():
@@ -469,7 +480,7 @@ def test_the_made_clip_carries_the_drawn_pattern_its_hook_and_who_chose_it(exper
     pick = add_pick(store)
     clip = made(store, pick)
     f = store.get_clip(clip.id).features
-    assert f["test_arms"]["hook"] == "false-premise" and isinstance(f["test_arms"]["trial"], bool)
+    assert f["test_arms"] == {"hook": "false-premise"}  # test C is off in the repo's registry: no trial arm
     assert (f["hook_pattern"], f["hook_index"], f["hook_by"], f["hook_text"]) == ("false-premise", 2, "bandit", "Breakfast is at eight.")
     assert clips.learn_problems(f) == []
     bandit = drop.drop_of(store.get_favorite(pick.id))["make"]["bandit"]
@@ -527,7 +538,7 @@ def test_an_adjust_that_never_touched_the_hook_leaves_it_to_the_bandit(experimen
 
 
 @pytest.mark.parametrize("broken", ["bandit_state", "choose_hook"])
-def test_a_fault_in_the_hook_bandit_never_blocks_a_make(experiments_on, monkeypatch, caplog, broken):
+def test_a_fault_in_the_hook_bandit_never_blocks_a_make(c_on, monkeypatch, caplog, broken):
     """Minor 1: the clip is made with the check's first hook (hook_by studio) and the other tests still assign."""
     def boom(*a, **k):
         raise ValueError("the bandit broke")
@@ -593,13 +604,14 @@ def test_a_pick_made_again_keeps_its_clip_and_its_drawn_hook(experiments_on):
 def test_with_test_b_off_the_hook_is_the_checks_first_as_before(tmp_path, monkeypatch):
     data = json.loads(REPO_REGISTRY.read_text())
     data["tests"]["B"]["status"] = "off"
+    data["tests"]["C"]["status"] = "on"  # the file has C off; the other tests still assign, which this checks
     path = tmp_path / "experiments.json"
     path.write_text(json.dumps(data))
     monkeypatch.setattr(experiments, "EXPERIMENTS_PATH", path)
     store = World().store
     f = store.get_clip(made(store, add_pick(store)).id).features
     assert (f["hook_by"], f["hook_index"], f["hook_text"]) == ("studio", 1, HOOKS[0]) and "hook" not in f["test_arms"]
-    assert "trial" in f["test_arms"]  # test C is still on in this registry
+    assert "trial" in f["test_arms"]  # test C is still on in this registry (switched on above)
 
 
 def test_the_tally_reads_what_was_made(experiments_on):

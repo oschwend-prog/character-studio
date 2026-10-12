@@ -2375,8 +2375,24 @@ def test_a_trial_reel_refused_twice_is_retried_like_any_failed_attempt(tmp_path)
     assert "trial_reel" not in rig.store.get_clip(clip.id).features  # nothing was posted, nothing is tagged
 
 
-def test_load_reach_reads_whether_test_c_is_on(experiments_on):
-    assert load_reach().trial_test is True  # the repo's registry: A, B and C on (owner 12 Oct 2026)
+def test_load_reach_reads_whether_test_c_is_on(experiments_on, tmp_path):
+    assert load_reach().trial_test is False  # the repo's registry: C is off (owner 12 Oct 2026: every post is a normal Reel)
+    data = json.loads(experiments_on_path().read_text())
+    data["tests"]["C"]["status"] = "on"
+    c_on = tmp_path / "experiments.json"
+    c_on.write_text(json.dumps(data))
+    assert load_reach(experiments_path=c_on).trial_test is True
+
+
+def test_with_the_repos_registry_and_its_scan_json_every_instagram_post_is_a_normal_reel(tmp_path, experiments_on):
+    """Test C is off and no account's Trial Reel switch is ticked: a clip whose coin says Trial (made while C was on) still goes
+    out as a normal Reel."""
+    rig = reach_rig(tmp_path)
+    ig_reel(rig, test_arms={"trial": True})
+    ig_reel(rig, test_arms={"trial": False})
+    pub = FakePublisher()
+    rig.run(pub, reach=load_reach())
+    assert [c["reach"].trial_reel for c in pub.calls] == [False, False]
 
 
 def test_load_reach_with_every_test_off_has_no_trial_test():
