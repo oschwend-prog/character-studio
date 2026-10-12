@@ -767,18 +767,17 @@ def test_the_drops_that_wait_are_those_filed_and_not_yet_sent_to_be_made():
     assert hits.waiting_drops(store) == 4
 
 
-@pytest.mark.parametrize("waiting, braked", [(19, False), (20, True), (21, True)])
-def test_auto_file_files_nothing_while_20_or_more_drops_wait(waiting, braked):
+@pytest.mark.parametrize("waiting, braked, files", [(16, False, 3), (19, True, 1), (20, True, 0), (21, True, 0)])
+def test_auto_file_stops_once_20_drops_wait_counting_its_own_filings(waiting, braked, files):
     store = roster_store()
     backlog(store, waiting)
     for n in range(1, 5):
         stored(store, n, "reginald", 100 - n)
     run = hits.file_hits(store, CONFIG, NOW)
     assert (run["braked"], run["waiting"], run["max_waiting"]) == (braked, waiting, 20)
-    assert (run["filed"] == []) is braked and (braked or len(run["filed"]) == 3)
-    if braked:
-        assert all(h.status == "new" for h in store.list_hits())  # nothing was touched: tomorrow's run looks again
-        assert hits.waiting_drops(store) == waiting
+    assert len(run["filed"]) == files
+    assert sum(h.status == "new" for h in store.list_hits()) == 4 - files  # the rest wait for tomorrow's run
+    assert hits.waiting_drops(store) == waiting + files
 
 
 def test_the_brake_is_read_from_the_config_and_zero_stops_the_filing():
@@ -806,7 +805,7 @@ def test_the_waiting_drops_are_counted_again_after_a_filing_so_the_next_run_sees
     backlog(store, 19)
     for n in range(1, 4):
         stored(store, n, "reginald", 90 - n)
-    assert len(hits.auto_file(store, CONFIG, NOW)) == 3 and hits.waiting_drops(store) == 22
+    assert len(hits.auto_file(store, CONFIG, NOW)) == 1 and hits.waiting_drops(store) == 20
     stored(store, 9, "reginald", 99)
     assert hits.file_hits(store, CONFIG, NOW + timedelta(days=1))["braked"] is True
 

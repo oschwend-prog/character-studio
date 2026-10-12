@@ -842,7 +842,8 @@ def file_hits(
     general lane; ``provisional`` is who the drop waits under). Only the ``fileable`` ones, ranked by their score today
     (``hit_score(h, now)``), never the score stored when they were found.
 
-    The brake first: ``braked`` (and nothing filed, nothing asked) when ``waiting_drops`` has reached ``hits.auto_file_max_waiting``.
+    The brake first: ``braked`` (and nothing filed, nothing asked) when ``waiting_drops`` has reached ``hits.auto_file_max_waiting``;
+    each filing of the run counts too, so a run stops (``braked``) once the waiting drops plus its own filings reach it.
     With a ``gate`` (the trend gate; None leaves the drops exactly as they were) each hit about to be filed is read first: a
     ``dead`` trend is skipped (``skipped_dead``, the hit stays ``new``, its room goes on to the next), anything else is filed with
     the reading on its drop. ``trend`` is the gate's ``summary()`` (None without a gate). ``events`` are extra trend names
@@ -863,6 +864,8 @@ def file_hits(
     fresh.sort(key=lambda h: (-scores[h.id], -(h.views or 0), h.url))
     filed: list[dict[str, Any]] = run["filed"]
     for lane in [*live, "general"]:
+        if run["braked"]:
+            break
         room = (cfg["auto_file_general"] if lane == "general" else cfg["auto_file_per_character"]) - used[lane]
         for hit in fresh:
             if room <= 0:
@@ -872,6 +875,9 @@ def file_hits(
             if store.list_favorites(url=hit.url):  # already a pick (any status): never filed twice, and not worth a trend check
                 store.update_hit(hit.id, status="dropped")
                 continue
+            if waiting + len(filed) >= cfg["auto_file_max_waiting"]:  # the brake counts this run's filings too
+                run["braked"] = True
+                break
             trend = None
             if gate is not None:
                 trend = read_trend(hit, now, trend_names(cfg, hit.character_slug, events), gate)
