@@ -488,6 +488,7 @@ class LunarCrush:
     def _handshake(self) -> None:
         if self._ready:
             return
+        self._wait()  # a refused handshake sets the same cool-down as a refused call
         id_ = self._next_id()
         response = self._post({
             "jsonrpc": "2.0", "id": id_, "method": "initialize",
@@ -521,6 +522,12 @@ class LunarCrush:
         if self._refusals >= REFUSALS_STOP:
             self._stopped = f"refused {self._refusals} times in a row"
 
+    def _account(self, error: LunarError) -> None:
+        """Count a failed request as a refusal when the account's rate limit said no (a status 429 or a text that says so)."""
+        if error.refused or _RATE_LIMITED.search(str(error)):
+            self._refused(error.retry_after)
+            error.refused = True
+
     def call_tool(self, name: str, arguments: Mapping[str, Any]) -> str:
         """The text of one ``tools/call`` answer. ``LunarError`` when the run is stopped (cap, a refused key, two refusals in a
         row), the call is refused or fails, or the tool answers an error; a refused call is counted and never retried."""
@@ -528,7 +535,11 @@ class LunarCrush:
             raise LunarError(f"LunarCrush stopped for this run: {self._stopped}")
         if self.calls >= self.cap:
             raise LunarError(f"LunarCrush: this run's cap of {self.cap} calls is used (hits.lunar_daily_cap)")
-        self._handshake()
+        try:
+            self._handshake()
+        except LunarError as e:  # a 429 on `initialize` is a refusal like any other: counted, cooled down, never retried at once
+            self._account(e)
+            raise
         self._wait()
         self._last_call = self._clock()
         self.calls += 1  # counted before it is sent: a refused call still counts
@@ -537,9 +548,7 @@ class LunarCrush:
             response = self._post({"jsonrpc": "2.0", "id": id_, "method": "tools/call", "params": {"name": name, "arguments": dict(arguments)}})
             message = self._message(response, id_)
         except LunarError as e:
-            if e.refused or _RATE_LIMITED.search(str(e)):
-                self._refused(e.retry_after)
-                e.refused = True
+            self._account(e)
             raise
         if "error" in message:
             text = self._error_text(message["error"])

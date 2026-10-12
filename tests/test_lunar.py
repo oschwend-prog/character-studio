@@ -236,6 +236,8 @@ class McpServer:
         self.bodies: list[dict] = []
         self.answers: list = []
         self.call_times: list[float] = []
+        self.init_answers: list = []  # answers for `initialize`, first come first served (an int HTTP status, an httpx.Response)
+        self.init_times: list[float] = []
         self.clock = clock
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -244,6 +246,11 @@ class McpServer:
         self.bodies.append(body)
         method = body.get("method")
         if method == "initialize":
+            if self.clock is not None:
+                self.init_times.append(self.clock.now)
+            if self.init_answers:
+                answer = self.init_answers.pop(0)
+                return httpx.Response(answer, json={"error": "nope"}) if isinstance(answer, int) else answer
             result = {"protocolVersion": "2025-03-26", "capabilities": {"tools": {}}, "serverInfo": {"name": "lunar", "version": "1"}}
             return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": result}, headers={"Mcp-Session-Id": "sess-1"})
         if method == "notifications/initialized":
@@ -395,6 +402,40 @@ def test_a_refused_key_stops_the_client_at_once():
     with pytest.raises(LunarError):
         client.keyword_time_series("b")
     assert len(server.tool_calls()) == 1
+
+
+def test_a_refused_handshake_is_accounted_like_a_refused_call_and_the_next_try_waits_the_minute():
+    clock = Clock()
+    server = McpServer(clock)
+    server.init_answers.append(429)
+    client = server.client(clock)
+    with pytest.raises(LunarError) as e:
+        client.keyword_time_series("a")
+    assert e.value.refused is True and client.calls == 0 and client._refusals == 1 and server.tool_calls() == []
+    client.keyword_time_series("a")  # a new handshake, a minute after the refusal, then the call
+    assert server.init_times[1] - server.init_times[0] == 60.0 and len(server.tool_calls()) == 1
+
+
+def test_a_handshake_that_says_rate_limit_counts_and_two_in_a_row_stop_the_client():
+    limit = {"jsonrpc": "2.0", "id": 1, "error": {"code": -32000, "message": "Rate limit exceeded"}}
+    server = McpServer()
+    server.init_answers += [httpx.Response(200, json=limit), httpx.Response(200, json={**limit, "id": 2})]
+    client = server.client()
+    for word in ("a", "b"):
+        with pytest.raises(LunarError):
+            client.keyword_time_series(word)
+    with pytest.raises(LunarError) as e:
+        client.keyword_time_series("c")
+    assert "stopped" in str(e.value) and [b["method"] for b in server.bodies] == ["initialize", "initialize"]
+
+
+def test_a_server_error_on_the_handshake_is_an_error_but_not_a_refusal():
+    server = McpServer()
+    server.init_answers.append(503)
+    client = server.client()
+    with pytest.raises(LunarError) as e:
+        client.keyword_time_series("a")
+    assert e.value.status == 503 and e.value.refused is False and client._refusals == 0
 
 
 def test_a_failed_handshake_is_an_error_and_not_a_counted_call():
