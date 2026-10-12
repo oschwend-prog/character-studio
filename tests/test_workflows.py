@@ -510,3 +510,92 @@ def test_weekly_a_refused_pull_request_prints_the_compare_link_and_the_job_still
     from studio import weekly as weekly_module
 
     assert weekly_module.proposal_url(date(2026, 10, 12)) == "https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-12?expand=1"
+
+
+# ---- studio-weekly: superseded weekly/* branches (Task 16 parked, Task 20) -----------------------------------------------------------------
+
+
+def run_block(step: str) -> str:
+    """The `run: |` script of a step, dedented as bash sees it."""
+    body = step.split("run: |\n", 1)[1]
+    lines = body.split("\n")
+    return "\n".join(line[10:] if line.startswith("          ") else line for line in lines)
+
+
+def prune_function(step: str) -> str:
+    found = re.search(r"(?ms)^prune_old_weekly_branches\(\) \{\n.*?^\}\n", run_block(step))
+    assert found, "the propose step has no prune_old_weekly_branches function"
+    return found.group(0)
+
+
+def test_weekly_propose_script_is_valid_bash():
+    import subprocess
+
+    script = run_block(weekly_step("Open the pull request"))
+    done = subprocess.run(["bash", "-n"], input=script, capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+
+
+def test_weekly_propose_prunes_old_weekly_branches_after_the_push_and_touches_only_weekly_refs():
+    step = weekly_step("Open the pull request")
+    assert "prune_old_weekly_branches ||" in step and step.index("git push --force-with-lease") < step.index("prune_old_weekly_branches ||")
+    func = prune_function(step)
+    assert "refs/heads/weekly/*" in func and 'git push origin --delete "refs/heads/$old"' in func
+    assert "build/slice1" not in func and "main" not in func  # the base branch is never named, let alone deleted
+    assert "--force" not in func
+
+
+def _prune(tmp_path, remote: list[str], *, current: str, open_prs: dict[str, str], failing: tuple[str, ...] = ()) -> list[str]:
+    """Run the step's prune function in bash with `git` and `gh` replaced by loggers; the branches it asked to delete."""
+    import subprocess
+
+    log = tmp_path / "calls.log"
+    log.write_text("")
+    listing = "".join(f"{i:040x}\trefs/heads/{name}\n" for i, name in enumerate(remote, 1))
+    answers = "\n".join(f'    "{name}") echo "{n}" ;;' for name, n in open_prs.items())
+    bad = "\n".join(f'    "{name}") return 1 ;;' for name in failing)
+    script = f"""
+git() {{
+  case "$1" in
+    ls-remote) printf '%s' '{listing}' ;;
+    push) echo "push $*" >> '{log}' ;;
+  esac
+}}
+gh() {{
+  head=""; while [ $# -gt 0 ]; do if [ "$1" = "--head" ]; then head="$2"; fi; shift; done
+  case "$head" in
+{bad}
+{answers}
+    *) echo 0 ;;
+  esac
+}}
+branch='{current}'
+{prune_function(weekly_step("Open the pull request"))}
+prune_old_weekly_branches
+"""
+    done = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, check=False)
+    assert done.returncode == 0, done.stderr
+    return [line.split("--delete ", 1)[1] for line in log.read_text().splitlines() if line.startswith("push ")]
+
+
+WEEKLY_REMOTE = [f"weekly/2026-{m}-{d}" for m, d in (("10", "12"), ("10", "05"), ("09", "28"), ("09", "21"), ("09", "14"), ("09", "07"), ("08", "31"))]
+
+
+def test_the_prune_keeps_the_newest_four_and_deletes_older_ones_without_an_open_pull_request(tmp_path):
+    remote = [*WEEKLY_REMOTE, "build/slice1", "main", "weekly/notes", "weekly/2026-9-1", "claude/learning-loop-2"]
+    deleted = _prune(tmp_path, remote, current="weekly/2026-10-12", open_prs={"weekly/2026-09-14": "1"})
+    assert deleted == ["refs/heads/weekly/2026-09-07", "refs/heads/weekly/2026-08-31"]  # 09-14 has an open PR; the newest four stay
+
+
+def test_the_prune_does_nothing_with_four_or_fewer_weekly_branches(tmp_path):
+    assert _prune(tmp_path, WEEKLY_REMOTE[:4], current="weekly/2026-10-12", open_prs={}) == []
+
+
+def test_the_prune_never_deletes_the_branch_pushed_in_this_run_even_when_it_is_an_old_week(tmp_path):
+    deleted = _prune(tmp_path, WEEKLY_REMOTE, current="weekly/2026-08-31", open_prs={})
+    assert "refs/heads/weekly/2026-08-31" not in deleted and deleted == ["refs/heads/weekly/2026-09-14", "refs/heads/weekly/2026-09-07"]
+
+
+def test_the_prune_keeps_a_branch_whose_pull_requests_could_not_be_checked(tmp_path):
+    deleted = _prune(tmp_path, WEEKLY_REMOTE, current="weekly/2026-10-12", open_prs={}, failing=("weekly/2026-09-07",))
+    assert deleted == ["refs/heads/weekly/2026-09-14", "refs/heads/weekly/2026-08-31"]

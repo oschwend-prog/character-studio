@@ -16,7 +16,9 @@
 # 2. Job `propose` (only when `propose` is true): no secret, no database. It copies the files into a checkout of build/slice1, stages
 #    only docs/weekly and characters/*/playbook.md, commits them on the branch `weekly/<monday>` as github-actions[bot] (no commit,
 #    and no failure, when the files equal the base: a rerun), fetches the branch and pushes it with --force-with-lease, then opens a pull
-#    request with the digest as its body, or, when one is already open for the branch, replaces its body (`gh pr edit`).
+#    request with the digest as its body, or, when one is already open for the branch, replaces its body (`gh pr edit`). Last it prunes
+#    the superseded branches: of the remote `weekly/YYYY-MM-DD` branches it keeps the newest 4 and deletes the older ones that have no
+#    open pull request (never another prefix, never the branch of this run, never one whose pull requests could not be checked).
 #    Merging that PR is the owner's approval: the rules reach the check only through a merged file. If the repository setting "Allow
 #    GitHub Actions to create and approve pull requests" is off (it is today), `gh pr create` fails: the branch is pushed anyway and the
 #    step prints the compare link into the run's summary (the terminal's Today card links the same address) and passes.
@@ -115,6 +117,24 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+          # Superseded weekly/<monday> branches pile up: keep the newest 4 and delete the older ones that have no open pull request.
+          # Only branches named weekly/YYYY-MM-DD are ever looked at (never the base branch, never another prefix), the branch pushed
+          # in this run is never deleted, and one whose pull requests could not be checked is kept.
+          prune_old_weekly_branches() {
+            local keep=4 old open
+            git ls-remote --heads origin 'refs/heads/weekly/*' \
+              | sed -n 's|^.*refs/heads/\(weekly/[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)$|\1|p' | sort -r | tail -n +$((keep + 1)) \
+              | while read -r old; do
+                if [ "$old" = "$branch" ]; then continue; fi
+                if ! open="$(gh pr list --head "$old" --state open --json number --jq 'length' </dev/null)"; then
+                  echo "::notice::could not check the pull requests of $old: kept"
+                  continue
+                fi
+                if [ "$open" = "0" ]; then
+                  git push origin --delete "refs/heads/$old" </dev/null || echo "::notice::could not delete $old"
+                fi
+              done
+          }
           doc="$(find weekly-out/docs/weekly -name '*.md' | sort | tail -n 1)"
           monday="$(basename "$doc" .md)"
           branch="weekly/$monday"
@@ -142,3 +162,4 @@ jobs:
             echo "::notice::gh pr create failed (setting off or PR already open? The setting is \"Allow GitHub Actions to create and approve pull requests\"): open it by hand"
             { echo "### Weekly review $monday"; echo; echo "The branch \`$branch\` is pushed. Open the pull request: $compare"; } >> "$GITHUB_STEP_SUMMARY"
           fi
+          prune_old_weekly_branches || echo "::notice::pruning the old weekly branches failed: nothing else is affected"
