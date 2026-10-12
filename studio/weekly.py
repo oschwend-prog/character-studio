@@ -113,8 +113,16 @@ CALL_MIN_POSTS = 10  # under 10 measured posts line 5 says "too few to call" (SK
 PLAYBOOK_MIN_POSTS = 5  # a playbook rule needs 5 posts behind it (SKILL.md step 6)
 ARM_RETIRE_MIN_USES, ARM_RETIRE_MAX_WIN_RATE, ARM_RETIRE_MAX_MEDIAN = 10, 0.20, 0.7  # 3.3: retire an arm
 ARMS_MIN = 2  # the registry needs at least two arms per character
-# Tags that say who chose or how a clip was made, not what is in it: a lift on one of them is no rule about clips.
-NOT_A_RULE = frozenset({"hit_rules_version", "explore_pick", "hook_by", "version_index", "hook_text", "hook_index"})
+# Tags that say who chose or how a clip was made or filed, or that carry the score or a test's arm, not what is in the clip: a lift on
+# one of them is no rule about clips (a rule about the score would be advice from the score before test A has looked, and circular).
+# ``zoom_pulses`` and ``hook_entrance`` arrive with Task 17's merge: listing them now is harmless.
+NOT_A_RULE = frozenset(
+    {
+        "hit_rules_version", "explore_pick", "hook_by", "version_index", "hook_text", "hook_index",
+        "score_bucket", "score_total", "score_potential", "score_swap", "test_arms", "family_id", "trial_reel", "first_comment_posted",
+        "series", "episode", "zoom_pulses", "hook_entrance",
+    }
+)
 
 
 # ---- Spearman (no new dependency) -------------------------------------------------------------------------------------------------------

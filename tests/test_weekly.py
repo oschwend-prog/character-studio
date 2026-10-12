@@ -708,6 +708,24 @@ def test_tags_that_are_not_content_are_never_rule_candidates():
     assert candidates_of(clips) == []
 
 
+@pytest.mark.parametrize(
+    ("feature", "value", "other"),
+    [
+        ("score_bucket", "80_up", "40_59"), ("score_total", 85, 40), ("score_potential", 9, 3), ("score_swap", 9, 2),
+        ("test_arms", {"C": "a"}, {"C": "b"}), ("family_id", "fam-1", "fam-2"), ("trial_reel", True, False),
+        ("first_comment_posted", True, False), ("series", "s1", "s2"), ("episode", 3, 1), ("zoom_pulses", 2, 0), ("hook_entrance", "slam", "fade"),
+    ],
+)
+def test_tags_about_the_score_the_tests_or_how_a_clip_was_filed_are_no_advice(feature, value, other):
+    # a lift on the score is advice from the score before test A has looked, and a hit rule about the score is circular
+    clips = [mc(i, 5.0, **{feature: value}) for i in range(10)] + [mc(100 + i, 1.0, **{feature: other}) for i in range(10)]
+    lifts = weekly.side_lifts(clips)
+    assert candidates_of(clips) == [] and weekly.do_more(lifts) is None and weekly.stop(lifts) is None
+    assert weekly.stop(weekly.side_lifts([mc(i, 0.5, **{feature: value}) for i in range(10)] + [mc(100 + i, 5.0, **{feature: other}) for i in range(10)])) is None
+    rules, watching = weekly.playbook_items(clips)
+    assert not any(feature in r["title"] for r in rules) and not any(feature in w for w in watching)
+
+
 def lifts_all(clips: list[Clip]) -> list[weekly.SideLift]:
     return weekly.side_lifts(clips, min_n=1)
 
