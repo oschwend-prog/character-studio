@@ -2069,12 +2069,13 @@ def test_a_made_drop_clip_carries_every_learning_tag_from_its_vocabulary(world, 
     tap_make(store, pid)
     assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
     f = store.get_clip(store.get_favorite(pid).clip_id).features
-    # the master wrote its length too; the publisher's two tags (first_comment_posted, trial_reel) come when it is posted
-    assert (clips.LEARN_FEATURES - clips.PUBLISH_FEATURES) | clips.REQUIRED_FEATURES <= f.keys()
-    assert not clips.PUBLISH_FEATURES & f.keys()
+    # the master wrote its length too; the publisher's two tags (first_comment_posted, trial_reel) come when it is posted; the edit
+    # record of tests G and H (zoom_pulses, hook_entrance) only when a test asked for an edit (every test is off here)
+    assert (clips.LEARN_FEATURES - clips.PUBLISH_FEATURES - clips.EDIT_FEATURES) | clips.REQUIRED_FEATURES <= f.keys()
+    assert not (clips.PUBLISH_FEATURES | clips.EDIT_FEATURES) & f.keys()
     assert clips.learn_problems(f) == []  # every value from its vocabulary
     score = d["score"]
-    assert {k: f[k] for k in sorted(clips.LEARN_FEATURES - clips.PUBLISH_FEATURES - {"length_s"})} == {
+    assert {k: f[k] for k in sorted(clips.LEARN_FEATURES - clips.PUBLISH_FEATURES - clips.EDIT_FEATURES - {"length_s"})} == {
         "caption_line1": "label-first", "days_since_trend_peak": None, "episode": None, "explore_pick": False,
         "family_id": pid, "first_comment_kind": "vote", "hit_rules_version": gemini.hit_rules_version(), "hook_by": "studio",
         "hook_index": 1, "length_bucket": "under_8", "part": "featured", "score_bucket": clips.score_bucket(score["total"]),
@@ -2877,3 +2878,80 @@ def test_the_reasons_the_real_client_writes_are_classified(world, portrait, erro
     assert out.state == "failed" and out.reason.startswith(drop.CHECK_FAILED), out.reason
     assert drop.transient_kind(out.reason) == kind, out.reason
     assert (drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(days=1)) == kind)
+
+
+# ---- tests G and H at the master: the clip's coins become the spec's edits; the master says what it applied ----------------------------
+
+
+def make_reporting(world, portrait, gen_out, monkeypatch, synth_video, applied):
+    """Make one drop with the master build replaced by a copy of a ready master that, like the real build, leaves ``applied`` in
+    ``spec.applied`` (``None``: it reports nothing). Returns (store, the specs the build was given, the made clip)."""
+    store, storage = world
+    ready = synth_video(w=1080, h=1920, dur=7)
+    specs = []
+
+    def build(spec):
+        specs.append(spec)
+        if applied is not None:
+            spec.applied = dict(applied)
+        Path(spec.out).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ready, spec.out)
+        return Path(spec.out)
+
+    monkeypatch.setattr(drop, "build_master", build)
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)
+    assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
+    return store, specs, store.get_clip(store.get_favorite(pid).clip_id)
+
+
+def reginalds_first_coins():
+    from studio import experiments
+
+    reg = experiments.load_experiments()
+    return {t.key: experiments.block_arm(reg, t, "reginald", 0) for t in (reg.test("G"), reg.test("H"))}
+
+
+def test_the_clips_two_coins_become_the_masters_edits_and_what_was_applied_is_written_on_the_clip(
+    world, portrait, gen_out, monkeypatch, synth_video, experiments_on
+):
+    coins = reginalds_first_coins()  # the real make path hands them out: the clip carries zoom and word_pop
+    store, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 4, "hook_entrance": "slam"})
+    assert {k: clip.features["test_arms"][k] for k in ("zoom", "word_pop")} == coins
+    assert specs[-1].edits == {"zoom_pulses": coins["zoom"], "word_pop": coins["word_pop"]}
+    f = clip.features
+    assert (f["zoom_pulses"], f["hook_entrance"]) == (4, "slam")
+    assert clips.learn_problems(f) == []
+
+
+def test_a_master_that_found_no_beat_is_recorded_so_the_analysis_leaves_it_out(
+    world, portrait, gen_out, monkeypatch, synth_video, experiments_on
+):
+    coins = reginalds_first_coins()
+    _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 0, "hook_entrance": "none"})
+    assert specs[-1].edits is not None  # the arms asked, the master heard no beat and applied neither
+    assert (clip.features["zoom_pulses"], clip.features["hook_entrance"]) == (0, "none")
+    assert {k: clip.features["test_arms"][k] for k in ("zoom", "word_pop")} == coins  # the arm stays: it is what the coin said
+
+
+def test_a_clip_without_the_two_coins_is_built_as_before_and_writes_no_edit_tags(world, portrait, gen_out, monkeypatch, synth_video):
+    """Every test is off here (conftest): no coin, so no ``edits`` on the spec at all: the same master as before the tests."""
+    _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 9, "hook_entrance": "slam"})
+    assert specs[-1].edits is None
+    assert "zoom_pulses" not in clip.features and "hook_entrance" not in clip.features and clip.features["test_arms"] == {}
+
+
+def test_a_silent_masters_clip_takes_no_position_and_is_built_without_edits(world, portrait, experiments_on):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "owner_music": "in_app"})  # the owner adds the song in the app: silent master
+    clip = drop._new_or_current_clip(store, store.get_favorite(pid), NOW)
+    assert "zoom" not in clip.features["test_arms"] and "word_pop" not in clip.features["test_arms"]
+    assert drop.edits_from_arms(clip.features["test_arms"]) is None  # so the master is built exactly as before
+
+
+def test_an_edit_the_master_did_not_report_writes_nothing(world, portrait, gen_out, monkeypatch, synth_video, experiments_on):
+    _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, None)
+    assert specs[-1].edits is not None and specs[-1].applied == {}  # a build that says nothing (a fake, an older master)
+    assert "zoom_pulses" not in clip.features and "hook_entrance" not in clip.features

@@ -106,6 +106,15 @@ the pattern, ``hook_by`` is ``bandit`` and the draw is kept in ``drop['make']['b
 (``effective``). The owner's own hook (his Adjust saved one: any explicit choice, the check's first included) is never drawn over (``hook_by`` ``owner``, no ``hook`` arm). A test that
 is ``off``, or not started, assigns nothing; a broken registry stops the make before anything is reserved.
 
+**Tests G and H, the master's two edits** (plan 3.9, 3.10; ``test_arms['zoom']`` and ``['word_pop']``, true / false): zoom pulses on
+every 4th beat, and the first hook coming in word by word on the beat. Both need a beat: a master with none to follow
+(``has_beat_source``: a silent ``in_app`` master, a clip with no sound) takes no position in them and carries neither key. The
+master step turns the clip's two keys into the spec's ``edits`` (``master.edits_from_arms``; a clip with neither key is built exactly
+as before) and, once the master is built and checked, writes what it really applied on the clip: ``features['zoom_pulses']`` (the
+count; 0 when the sound had no beat after all) and ``features['hook_entrance']`` (the entrance shown: the kit's own, or
+``word_pop``), ``clips.set_edit_tags``, so the analysis leaves out a clip whose edit did not happen. The Recreate path assigns no
+test arms (it writes ``test_arms`` ``{}``), so it is not part of G and H.
+
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
 record (``{"at", "by": "owner"}``, written only by ``request_job``; nothing in this CLI writes it). The owner's Adjust
 (``drop['adjust']``: who is replaced, his part, gadgets, hook, section start and length, crop) overrides the defaults. A clip is
@@ -200,7 +209,7 @@ from studio.higgsfield_api import (
 )
 from studio.media import clipwork
 from studio.media.analyze import AnalysisError, analyze_clip
-from studio.media.master import MasterSpec, audio_problem, build_master, style_lead_s, upload_master
+from studio.media.master import MasterSpec, audio_problem, build_master, edits_from_arms, style_lead_s, upload_master
 from studio.media.qa import QAError, check_master, contact_sheet, frame_sheet, probe
 from studio.models import HOOK_PATTERNS, Body, Clip, ClipState, Favorite, Mode, Source
 from studio.planning import estimate_credits
@@ -2093,6 +2102,7 @@ def _master(store: Store, storage: Storage, pick: Favorite, clip: Clip, ref: Map
         hook2_until_s=max(1.0, min(HOOK_ON_SCREEN_S, duration - 1.0)), audio=gen, audio_offset_s=0.0,
         out=work / "master.mp4", preset=preset, clip_id=clip.id, music=MUSIC,
         character=pick.character_slug, style=ref.get("style"),  # his kit: pill, entrance, hook edit, tone (refs.json is the authority)
+        edits=edits_from_arms(clip.features.get("test_arms")),  # tests G and H: the clip's two coins, None when it carries neither
     )
     source = _source(store, clip.source_id) if clip.source_id else None
     if (problem := audio_problem(gen, gen, clip, source, pick.proposal.get("owner_music"))) is not None:
@@ -2112,6 +2122,8 @@ def _master(store: Store, storage: Storage, pick: Favorite, clip: Clip, ref: Map
     # not be the hook the clip was created with (a clip made before the learning tags keeps its old pattern tags)
     retag = {"hook_text": hook, **(_hook_tags(drop, look, hook) if "hook_index" in clip.features else {})}
     clips.set_hook_tags(store, clip.id, retag)
+    if spec.edits is not None and spec.applied:  # tests G, H: what the master really shows (a remake says what it did this time)
+        clips.set_edit_tags(store, clip.id, spec.applied)
     upload_master(store, storage, clip.id, out)
     kind = clip.features.get("engagement_kind") if clip.features.get("engagement_kind") in ENGAGEMENT_ORDER else ENGAGEMENT_ORDER[0]
     caption = caption_text(pick, look, kind) if look.get("caption") else hook
