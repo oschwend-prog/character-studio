@@ -10,15 +10,15 @@ from __future__ import annotations
 import statistics
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import typer
 
 from studio.cli_support import emit, open_store
-from studio.config import now_london
-from studio.metrics import post_reads
-from studio.models import Platform
+from studio.config import LONDON, now_london
+from studio.metrics import post_reads, posted_at
+from studio.models import Platform, PostStatus, Snapshot
 from studio.store import Store
 
 INSTAGRAM = Platform.instagram.value
@@ -31,6 +31,20 @@ SCORE_FINAL_VALIDATED_RHO = 0.31  # at 40: rho >= 0.31 validated, else failed
 SCORE_MIN_SPAN = 15  # the middle 80 % of the scores spans fewer points than this: uninformative (never failed)
 SCORE_BUCKET_WIDTH = 20
 OUTLIER_LAG = timedelta(days=7)  # a clip's outlier_x exists 7 days after its post (``metrics.views_at_7d``)
+
+# ---- the mechanism floors: the plan's procedure (3.8, FROZEN) ----
+
+FLOORS_FROM, FLOORS_TO = date(2026, 10, 5), date(2026, 10, 18)  # weeks 1-2: Mon 5 Oct to Sun 18 Oct (London days)
+FLOORS_APPLY_FROM = date(2026, 10, 19)  # week 3: a post from this day on is diagnosed against the floors
+FLOOR_MIN_OWN = 4  # fewer than 4 readings for a character: the studio-wide median
+FLOOR_MIN_STUDIO = 6  # fewer than 6 readings studio-wide: the metric is pending
+FLOOR_NO_DATA = "no data in the cloud yet"
+# metric -> its kind: a floor (a post should reach it) or a ceiling (a post should stay under it)
+FLOOR_METRICS: tuple[tuple[str, str], ...] = (
+    ("sends_per_1k", "floor"), ("follows_per_1k", "floor"), ("watched_pct", "floor"), ("skip_rate", "ceiling"),
+)
+FLOOR_FAILS = {"skip_rate": "hook", "watched_pct": "hold", "sends_per_1k": "sends", "follows_per_1k": "follows"}  # what failing each one means
+FLOOR_FLAG_MIN = 2  # a post below two of them is flagged
 
 
 # ---- Spearman (no new dependency) -------------------------------------------------------------------------------------------------------
@@ -226,3 +240,128 @@ def score_observations(store: Store) -> list[ScoreObservation]:
 def score_test_command() -> None:
     """Test A, the score test (plan 3.2): the label, n against the looks, rho and the median outlier_x per score bucket. Read-only."""
     emit(score_test(score_observations(open_store())))
+
+
+# ---- the mechanism floors (plan 3.8) ---------------------------------------------------------------------------------------------------
+
+
+def floors_due(week_monday: date) -> bool:
+    """Whether the review of the week starting ``week_monday`` is the one that sets the floors: its Sunday is Sun 18 Oct or later."""
+    return week_monday + timedelta(days=6) >= FLOORS_TO
+
+
+def post_metric_values(snapshots: Iterable[Snapshot]) -> dict[str, float]:
+    """A post's floor metrics from its snapshots, each from the LATEST snapshot that reports what it needs (a counter only grows):
+    ``sends_per_1k`` = shares / views x 1000 and ``follows_per_1k`` = follows / views x 1000 (a snapshot with views above 0 and the
+    count), ``watched_pct`` and ``skip_rate`` as reported. A metric nothing reported is left out, never 0."""
+    out: dict[str, float] = {}
+    for snap in sorted((s for s in snapshots if s.captured_at is not None), key=lambda s: s.captured_at, reverse=True):
+        if snap.views is not None and snap.views > 0:
+            if "sends_per_1k" not in out and snap.shares is not None:
+                out["sends_per_1k"] = snap.shares / snap.views * 1000
+            if "follows_per_1k" not in out and snap.follows is not None:
+                out["follows_per_1k"] = snap.follows / snap.views * 1000
+        if "watched_pct" not in out and snap.watched_pct is not None:
+            out["watched_pct"] = float(snap.watched_pct)
+        if "skip_rate" not in out and snap.skip_rate is not None:
+            out["skip_rate"] = float(snap.skip_rate)
+    return out
+
+
+def floor_readings(store: Store, start: date = FLOORS_FROM, end: date = FLOORS_TO) -> dict[str, dict[str, list[float]]]:
+    """``{metric: {character: [one reading per post]}}`` of the Instagram posts posted from ``start`` to ``end`` (London days, both
+    included): the baseline of weeks 1-2. A post that has no reading of a metric is not in its list."""
+    out: dict[str, dict[str, list[float]]] = {}
+    for account in store.accounts():
+        if account.platform.value != INSTAGRAM:
+            continue
+        for post in store.list_posts(account_id=account.id, status=PostStatus.posted):
+            if not start <= posted_at(post).astimezone(LONDON).date() <= end:
+                continue
+            for metric, value in post_metric_values(store.snapshots_for(post.id)).items():
+                out.setdefault(metric, {}).setdefault(account.character_slug, []).append(value)
+    return out
+
+
+def _fixed(entry: Any) -> bool:
+    return isinstance(entry, dict) and entry.get("status") == "fixed" and isinstance(entry.get("value"), (int, float))
+
+
+def _pending_reason(n: int) -> str:
+    return FLOOR_NO_DATA if n == 0 else f"{n} of {FLOOR_MIN_STUDIO} readings studio-wide so far"
+
+
+def compute_floors(
+    readings: dict[str, dict[str, list[float]]], characters: Sequence[str], *, today: date, previous: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """The floors (plan 3.8, frozen). ``readings`` is ``floor_readings``'s ``{metric: {character: [values]}}``; ``previous`` the
+    ``floors`` of an earlier weekly run.
+
+    Per metric: **studio-wide** the median of every reading once there are at least 6 (else it is ``pending`` with the reason: none
+    at all means "no data in the cloud yet"); **per character** the median of his own readings when he has at least 4, else the
+    studio-wide median. A pending metric stays pending for everybody (even a character with 4 readings) until the 6th reading
+    arrives; the day a metric is fixed is written down (``fixed_on``, ``today``). **A fixed floor is never recomputed**: whatever
+    ``previous`` has fixed is copied as it is, and only pending ones are filled. A character who joins later gets the fixed
+    studio-wide value (or his own median if he already has 4 readings).
+
+    ``{"computed": True, "basis", "fixed_on": {metric: date|None}, "studio": {metric: entry}, "characters": {slug: {metric: entry}}}``;
+    an entry is ``{"kind", "status": "fixed", "value", "n", ...}`` or ``{"kind", "status": "pending", "n", "needed", "reason"}``.
+    """
+    prev = previous or {}
+    prev_studio = prev.get("studio") or {}
+    prev_chars = prev.get("characters") or {}
+    prev_fixed_on = prev.get("fixed_on") or {}
+    studio: dict[str, Any] = {}
+    fixed_on: dict[str, str | None] = {}
+    chars: dict[str, dict[str, Any]] = {slug: {} for slug in characters}
+    for metric, kind in FLOOR_METRICS:
+        by_character = readings.get(metric, {})
+        pooled = [v for values in by_character.values() for v in values]
+        if _fixed(prev_studio.get(metric)):
+            studio[metric] = dict(prev_studio[metric])
+            fixed_on[metric] = prev_fixed_on.get(metric) or studio[metric].get("fixed_on")
+        elif len(pooled) >= FLOOR_MIN_STUDIO:
+            studio[metric] = {"kind": kind, "status": "fixed", "value": statistics.median(pooled), "n": len(pooled), "fixed_on": today.isoformat()}
+            fixed_on[metric] = today.isoformat()
+        else:
+            studio[metric] = {
+                "kind": kind, "status": "pending", "n": len(pooled), "needed": FLOOR_MIN_STUDIO, "reason": _pending_reason(len(pooled)),
+            }
+            fixed_on[metric] = None
+        for slug in characters:
+            earlier = (prev_chars.get(slug) or {}).get(metric)
+            own = by_character.get(slug, [])
+            if _fixed(earlier):
+                chars[slug][metric] = dict(earlier)
+            elif studio[metric]["status"] != "fixed":
+                chars[slug][metric] = {
+                    "kind": kind, "status": "pending", "n": len(own), "needed": FLOOR_MIN_STUDIO, "reason": studio[metric]["reason"],
+                }
+            elif len(own) >= FLOOR_MIN_OWN:
+                chars[slug][metric] = {"kind": kind, "status": "fixed", "value": statistics.median(own), "n": len(own), "basis": "character"}
+            else:
+                chars[slug][metric] = {"kind": kind, "status": "fixed", "value": studio[metric]["value"], "n": len(own), "basis": "studio"}
+    return {
+        "computed": True,
+        "basis": {"from": FLOORS_FROM.isoformat(), "to": FLOORS_TO.isoformat(), "platform": INSTAGRAM},
+        "fixed_on": fixed_on, "studio": studio, "characters": chars,
+    }
+
+
+def floor_failures(values: dict[str, float], floors: dict[str, Any]) -> list[str]:
+    """What a post fails against a character's floors, in the order hook, hold, sends, follows: the skip rate above its ceiling
+    (the hook), the watched share, the sends or the follows per 1K below their floors. A metric the post has no reading of, or whose
+    floor is pending, is never failed. Exactly on the line is not below it."""
+    out = []
+    for metric, name in FLOOR_FAILS.items():
+        entry, value = floors.get(metric), values.get(metric)
+        if value is None or not _fixed(entry):
+            continue
+        if (value > entry["value"]) if entry.get("kind") == "ceiling" else (value < entry["value"]):
+            out.append(name)
+    return out
+
+
+def flagged(failures: Sequence[str]) -> bool:
+    """A post is flagged when it is below two floors or more (they diagnose; they never kill or change anything)."""
+    return len(failures) >= FLOOR_FLAG_MIN

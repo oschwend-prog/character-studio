@@ -344,3 +344,176 @@ def test_the_cli_score_test_is_read_only_and_prints_the_test(monkeypatch):
     out = json.loads(r.stdout)
     assert (out["label"], out["n"], out["needed"], out["look"]) == ("unproven", 3, 20, None) and "3 of 20" in out["note"]
     assert before == (len(w.store.list_clips()), len(w.store.list_posts()), len(w.store.list_runs()), len(w.store.list_reviews()))
+
+
+# ---- the mechanism floors (plan 3.8) ---------------------------------------------------------------------------------------------------
+
+TODAY = date(2026, 10, 19)  # the Monday after the baseline weeks
+SENDS = "sends_per_1k"
+
+
+def readings(**per_metric: dict[str, list[float]]) -> dict[str, dict[str, list[float]]]:
+    return per_metric
+
+
+def test_the_floor_is_the_median_of_the_characters_own_readings_with_4_or_more():
+    r = readings(sends_per_1k={"franz": [1.0, 2.0, 3.0, 10.0], "lenny": [5.0, 6.0, 7.0]})  # 7 readings studio-wide
+    f = weekly.compute_floors(r, ["franz", "lenny"], today=TODAY)
+    assert f["studio"][SENDS]["status"] == "fixed" and f["studio"][SENDS]["value"] == statistics.median([1.0, 2.0, 3.0, 10.0, 5.0, 6.0, 7.0])
+    assert f["studio"][SENDS]["n"] == 7
+    own = f["characters"]["franz"][SENDS]
+    assert (own["status"], own["value"], own["basis"], own["n"]) == ("fixed", 2.5, "character", 4)  # median of his four
+    assert f["fixed_on"][SENDS] == "2026-10-19"
+
+
+def test_fewer_than_4_of_his_own_readings_take_the_studio_wide_median():
+    r = readings(sends_per_1k={"franz": [1.0, 2.0, 3.0, 10.0], "lenny": [5.0, 6.0, 7.0]})
+    f = weekly.compute_floors(r, ["franz", "lenny"], today=TODAY)
+    lenny = f["characters"]["lenny"][SENDS]
+    assert (lenny["status"], lenny["basis"], lenny["n"]) == ("fixed", "studio", 3)
+    assert lenny["value"] == f["studio"][SENDS]["value"] == 5.0
+
+
+def test_a_character_with_no_reading_at_all_uses_the_studio_median():
+    r = readings(sends_per_1k={"franz": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]})
+    f = weekly.compute_floors(r, ["franz", "reginald"], today=TODAY)
+    assert f["characters"]["reginald"][SENDS]["basis"] == "studio" and f["characters"]["reginald"][SENDS]["n"] == 0
+    assert f["characters"]["reginald"][SENDS]["value"] == 3.5
+
+
+def test_exactly_6_readings_studio_wide_fix_it_and_5_do_not():
+    six = weekly.compute_floors(readings(sends_per_1k={"a": [1.0] * 3, "b": [2.0] * 3}), ["a", "b"], today=TODAY)
+    five = weekly.compute_floors(readings(sends_per_1k={"a": [1.0] * 3, "b": [2.0] * 2}), ["a", "b"], today=TODAY)
+    assert six["studio"][SENDS]["status"] == "fixed"
+    st = five["studio"][SENDS]
+    assert st["status"] == "pending" and st["n"] == 5 and st["needed"] == 6 and "5 of 6" in st["reason"]
+    assert five["fixed_on"][SENDS] is None
+    # nobody gets a number from an unfixed studio: not even a character with 4 readings of his own
+    five4 = weekly.compute_floors(readings(sends_per_1k={"a": [1.0] * 4, "b": [2.0]}), ["a", "b"], today=TODAY)
+    assert five4["characters"]["a"][SENDS]["status"] == "pending" and "value" not in five4["characters"]["a"][SENDS]
+
+
+def test_a_metric_with_no_reading_anywhere_is_pending_because_there_is_no_data_in_the_cloud_yet():
+    f = weekly.compute_floors(readings(), ["franz"], today=TODAY)
+    for metric, _ in weekly.FLOOR_METRICS:
+        assert f["studio"][metric]["status"] == "pending" and f["studio"][metric]["n"] == 0
+        assert f["studio"][metric]["reason"] == "no data in the cloud yet"
+        assert f["characters"]["franz"][metric]["status"] == "pending" and f["fixed_on"][metric] is None
+
+
+def test_the_skip_rate_is_a_ceiling_and_the_others_floors():
+    f = weekly.compute_floors(readings(skip_rate={"a": [40.0] * 6}), ["a"], today=TODAY)
+    assert f["studio"]["skip_rate"]["kind"] == "ceiling" and f["studio"][SENDS]["kind"] == "floor"
+    assert [m for m, _ in weekly.FLOOR_METRICS] == ["sends_per_1k", "follows_per_1k", "watched_pct", "skip_rate"]
+
+
+def test_a_fixed_floor_is_never_recomputed_and_a_pending_one_is_filled_when_the_6th_reading_arrives():
+    first = weekly.compute_floors(
+        readings(sends_per_1k={"a": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]}, watched_pct={"a": [50.0, 60.0]}), ["a"], today=TODAY,
+    )
+    assert first["studio"][SENDS]["status"] == "fixed" and first["studio"]["watched_pct"]["status"] == "pending"
+    later = weekly.compute_floors(
+        readings(sends_per_1k={"a": [100.0] * 6}, watched_pct={"a": [50.0, 60.0, 70.0, 80.0, 90.0, 100.0]}),
+        ["a"], today=date(2026, 10, 26), previous=first,
+    )
+    assert later["studio"][SENDS] == first["studio"][SENDS] and later["characters"]["a"][SENDS] == first["characters"]["a"][SENDS]
+    assert later["fixed_on"][SENDS] == "2026-10-19"  # the day it was fixed stays
+    w = later["studio"]["watched_pct"]
+    assert (w["status"], w["value"], w["n"]) == ("fixed", 75.0, 6) and later["fixed_on"]["watched_pct"] == "2026-10-26"  # the date is written down
+    assert later["characters"]["a"]["watched_pct"]["value"] == 75.0
+
+
+def test_a_character_who_joins_later_gets_the_fixed_studio_value_not_a_new_median():
+    first = weekly.compute_floors(readings(sends_per_1k={"a": [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]}), ["a"], today=TODAY)
+    later = weekly.compute_floors(
+        readings(sends_per_1k={"a": [99.0] * 6, "b": [8.0, 9.0]}), ["a", "b"], today=date(2026, 10, 26), previous=first,
+    )
+    assert later["characters"]["b"][SENDS]["value"] == first["studio"][SENDS]["value"] == 3.5 and later["characters"]["b"][SENDS]["basis"] == "studio"
+
+
+def test_a_pending_character_floor_is_fixed_with_his_own_median_once_he_has_4_readings():
+    first = weekly.compute_floors(readings(sends_per_1k={"a": [1.0] * 6}), ["a"], today=TODAY)
+    assert first["characters"]["a"][SENDS]["status"] == "fixed"
+    # a character who was added with the studio fixed but no data of his own, then gets a 4th reading: still the fixed studio value
+    again = weekly.compute_floors(
+        readings(sends_per_1k={"a": [1.0] * 6, "b": [9.0] * 4}), ["a", "b"], today=date(2026, 10, 26), previous=first,
+    )
+    assert again["characters"]["b"][SENDS]["basis"] == "character" and again["characters"]["b"][SENDS]["value"] == 9.0
+
+
+def test_floors_are_due_for_a_week_that_ends_on_or_after_sunday_18_october():
+    assert weekly.floors_due(date(2026, 10, 12)) is True  # the week of 12 Oct ends Sun 18 Oct
+    assert weekly.floors_due(date(2026, 10, 5)) is False  # ends Sun 11 Oct
+    assert weekly.floors_due(date(2026, 10, 19)) is True
+
+
+def test_the_floors_result_is_plain_json():
+    json.dumps(weekly.compute_floors(readings(sends_per_1k={"a": [1.0] * 6}), ["a"], today=TODAY))
+
+
+# ---- a post's readings and the readings of the baseline weeks --------------------------------------------------------------------------
+
+
+def snap(at: datetime, **kw: Any) -> dict[str, Any]:
+    return {"at": at, **kw}
+
+
+def test_a_posts_values_come_from_its_latest_snapshot_that_has_them():
+    at = T0
+    snaps = [
+        Snapshot(post_id="p", captured_at=at + 1 * D, views=1000, shares=5, follows=1, watched_pct=40.0, skip_rate=50.0),
+        Snapshot(post_id="p", captured_at=at + 3 * D, views=4000, shares=40, follows=8, watched_pct=None, skip_rate=None),
+        Snapshot(post_id="p", captured_at=at + 8 * D, views=5000, shares=None, follows=None),
+    ]
+    v = weekly.post_metric_values(snaps)
+    assert v["sends_per_1k"] == pytest.approx(10.0)  # 40 / 4000 x 1000: the latest snapshot with views and shares
+    assert v["follows_per_1k"] == pytest.approx(2.0)
+    assert v["watched_pct"] == 40.0 and v["skip_rate"] == 50.0  # the latest that reported them
+    assert weekly.post_metric_values([]) == {}
+    assert weekly.post_metric_values([Snapshot(post_id="p", captured_at=at, views=0, shares=0)]) == {}  # no views: no rate, and 0 shares is a reading only with views
+    assert "sends_per_1k" not in weekly.post_metric_values([Snapshot(post_id="p", captured_at=at, views=None, shares=3)])
+
+
+def test_the_baseline_readings_are_the_instagram_posts_of_5_to_18_october_london():
+    w = World()
+    inside = [datetime(2026, 10, 5, 0, 30, tzinfo=LONDON), datetime(2026, 10, 18, 23, 30, tzinfo=LONDON)]
+    outside = [datetime(2026, 10, 4, 23, 30, tzinfo=LONDON), datetime(2026, 10, 19, 0, 30, tzinfo=LONDON)]
+    for i, at in enumerate(inside + outside):
+        w.post("franz", at, snaps=[{"views": 1000, "shares": 10 * (i + 1)}])
+    w.post("reginald", inside[0], platform="tiktok", snaps=[{"views": 1000, "shares": 99}])  # TikTok: not a baseline reading
+    got = weekly.floor_readings(w.store)
+    assert sorted(got["sends_per_1k"]["franz"]) == [10.0, 20.0] and "reginald" not in got["sends_per_1k"]
+    assert got.get("skip_rate", {}) == {}
+
+
+def test_a_post_just_before_midnight_london_is_that_londons_day_not_utcs():
+    w = World()
+    late = datetime(2026, 10, 18, 23, 59, tzinfo=LONDON)  # BST: 22:59 UTC, still the 18th either way
+    early = datetime(2026, 10, 19, 0, 30, tzinfo=LONDON)  # BST: 23:30 UTC on the 18th, but London's 19th
+    w.post("franz", late, snaps=[{"views": 1000, "shares": 10}])
+    w.post("franz", early, snaps=[{"views": 1000, "shares": 50}])
+    assert weekly.floor_readings(w.store)["sends_per_1k"]["franz"] == [10.0]
+
+
+def test_a_post_below_two_floors_is_flagged_with_what_failed():
+    floors = {
+        "sends_per_1k": {"status": "fixed", "kind": "floor", "value": 5.0},
+        "follows_per_1k": {"status": "fixed", "kind": "floor", "value": 2.0},
+        "watched_pct": {"status": "fixed", "kind": "floor", "value": 40.0},
+        "skip_rate": {"status": "fixed", "kind": "ceiling", "value": 45.0},
+    }
+    ok = {"sends_per_1k": 5.0, "follows_per_1k": 2.0, "watched_pct": 40.0, "skip_rate": 45.0}  # exactly on every line: nothing failed
+    assert weekly.floor_failures(ok, floors) == []
+    assert weekly.floor_failures({**ok, "skip_rate": 45.1}, floors) == ["hook"]  # above the ceiling
+    assert weekly.floor_failures({**ok, "watched_pct": 39.9}, floors) == ["hold"]
+    assert weekly.floor_failures({**ok, "sends_per_1k": 4.9}, floors) == ["sends"]
+    assert weekly.floor_failures({**ok, "follows_per_1k": 1.9}, floors) == ["follows"]
+    assert weekly.floor_failures({"sends_per_1k": 1.0, "follows_per_1k": 0.0, "watched_pct": 10.0, "skip_rate": 80.0}, floors) == ["hook", "hold", "sends", "follows"]
+    assert weekly.flagged(["hook"]) is False and weekly.flagged(["hook", "sends"]) is True  # two floors flag a post, one does not
+
+
+def test_a_pending_floor_or_a_missing_reading_never_counts_as_failed():
+    floors = {"sends_per_1k": {"status": "pending", "kind": "floor"}, "skip_rate": {"status": "fixed", "kind": "ceiling", "value": 40.0}}
+    assert weekly.floor_failures({"sends_per_1k": 0.0, "skip_rate": 90.0}, floors) == ["hook"]  # sends has no floor yet
+    assert weekly.floor_failures({}, floors) == []  # nothing read: nothing failed
+    assert weekly.floor_failures({"watched_pct": 1.0}, floors) == []  # no floor for it at all
