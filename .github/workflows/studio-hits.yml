@@ -12,6 +12,12 @@
 #    general lane's trending feeds and broad searches) within the London day's `hits.daily_credit_cap` (45, less the room kept
 #    for the day's 2 one-post downloads: 25 for the searches), then the auto-filing (at most 3 new drops a live character and 3
 #    from the general lane a day). Without SCRAPECREATORS_API_KEY: a notice, nothing is pulled, the step passes. Its JSON says how many drops were filed (the step's output `filed`).
+#    The auto-filing has two guards (task 18). The brake: nothing is filed while `hits.auto_file_max_waiting` (20) or more drops
+#    wait for the owner (the JSON says `braked: true` and `waiting`). The trend gate: each hit about to be filed has its sound or
+#    trend looked up on LunarCrush (`studio/lunar.py`, at most `hits.lunar_daily_cap` = 40 calls a run, 16 s apart: 11 minutes at
+#    the most, inside this job's 30); a dead trend is not filed (`skipped_dead`), any other reading is written on the drop
+#    (`trend_stage`, `days_since_trend_peak`, `sound_rising`). Without LUNARCRUSH_API_KEY the gate is off: a notice, every hit is
+#    filed as before with the stage `unknown`, the step passes. A refused call or an unreadable answer is the same: unknown.
 # 2. `studio source purge --stale`: retention (a drop never made: its clip goes 30 days after filing when it came from a hit, 60
 #    days for the owner's own; never one he marked Keep, one being made, or a family member still to be made). It runs even when
 #    the pull failed.
@@ -20,10 +26,12 @@
 #    and checks it for free, instead of waiting for its 2-hourly sweep. The checkout keeps no credentials (persist-credentials:
 #    false).
 #
-# Secrets (repo secrets): DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY (as the other workflows) and SCRAPECREATORS_API_KEY
-# (`gh secret set SCRAPECREATORS_API_KEY`: the owner pastes it, it is never written to a file). Until DATABASE_URL exists the job
-# prints a notice and every later step is skipped. Each secret reaches only the step that needs it; nothing reaches a script but
-# through its environment.
+# Secrets (repo secrets): DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY (as the other workflows), SCRAPECREATORS_API_KEY
+# (`gh secret set SCRAPECREATORS_API_KEY`: the owner pastes it, it is never written to a file) and LUNARCRUSH_API_KEY (free: make a
+# key at lunarcrush.com, test it with `LUNARCRUSH_API_KEY=<key> bin/studio hits lunar-probe "single ladies"`, then
+# `gh secret set LUNARCRUSH_API_KEY`; the owner pastes it, it is never written to a file, and without it the trend gate is off).
+# Until DATABASE_URL exists the job prints a notice and every later step is skipped. Each secret reaches only the step that needs
+# it (LUNARCRUSH_API_KEY: the pull step only); nothing reaches a script but through its environment.
 name: studio-hits
 
 on:
@@ -68,9 +76,13 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
+          LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}
         run: |
           if [ -z "${SCRAPECREATORS_API_KEY:-}" ]; then
             echo "::notice::SCRAPECREATORS_API_KEY is not set: no hits are pulled (gh secret set SCRAPECREATORS_API_KEY)"
+          fi
+          if [ -z "${LUNARCRUSH_API_KEY:-}" ]; then
+            echo "::notice::LUNARCRUSH_API_KEY is not set: the trend-freshness gate is off, hits are filed without it (gh secret set LUNARCRUSH_API_KEY)"
           fi
           status=0
           uv run studio hits pull > "$RUNNER_TEMP/hits.json" || status=$?

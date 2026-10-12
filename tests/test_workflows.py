@@ -284,7 +284,7 @@ def test_publish_is_started_by_the_database_timers_dispatch_and_keeps_the_schedu
 
 # ---- studio-hits: the cloud hits job (terminal v3 spec section 10, plan Task 6) ------------------------------------------------------
 
-HITS_SECRETS = {"DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SCRAPECREATORS_API_KEY"}
+HITS_SECRETS = {"DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "SCRAPECREATORS_API_KEY", "LUNARCRUSH_API_KEY"}
 
 
 def hits_job(job: str) -> str:
@@ -342,6 +342,8 @@ def test_hits_pulls_files_then_deletes_unused_clips():
     pull = hits_step("Pull the hits")
     assert "id: pull" in pull and "uv run studio hits pull" in pull
     assert "SCRAPECREATORS_API_KEY" in pull and "::notice::" in pull  # a missing key is a notice, never a failure
+    assert "LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}" in pull  # the trend gate's key: this step only
+    assert re.search(r'if \[ -z "\$\{LUNARCRUSH_API_KEY:-\}" \]; then\n\s+echo "::notice::LUNARCRUSH_API_KEY is not set', pull)
     assert "echo \"filed=$(jq '.filed | length'" in pull
     purge = hits_step("Delete the clips nobody used")
     assert "run: uv run studio source purge --stale" in purge
@@ -354,6 +356,16 @@ def test_hits_pulls_files_then_deletes_unused_clips():
             assert "${{" not in run, block[:60]  # nothing reaches a script but through env
 
 
+def test_the_lunarcrush_key_reaches_the_pull_step_only_and_the_header_explains_the_gate():
+    t = text("studio-hits")
+    assert t.count("secrets.LUNARCRUSH_API_KEY") == 1 and "LUNARCRUSH_API_KEY" in hits_step("Pull the hits")
+    assert "LUNARCRUSH_API_KEY" not in hits_step("Delete the clips nobody used") and "LUNARCRUSH_API_KEY" not in hits_job("wake")
+    header = t.split("\nname: studio-hits", 1)[0]
+    for phrase in ("gh secret set LUNARCRUSH_API_KEY", "the owner pastes it", "without it the trend gate is off", "auto_file_max_waiting",
+                   "lunar-probe"):
+        assert phrase in header, phrase
+
+
 def test_hits_secrets_reach_only_the_steps_that_need_them():
     t = text("studio-hits")
     assert set(re.findall(r"secrets\.([A-Z_]+)", t)) == HITS_SECRETS and "POSTIZ" not in t and "HF_" not in t and "GEMINI" not in t
@@ -361,7 +373,7 @@ def test_hits_secrets_reach_only_the_steps_that_need_them():
         assert "env:" not in hits_job(job).split("    steps:")[0]  # no job-level env
     assert "env:" not in t.split("\njobs:\n")[0]  # no workflow-level env
     pull, purge = hits_step("Pull the hits"), hits_step("Delete the clips nobody used")
-    assert set(re.findall(r"secrets\.([A-Z_]+)", pull)) == {"DATABASE_URL", "SCRAPECREATORS_API_KEY"}
+    assert set(re.findall(r"secrets\.([A-Z_]+)", pull)) == {"DATABASE_URL", "SCRAPECREATORS_API_KEY", "LUNARCRUSH_API_KEY"}
     assert set(re.findall(r"secrets\.([A-Z_]+)", purge)) == {"DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY"}
     for block in hits_steps("hits"):
         if block.startswith("uses:"):
