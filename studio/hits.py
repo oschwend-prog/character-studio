@@ -960,8 +960,9 @@ def pull_command(
             out["file_error"] = str(e)[:300]
         if filing["braked"]:
             typer.echo(
-                f"::notice::auto-filing is braked: {filing['waiting']} drops are waiting (hits.auto_file_max_waiting "
-                f"{filing['max_waiting']}); nothing is filed until the owner works through them", err=True,
+                f"::notice::auto-filing is braked: {filing['waiting'] + len(filing['filed'])} drops are waiting "
+                f"(hits.auto_file_max_waiting {filing['max_waiting']}); nothing more is filed until the owner works through them",
+                err=True,
             )
     emit({**out, **filing})
     if out["calls"] == 0 and out["errors"]:
