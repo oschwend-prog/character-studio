@@ -2,9 +2,11 @@
 
 Skipped unless ``DATABASE_URL_TEST`` is set; see ``test_pgstore.py`` for what the database needs. The schema is built from every
 migration, renamed ``studio_test``, and dropped afterwards. set_drop_character needs Supabase's ``auth.jwt()``: those tests are
-skipped on a database without it. No dispatch leaves the database (no ``github_dispatch_token`` in a test Vault: ``dispatched``
-is false). NOT run when this file was written (no Postgres on the machine): ``tests/test_schema.py`` pins the text, this file
-pins the behaviour once a database is at hand.
+skipped on a database without it. No dispatch leaves the database: the test database may be the live shared project, whose Vault
+HOLDS ``github_dispatch_token``, so ``_ddl`` points every Vault lookup of the TEST schema at a secret name that does not exist
+(request_job then finds no token and sends nothing: ``dispatched`` is false), as ``test_migration_0015.py`` does. NOT run when this
+file was written (no Postgres on the machine): ``tests/test_schema.py`` pins the text, this file pins the behaviour once a database
+is at hand.
 """
 
 import json
@@ -23,18 +25,23 @@ SCHEMA = "studio_test"
 MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
 OWNER = json.dumps({"email": "o.schwend@gmail.com"})
 TIKTOK = "https://www.tiktok.com/@dancer.one/video/7688386199270001953"
+TOKEN = "'github_dispatch_token'"
+NO_TOKEN = "'github_dispatch_token_absent_in_tests'"
 
 
 def _ddl() -> str:
     text = "\n".join(f.read_text() for f in sorted(MIGRATIONS.glob("*.sql")))
-    return re.sub(r"\bstudio\b", SCHEMA, text)
+    assert TOKEN in text  # what the next line neutralises is really there
+    return re.sub(r"\bstudio\b", SCHEMA, text).replace(TOKEN, NO_TOKEN)
 
 
 @pytest.fixture
 def db():
     with psycopg.connect(DSN, autocommit=True, row_factory=dict_row) as conn:
         conn.execute(f"drop schema if exists {SCHEMA} cascade")
-        conn.execute(_ddl())
+        ddl = _ddl()
+        assert TOKEN not in ddl
+        conn.execute(ddl)
         conn.execute(
             f"insert into {SCHEMA}.characters (slug, name, bodies, status) values "
             "('franz', 'Franz', '{quadruped}', 'designing'), ('lenny', 'Lenny Gold', '{biped}', 'designing'), "
