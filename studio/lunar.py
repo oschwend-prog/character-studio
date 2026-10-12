@@ -581,11 +581,12 @@ class LunarCrush:
 @dataclass(frozen=True)
 class Reading:
     """What the gate read for one trend key: ``stage`` (one of ``STAGES`` or ``unknown``), ``days_since_peak`` (None unless
-    measured) and, for ``unknown``, the ``reason``."""
+    measured), for ``unknown`` the ``reason``, and ``ratio`` (the latest day over the peak; None unless measured)."""
 
     stage: str
     days_since_peak: int | None = None
     reason: str | None = None
+    ratio: float | None = None
 
 
 class TrendGate:
@@ -632,7 +633,7 @@ class TrendGate:
             return Reading(UNKNOWN, reason="the answer could not be read")
         if curve is None:
             return Reading(UNKNOWN, reason="the curve has no signal to judge")
-        return Reading(curve.stage, curve.days_since_peak)
+        return Reading(curve.stage, curve.days_since_peak, ratio=curve.ratio)
 
     def summary(self) -> dict[str, Any]:
         """``{"enabled", "keys", "calls", "stages": {stage: n}}``: what this run asked and found."""

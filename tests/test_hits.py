@@ -859,6 +859,26 @@ def test_a_dead_trend_is_not_filed_it_is_counted_and_its_room_goes_to_the_next_h
     assert run["trend"]["calls"] == 4
 
 
+def test_a_dead_trend_under_a_fifth_of_its_peak_is_dismissed_with_its_reason_and_not_asked_about_again():
+    store = roster_store()
+    gone = stored(store, 1, "reginald", 90, sound="Hot Dog Dance")
+    sinking = stored(store, 2, "reginald", 80, sound="Old Dance")
+    unsure = stored(store, 3, "reginald", 70, sound="Odd Dance")
+    alive = stored(store, 4, "reginald", 60, sound="Gangnam Style")
+    gate = StubGate({
+        "hot dog dance": lunar.Reading("dead", 14, ratio=0.1), "old dance": lunar.Reading("dead", 9, ratio=0.35),
+        "odd dance": lunar.Reading("dead", 11), "gangnam style": lunar.Reading("rising", 0, ratio=1.0),
+    })  # fmt: skip
+    run = hits.file_hits(store, CONFIG, NOW, gate=gate)
+    assert [f["hit_id"] for f in run["filed"]] == [alive.id] and run["skipped_dead"] == 3
+    assert store.get_hit(gone.id).status == "dismissed"  # a clear case: not asked about again tomorrow
+    assert store.get_hit(sinking.id).status == "new" and store.get_hit(unsure.id).status == "new"  # a doubtful one may recover; no ratio: no verdict
+    assert run["dismissed"] == [{"hit_id": gone.id, "reason": "dead trend: 14 days past its peak, now at 10% of it"}]
+    again = StubGate({"old dance": lunar.Reading("dead", 10, ratio=0.3), "odd dance": lunar.Reading("dead", 12)})
+    hits.file_hits(store, CONFIG, NOW + timedelta(hours=1), gate=again)
+    assert "hot dog dance" not in again.asked and again.asked == ["old dance", "odd dance"]
+
+
 def test_the_filed_drops_trend_keys_are_the_ones_the_tag_builder_reads():
     store = roster_store()
     stored(store, 1, "reginald", 90, sound="Gangnam Style")

@@ -74,7 +74,9 @@ LunarCrush is not asked anything.
 looked up on LunarCrush: its sound's title (not a generic "original sound - <handle>"), else a keyword of its lane or an event
 (``config/events.yaml`` when it exists) that its caption says (``lunar.trend_key``). A classic (tier ``iconic``: 50M views or more)
 is not checked. One check a key per run. A ``dead`` trend is not filed (``skipped_dead`` in the JSON; the hit stays ``new``, its
-room goes to the next one); anything else is filed with ``trend_stage`` (``rising``, ``peak``, ``fading``, ``classic`` or
+room goes to the next one), unless its latest day is under a fifth of its peak (``DEAD_DISMISS_RATIO``): that hit is marked
+``dismissed`` (as "Not for us", so it is not asked about again every day while it stays fresh) and its reason is in the JSON's
+``dismissed``; anything else is filed with ``trend_stage`` (``rising``, ``peak``, ``fading``, ``classic`` or
 ``unknown``), ``days_since_trend_peak`` (when measured) and ``sound_rising`` (the key was the sound and it is ``rising``) written
 onto the drop, the keys ``drop.learn_tags`` reads. Without ``LUNARCRUSH_API_KEY``, a refused call, the run's
 ``hits.lunar_daily_cap`` (40) or an answer it cannot read, the reading is ``unknown`` and the hit is filed as before (fail open:
@@ -87,7 +89,7 @@ An account out of credits (HTTP 402) stops the pull (``stopped: "out_of_credits"
 
 CLI: ``studio hits pull [--dry-run] [--no-file]`` prints ``{"calls", "credits", "day_credits", "kept", "updated", "skipped":
 {reason: n}, "stopped": "cap" | null, "errors": [...], "filed": [{"hit_id", "pick_id", "character", "provisional"}], "braked",
-"waiting", "max_waiting", "skipped_dead", "trend": {"enabled", "keys", "calls", "stages"} | null}``; without the key it
+"waiting", "max_waiting", "skipped_dead", "dismissed": [{"hit_id", "reason"}], "trend": {"enabled", "keys", "calls", "stages"} | null}``; without the key it
 prints a ``::notice::`` and exits 0; ``--dry-run`` prints the plan of calls and calls nothing. ``studio hits list`` prints the
 stored hits. ``studio hits lunar-probe "<keyword>"`` asks LunarCrush about one keyword (read-only; needs
 ``LUNARCRUSH_API_KEY`` in the environment) and prints the parsed curve and its stage, or the raw head of an answer it cannot
@@ -792,6 +794,7 @@ def fileable(hit: Hit, now: datetime) -> bool:
     return hit.last_seen is None or now - hit.last_seen <= timedelta(days=STALE_SEEN_DAYS)
 
 
+DEAD_DISMISS_RATIO = 0.2  # a dead trend whose latest day is under this share of its peak is dismissed, not kept for tomorrow's check
 WAITING_STATES = ("uploading", "checking", "waiting", "ready")  # drop states: filed, not yet sent to be made (see the module doc)
 NOT_WAITING = ("skipped", "made")  # pick statuses: skipped (also: an unfetched auto-filed link dropped after 3 days) or made
 
@@ -825,21 +828,26 @@ def trend_as_of(now: datetime) -> date:
     return london_day(now) - timedelta(days=1)
 
 
-def read_trend(hit: Hit, now: datetime, names: Sequence[str], gate: lunar.TrendGate) -> dict[str, Any]:
-    """The drop's trend keys for a hit (see the module doc): ``trend_stage``, ``days_since_trend_peak`` (only when measured) and
-    ``sound_rising``. ``classic`` for a classic (no call), ``unknown`` without a trend key to ask about or when the gate has no
-    reading, else the gate's stage (one of ``lunar.STAGES``; ``dead`` means the caller must not file it)."""
+def trend_reading(hit: Hit, now: datetime, names: Sequence[str], gate: lunar.TrendGate) -> tuple[dict[str, Any], lunar.Reading | None]:
+    """``read_trend``'s keys and, when the gate was asked, its reading (for the ``ratio`` of a dead trend)."""
     if _is_classic(hit, now):
-        return {"trend_stage": "classic", "sound_rising": False}
+        return {"trend_stage": "classic", "sound_rising": False}, None
     found = lunar.trend_key(hit.sound, hit.caption, names)
     if found is None:
-        return {"trend_stage": lunar.UNKNOWN, "sound_rising": False}
+        return {"trend_stage": lunar.UNKNOWN, "sound_rising": False}, None
     key, kind = found
     reading = gate.read(key, as_of=trend_as_of(now))
     out: dict[str, Any] = {"trend_stage": reading.stage, "sound_rising": kind == "sound" and reading.stage == "rising"}
     if reading.days_since_peak is not None:
         out["days_since_trend_peak"] = reading.days_since_peak
-    return out
+    return out, reading
+
+
+def read_trend(hit: Hit, now: datetime, names: Sequence[str], gate: lunar.TrendGate) -> dict[str, Any]:
+    """The drop's trend keys for a hit (see the module doc): ``trend_stage``, ``days_since_trend_peak`` (only when measured) and
+    ``sound_rising``. ``classic`` for a classic (no call), ``unknown`` without a trend key to ask about or when the gate has no
+    reading, else the gate's stage (one of ``lunar.STAGES``; ``dead`` means the caller must not file it)."""
+    return trend_reading(hit, now, names, gate)[0]
 
 
 def file_hits(
@@ -847,21 +855,21 @@ def file_hits(
     gate: lunar.TrendGate | None = None, events: Sequence[str] = (),
 ) -> dict[str, Any]:
     """File the best new hits as drops (see the module doc): ``{"filed": [{"hit_id", "pick_id", "character", "provisional"}], "braked",
-    "waiting", "max_waiting", "skipped_dead", "trend"}``. ``filed`` is in the order they were filed (``character`` None for the
+    "waiting", "max_waiting", "skipped_dead", "dismissed", "trend"}``. ``filed`` is in the order they were filed (``character`` None for the
     general lane; ``provisional`` is who the drop waits under). Only the ``fileable`` ones, ranked by their score today
     (``hit_score(h, now)``), never the score stored when they were found.
 
     The brake first: ``braked`` (and nothing filed, nothing asked) when ``waiting_drops`` has reached ``hits.auto_file_max_waiting``;
     each filing of the run counts too, so a run stops (``braked``) once the waiting drops plus its own filings reach it.
     With a ``gate`` (the trend gate; None leaves the drops exactly as they were) each hit about to be filed is read first: a
-    ``dead`` trend is skipped (``skipped_dead``, the hit stays ``new``, its room goes on to the next), anything else is filed with
-    the reading on its drop. ``trend`` is the gate's ``summary()`` (None without a gate). ``events`` are extra trend names
+    ``dead`` trend is skipped (``skipped_dead``, the hit stays ``new``, its room goes on to the next; under a fifth of its peak it is
+    ``dismissed`` instead, with the reason in ``dismissed``), anything else is filed with the reading on its drop. ``trend`` is the gate's ``summary()`` (None without a gate). ``events`` are extra trend names
     (``lunar.event_names()``)."""
     cfg = hits_config(scan_config)
     waiting = waiting_drops(store)
     run: dict[str, Any] = {
         "filed": [], "braked": waiting >= cfg["auto_file_max_waiting"], "waiting": waiting, "max_waiting": cfg["auto_file_max_waiting"],
-        "skipped_dead": 0, "trend": None,
+        "skipped_dead": 0, "dismissed": [], "trend": None,
     }  # fmt: skip
     if run["braked"]:
         return run
@@ -889,13 +897,18 @@ def file_hits(
                 break
             trend = None
             if gate is not None:
+                reading = None
                 try:
-                    trend = read_trend(hit, now, trend_names(cfg, hit.character_slug, events), gate)
+                    trend, reading = trend_reading(hit, now, trend_names(cfg, hit.character_slug, events), gate)
                 except Exception as e:  # noqa: BLE001 - the gate fails open: an error of any kind is an unknown reading
                     log.warning("the trend gate failed (%s): the hit is filed with the stage unknown", type(e).__name__)
                     trend = {"trend_stage": lunar.UNKNOWN, "sound_rising": False}
                 if trend["trend_stage"] == "dead":
                     run["skipped_dead"] += 1
+                    if reading is not None and reading.ratio is not None and reading.ratio < DEAD_DISMISS_RATIO:
+                        reason = f"dead trend: {reading.days_since_peak} days past its peak, now at {reading.ratio:.0%} of it"
+                        store.update_hit(hit.id, status="dismissed")  # a clear case is not asked about again every day
+                        run["dismissed"].append({"hit_id": hit.id, "reason": reason})
                     continue
             with store.transaction():
                 if store.list_favorites(url=hit.url):  # the same, now that the check (a slow network call) is behind us
@@ -964,7 +977,7 @@ def pull_command(
     now = now_london()
     out = pull(store, client, scan, now)
     filing: dict[str, Any] = {"filed": [], "braked": False, "waiting": None, "max_waiting": cfg["auto_file_max_waiting"],
-                              "skipped_dead": 0, "trend": None}  # fmt: skip
+                              "skipped_dead": 0, "dismissed": [], "trend": None}  # fmt: skip
     if file:
         gate = lunar.TrendGate.from_env(cap=cfg["lunar_daily_cap"])  # off (every reading unknown) without LUNARCRUSH_API_KEY
         try:
