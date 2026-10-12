@@ -742,17 +742,28 @@ def test_the_hosted_copys_download_has_a_total_deadline(tmp_path):
 # ---- the brake: auto-filing stops while a backlog of drops waits (task 18) -----------------------------------------------------------------------
 
 
-def waiting_drop(store, n: int, state: str = "ready", status: str = "approved") -> Favorite:
-    """A drop in ``state`` (a link at ``status``): the owner's own or an auto-filed one, the brake counts both."""
+def waiting_drop(store, n: int, state: str = "ready", status: str = "approved", **drop_fields) -> Favorite:
+    """A drop in ``state`` (a link at ``status``): the owner's own or an auto-filed one (``auto_filed=True``), the brake counts both."""
     return store.add_favorite(Favorite(
         url=f"https://www.tiktok.com/@owner{n}/video/{5000 + n}", platform="tiktok", origin="owner", character_slug="franz",
-        status=status, proposal={"drop": {"state": state, "kind": "link", "at": NOW.isoformat(), "reason": None}},
+        status=status, proposal={"drop": {"state": state, "kind": "link", "at": NOW.isoformat(), "reason": None, **drop_fields}},
     ))  # fmt: skip
 
 
 def backlog(store, count: int) -> None:
     for n in range(count):
         waiting_drop(store, n, ("uploading", "checking", "waiting", "ready")[n % 4])
+
+
+def test_an_auto_filed_link_the_cloud_could_not_fetch_is_not_on_the_owners_list_so_it_does_not_brake():
+    store = roster_store()
+    stuck = {"auto_filed": True, "fetch_days": ["2026-10-07"], "reason": "the link could not be fetched in the cloud"}
+    waiting_drop(store, 1, "waiting", **stuck)  # no clip yet; the cloud retries it and drops it after 3 days
+    waiting_drop(store, 2, "waiting", **{**stuck, "fetch_days": ["2026-10-06", "2026-10-07", "2026-10-08"]})
+    waiting_drop(store, 3, "waiting")  # the owner's own pasted link the cloud could not fetch: on his list, it counts
+    for n, state in enumerate(("uploading", "checking", "ready"), start=4):
+        waiting_drop(store, n, state, auto_filed=True)  # an auto-filed drop that has a clip (or is being fetched and checked) counts
+    assert hits.waiting_drops(store) == 4
 
 
 def test_the_drops_that_wait_are_those_filed_and_not_yet_sent_to_be_made():

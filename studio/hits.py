@@ -65,7 +65,8 @@ each take the last download. PARKED (task 12 review): with the sweep's three wor
 **The brake** (task 18, ``hits.auto_file_max_waiting``, 20): ``auto_file`` files nothing while that many drops or more are waiting
 (``waiting_drops``: the picks that carry ``proposal.drop``, are not skipped or made, and sit in the drop state ``uploading``,
 ``checking``, ``waiting`` or ``ready``, that is filed and not yet sent to be made; the owner's own drops count as much as the
-job's; ``blocked`` and ``failed`` ones do not, nor ``making`` (the owner already said Make it) or ``made``). It is read once, at
+job's; ``blocked`` and ``failed`` ones do not, nor ``making`` (the owner already said Make it) or ``made``, nor an auto-filed link
+the cloud could not fetch yet: it has no clip, so it is not on his Clips list to work through). It is read once, at
 the start of the run: a run that starts under the limit files its usual allowance, so the count can pass the limit by at most one
 day's filing. Over the limit the JSON says ``braked: true`` with the ``waiting`` count, the hits stay ``new`` for tomorrow, and
 LunarCrush is not asked anything.
@@ -804,11 +805,21 @@ def waiting_drops(store: Store) -> int:
     """How many drops wait: the picks with ``proposal.drop`` that are not ``skipped`` or ``made`` and whose ``drop.state`` is one of
     ``WAITING_STATES`` (``uploading``, ``checking``, ``waiting``, ``ready``: filed, not yet sent to be made). ``blocked`` (can never
     be made), ``failed`` (the sweep retries a check, the owner's Try again a make), ``making`` (the owner said Make it) and ``made``
-    do not wait. The owner's own drops count too: they are in the same Make-it list."""
+    do not wait. The owner's own drops count too: they are in the same Make-it list.
+
+    The brake counts only clips the owner has to work through, the ones on his Clips list. An auto-filed link the cloud could not
+    fetch (state ``waiting`` with ``auto_filed``) is not one: it has no clip, the cloud tries it again on a later day and drops it
+    after ``drop.AUTO_FETCH_DAYS`` days (the pick becomes ``skipped``), so it does not count while it waits. The owner's own link in
+    the same state does count (the Mac's daily run, or his Try again, is what moves it)."""
     return sum(
         1 for f in store.list_favorites()
-        if f.status not in NOT_WAITING and is_drop(f.proposal) and f.proposal["drop"].get("state") in WAITING_STATES
+        if f.status not in NOT_WAITING and is_drop(f.proposal) and _on_owners_list(f.proposal["drop"])
     )  # fmt: skip
+
+
+def _on_owners_list(d: Mapping[str, Any]) -> bool:
+    state = d.get("state")
+    return state in WAITING_STATES and not (state == "waiting" and d.get("auto_filed") is True)
 
 
 def _is_classic(hit: Hit, now: datetime) -> bool:
