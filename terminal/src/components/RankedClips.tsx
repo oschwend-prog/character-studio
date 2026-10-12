@@ -8,7 +8,7 @@
 // pull (spec 10, Hits.tsx). A clip not made yet has the Keep toggle under More (retention never deletes a kept clip). `compact` is
 // Today's "Make these": his top 3 Ready clips and, when he has one, an Explore clip (one suggestion in four, learning test A).
 import { ArrowRight, CircleAlert } from 'lucide-react';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { cardPrice, originalLink, playableFor } from '../lib/clipcard';
 import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipChip } from '../lib/clipstatus';
 import { cantUseLine, clipsByCharacter, isTopPick, readyWithChoice, sectionSummary, versionsLine } from '../lib/clipsview';
@@ -19,6 +19,7 @@ import { reuseTargets, scoreOf, suggestedClips } from '../lib/ranking';
 import { activeRoster, nameOf, type RosterEntry } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import type { TrackerRow } from '../lib/types';
+import { rankOrderFor, scoreTestOf, type RankOrder } from '../lib/weekly';
 import { ClipCard, ClipGrid, MakeToggle, OriginalLink, dropPicture } from './ClipCard';
 import { CharacterCell } from './DropsTable';
 import { WorthSaving } from './Hits';
@@ -28,6 +29,16 @@ import { Avatar, Spinner } from './ui';
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 const SCORE_TITLE = 'The free check’s score: how likely the clip gets views with him in it';
+
+/**
+ * How his ready clips are ranked: by the score, or, after the weekly review says the score test failed, by the freshness of the
+ * trend first and the score second (learning plan 3.2). Today's Make these and the Clips page read the same answer.
+ */
+export function useRankOrder(): RankOrder {
+  const { data } = useStudio();
+  const weekly = data?.weekly;
+  return useMemo(() => rankOrderFor(scoreTestOf(weekly)), [weekly]);
+}
 
 /** The check's one line why the clip may get views, shown only with its score. */
 const scoreReason = (row: TrackerRow): string | null => {
@@ -48,7 +59,8 @@ export function RankedClips({
   compact?: boolean;
 }) {
   const { data } = useStudio();
-  const { groups, others, deciding } = clipsByCharacter(rows, characters);
+  const order = useRankOrder();
+  const { groups, others, deciding } = clipsByCharacter(rows, characters, order);
   const names = new Map((data?.characters ?? []).map((c) => [c.slug, c.name]));
 
   if (!characters.length) {
@@ -71,7 +83,7 @@ export function RankedClips({
           </p>
         )}
         {groups.map((g) => {
-          const top = suggestedClips(g.ready, 3);
+          const top = suggestedClips(g.ready, 3, order);
           return (
             <section key={g.slug} className={`pick-sec ${g.slug}`} aria-labelledby={`make-${g.slug}`}>
               <header className="pick-sec-head">

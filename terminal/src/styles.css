@@ -1281,3 +1281,28 @@ button.cc-pic, a.cc-pic { cursor: pointer; }
   /* the centred box is at most min(88dvh, 760px) tall: the frame takes what the title, the action and Close leave of it */
   .player-frame { height: clamp(240px, calc(min(88dvh, 760px) - 360px - var(--note-h)), 420px); }
 }
+
+/* ---- Today: This week, the weekly review's digest (Task 16) ----------------------------------------- */
+.week-proposal {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; min-height: 44px; padding: 10px 14px;
+  color: var(--ink); font-size: 13.5px; text-decoration: none;
+}
+.week-proposal:hover { background: var(--panel-2); }
+.week-proposal svg { flex: none; width: 14px; height: 14px; color: var(--ink-2); }
+.week-head { display: flex; flex-direction: column; gap: 4px; }
+.week-head p { margin: 0; overflow-wrap: anywhere; }
+.week-who { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }
+.week-who b { font-size: 14px; }
+.week-lines { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 0; }
+.week-line { display: grid; gap: 1px; margin: 0; }
+.week-line dt { color: var(--ink-3); }
+.week-line dd { margin: 0; font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }
+.week-none { margin: 8px 0 0; }
+@media (min-width: 720px) {
+  .week-line { grid-template-columns: 76px minmax(0, 1fr); gap: 10px; }
+  .week-line dt { padding-top: 2px; }
+}
+
+/* the score test's caution beside a clip's score (Task 16): small and muted, never louder than the score itself */
+.cc-score-note { color: var(--ink-2); line-height: 1.25; overflow-wrap: anywhere; }
+.player-score-note { margin-left: 6px; font-size: 12px; color: var(--ink-2); }

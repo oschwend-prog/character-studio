@@ -2,14 +2,16 @@
 // clips, views, next post, runway and test status), then Make these (each character's best ready clips, ranked, with the
 // tick-and-make bar), then Approve these (the finished videos waiting for his OK), then tonight's departures with the one lit
 // plate (Approve all), the last posts of every live character, what is left of the month's credits and, only when something is
-// wrong, the alerts. Every action is one or two taps from here.
+// wrong, the alerts. Every action is one or two taps from here. "This week" (Task 16) is the latest weekly review: low on the page, because
+// it changes on Mondays and asks for nothing but a look (a pull request to merge is its one action).
 import { AlertTriangle, ArrowRight, CircleCheck, OctagonAlert } from 'lucide-react';
 import { useMemo } from 'react';
 import { DropThumb } from '../components/DropsTable';
 import { Glance } from '../components/Glance';
 import { MakeBar, useTicks } from '../components/MakeBar';
 import { PickThumb } from '../components/PickThumb';
-import { RankedClips } from '../components/RankedClips';
+import { RankedClips, useRankOrder } from '../components/RankedClips';
+import { ThisWeek } from '../components/ThisWeek';
 import { Flap, Livery, PlatformCode, Section, Skeleton, Spinner, characterName } from '../components/ui';
 import { makeTheseIds } from '../lib/clipsview';
 import { creditsLeft, hasWarnings, liveChannels, liveLastPosts, postNumbers, problemClips, problemClipsLine } from '../lib/dashboard';
@@ -125,6 +127,7 @@ export function Today() {
         </div>
 
         <div className="stack">
+          <ThisWeek />
           <LastPosts />
           <CreditsLine />
           {hasWarnings(data) && <Alerts />}
@@ -143,10 +146,11 @@ function MakeThese({ now }: { now: number }) {
   const { ticked, toggle, untick, clear } = useTicks();
   const rows = useMemo(() => (data ? data.tracker.filter((r) => r.drop_card && inTracker(r, now)) : []), [data, now]);
   const live = useMemo(() => orderRoster((data?.characters ?? []).filter((c) => c.status === 'live')), [data]);
+  const order = useRankOrder();
   if (!data) return null;
   // only the clips this block shows can be ticked here (each live character's top 3 Ready ones): a ticked clip that drops out of
   // the top 3 (a better one arrived) also drops out of the bar, so nothing unseen is ever made
-  const selected = liveSelection(ticked, makeTheseIds(rows, live));
+  const selected = liveSelection(ticked, makeTheseIds(rows, live, order));
   return (
     <Section
       id="make-these" title="Make these"
@@ -157,6 +161,7 @@ function MakeThese({ now }: { now: number }) {
         in four is marked Explore: it comes from below his median score, so we can learn whether the score predicts views; tick it or
         not, as you like. Tap a picture to watch it, ＋ Make this on the ones to make: the price shows first, and nothing is spent
         before you confirm.
+        {order === 'freshness' && ' The score did not predict views at the weekly review’s look, so the freshest trends come first and the score second.'}
       </p>
       <div className="make-scope">
         <RankedClips compact rows={rows} characters={live} ticked={ticked} onTick={toggle} now={now} />

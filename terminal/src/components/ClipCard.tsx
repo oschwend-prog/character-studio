@@ -8,7 +8,7 @@
 // file of ours opens its post on TikTok, Instagram or YouTube in a new tab instead ("Watch on TikTok ↗"); with nothing to play the
 // card has no play button. What plays is lib/clipcard.ts's playableFor.
 import { ExternalLink, Play } from 'lucide-react';
-import { useEffect, useId, useRef, useState, type ReactNode, type Ref, type SyntheticEvent } from 'react';
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode, type Ref, type SyntheticEvent } from 'react';
 import {
   MAKE_TOGGLE, afterPictureError, originalLink, pictureSources, removeStep, shouldLoopBack, withFragment, type PicturePos, type Playable,
   type PlayableSource, type RemoveStep,
@@ -17,6 +17,7 @@ import { EXPLORE_HELP, EXPLORE_LABEL } from '../lib/ranking';
 import { thumbFor } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import type { DropCard } from '../lib/types';
+import { scoreNote, scoreTestOf, type ScoreNote } from '../lib/weekly';
 import { Sheet } from './ui';
 
 type ThumbPick = Parameters<typeof thumbFor>[0];
@@ -41,6 +42,28 @@ export function dropPicture(row: PlayableSource & ThumbPick & { drop_card?: Drop
     // a Genjutsu preview_url never plays inside the card's own button (the player is the card's): the still only
     thumb: { thumbnail_url: row.thumbnail_url, preview_url: null, platform: row.platform, creator_handle: row.creator_handle, hook: title, url: row.url },
   };
+}
+
+/**
+ * The score test's caution (learning plan 3.2, test A): what the latest weekly review says about the score, as a small label.
+ * Null once the test validated the score. Before the first review it is "unproven" (the score may steer nothing, an unvalidated one
+ * must not look like a promise).
+ */
+export function useScoreNote(): ScoreNote | null {
+  const { data } = useStudio();
+  const weekly = data?.weekly;
+  return useMemo(() => scoreNote(scoreTestOf(weekly)), [weekly]);
+}
+
+/** The label beside a score: small, muted, the reason in its title and, for a screen reader, after it. */
+export function ScoreCaution({ note, className }: { note: ScoreNote | null; className: string }) {
+  if (!note) return null;
+  return (
+    <span className={className} title={note.title}>
+      {note.text}
+      <span className="sr-only">. {note.title}</span>
+    </span>
+  );
 }
 
 /** The cards: a list (phone: 2 columns; wider: as many 190 px columns as fit). */
@@ -96,6 +119,7 @@ export interface ClipCardProps {
 
 export function ClipCard(p: ClipCardProps) {
   const [watching, setWatching] = useState(false);
+  const caution = useScoreNote();
   const [moreOpen, setMoreOpen] = useState(false);
   const base = `cc-${p.id}`;
   const titleId = `${base}-title`;
@@ -122,6 +146,7 @@ export function ClipCard(p: ClipCardProps) {
           </span>
         )}
         <span className="cc-title" id={titleId}>{p.title}</span>
+        {p.score != null && <ScoreCaution note={caution} className="small cc-score-note" />}
         {p.reason && <span className="small muted cc-reason">{p.reason}</span>}
         {p.price && <span className="small num cc-price" id={priceId}>{p.price}</span>}
         {p.character && <span className="small cc-char">{p.character}</span>}
@@ -339,6 +364,7 @@ export function ClipPlayerSheet({
   onClose(): void;
 }) {
   const { backend } = useStudio();
+  const caution = useScoreNote();
   const [url, setUrl] = useState<string | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'none' | 'broken'>('loading');
   const video = useRef<HTMLVideoElement>(null);
@@ -404,6 +430,7 @@ export function ClipPlayerSheet({
               {score != null && (
                 <span className="num player-score">
                   <span className="sr-only">{scoreLabel}: </span><b>{score}</b><span className="muted">/100</span>
+                  <ScoreCaution note={caution} className="player-score-note" />
                 </span>
               )}
               {score != null && reason ? <span className="muted"> · </span> : null}
