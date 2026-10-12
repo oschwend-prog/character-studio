@@ -270,7 +270,7 @@ function ReadyCard({
   return (
     <ClipCard
       id={`${compact ? 'c' : 'f'}-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
-      rank={rank} top={top} explore={explore} score={scoreOf(row)} scoreTitle={SCORE_TITLE} reason={scoreReason(row)}
+      rank={rank} top={top} explore={explore} score={scoreOf(row)} scoreTitle={SCORE_TITLE} checkScore reason={scoreReason(row)}
       price={cardPrice(credits, d.window ? e.length_s : null)}
       sheetPrice={credits != null ? `about ${credits} credits${d.window ? ` · ${sectionLabel(e.start_s, e.length_s)}` : ''}` : 'priced by the check'}
       extra={versions && <span className="small muted">{versions}</span>}
@@ -385,7 +385,7 @@ function NeedsYouCard({ row, roster }: { row: TrackerRow; roster: ReadonlyArray<
   return (
     <ClipCard
       id={`n-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
-      score={score ?? undefined} scoreTitle={SCORE_TITLE} reason={scoreReason(row)}
+      score={score ?? undefined} scoreTitle={SCORE_TITLE} checkScore reason={scoreReason(row)}
       price={credits != null ? `about ${credits} credits once you choose` : undefined}
       dataChar={row.character_slug ?? 'none'} original={original}
       action={({ where }) => (

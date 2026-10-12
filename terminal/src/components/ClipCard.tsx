@@ -55,6 +55,10 @@ export function useScoreNote(): ScoreNote | null {
   return useMemo(() => scoreNote(scoreTestOf(weekly)), [weekly]);
 }
 
+/** Whether the score test's label stands beside this score: only the free check's own score, and only when there is one (a hit's
+ * "How hot" and every other figure is not what test A judges). Card and player sheet share this one rule. */
+export const showsScoreCaution = (score: number | null | undefined, checkScore: boolean | undefined): boolean => checkScore === true && score != null;
+
 /** The label beside a score: small, muted, the reason in its title and, for a screen reader, after it. */
 export function ScoreCaution({ note, className }: { note: ScoreNote | null; className: string }) {
   if (!note) return null;
@@ -96,6 +100,11 @@ export interface ClipCardProps {
   /** What the score is (said to a screen reader before it, and as its hover title). */
   scoreLabel?: string;
   scoreTitle?: string;
+  /**
+   * The score is the free check's (the drop's score total), the one score test A judges: only then does the score test's label
+   * ("unproven") stand beside it. A hit's "How hot" or any other figure never carries it. Default false.
+   */
+  checkScore?: boolean;
   reason?: ReactNode;
   /** "about 102 credits · 9 s". */
   price?: ReactNode;
@@ -146,7 +155,7 @@ export function ClipCard(p: ClipCardProps) {
           </span>
         )}
         <span className="cc-title" id={titleId}>{p.title}</span>
-        {p.score != null && <ScoreCaution note={caution} className="small cc-score-note" />}
+        {showsScoreCaution(p.score, p.checkScore) && <ScoreCaution note={caution} className="small cc-score-note" />}
         {p.reason && <span className="small muted cc-reason">{p.reason}</span>}
         {p.price && <span className="small num cc-price" id={priceId}>{p.price}</span>}
         {p.character && <span className="small cc-char">{p.character}</span>}
@@ -163,7 +172,7 @@ export function ClipCard(p: ClipCardProps) {
       </div>
       {watching && p.playable.kind === 'file' && (
         <ClipPlayerSheet
-          id={base} title={p.title} playable={p.playable} picture={p.picture} score={p.score} scoreLabel={p.scoreLabel} reason={p.reason}
+          id={base} title={p.title} playable={p.playable} picture={p.picture} score={p.score} scoreLabel={p.scoreLabel} checkScore={p.checkScore} reason={p.reason}
           price={p.sheetPrice ?? p.price} character={p.character} action={p.action} original={p.original ?? null} onClose={() => setWatching(false)}
         />
       )}
@@ -348,7 +357,7 @@ export function RemoveClip({ title, disabled, onRemove }: { title: string; disab
  * card's own action (the same state: a change here is a change on the card), then Open the original and Close.
  */
 export function ClipPlayerSheet({
-  id, title, playable, picture, score, scoreLabel = 'Score', reason, price, character, action, original, onClose,
+  id, title, playable, picture, score, scoreLabel = 'Score', checkScore = false, reason, price, character, action, original, onClose,
 }: {
   id: string;
   title: string;
@@ -356,6 +365,8 @@ export function ClipPlayerSheet({
   picture: CardPictureSpec;
   score?: number | null;
   scoreLabel?: string;
+  /** The score is the free check's: the score test's label stands beside it (see ClipCardProps.checkScore). */
+  checkScore?: boolean;
   reason?: ReactNode;
   price?: ReactNode;
   character?: string | null;
@@ -430,7 +441,7 @@ export function ClipPlayerSheet({
               {score != null && (
                 <span className="num player-score">
                   <span className="sr-only">{scoreLabel}: </span><b>{score}</b><span className="muted">/100</span>
-                  <ScoreCaution note={caution} className="player-score-note" />
+                  {showsScoreCaution(score, checkScore) && <ScoreCaution note={caution} className="player-score-note" />}
                 </span>
               )}
               {score != null && reason ? <span className="muted"> · </span> : null}

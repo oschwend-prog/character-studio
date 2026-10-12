@@ -146,7 +146,7 @@ function DropItem({ row, roster, now }: { row: TrackerRow; roster: ReadonlyArray
     <>
       <ClipCard
         id={`a-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
-        score={score ?? undefined} scoreTitle="The free check’s score: how likely the clip gets views with him in it" reason={reason}
+        score={score ?? undefined} scoreTitle="The free check’s score: how likely the clip gets views with him in it" checkScore reason={reason}
         price={priced ? cardPrice(credits, e.length_s) : d.state === 'checking' || d.state === 'uploading' ? 'priced by the check' : undefined}
         sheetPrice={priced ? `about ${credits} credits · ${sectionLabel(e.start_s, e.length_s)}` : undefined}
         character={isDeciding(row) ? 'Recommend: chosen after the check' : row.character_slug ? `For ${row.character_name ?? nameOf(row.character_slug)}` : 'No character yet'}

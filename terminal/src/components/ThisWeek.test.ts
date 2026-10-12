@@ -7,7 +7,7 @@ import { StudioProvider } from '../lib/store';
 import { scoreNote } from '../lib/weekly';
 import { parseWeekly, type WeeklyDigest } from '../lib/weekly';
 import type { RunRow } from '../lib/types';
-import { ClipCard, ScoreCaution } from './ClipCard';
+import { ClipCard, ScoreCaution, showsScoreCaution } from './ClipCard';
 import { WeekCard } from './ThisWeek';
 
 const URL_ = 'https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-12?expand=1';
@@ -94,25 +94,39 @@ describe('the score test label beside a clip score', () => {
 });
 
 describe('ClipCard with the score test', () => {
-  const card = (score: number | null | undefined) =>
+  const card = (score: number | null | undefined, over: Record<string, unknown> = {}) =>
     renderToStaticMarkup(
       createElement(StudioProvider, {
         backend: new DemoBackend(),
         children: createElement(ClipCard, {
           id: 'f-1', title: 'A clip', picture: { sources: [], thumb: { thumbnail_url: null, platform: 'tiktok', creator_handle: null } as never },
-          playable: { kind: 'none' }, score,
+          playable: { kind: 'none' }, score, ...over,
         }),
       }),
     );
 
-  it('before any weekly review a scored clip says unproven', () => {
-    const out = card(72);
+  it('before any weekly review the check score says unproven', () => {
+    const out = card(72, { checkScore: true });
     expect(out).toContain('cc-score-note');
     expect(out).toContain('>unproven<');
   });
 
   it('a clip with no score, or a card that shows no score, gets no label', () => {
-    expect(card(null)).not.toContain('cc-score-note');
-    expect(card(undefined)).not.toContain('cc-score-note');
+    expect(card(null, { checkScore: true })).not.toContain('cc-score-note');
+    expect(card(undefined, { checkScore: true })).not.toContain('cc-score-note');
+  });
+
+  it('a Hits card ("How hot") is not the check score: no label, whatever the test says', () => {
+    expect(card(72, { scoreLabel: 'How hot' })).not.toContain('cc-score-note');
+    expect(card(72)).not.toContain('cc-score-note'); // a score nobody said is the check's gets no caution either
+  });
+
+  it('the card and its player sheet share one rule: the check score only, and only when there is a score', () => {
+    expect(showsScoreCaution(72, true)).toBe(true);
+    expect(showsScoreCaution(0, true)).toBe(true); // a score of 0 is a score
+    expect(showsScoreCaution(72, false)).toBe(false);
+    expect(showsScoreCaution(72, undefined)).toBe(false); // the player sheet of a hit
+    expect(showsScoreCaution(null, true)).toBe(false);
+    expect(showsScoreCaution(undefined, true)).toBe(false);
   });
 });
