@@ -46,7 +46,8 @@ test; a middle 80 % of the scores under 15 points wide is ``uninformative``, nev
 (shares), follows per 1K and watched %, and his median skip rate as a ceiling; per character when he has 4 readings, else the
 studio-wide median; pending below 6 readings studio-wide ("no data in the cloud yet" when there is none at all). The first weekly run
 for a week that ends on or after Sun 18 Oct stores them in its ``details.floors``; every later run copies the fixed ones from the
-latest run that has them and only fills the pending ones, writing down the day (a fixed floor is never recomputed). They diagnose
+latest run that has them and only fills the pending ones, writing down the day (a fixed floor is never recomputed): the first fix
+records Sun 18 Oct, the end of weeks 1-2; a later fix the London date the 6th reading arrived. They diagnose
 only: from Mon 19 Oct a post below two of them is named on the Hook line with what failed (hook, hold, sends, follows).
 
 **Proposals** (4.1, 4.3, 3.3): a rule candidate is a tag value that passes entry conditions 1-3 (5 clips on each side, a median at
@@ -395,18 +396,46 @@ def post_metric_values(snapshots: Iterable[Snapshot]) -> dict[str, float]:
     return out
 
 
-def floor_readings(store: Store, start: date = FLOORS_FROM, end: date = FLOORS_TO) -> dict[str, dict[str, list[float]]]:
-    """``{metric: {character: [one reading per post]}}`` of the Instagram posts posted from ``start`` to ``end`` (London days, both
-    included): the baseline of weeks 1-2. A post that has no reading of a metric is not in its list."""
-    out: dict[str, dict[str, list[float]]] = {}
+def _baseline_posts(store: Store, start: date, end: date) -> Iterable[tuple[str, list[Snapshot]]]:
+    """``(character, the post's snapshots)`` of the Instagram posts posted from ``start`` to ``end`` (London days, both included)."""
     for account in store.accounts():
         if account.platform.value != INSTAGRAM:
             continue
         for post in store.list_posts(account_id=account.id, status=PostStatus.posted):
-            if not start <= posted_at(post).astimezone(LONDON).date() <= end:
-                continue
-            for metric, value in post_metric_values(store.snapshots_for(post.id)).items():
-                out.setdefault(metric, {}).setdefault(account.character_slug, []).append(value)
+            if start <= posted_at(post).astimezone(LONDON).date() <= end:
+                yield account.character_slug, store.snapshots_for(post.id)
+
+
+def floor_readings(store: Store, start: date = FLOORS_FROM, end: date = FLOORS_TO) -> dict[str, dict[str, list[float]]]:
+    """``{metric: {character: [one reading per post]}}`` of the Instagram posts posted from ``start`` to ``end`` (London days, both
+    included): the baseline of weeks 1-2. A post that has no reading of a metric is not in its list."""
+    out: dict[str, dict[str, list[float]]] = {}
+    for slug, snaps in _baseline_posts(store, start, end):
+        for metric, value in post_metric_values(snaps).items():
+            out.setdefault(metric, {}).setdefault(slug, []).append(value)
+    return out
+
+
+def post_metric_arrivals(snapshots: Iterable[Snapshot]) -> dict[str, datetime]:
+    """When each of a post's floor metrics first existed: the ``captured_at`` of the EARLIEST snapshot that reports it (a later
+    snapshot may change the value, not the day the reading arrived). A metric nothing reported is left out."""
+    out: dict[str, datetime] = {}
+    for snap in snapshots:
+        if snap.captured_at is None:
+            continue
+        for metric in post_metric_values([snap]):
+            if metric not in out or snap.captured_at < out[metric]:
+                out[metric] = snap.captured_at
+    return out
+
+
+def floor_arrivals(store: Store, start: date = FLOORS_FROM, end: date = FLOORS_TO) -> dict[str, list[datetime]]:
+    """``{metric: [when each reading arrived]}`` for the same posts as ``floor_readings``, pooled over the characters (the studio-wide
+    floor is fixed by the 6th of them): ``compute_floors`` dates a later fix by the 6th."""
+    out: dict[str, list[datetime]] = {}
+    for _, snaps in _baseline_posts(store, start, end):
+        for metric, moment in post_metric_arrivals(snaps).items():
+            out.setdefault(metric, []).append(moment)
     return out
 
 
@@ -420,6 +449,7 @@ def _pending_reason(n: int) -> str:
 
 def compute_floors(
     readings: dict[str, dict[str, list[float]]], characters: Sequence[str], *, today: date, previous: dict[str, Any] | None = None,
+    arrivals: Mapping[str, Sequence[datetime]] | None = None,
 ) -> dict[str, Any]:
     """The floors (plan 3.8, frozen). ``readings`` is ``floor_readings``'s ``{metric: {character: [values]}}``; ``previous`` the
     ``floors`` of an earlier weekly run.
@@ -427,7 +457,10 @@ def compute_floors(
     Per metric: **studio-wide** the median of every reading once there are at least 6 (else it is ``pending`` with the reason: none
     at all means "no data in the cloud yet"); **per character** the median of his own readings when he has at least 4, else the
     studio-wide median. A pending metric stays pending for everybody (even a character with 4 readings) until the 6th reading
-    arrives; the day a metric is fixed is written down (``fixed_on``, ``today``). **A fixed floor is never recomputed**: whatever
+    arrives. **The day a metric is fixed is written down** (``fixed_on``): the first computation (no ``previous``) records Sun 18 Oct,
+    the end of weeks 1-2, whatever day the run happens; a later fix records the London date the 6th reading arrived (``arrivals``,
+    ``{metric: [when each reading arrived]}`` from ``floor_arrivals``: the reading's own time, not the run's), or ``today`` when no
+    times are given. **A fixed floor is never recomputed**: whatever
     ``previous`` has fixed is copied as it is, and only pending ones are filled. A character who joins later gets the fixed
     studio-wide value (or his own median if he already has 4 readings).
 
@@ -435,6 +468,14 @@ def compute_floors(
     an entry is ``{"kind", "status": "fixed", "value", "n", ...}`` or ``{"kind", "status": "pending", "n", "needed", "reason"}``.
     """
     prev = previous or {}
+    first_computation = not prev.get("computed")
+
+    def fixed_day(metric: str) -> str:
+        if first_computation:
+            return FLOORS_TO.isoformat()
+        moments = sorted((arrivals or {}).get(metric, ()))
+        return moments[FLOOR_MIN_STUDIO - 1].astimezone(LONDON).date().isoformat() if len(moments) >= FLOOR_MIN_STUDIO else today.isoformat()
+
     prev_studio = prev.get("studio") or {}
     prev_chars = prev.get("characters") or {}
     prev_fixed_on = prev.get("fixed_on") or {}
@@ -448,8 +489,9 @@ def compute_floors(
             studio[metric] = dict(prev_studio[metric])
             fixed_on[metric] = prev_fixed_on.get(metric) or studio[metric].get("fixed_on")
         elif len(pooled) >= FLOOR_MIN_STUDIO:
-            studio[metric] = {"kind": kind, "status": "fixed", "value": statistics.median(pooled), "n": len(pooled), "fixed_on": today.isoformat()}
-            fixed_on[metric] = today.isoformat()
+            day = fixed_day(metric)
+            studio[metric] = {"kind": kind, "status": "fixed", "value": statistics.median(pooled), "n": len(pooled), "fixed_on": day}
+            fixed_on[metric] = day
         else:
             studio[metric] = {
                 "kind": kind, "status": "pending", "n": len(pooled), "needed": FLOOR_MIN_STUDIO, "reason": _pending_reason(len(pooled)),
@@ -1243,7 +1285,7 @@ def run_weekly(
     def make_floors() -> dict[str, Any]:
         if earlier_floors is None and not floors_due(monday):
             return {"computed": False, "reason": f"set after Sun {FLOORS_TO.day} Oct, by the first review of a week that ends then or later"}
-        return compute_floors(floor_readings(store), live, today=today, previous=earlier_floors)
+        return compute_floors(floor_readings(store), live, today=today, previous=earlier_floors, arrivals=floor_arrivals(store))
 
     floors = part("floors", make_floors, {"computed": False, "reason": "failed, see notes"})
     pending = [m for m, e in floors.get("studio", {}).items() if e["status"] == "pending"]

@@ -432,7 +432,7 @@ def test_the_floor_is_the_median_of_the_characters_own_readings_with_4_or_more()
     assert f["studio"][SENDS]["n"] == 7
     own = f["characters"]["franz"][SENDS]
     assert (own["status"], own["value"], own["basis"], own["n"]) == ("fixed", 2.5, "character", 4)  # median of his four
-    assert f["fixed_on"][SENDS] == "2026-10-19"
+    assert f["fixed_on"][SENDS] == "2026-10-18"  # the first fix records the end of weeks 1-2, not the day the run happened
 
 
 def test_fewer_than_4_of_his_own_readings_take_the_studio_wide_median():
@@ -486,10 +486,38 @@ def test_a_fixed_floor_is_never_recomputed_and_a_pending_one_is_filled_when_the_
         ["a"], today=date(2026, 10, 26), previous=first,
     )
     assert later["studio"][SENDS] == first["studio"][SENDS] and later["characters"]["a"][SENDS] == first["characters"]["a"][SENDS]
-    assert later["fixed_on"][SENDS] == "2026-10-19"  # the day it was fixed stays
+    assert later["fixed_on"][SENDS] == "2026-10-18"  # the day it was fixed stays
     w = later["studio"]["watched_pct"]
-    assert (w["status"], w["value"], w["n"]) == ("fixed", 75.0, 6) and later["fixed_on"]["watched_pct"] == "2026-10-26"  # the date is written down
+    assert (w["status"], w["value"], w["n"]) == ("fixed", 75.0, 6) and later["fixed_on"]["watched_pct"] == "2026-10-26"  # no times given: the run's day
     assert later["characters"]["a"]["watched_pct"]["value"] == 75.0
+
+
+def arrivals_at(*moments: datetime) -> dict[str, list[datetime]]:
+    return {"watched_pct": list(moments)}
+
+
+def test_a_later_fix_records_the_london_day_the_6th_reading_arrived_not_the_day_of_the_run():
+    first = weekly.compute_floors(readings(sends_per_1k={"a": [1.0] * 6}, watched_pct={"a": [50.0, 60.0]}), ["a"], today=TODAY)
+    values = readings(sends_per_1k={"a": [1.0] * 6}, watched_pct={"a": [50.0, 60.0, 70.0, 80.0, 90.0, 100.0, 40.0]})
+    moments = [datetime(2026, 10, d, 12, 0, tzinfo=timezone.utc) for d in (20, 20, 21, 21, 22, 22)] + [datetime(2026, 10, 25, 12, 0, tzinfo=timezone.utc)]
+    later = weekly.compute_floors(values, ["a"], today=date(2026, 10, 26), previous=first, arrivals=arrivals_at(*reversed(moments)))
+    # the 6th earliest arrival is 22 Oct 12:00; the 7th (25 Oct) and the run (26 Oct) do not matter
+    assert later["fixed_on"]["watched_pct"] == "2026-10-22" and later["studio"]["watched_pct"]["fixed_on"] == "2026-10-22"
+    assert later["fixed_on"][SENDS] == "2026-10-18"
+
+
+def test_the_day_of_the_6th_reading_is_a_london_day_not_a_utc_one():
+    first = weekly.compute_floors(readings(), ["a"], today=TODAY)
+    values = readings(watched_pct={"a": [50.0] * 6})
+    late = [datetime(2026, 10, 20, h, 0, tzinfo=timezone.utc) for h in (1, 2, 3, 4, 5)] + [datetime(2026, 10, 22, 23, 30, tzinfo=timezone.utc)]  # BST: 00:30 on the 23rd
+    later = weekly.compute_floors(values, ["a"], today=date(2026, 10, 26), previous=first, arrivals=arrivals_at(*late))
+    assert later["fixed_on"]["watched_pct"] == "2026-10-23"
+
+
+def test_the_first_fix_is_the_end_of_weeks_1_and_2_however_late_the_first_run_is():
+    values = readings(sends_per_1k={"a": [1.0] * 6})
+    first = weekly.compute_floors(values, ["a"], today=date(2026, 11, 2), arrivals={"sends_per_1k": [datetime(2026, 10, 30, tzinfo=timezone.utc)] * 6})
+    assert first["fixed_on"][SENDS] == "2026-10-18"
 
 
 def test_a_character_who_joins_later_gets_the_fixed_studio_value_not_a_new_median():
@@ -1111,7 +1139,7 @@ def test_the_baseline_week_sets_the_floors_on_the_first_run_and_pending_ones_say
     f = out["floors"]
     assert f["computed"] is True and f["basis"]["from"] == "2026-10-05" and f["basis"]["to"] == "2026-10-18"
     sends = f["studio"]["sends_per_1k"]
-    assert sends["status"] == "fixed" and sends["n"] == 13 and f["fixed_on"]["sends_per_1k"] == "2026-10-19"  # 10 + 3 readings
+    assert sends["status"] == "fixed" and sends["n"] == 13 and f["fixed_on"]["sends_per_1k"] == "2026-10-18"  # 10 + 3 readings; the first fix: end of weeks 1-2
     assert f["characters"]["franz"]["sends_per_1k"]["basis"] == "character" and f["characters"]["lenny"]["sends_per_1k"]["basis"] == "studio"
     assert f["characters"]["franz"]["skip_rate"]["kind"] == "ceiling"
     assert any(n.startswith("score test: 0 of 20") for n in out["notes"])
@@ -1147,13 +1175,14 @@ def test_later_runs_copy_the_fixed_floors_and_never_recompute_them(tmp_path):
 def test_a_floor_that_was_pending_is_filled_by_a_later_run_with_the_date_written_down(tmp_path):
     w = World()
     for i in range(3):
-        w.post("franz", datetime(2026, 10, 13 + i, 19, 0, tzinfo=LONDON), snaps=[{"views": 1000, "shares": 10 + i}])
+        w.post("franz", datetime(2026, 10, 13 + i, 19, 0, tzinfo=LONDON), snaps=[{"views": 1000, "shares": 10 + i, "at": datetime(2026, 10, 20, 10, 0, tzinfo=timezone.utc)}])
     first = run(w, tmp_path)
     assert first["floors"]["studio"]["sends_per_1k"]["status"] == "pending" and first["floors"]["fixed_on"]["sends_per_1k"] is None
-    for i in range(3):
-        w.post("franz", datetime(2026, 10, 16 + i, 19, 0, tzinfo=LONDON), snaps=[{"views": 1000, "shares": 20 + i}])
+    for i, at in enumerate([(20, 0), (21, 0), (23, 30)]):  # the 4th..6th readings arrive on 22 Oct, the last at 23:30 UTC: 00:30 on the 23rd in London
+        w.post("franz", datetime(2026, 10, 16 + i, 19, 0, tzinfo=LONDON), snaps=[{"views": 1000, "shares": 20 + i, "at": datetime(2026, 10, 22, *at, tzinfo=timezone.utc)}])
     second = run(w, tmp_path, monday=date(2026, 10, 19), now=datetime(2026, 10, 26, 6, 15, tzinfo=LONDON))
-    assert second["floors"]["studio"]["sends_per_1k"]["status"] == "fixed" and second["floors"]["fixed_on"]["sends_per_1k"] == "2026-10-26"
+    # the day is the one the 6th reading arrived (London), not the day of the run (26 Oct)
+    assert second["floors"]["studio"]["sends_per_1k"]["status"] == "fixed" and second["floors"]["fixed_on"]["sends_per_1k"] == "2026-10-23"
 
 
 def test_rerunning_the_same_week_rewrites_its_reviews_and_logs_another_run(tmp_path):
