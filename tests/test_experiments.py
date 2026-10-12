@@ -292,15 +292,12 @@ def test_the_position_is_the_number_of_his_clips_that_carry_the_key():
     assert block_position(store, "franz", "length") == 0
 
 
-def test_a_dropped_or_rejected_clip_gives_its_place_back_and_the_picks_own_earlier_try_is_not_counted():
+def test_every_clip_that_ever_got_the_arm_keeps_its_place_whatever_became_of_it():
+    """I1: a rejected or dropped clip, and an earlier try of the same pick, still count: a position is never given twice."""
     store = world()
-    clip_with(store, "franz", {"trial": True}, state="posted")
-    clip_with(store, "franz", {"trial": False}, state="dropped")
-    clip_with(store, "franz", {"trial": False}, state="rejected")
-    clip_with(store, "franz", {"trial": True}, state="planned", fav_id="pick-1")  # a try of the pick being made again
-    assert block_position(store, "franz", "trial") == 2
-    assert block_position(store, "franz", "trial", exclude_pick_id="pick-1") == 1
-    assert block_position(store, "franz", "trial", exclude_pick_id="other") == 2
+    for state in ("posted", "dropped", "rejected", "generating", "planned"):
+        clip_with(store, "franz", {"trial": True}, state=state, fav_id="pick-1" if state == "planned" else None)
+    assert block_position(store, "franz", "trial") == 5
 
 
 def test_assign_blocks_gives_the_arm_of_the_next_place_and_only_for_active_block_coin_tests():
@@ -308,7 +305,7 @@ def test_assign_blocks_gives_the_arm_of_the_next_place_and_only_for_active_block
     c = reg.test("C")
     got = []
     for _ in range(8):
-        arms = assign_blocks(store, reg, "franz", START, pick_id="p")
+        arms = assign_blocks(store, reg, "franz", START)
         assert set(arms) == {"trial"}  # A is a tag, B the bandit, D-F are off
         got.append(arms["trial"])
         clip_with(store, "franz", arms)
@@ -388,19 +385,41 @@ def test_a_made_clip_carries_its_coin_and_the_explore_tag(experiments_on):
     assert store.get_clip(make_clip(store, top).id).features["explore_pick"] is False
 
 
-def test_the_pool_is_what_the_owner_chose_from(experiments_on):
+def test_the_pool_is_the_characters_checked_drops_with_a_score(experiments_on):
     store = world()
     ready = [add_pick(store, "franz", s) for s in (90, 80, 70)]
     add_pick(store, "reginald", 5)  # another character's clips are not his pool
-    add_pick(store, "franz", 1, state="blocked")  # not ready
+    add_pick(store, "franz", 1, state="blocked")  # a check that did not finish
+    add_pick(store, "franz", 4, state="checking")
     skipped = add_pick(store, "franz", 2)
     store.update_favorite(skipped.id, status="skipped")
-    sent_and_started = add_pick(store, "franz", 3, state="making", make={"clip_id": "c-1"})  # its make has begun: not in the pool
-    scores = sorted(drop.ready_scores(store, ready[2]))
-    assert scores == [70, 80, 90]
-    assert sorted(drop.ready_scores(store, sent_and_started)) == [3, 70, 80, 90]  # (the clip itself is always in its own pool)
+    started = add_pick(store, "franz", 3, state="making", make={"clip_id": "c-1"})  # its make has begun: still in the pool
+    add_pick(store, "franz", 85, state="made")
+    add_pick(store, "franz", 75, state="failed")  # a failed make keeps its score (a failed check keeps none)
+    add_pick(store, "franz", None, state="failed")
+    expected = [3, 70, 75, 80, 85, 90]
+    assert sorted(drop.checked_scores(store, ready[2])) == expected
+    assert sorted(drop.checked_scores(store, started)) == expected  # the same pool for every clip of the batch
     sent_now = add_pick(store, "franz", 60, state="making")
-    assert sorted(drop.ready_scores(store, sent_now)) == [60, 70, 80, 90]
+    assert sorted(drop.checked_scores(store, sent_now)) == sorted([*expected, 60])
+
+
+def test_the_median_does_not_move_while_a_batch_is_made_so_the_explore_clip_the_terminal_offered_is_tagged(experiments_on):
+    """I2, the reviewer's probe: Franz has Ready 90, 80, 70, 60, 50, 40 (median 65). The terminal offers 90, 80, 70 and, as the
+    Explore card, 50. The owner ticks all four and the makes run one after the other; each earlier make leaves the waiting set,
+    but the pool does not shrink, so 50 is still judged against 65 and tagged."""
+    store = world()
+    picks = {s: add_pick(store, "franz", s) for s in (90, 80, 70, 60, 50, 40)}
+    batch = [picks[s] for s in (90, 80, 70, 50)]
+    for pick in batch:  # tapping Make: all four are `making` before the first make runs
+        store.update_favorite(pick.id, proposal={**pick.proposal, "drop": {**pick.proposal["drop"], "state": "making"}})
+    tagged = {}
+    for pick in batch:
+        clip = make_clip(store, store.get_favorite(pick.id))
+        tagged[pick.proposal["drop"]["score"]["total"]] = store.get_clip(clip.id).features["explore_pick"]
+    assert tagged == {90: False, 80: False, 70: False, 50: True}
+    # the 60 and the 40 that were not ticked are still in the pool, as is everything made: nothing left it
+    assert sorted(drop.checked_scores(store, store.get_favorite(picks[60].id))) == [40, 50, 60, 70, 80, 90]
 
 
 def test_a_clip_with_no_score_is_never_an_exploration_pick_and_a_lone_clip_neither(experiments_on):
@@ -430,13 +449,25 @@ def test_making_the_same_pick_again_reuses_its_clip_and_its_place(experiments_on
     assert len(store.list_clips()) == 1
 
 
-def test_a_rejected_clips_place_goes_to_the_next_clip(experiments_on):
+def test_a_rejected_clip_keeps_its_place_so_the_next_clip_gets_a_new_one(experiments_on):
     store, reg = world(), load_experiments(REPO_REGISTRY)
     first = make_clip(store, add_pick(store, "franz", 70, state="making"))
-    arm0 = store.get_clip(first.id).features["test_arms"]["trial"]
     store.update_clip(first.id, state=ClipState.rejected)
     second = make_clip(store, add_pick(store, "franz", 71, state="making"))
-    assert store.get_clip(second.id).features["test_arms"]["trial"] is arm0  # the rejected clip never posted: the place is free
+    assert store.get_clip(second.id).features["test_arms"]["trial"] is block_arm(reg, reg.test("C"), "franz", 1)
+
+
+def test_a_rejection_in_the_middle_never_repeats_a_position_and_every_block_holds_two_and_two(experiments_on):
+    """The reviewer's probe (I1): clips made at positions 0, 1, 2; the second is rejected; five more are made. Every position is
+    handed out once, so every block of 4 holds 2 trial and 2 normal (the rejected clip's arm included)."""
+    store, reg = world(), load_experiments(REPO_REGISTRY)
+    made = [make_clip(store, add_pick(store, "franz", 50 + i, state="making")) for i in range(3)]
+    store.update_clip(made[1].id, state=ClipState.rejected)
+    made += [make_clip(store, add_pick(store, "franz", 60 + i, state="making")) for i in range(5)]
+    arms = [store.get_clip(c.id).features["test_arms"]["trial"] for c in made]
+    assert arms == [block_arm(reg, reg.test("C"), "franz", i) for i in range(8)]  # positions 0..7, none twice
+    assert Counter(arms[:4]) == {True: 2, False: 2} == Counter(arms[4:])
+    assert block_position(store, "franz", "trial") == 8
 
 
 def test_with_every_test_off_a_clip_is_made_exactly_as_before():

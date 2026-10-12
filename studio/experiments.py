@@ -9,8 +9,9 @@ on (London).
 
 **The block coin** (section 3.0; tests C, D, E, F). Each test has its own coin, so two tests never line up and none lines up with
 the caption rotation. A character's clips are numbered by the tests they carry: the next clip is at ``position`` = the number of his
-earlier clips that already carry the test's ``key`` in ``features['test_arms']`` (a clip that was dropped or rejected never posts,
-so it gives its place back; the pick's own earlier clip is not counted either). Positions are cut into blocks of ``block``; a block
+earlier clips that ever carried the test's ``key`` in ``features['test_arms']``: EVERY one, whatever became of it (a clip that was
+dropped, rejected or failed keeps its place, as does an earlier try of the same pick), so a position is never given out twice. A
+clip that never posts leaves a hole in its block rather than a duplicate: the arms handed out stay 2 and 2 in every 4. Positions are cut into blocks of ``block``; a block
 holds every arm exactly ``block / len(arms)`` times (or ``arms[name]`` times when ``arms`` is a name -> count object, test D's
 1 in 3) in an order shuffled by ``random.Random`` seeded from the registry ``seed``, the test id, the character and the block
 number. So the same character, test, position and seed always give the same arm, whatever else happened, and no run of four posts
@@ -18,7 +19,8 @@ is ever lopsided. ``assign_blocks`` returns ``{key: arm}`` for every active bloc
 settings row lock (``drop._new_or_current_clip``), so two makes of one character never read the same position.
 
 **Test A** (section 3.2) is a tag, not a coin: ``explore_pick`` is true when the clip's score is below the median score of the
-character's ready clips at the moment it is made (``is_explore``; the pool is given by the caller and holds the clip itself).
+character's checked drops (ready, being made or made, ``drop.checked_scores``: so the median does not move while a batch is made;
+``is_explore``; the pool is given by the caller and holds the clip itself).
 The owner still ticks what is made; the terminal's suggestions (``terminal/src/lib/ranking.ts``) offer one such clip in every 4.
 
 **Test B** is the hook bandit (``studio.learn``); this module only validates its entry (arms per character, floor, ceiling).
@@ -36,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from studio.config import LONDON
-from studio.models import HOOK_PATTERNS, ClipState
+from studio.models import HOOK_PATTERNS
 from studio.store import Store
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,7 +47,6 @@ EXPERIMENTS_PATH = ROOT / "config" / "experiments.json"
 TEST_IDS = ("A", "B", "C", "D", "E", "F")
 STATUSES = ("on", "off")
 ASSIGNMENTS = ("tag", "block_coin", "bandit")
-GIVEN_BACK = (ClipState.dropped, ClipState.rejected)  # a clip in these states never posts: its place in a block is free again
 MIN_EXPLORE_POOL = 2  # a median needs at least two scored clips; with one, nothing is "below" it
 
 
@@ -249,27 +250,23 @@ def block_arm(registry: Registry, test: Experiment, character: str, position: in
     return block_order(registry.seed, test, character, position // test.block)[position % test.block]
 
 
-def block_position(store: Store, character: str, key: str, *, exclude_pick_id: str | None = None) -> int:
-    """How many of the character's clips already carry ``key`` in their ``test_arms`` (a dropped or rejected one gives its place
-    back; the clip of ``exclude_pick_id``, an earlier try of the pick being made, is not counted)."""
-    n = 0
-    for clip in store.list_clips(character_slug=character):
-        arms = clip.features.get("test_arms")
-        if not isinstance(arms, Mapping) or key not in arms or clip.state in GIVEN_BACK:
-            continue
-        if exclude_pick_id is not None and clip.features.get("fav_id") == exclude_pick_id:
-            continue
-        n += 1
-    return n
+def block_position(store: Store, character: str, key: str) -> int:
+    """How many of the character's clips ever carried ``key`` in their ``test_arms``: all of them, rejected, dropped and failed
+    ones included, so the next position is never one that was already given out (a rejected clip in the middle leaves a hole in
+    its block, never a duplicate)."""
+    return sum(
+        1 for clip in store.list_clips(character_slug=character)
+        if isinstance(arms := clip.features.get("test_arms"), Mapping) and key in arms
+    )
 
 
-def assign_blocks(store: Store, registry: Registry, character: str, now: datetime, *, pick_id: str | None = None) -> dict[str, Any]:
+def assign_blocks(store: Store, registry: Registry, character: str, now: datetime) -> dict[str, Any]:
     """``{key: arm}`` for every active block-coin test, for the character's next clip (``{}`` when none is active). Call it under
     the settings row lock so two makes of one character cannot read the same position."""
     out: dict[str, Any] = {}
     for test in registry.active(now):
         if test.assignment == "block_coin" and test.key:
-            position = block_position(store, character, test.key, exclude_pick_id=pick_id)
+            position = block_position(store, character, test.key)
             out[test.key] = block_arm(registry, test, character, position)
     return out
 
@@ -278,8 +275,8 @@ def assign_blocks(store: Store, registry: Registry, character: str, now: datetim
 
 
 def is_explore(score_total: int | None, pool: Sequence[int]) -> bool:
-    """Test A's tag: the clip's score is below the median of ``pool`` (the scores of the character's ready clips at this moment,
-    the clip itself included). False for a clip with no score and for a pool of fewer than two scores."""
+    """Test A's tag: the clip's score is below the median of ``pool`` (the scores of the character's checked drops, the clip itself
+    included). False for a clip with no score and for a pool of fewer than two scores."""
     if score_total is None or len(pool) < MIN_EXPLORE_POOL:
         return False
     return score_total < statistics.median(pool)

@@ -109,6 +109,18 @@ describe('the Adjust: the same rules as the CLI and request_job', () => {
     expect(adjustChanges(LANDSCAPE, { ...effectiveDrop(LANDSCAPE), crop_x: 0.25 })).toEqual({ crop_x: 0.25 });
     expect(adjustChanges(READY, { ...same, gadgets: [] })).toEqual({ gadgets: [] });
   });
+
+  it('sends a hook the owner chose even when it is the check\'s first, and none he never touched', () => {
+    const base = effectiveDrop(READY);
+    const same = { ...base, gadgets: [...base.gadgets], crop_x: null };
+    expect(base.hook).toBe(READY.hooks?.[0]);
+    expect(adjustChanges(READY, same)).toEqual({}); // untouched: not sent, the studio may use another of the three
+    expect(adjustChanges(READY, same, false)).toEqual({});
+    expect(adjustChanges(READY, same, true)).toEqual({ hook: base.hook }); // he picked hook #1 on purpose: his choice
+    expect(adjustChanges(READY, { ...same, hook: `  ${base.hook}  ` }, true)).toEqual({ hook: base.hook });
+    expect(adjustChanges(READY, { ...same, hook: READY.hooks?.[1] ?? 'x' }, false)).toEqual({ hook: READY.hooks?.[1] }); // a changed hook is always sent
+    expect(adjustChanges(READY, { ...same, hook: '   ' }, true)).toEqual({}); // an empty line is no choice
+  });
 });
 
 describe('the drop box', () => {

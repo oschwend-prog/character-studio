@@ -145,15 +145,22 @@ export function validateAdjust(adjust: DropAdjust, d: DropCard): { ok: true } | 
   return { ok: true };
 }
 
-/** Only what the owner changed (an unchanged value is not sent, so the check's own choice stays the default). */
-export function adjustChanges(d: DropCard, wanted: Required<Omit<DropAdjust, 'crop_x'>> & { crop_x: number | null }): DropAdjust {
+/**
+ * Only what the owner changed (an unchanged value is not sent, so the check's own choice stays the default). The hook is the one
+ * exception: `hookChosen` says he touched it (picked one of the check's hooks, the first included, or typed his own), and a hook
+ * he chose is sent even when it is the line the check put first. It is his explicit choice, and the studio never swaps it (the
+ * hook bandit, learning test B, draws only when no hook is sent).
+ */
+export function adjustChanges(
+  d: DropCard, wanted: Required<Omit<DropAdjust, 'crop_x'>> & { crop_x: number | null }, hookChosen = false,
+): DropAdjust {
   const base = effectiveDrop(d);
   const out: DropAdjust = {};
   if (wanted.star.trim() && wanted.star.trim() !== base.star) out.star = wanted.star.trim();
   if (wanted.part !== base.part) out.part = wanted.part;
   const g = wanted.gadgets.map((x) => x.trim()).filter(Boolean);
   if (g.join('\u0000') !== base.gadgets.join('\u0000')) out.gadgets = g;
-  if (wanted.hook.trim() && wanted.hook.trim() !== base.hook) out.hook = wanted.hook.trim();
+  if (wanted.hook.trim() && (hookChosen || wanted.hook.trim() !== base.hook)) out.hook = wanted.hook.trim();
   if (wanted.start_s !== base.start_s || wanted.length_s !== base.length_s) {
     out.start_s = wanted.start_s;
     out.length_s = wanted.length_s;

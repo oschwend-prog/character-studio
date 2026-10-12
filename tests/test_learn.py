@@ -503,10 +503,27 @@ def test_the_owners_own_hook_always_wins_and_is_not_drawn(experiments_on):
     assert drop.effective(drop.drop_of(store.get_favorite(second.id)))["hook"] == "Kindly do not tell the Duchess."
 
 
-def test_an_adjust_that_kept_the_default_hook_changes_nothing_so_the_bandit_still_draws(experiments_on):
+def test_an_explicit_choice_of_the_checks_first_hook_is_the_owners_and_the_bandit_never_swaps_it(experiments_on):
+    """I3: he picked hook #1 in Adjust (the terminal sends a hook he touched even when it is the check's first): his choice."""
     store = World().store
-    f = store.get_clip(made(store, add_pick(store, adjust={"hook": " the household is UNAWARE. ", "part": "star"})).id).features
-    assert f["hook_by"] == "bandit" and f["test_arms"]["hook"] == "false-premise"
+    pick = add_pick(store, adjust={"hook": " the household is UNAWARE. ", "part": "star"})
+    f = store.get_clip(made(store, pick).id).features
+    assert (f["hook_by"], f["hook_index"], f["hook_pattern"], f["hook_text"]) == ("owner", 1, "understatement", "the household is UNAWARE.")
+    assert "hook" not in f["test_arms"] and "bandit" not in (drop.drop_of(store.get_favorite(pick.id)).get("make") or {})
+    d = drop.drop_of(store.get_favorite(pick.id))
+    assert drop.effective(d)["hook"] == "the household is UNAWARE." and clips.learn_problems(f) == []
+    # it is not tallied for the bandit either: only its own draws are
+    assert drop.owner_chose_hook(d) and not drop.owner_chose_hook(drop.drop_of(add_pick(store)))
+
+
+def test_an_adjust_that_never_touched_the_hook_leaves_it_to_the_bandit(experiments_on):
+    """The other side: no hook in the Adjust (he changed only the part) means no choice, so the bandit still draws."""
+    store = World().store
+    pick = add_pick(store, adjust={"part": "star"})
+    f = store.get_clip(made(store, pick).id).features
+    assert f["hook_by"] == "bandit" and f["test_arms"]["hook"] == "false-premise" and f["hook_text"] == "Breakfast is at eight."
+    assert drop.effective(drop.drop_of(store.get_favorite(pick.id)))["hook"] == "Breakfast is at eight."
+    assert not drop.owner_chose_hook(drop.drop_of(store.get_favorite(pick.id)))
 
 
 def test_a_check_with_no_arm_pattern_keeps_the_first_hook_and_draws_nothing(experiments_on):

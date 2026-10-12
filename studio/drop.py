@@ -99,10 +99,11 @@ the owner's latest Adjust). A drop checked before this build is made with ``none
 **The learning tests at Make it** (``docs/launch/measurement-and-learning-plan.md`` section 3, ``config/experiments.json``,
 ``studio.experiments``, ``studio.learn``). When a clip is created, under the settings row lock: every active block-coin test writes
 its arm into ``features['test_arms']`` (test C: ``trial``, true / false, the clip's Trial Reel coin, read by the publisher); test A
-tags ``explore_pick`` (the clip's score is below the median of the character's ready scores, ``ready_scores``); test B, the hook
+tags ``explore_pick`` (the clip's score is below the median of the character's checked scores, ``checked_scores``: ready, being
+made, made, so the median does not move while a batch is made); test B, the hook
 bandit, draws a hook pattern for the character and puts the check's candidate of that pattern on screen: ``test_arms['hook']`` is
 the pattern, ``hook_by`` is ``bandit`` and the draw is kept in ``drop['make']['bandit']`` so the master renders the same hook
-(``effective``). The owner's own hook (his Adjust changed it) is never drawn over (``hook_by`` ``owner``, no ``hook`` arm). A test that
+(``effective``). The owner's own hook (his Adjust saved one: any explicit choice, the check's first included) is never drawn over (``hook_by`` ``owner``, no ``hook`` arm). A test that
 is ``off``, or not started, assigns nothing; a broken registry stops the make before anything is reserved.
 
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
@@ -712,15 +713,15 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any], *, lead_s: float = 0.0
 def effective(drop: Mapping[str, Any], *, lead_s: float = 0.0, swap_part: str | None = None) -> dict[str, Any]:
     """What the make job uses: the process job's choices with the owner's Adjust on top (``lead_s``: see ``validate_adjust``).
     His part: the owner's Adjust, else the character's own (refs.json ``swap_part``, read at Make it: Franz performs as the star),
-    else the check's suggestion, else featured. His hook: the owner's Adjust when it changed the check's hook, else the one the hook
-    bandit drew at Make it (``drop['make']['bandit']``, learning test B), else the check's first."""
+    else the check's suggestion, else featured. His hook: the owner's Adjust when it saved one (any explicit choice, the check's first
+    included), else the one the hook bandit drew at Make it (``drop['make']['bandit']``, learning test B), else the check's first."""
     adjust = validate_adjust(drop.get("adjust"), drop, lead_s=lead_s)
     window = drop.get("window") or {}
     star = drop.get("star") or {}
     hook = adjust.get("hook", drop.get("hook"))
     chosen = bandit_hook(drop)
-    if chosen is not None and ("hook" not in adjust or _same_line(adjust["hook"], drop.get("hook"))):
-        hook = chosen  # the bandit's draw, unless the owner's Adjust changed the hook (his own line always wins)
+    if chosen is not None and "hook" not in adjust:
+        hook = chosen  # the bandit's draw, unless the owner's Adjust saved a hook (his own choice always wins)
     return {
         "star": adjust.get("star", star.get("description")),
         "body": star.get("body"),
@@ -1456,18 +1457,19 @@ def bandit_hook(drop: Mapping[str, Any]) -> str | None:
     return b["hook"] if b else None
 
 
-def owner_changed_hook(drop: Mapping[str, Any]) -> bool:
-    """Did the owner's Adjust put a hook of his own on the clip: one that differs from the check's (an Adjust that kept the
-    default changed nothing)."""
+def owner_chose_hook(drop: Mapping[str, Any]) -> bool:
+    """Did the owner's Adjust save a hook: any explicit choice, his own line or one of the check's three (the first included).
+    The terminal sends ``hook`` only when he touched the hook in Adjust, so a hook that is there IS his choice, even when it is
+    the line the check put first; one he never touched is not in the Adjust and the bandit may draw."""
     adjusted = (drop.get("adjust") or {}).get("hook")
-    return isinstance(adjusted, str) and not _same_line(adjusted, drop.get("hook"))
+    return isinstance(adjusted, str) and bool(adjusted.strip())
 
 
 def _hook_tags(drop: Mapping[str, Any], look: Mapping[str, Any], hook: Any) -> dict[str, Any]:
     """Which hook went on screen (learning plan tag 3). ``hook_index`` 1-3 = the check's hook of that place (case and spaces
     aside), with the pattern the check gave it (``"none"`` for a check made before the labels); 0 = none of them (the owner's own
-    line): its pattern is ``"owner"``, never guessed from the nearest one. ``hook_by`` is ``owner`` when his Adjust changed the
-    hook (an Adjust that kept the default changed nothing), ``bandit`` when it is the hook the bandit drew at Make it
+    line): its pattern is ``"owner"``, never guessed from the nearest one. ``hook_by`` is ``owner`` when his Adjust saved a
+    hook (any explicit choice, the check's first included: ``owner_chose_hook``), ``bandit`` when it is the hook the bandit drew at Make it
     (``drop['make']['bandit']``, test B: its own pattern and place), else ``studio``."""
     hooks = list(look.get("hooks") or drop.get("hooks") or [])
     labels = list(look.get("hook_patterns") or [])
@@ -1476,7 +1478,7 @@ def _hook_tags(drop: Mapping[str, Any], look: Mapping[str, Any], hook: Any) -> d
         pattern = "owner"
     else:
         pattern = labels[index] if index < len(labels) and labels[index] in HOOK_PATTERNS else "none"
-    if owner_changed_hook(drop):
+    if owner_chose_hook(drop):
         return {"hook_pattern": pattern, "hook_index": 0 if index is None else index + 1, "hook_by": "owner"}
     drawn = _bandit(drop)
     if drawn is not None and _same_line(hook, drawn["hook"]) and drawn.get("pattern") in HOOK_PATTERNS and _whole(drawn.get("index"), 0) is not None:
@@ -1682,17 +1684,19 @@ def _score_of(pick: Favorite) -> int | None:
     return _whole(score.get("total"), 0) if isinstance(score, Mapping) else None
 
 
-def ready_scores(store: Store, pick: Favorite) -> list[int]:
-    """The scores the owner chose from when he sent ``pick`` to be made (test A's pool): the scored clips of its character that are
-    ``ready``, those he has just sent that no make has started on yet (``making`` and no clip: tapping Make on several at once
-    puts them all in ``making`` before the first make runs), and the clip itself; a skipped one is out. Each pick once."""
+def checked_scores(store: Store, pick: Favorite) -> list[int]:
+    """The scores test A's median is taken over: every scored drop of the pick's character whose check finished and that the owner
+    has not skipped, whatever became of it since: ``ready`` ones, those sent to be made (``making``, with or without a clip yet:
+    tapping Make on several at once puts them all in ``making`` before the first make runs, and each make starts a clip that
+    leaves "waiting"), ``made`` ones and a failed make (``failed`` with its score kept; a failed check keeps none), and the clip
+    itself. So the median does not move while a batch is being made: the clip the terminal offered as the Explore pick is judged
+    against the same pool as the others. Each pick once."""
     pool: dict[str, int] = {}
     for f in store.list_favorites(character_slug=pick.character_slug):
         if f.status == "skipped" or not is_drop(f.proposal):
             continue
         d = f.proposal["drop"]
-        waiting = d.get("state") == "ready" or (d.get("state") == "making" and not (d.get("make") or {}).get("clip_id"))
-        if (waiting or f.id == pick.id) and (total := _score_of(f)) is not None:
+        if (d.get("state") in CHECKED_STATES or d.get("state") == "failed") and (total := _score_of(f)) is not None:
             pool[f.id] = total
     if (own := _score_of(pick)) is not None:
         pool[pick.id] = own
@@ -1703,8 +1707,8 @@ def _tests_at_make(
     store: Store, pick: Favorite, now: datetime, registry: experiments.Registry,
 ) -> tuple[dict[str, Any], bool]:
     """(the block-coin arms for the pick's next clip, whether test A tags it ``explore_pick``): see ``studio.experiments``."""
-    arms = experiments.assign_blocks(store, registry, pick.character_slug, now, pick_id=pick.id)
-    explore = registry.is_active("A", now) and experiments.is_explore(_score_of(pick), ready_scores(store, pick))
+    arms = experiments.assign_blocks(store, registry, pick.character_slug, now)
+    explore = registry.is_active("A", now) and experiments.is_explore(_score_of(pick), checked_scores(store, pick))
     return arms, explore
 
 
@@ -1717,7 +1721,7 @@ def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part:
             return clip
     registry = experiments.load_experiments()  # a broken registry stops the make here, before anything is reserved or paid
     look = drop.get("deconstruct") or {}
-    state = learn.bandit_state(store, registry) if registry.is_active("B", now) and not owner_changed_hook(drop) else None
+    state = learn.bandit_state(store, registry) if registry.is_active("B", now) and not owner_chose_hook(drop) else None
     with store.transaction():
         store.get_settings()  # the settings row lock: two makes of one character never read the same place in a test's block
         arms, explore = _tests_at_make(store, pick, now, registry)

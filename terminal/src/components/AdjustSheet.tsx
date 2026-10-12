@@ -24,6 +24,9 @@ export function AdjustSheet({
   const [gadgets, setGadgets] = useState<string[]>(start.gadgets);
   const [custom, setCustom] = useState('');
   const [hook, setHook] = useState(start.hook);
+  // a hook he picked or typed (or saved in an earlier Adjust) is his explicit choice and is sent even when it is the check's first;
+  // one he never touched is not sent, and the studio may use another of the check's hooks (the hook test)
+  const [hookChosen, setHookChosen] = useState(d.adjust?.hook !== undefined);
   const [from, setFrom] = useState(String(start.start_s));
   const [length, setLength] = useState(String(start.length_s));
   const [crop, setCrop] = useState(start.crop_x ?? 0.5);
@@ -38,9 +41,15 @@ export function AdjustSheet({
   const wanted = {
     star, part, gadgets: all, hook, start_s: Number(from), length_s: Number(length), crop_x: landscape ? crop : null,
   };
-  const changes = adjustChanges(d, wanted);
+  const changes = adjustChanges(d, wanted, hookChosen);
   const checked = validateAdjust(changes, d);
   const credits = dropCredits(d, checked.ok ? changes : {});
+
+  const chooseHook = (text: string) => {
+    setHook(text);
+    setHookChosen(true);
+    setError(null);
+  };
 
   const toggle = (name: string) =>
     setGadgets((g) => (g.includes(name) ? g.filter((x) => x !== name) : g.length + (custom.trim() ? 1 : 0) >= PROPS_MAX ? g : [...g, name]));
@@ -103,12 +112,13 @@ export function AdjustSheet({
           <legend className="label">The hook on screen</legend>
           {(d.hooks ?? []).filter(Boolean).map((h) => (
             <label key={h} className="option" data-checked={hook === h}>
-              <input type="radio" name={`${ids}-hook`} value={h} checked={hook === h} onChange={() => setHook(h)} />
+              <input type="radio" name={`${ids}-hook`} value={h} checked={hook === h} onChange={() => chooseHook(h)} onClick={() => chooseHook(h)} />
               <span><b>“{h}”</b></span>
             </label>
           ))}
           <label className="sr-only" htmlFor={`${ids}-hook-own`}>Your own hook</label>
-          <input id={`${ids}-hook-own`} className="input" value={hook} maxLength={80} onChange={(e) => { setHook(e.target.value); setError(null); }} />
+          <input id={`${ids}-hook-own`} className="input" value={hook} maxLength={80} onChange={(e) => chooseHook(e.target.value)} />
+          <span className="hint">Pick one to keep it. Left as it is, the studio may use another of these three.</span>
         </fieldset>
 
         <div className="field" role="group" aria-labelledby={`${ids}-section`}>

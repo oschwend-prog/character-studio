@@ -304,7 +304,7 @@ def choose_hook(
     state = state if state is not None else bandit_state(store, registry)
     draw = draw_shares(test, state, registry.seed, slug, moment=moment)
     if draw.warmup:  # a fixed rotation, one place per clip that carries a hook arm
-        start = experiments.block_position(store, slug, str(test.key), exclude_pick_id=pick_id) % len(arms)
+        start = experiments.block_position(store, slug, str(test.key)) % len(arms)
         order = tuple(arms[(start + i) % len(arms)] for i in range(len(arms)))
     else:
         rng = random.Random(f"{registry.seed}|bandit|{slug}|{pick_id}")

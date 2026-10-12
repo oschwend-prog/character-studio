@@ -2138,8 +2138,8 @@ def test_the_hook_used_is_tagged_with_its_pattern_and_who_chose_it():
     assert (second["hook_pattern"], second["hook_index"], second["hook_by"]) == ("false-premise", 2, "owner")
     own = tags(adjust_hook="Tea is at four.")  # his own line: none of the three, so no pattern is guessed
     assert (own["hook_pattern"], own["hook_index"], own["hook_by"]) == ("owner", 0, "owner")
-    same = tags(adjust_hook="The household is unaware.")  # an Adjust that kept the default changed nothing
-    assert (same["hook_pattern"], same["hook_index"], same["hook_by"]) == ("understatement", 1, "studio")
+    same = tags(adjust_hook="The household is unaware.")  # he picked the first candidate on purpose: still his own choice
+    assert (same["hook_pattern"], same["hook_index"], same["hook_by"]) == ("understatement", 1, "owner")
 
 
 def test_a_drop_checked_before_the_labels_is_made_with_none():
