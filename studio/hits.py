@@ -78,8 +78,9 @@ room goes to the next one), unless its latest day is under a fifth of its peak (
 ``dismissed`` (as "Not for us", so it is not asked about again every day while it stays fresh) and its reason is in the JSON's
 ``dismissed``; anything else is filed with ``trend_stage`` (``rising``, ``peak``, ``fading``, ``classic`` or
 ``unknown``), ``days_since_trend_peak`` (when measured) and ``sound_rising`` (the key was the sound and it is ``rising``) written
-onto the drop, the keys ``drop.learn_tags`` reads. Without ``LUNARCRUSH_API_KEY``, a refused call, the run's
-``hits.lunar_daily_cap`` (40) or an answer it cannot read, the reading is ``unknown`` and the hit is filed as before (fail open:
+onto the drop, the keys ``drop.learn_tags`` reads. Without ``LUNARCRUSH_API_KEY``, a refused call, the London day's
+``hits.lunar_daily_cap`` (40 calls; a second run the same day gets what the earlier ones left, counted from the ``hits`` runs that
+``record_lunar_calls`` logs) or an answer it cannot read, the reading is ``unknown`` and the hit is filed as before (fail open:
 filing costs only a free check). The checks are made lazily, in rank order, for the hits about to be filed only, so the ranking
 (``hit_score``) is not changed by them: ``rising`` gets no score bonus (the score has no place for it without a re-weighting or a
 check of every candidate; the learning tags carry ``trend_stage`` instead, and the weekly review judges it). The readings are not
@@ -120,7 +121,7 @@ from studio.fetch import filed_at
 from studio.cli_support import emit, fail, open_store
 from studio.config import LONDON, now_london
 from studio.favorites import default_tier, is_drop, parse_video_url
-from studio.models import HIT_CAPTION_MAX, Hit, HitSpend
+from studio.models import HIT_CAPTION_MAX, Hit, HitSpend, Run, RunKind, RunStatus
 from studio.store import HIT_REFRESHED, Store
 
 log = logging.getLogger("studio.hits")
@@ -535,7 +536,7 @@ def _words(raw: Any, limit: int | None = None) -> list[str]:
 
 def hits_config(scan: Mapping[str, Any]) -> dict[str, Any]:
     """``config/scan.json`` ``hits``, with the defaults (``DEFAULTS``: 45 credits and 2 downloads a day, 3 drops a character and 3
-    general ones a day, the brake at 20 waiting drops, 40 LunarCrush calls a run)."""
+    general ones a day, the brake at 20 waiting drops, 40 LunarCrush calls a London day)."""
     raw = scan.get("hits") if isinstance(scan.get("hits"), Mapping) else {}
     out: dict[str, Any] = {}
     for name, default in DEFAULTS.items():
@@ -822,6 +823,30 @@ def trend_names(cfg: Mapping[str, Any], character: str | None, events: Sequence[
     return list(dict.fromkeys([*own, *events, *cfg["general_keywords"]]))
 
 
+def lunar_calls_today(store: Store, day: date) -> int:
+    """The LunarCrush calls the hits job has already made on this London ``day``: the sum of the ``details.lunar.calls`` of the
+    ``hits`` runs ``record_lunar_calls`` logged for it (a line without a whole number of calls is ignored)."""
+    total = 0
+    for r in store.list_runs(kind=RunKind.hits):
+        made = r.details.get("lunar") if isinstance(r.details, dict) else None
+        if isinstance(made, dict) and made.get("day") == day.isoformat() and isinstance(made.get("calls"), int) and not isinstance(made["calls"], bool):
+            total += max(made["calls"], 0)
+    return total
+
+
+def record_lunar_calls(store: Store, now: datetime, gate: lunar.TrendGate) -> None:
+    """Log the gate's calls of this run as one ``hits`` run (``details.lunar``: ``day``, ``calls``, ``keys``, ``stages``), so that
+    ``hits.lunar_daily_cap`` is the London day's and a second run the same day gets only what is left. No line when no call was made."""
+    summary = gate.summary()
+    if not summary["calls"]:
+        return
+    day, n = london_day(now), summary["calls"]
+    store.add_run(Run(
+        kind=RunKind.hits, status=RunStatus.ok, started_at=now, finished_at=now, summary=f"LunarCrush: {n} call{'s' if n != 1 else ''} on {day}",
+        details={"lunar": {"day": day.isoformat(), "calls": n, "keys": summary["keys"], "stages": summary["stages"]}},
+    ))  # fmt: skip
+
+
 def trend_as_of(now: datetime) -> date:
     """The latest full day of a trend's series: yesterday in London (``lunar.trend_curve`` reads a series that stopped earlier as
     days of nothing posted)."""
@@ -979,11 +1004,18 @@ def pull_command(
     filing: dict[str, Any] = {"filed": [], "braked": False, "waiting": None, "max_waiting": cfg["auto_file_max_waiting"],
                               "skipped_dead": 0, "dismissed": [], "trend": None}  # fmt: skip
     if file:
-        gate = lunar.TrendGate.from_env(cap=cfg["lunar_daily_cap"])  # off (every reading unknown) without LUNARCRUSH_API_KEY
+        # the cap is the London day's: this run may make what earlier runs of the day left of it (a manual rerun, say)
+        left = max(0, cfg["lunar_daily_cap"] - lunar_calls_today(store, london_day(now)))
+        gate = lunar.TrendGate.from_env(cap=left)  # off (every reading unknown) without LUNARCRUSH_API_KEY
         try:
             filing = file_hits(store, scan, now, gate=gate, events=lunar.event_names())
         except ValueError as e:  # every character paused, say: the pull is kept, nothing is filed
             out["file_error"] = str(e)[:300]
+        finally:
+            try:
+                record_lunar_calls(store, now, gate)
+            except Exception as e:  # noqa: BLE001 - the day's count is bookkeeping: the pull and the filing stand without it
+                log.warning("the LunarCrush calls of this run could not be logged (%s)", type(e).__name__)
         if filing["braked"]:
             typer.echo(
                 f"::notice::auto-filing is braked: {filing['waiting'] + len(filing['filed'])} drops are waiting "

@@ -20,7 +20,7 @@ from studio import drop, hits, lunar
 from studio.cli import app
 from studio.config import LONDON
 from studio.hits import ScrapeCreators, ScrapeCreatorsError, hit_score, parse_instagram, parse_tiktok
-from studio.models import Body, Character, Favorite, Hit, HitSpend
+from studio.models import Body, Character, Favorite, Hit, HitSpend, Run, RunKind
 from studio.store import MemoryStore
 
 FIX = Path(__file__).resolve().parent / "fixtures" / "scrapecreators"
@@ -1072,6 +1072,65 @@ def test_cli_pull_gives_the_gate_the_key_and_the_runs_cap(cli_store, monkeypatch
     monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
     out = json.loads(CliRunner().invoke(app, ["hits", "pull"]).stdout)
     assert seen["cap"] == 7 and out["skipped_dead"] == 1 and out["filed"] == []
+
+
+def lunar_run(store, day: date, calls: int, **over):
+    """A `hits` run line as the pull writes it after the gate made `calls` calls on London `day`."""
+    return store.add_run(Run(
+        kind=RunKind.hits, status="ok", started_at=NOW, finished_at=NOW, summary=f"LunarCrush: {calls} calls",
+        details={"lunar": {"day": day.isoformat(), "calls": calls, "keys": calls, "stages": {}}, **over},
+    ))  # fmt: skip
+
+
+def test_the_lunar_calls_of_a_london_day_are_counted_from_the_runs_the_pull_logs():
+    store = roster_store()
+    today = NOW.date()
+    lunar_run(store, today, 12)
+    lunar_run(store, today, 9)
+    lunar_run(store, today - timedelta(days=1), 40)  # yesterday's are not today's
+    store.add_run(Run(kind=RunKind.daily, status="ok", started_at=NOW, details={"lunar": {"day": today.isoformat(), "calls": 99}}))
+    store.add_run(Run(kind=RunKind.hits, status="ok", started_at=NOW, details={"lunar": {"day": today.isoformat(), "calls": "many"}}))
+    store.add_run(Run(kind=RunKind.hits, status="ok", started_at=NOW, details={"lunar": "odd"}))
+    assert hits.lunar_calls_today(store, today) == 21 and hits.lunar_calls_today(store, today + timedelta(days=1)) == 0
+
+
+@pytest.mark.parametrize("spent, left", [(0, 40), (30, 10), (40, 0), (55, 0)])
+def test_the_lunar_cap_is_the_london_days_not_the_runs_so_a_second_run_gets_what_is_left(cli_store, monkeypatch, spent, left):
+    seen = {}
+
+    def gate(cls, *, cap=40, env=None, **kw):
+        seen["cap"] = cap
+        return StubGate()
+
+    monkeypatch.setattr(lunar.TrendGate, "from_env", classmethod(gate))
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: FakeAPI().client()))
+    if spent:
+        lunar_run(cli_store, NOW.date(), spent)
+    assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 0
+    assert seen["cap"] == left
+
+
+def test_a_pull_that_asked_lunarcrush_logs_its_calls_for_the_day(cli_store, monkeypatch):
+    gate = StubGate({"patient zero": lunar.Reading("fading", 5)})
+    monkeypatch.setattr(lunar.TrendGate, "from_env", classmethod(lambda cls, *, cap=40, env=None, **kw: gate))
+    api = FakeAPI()
+    item = tt_item(1, views=2_000_000, followers=20_000)
+    item.setdefault("music", {})["title"] = "Patient Zero"
+    api.answer(TT_SEARCH, page(TT_SEARCH, [item]))
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 0
+    (logged,) = cli_store.list_runs(kind="hits")
+    assert logged.status.value == "ok" and logged.summary == "LunarCrush: 1 call on 2026-10-08"
+    assert logged.details["lunar"] == {"day": "2026-10-08", "calls": 1, "keys": 1, "stages": {}}
+    assert hits.lunar_calls_today(cli_store, NOW.date()) == 1
+
+
+def test_a_pull_with_the_gate_off_or_no_call_made_logs_no_line(cli_store, monkeypatch):
+    api = FakeAPI()
+    api.answer(TT_SEARCH, page(TT_SEARCH, [tt_item(1, views=2_000_000, followers=20_000)]))
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 0  # no LUNARCRUSH_API_KEY: the gate is off
+    assert cli_store.list_runs(kind="hits") == []
 
 
 def test_cli_pull_without_the_scrapecreators_key_reports_the_new_fields_too(cli_store, monkeypatch):

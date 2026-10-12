@@ -72,6 +72,7 @@ class RunKind(StrEnum):
     weekly = "weekly"
     publish = "publish"
     metrics = "metrics"
+    hits = "hits"  # the cloud hits job's line (studio.hits.record_lunar_calls): the LunarCrush calls it made on a London day
 
 
 class RunStatus(StrEnum):

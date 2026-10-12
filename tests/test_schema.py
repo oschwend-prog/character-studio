@@ -215,7 +215,7 @@ def test_0003_makes_character_and_platform_unique_for_the_account_upsert():
 
 def test_run_kinds_and_statuses_are_the_ones_the_log_and_health_know():
     # studio.runs has no CHECK on kind/status: the enums are the only gate, so pin them.
-    assert {str(k) for k in RunKind} == {"daily", "weekly", "publish", "metrics"}
+    assert {str(k) for k in RunKind} == {"daily", "weekly", "publish", "metrics", "hits"}  # hits: the LunarCrush calls of a London day (health ignores it)
     assert {str(s) for s in RunStatus} == {"ok", "budget_stop", "error"}
     assert "check" not in table_body("runs")  # if a CHECK is ever added it must match the enums
 

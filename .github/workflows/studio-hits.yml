@@ -14,7 +14,7 @@
 #    from the general lane a day). Without SCRAPECREATORS_API_KEY: a notice, nothing is pulled, the step passes. Its JSON says how many drops were filed (the step's output `filed`).
 #    The auto-filing has two guards (task 18). The brake: nothing is filed while `hits.auto_file_max_waiting` (20) or more drops
 #    wait for the owner (the JSON says `braked: true` and `waiting`). The trend gate: each hit about to be filed has its sound or
-#    trend looked up on LunarCrush (`studio/lunar.py`, at most `hits.lunar_daily_cap` = 40 calls a run, 16 s apart: 11 minutes at
+#    trend looked up on LunarCrush (`studio/lunar.py`, at most `hits.lunar_daily_cap` = 40 calls a London day (a rerun gets what is left), 16 s apart: 11 minutes at
 #    the most, inside this job's 30); a dead trend is not filed (`skipped_dead`), any other reading is written on the drop
 #    (`trend_stage`, `days_since_trend_peak`, `sound_rising`). Without LUNARCRUSH_API_KEY the gate is off: a notice, every hit is
 #    filed as before with the stage `unknown`, the step passes. A refused call or an unreadable answer is the same: unknown.
