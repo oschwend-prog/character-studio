@@ -12,8 +12,8 @@ and the draw is not recorded. ``trend-label`` is an arm only for a clip that has
 chooses among hooks already written and checked: never the clip, the slot, the price or a bar.
 
 **No table, no stored state.** The arms' state is computed from the data every time (``bandit_state``): a made clip with a real
-``hook_pattern`` and ``hook_by`` of ``studio`` or ``bandit`` (never ``owner``: the owner's hook does not change the tally, plan
-guard rail 4) made on or after the registry's ``start`` has a **win** when its Instagram post's ``x72`` is above 1 (its 72-hour views beat
+``hook_pattern`` and ``hook_by`` ``bandit`` (the hook the draw chose, the warm-up rotation's draws included; never ``studio``, the
+check's first hook that no draw chose, nor ``owner``: the owner's hook does not change the tally, plan guard rail 4) made on or after the registry's ``start`` has a **win** when its Instagram post's ``x72`` is above 1 (its 72-hour views beat
 the median 72-hour views of the account's last 15 earlier posts, ``studio.metrics.post_reads``) and a **loss** when it is 1 or below;
 a clip with no ``x72`` yet is neither (a post that missed its 72 h reading never is). Only Instagram counts (plan 3.0: one
 observation is one posted clip on Instagram). The tally is recomputed on every read, so a win is as final as the 72-hour reading it
@@ -64,7 +64,9 @@ from studio.models import HOOK_PATTERNS, Platform
 from studio.store import Store
 
 WIN_X = 1.0  # a win: x72 above this (the post beat the median 72-hour views of the account's last 15)
-TALLIED_BY = ("studio", "bandit")  # hook_by values that count; the owner's own hook never changes the tally
+# hook_by values that count: only a hook the bandit drew (the warm-up rotation's draws are recorded the same way). Not "studio" (the
+# check's first hook, no arm had a candidate: Gemini's habit, not a draw; controller 12 Oct, before data) and not "owner" (plan rail 4).
+TALLIED_BY = ("bandit",)
 THOMPSON_DRAWS = 4000  # simulated rounds behind ``thompson_shares``
 EPS = 1e-9
 

@@ -178,12 +178,36 @@ def test_wins_and_losses_are_counted_from_x72_on_the_instagram_post():
     w.hooked("reginald", "understatement", 300)  # x72 3.0: a win
     w.hooked("reginald", "understatement", 150)  # a win
     w.hooked("reginald", "understatement", 40)  # a loss
-    w.hooked("reginald", "false-premise", 100, by="studio")  # exactly 1.0 beat nothing: a loss; the studio's own default counts
+    w.hooked("reginald", "false-premise", 100)  # exactly 1.0 beat nothing: a loss
+    w.hooked("reginald", "false-premise", 900, by="studio")  # the check's first hook, nobody drew it: no use of the arm, win or not
     s = state_of(w)
     assert s.by_character[("reginald", "understatement")] == Counts(2, 1)
     assert s.by_character[("reginald", "false-premise")] == Counts(0, 1)
     assert s.studio["understatement"] == Counts(2, 1) and s.tallied("reginald") == 4
-    assert s.readings["reginald"] == 7 and s.pending == {}
+    assert s.readings["reginald"] == 8 and s.pending == {}  # (the studio-hook post still has its reading: a baseline for the next)
+
+
+def test_only_a_hook_the_bandit_chose_is_tallied_not_the_checks_default_nor_the_owners():
+    """Controller, 12 Oct (before data: 1 reading): the arm tally counts the clips whose hook the bandit really drew (``hook_by``
+    ``bandit``, the warm-up rotation's draws included: the make records them the same way). A ``studio`` clip kept the check's first
+    hook because no arm had a candidate: its pattern is Gemini's habit, not a draw, and counting it would bias the arms (and the
+    studio-wide pool the other characters' arms lean on) towards what Gemini writes first."""
+    assert learn.TALLIED_BY == ("bandit",)
+    w = World()
+    w.readings("franz")
+    w.hooked("franz", "ego-claim", 300, by="studio")  # would be a win
+    w.hooked("franz", "ego-claim", 20, by="studio")  # would be a loss
+    w.hooked("franz", "ego-claim", None, by="studio")  # would wait for its reading
+    w.hooked("franz", "ego-claim", 300, by="owner")
+    s = state_of(w)
+    assert s.by_character == {} and s.studio == {} and s.pending == {} and s.tallied("franz") == 0
+    w.hooked("franz", "ego-claim", 300)
+    w.hooked("franz", "ego-claim", None)
+    s = state_of(w)
+    assert s.by_character == {("franz", "ego-claim"): Counts(1, 0)} and s.studio == {"ego-claim": Counts(1, 0)}
+    assert s.pending == {"franz": 1}  # only the bandit's unread clip waits
+    # the draw reads the same tally: the studio-hook clips moved no arm
+    assert arm_counts(s, "franz", "ego-claim", 3) == (Counts(1, 0), "studio")
 
 
 def test_the_owners_hook_a_missing_label_a_missing_reading_and_the_time_before_the_start_are_not_tallied():
