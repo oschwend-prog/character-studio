@@ -252,7 +252,7 @@ def test_database_and_schema_pass_when_everything_is_applied(world):
     checks = world.run()
     assert checks["database"].status == "pass"
     assert checks["schema"].status == "pass"
-    assert "0001" in checks["schema"].title and "0016" in checks["schema"].title
+    assert "0001" in checks["schema"].title and "0017" in checks["schema"].title
 
 
 def test_no_database_url_fails_both_and_points_at_the_keychain(world):
@@ -319,6 +319,7 @@ def test_a_missing_table_fails_the_schema_check_naming_it(world):
         (("view", "v_hits"), "0016"),
         (("function", "set_hit_status"), "0016"),
         (("function", "set_drop_keep"), "0016"),
+        (("definition", golive.ADD_DROP_MERGES), "0017"),
     ],
 )
 def test_each_migration_is_detected_by_its_own_objects(world, missing, migration):
@@ -373,9 +374,23 @@ def test_the_markers_cover_exactly_what_the_migration_files_create():
         if n == "0001":  # the first migration's snapshot columns are not markers; its tables are
             created = {c for c in created if c[0] == "table"}
             marks = {m for m in marks if m[0] == "table"}
-        assert created >= set(marks), f"{n}: marker not created by the file: {set(marks) - created}"
+        objects = {m for m in marks if m[0] != "definition"}  # a `definition` row is read from a function's source, see below
+        assert created >= objects, f"{n}: marker not created by the file: {objects - created}"
         if n != "0001":
-            assert set(marks) >= created, f"{n}: object without a marker: {created - set(marks)}"
+            assert objects >= created, f"{n}: object without a marker: {created - objects}"
+
+
+def test_the_0017_definition_marker_is_in_the_probe_and_only_in_the_migration_that_adds_it():
+    """0017 re-creates add_drop without a new object: the probe tells it from 0015's add_drop by a piece of its source."""
+    token = "jsonb_typeof(fa.proposal -> 'drop') = 'object'"
+    probe_token = token.replace("'", "''")
+    assert ("definition", golive.ADD_DROP_MERGES) in golive.MIGRATION_MARKERS["0017"]
+    assert f"select 'definition', '{golive.ADD_DROP_MERGES}'" in golive.PROBE_SQL
+    assert "p.proname = 'add_drop'" in golive.PROBE_SQL and f"strpos(p.prosrc, '{probe_token}') > 0" in golive.PROBE_SQL
+    migrations = ROOT / "supabase" / "migrations"
+    assert token in (migrations / "0017_add_drop_merge.sql").read_text()
+    for older in sorted(p for p in migrations.glob("*.sql") if not p.name.startswith("0017")):
+        assert token not in older.read_text(), older.name  # no earlier add_drop has the merge: 0017 is what adds it
 
 
 # ---- (c) Data API ----------------------------------------------------------------------------------

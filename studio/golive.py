@@ -9,7 +9,7 @@ What is checked, in the order the owner's checklist (``docs/launch/go-live.md``)
 
 * Keychain items ``cs-database-url``, ``cs-supabase-url``, ``cs-supabase-service-key``,
   ``cs-postiz-api-key``: present or absent. The probe never reads a value.
-* The database is reachable, schema ``studio`` has the tables and objects of migrations 0001-0012.
+* The database is reachable, schema ``studio`` has the tables and objects of every migration (``MIGRATION_MARKERS``).
 * The Supabase Data API exposes schema ``studio`` (the terminal and the owner RPCs need it).
 * Characters: at least one is ``live``; each launch character has masters, a close-up and an account
   with a Postiz integration id (``characters/*/refs.json`` plus the database).
@@ -73,6 +73,10 @@ HF_PAIR = ("HF_API_KEY_ID", "HF_API_KEY_SECRET")
 VAULT_SECRET = "github_dispatch_token"
 # Only whether the Vault holds a secret of that name: the value is never selected.
 VAULT_SQL = "select count(*) from vault.secrets where name = 'github_dispatch_token'"
+
+# The probe's `definition` row for migration 0017: a function re-created without a new object is told from its earlier self by a
+# piece of its source (pg_proc.prosrc). tests/test_golive.py pins the text in PROBE_SQL to the one in the migration file.
+ADD_DROP_MERGES = "add_drop merges the earlier drop"
 
 # What each migration leaves behind in schema studio: (kind, name). tests/test_golive.py pins these to
 # the text of supabase/migrations/*.sql, so a new migration or object cannot be forgotten here.
@@ -159,6 +163,10 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
         ("table", "hits"), ("table", "hits_spend"), ("view", "v_hits"), ("function", "set_hit_status"), ("function", "set_drop_keep"),
         ("function", "copy_drop"), ("index", "hits_platform_creator_idx"), ("index", "hits_status_score_idx"),
     ),
+    # 0017 (add_drop merges the earlier drop on a duplicate): it creates no object, only re-creates add_drop (which exists since
+    # 0012), so the function's name cannot tell it from 0016. The probe's `definition` row can: add_drop's source holds 0017's
+    # merge (see ADD_DROP_MERGES and PROBE_SQL).
+    "0017": (("function", "add_drop"), ("definition", ADD_DROP_MERGES)),
 }
 
 PROBE_SQL = """
@@ -182,6 +190,11 @@ union all
 select 'function', p.proname::text
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'studio'
+union all
+select 'definition', 'add_drop merges the earlier drop'
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'studio' and p.proname = 'add_drop'
+  and strpos(p.prosrc, 'jsonb_typeof(fa.proposal -> ''drop'') = ''object''') > 0
 """
 
 CHARACTERS_SQL = """

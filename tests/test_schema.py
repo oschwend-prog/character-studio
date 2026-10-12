@@ -1804,3 +1804,49 @@ def test_0016_hits_spend_is_one_row_per_london_day_that_no_api_role_can_touch():
 
     src = Path(pgstore.__file__).read_text(encoding="utf-8")
     assert "on conflict (day) do update set" in src and '"{c} = s.{c} + excluded.{c}"' in src  # an increment, never a read-then-write
+
+
+# ---- 0017: add_drop merges the earlier drop on a duplicate (terminal v3 task 14, item 4) -----------------------------------------
+
+MERGE_PATH = MIGRATIONS / "0017_add_drop_merge.sql"
+MERGE_SQL = MERGE_PATH.read_text() if MERGE_PATH.is_file() else ""  # read lazily: a missing file fails these tests, not the module
+MERGE_CODE = re.sub(r"--[^\n]*", "", MERGE_SQL)
+MERGE_EXPR = (
+    "(case when jsonb_typeof(fa.proposal -> 'drop') = 'object' then fa.proposal -> 'drop' else '{}'::jsonb end) || drop_)"
+)
+
+
+def test_0017_is_add_drop_and_its_grants_only():
+    assert MERGE_PATH.is_file()
+    assert re.findall(r"create or replace function studio\.(\w+)", MERGE_CODE) == ["add_drop"]
+    code = re.sub(r"create or replace function studio\.\w+\(.*?\n\$\$;", "", MERGE_CODE, flags=re.S)
+    statements = [s.strip() for s in code.split(";") if s.strip()]
+    assert statements == [
+        "revoke all on function studio.add_drop(text, text) from public",
+        "grant execute on function studio.add_drop(text, text) to authenticated",
+    ]  # the grants of 0013 and 0015, nothing else: no table, view, other function or policy
+    assert not re.search(r"\b(truncate|delete|alter|create table|create or replace view|drop function|drop view|drop table)\b", MERGE_CODE, re.I)
+    assert not re.search(r"\b(?:public|auth|storage|extensions|vault|net)\.[a-z_]+", MERGE_CODE)  # nothing outside schema studio
+    for said in ("WHY.", "studio_0017_add_drop_merge", "AFTER 0016", "TO UNDO", "Re-run safe", "hkcafvzjwkeibbmvskko"):
+        assert said in MERGE_SQL, said
+
+
+def test_0017_add_drop_is_0015s_word_for_word_but_the_duplicate_branch_merges_the_earlier_drop():
+    old, new = _v3("add_drop"), _function(MERGE_SQL, "add_drop")  # 0015 holds the latest definition (0013's was re-created there)
+    old_update = "           proposal = (fa.proposal - 'hold_reason') || jsonb_build_object('decision', rec, 'drop', drop_)\n"
+    new_update = (
+        "           proposal = (fa.proposal - 'hold_reason') || jsonb_build_object('decision', rec, 'drop',\n"
+        f"                        {MERGE_EXPR}\n"
+    )
+    assert old.count(old_update) == 1 and new.count(new_update) == 1
+    note = re.search(r"           -- the earlier drop's keys stay.*?\n           -- \(never written.*?\n", new, re.S).group(0)
+    assert new.replace(note, "").replace(new_update, old_update) == old  # signature, security, links, character choice: all 0015's
+    assert "add_drop(character_slug text default null, link text default null)" in new  # (text, text): replaced in place
+    assert "security invoker" in new and "set search_path = ''" in new and "security definer" not in new
+    # the new keys win (`old || drop_`), and a drop that is missing or no object counts as empty (jsonb 'null' || object is an array)
+    assert "|| drop_)" in new and new.index("fa.proposal -> 'drop'") < new.index("|| drop_)")
+    assert "else '{}'::jsonb end" in new
+    # only the duplicate branch merges: the two inserts still write the new drop as it is
+    assert new.count("jsonb_build_object('decision', rec, 'drop', drop_)") == 2
+    for line in ("revoke all on function studio.add_drop(text, text) from public;", "grant execute on function studio.add_drop(text, text) to authenticated;"):
+        assert line in MERGE_SQL and line in V3_SQL
