@@ -1,4 +1,4 @@
-"""``studio.lunar``: LunarCrush's free trend data for the hits job's freshness gate (task 18; research
+"""``studio.lunar``: LunarCrush's trend data for the hits job's freshness gate (task 18; research
 ``docs/research/2026-10-08-tools-data-earn.md`` section 3, rule P5 of ``docs/research/2026-10-07-hit-patterns.md`` section 5).
 
 ScrapeCreators finds the clips; LunarCrush dates the trend: **is the sound or trend a hit is riding still alive?** One call to
@@ -6,8 +6,8 @@ LunarCrush's hosted MCP endpoint (``keyword_time_series``, interval ``1m``: one 
 the curve; ``trend_curve`` turns it into a stage (``rising`` / ``peak`` / ``fading`` / ``dead``) and the days since the peak.
 Cloud API only, like ScrapeCreators (CLAUDE.md, research scraping): never the Mac's browser, cookies or a logged-in session.
 
-**Inert without the key.** The key is ``LUNARCRUSH_API_KEY`` in the environment (a GitHub secret on the cloud job; the owner makes
-a free key and pastes it with ``gh secret set``), never a file, never printed or logged. Without it ``TrendGate`` answers
+**Inert without the key.** The key is ``LUNARCRUSH_API_KEY`` in the environment (a GitHub secret on the cloud job; LunarCrush's free
+plan gives no API key (owner, 12 Oct 2026), so the gate stays off until a paid key is pasted with ``gh secret set``), never a file, never printed or logged. Without it ``TrendGate`` answers
 ``unknown`` and makes no call: the hits job files as it always did.
 
 **The wire** (MCP "streamable HTTP", ``Authorization: Bearer <key>`` to ``https://lunarcrush.ai/mcp``): ``initialize`` (the session

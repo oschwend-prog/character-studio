@@ -27,8 +27,8 @@
 #    false).
 #
 # Secrets (repo secrets): DATABASE_URL, SUPABASE_URL, SUPABASE_SERVICE_KEY (as the other workflows), SCRAPECREATORS_API_KEY
-# (`gh secret set SCRAPECREATORS_API_KEY`: the owner pastes it, it is never written to a file) and LUNARCRUSH_API_KEY (free: make a
-# key at lunarcrush.com, test it with `LUNARCRUSH_API_KEY=<key> bin/studio hits lunar-probe "single ladies"`, then
+# (`gh secret set SCRAPECREATORS_API_KEY`: the owner pastes it, it is never written to a file) and LUNARCRUSH_API_KEY (not set: the free
+# plan gives no API key (owner, 12 Oct), a paid plan does; with one, test it with `LUNARCRUSH_API_KEY=<key> bin/studio hits lunar-probe "single ladies"`, then
 # `gh secret set LUNARCRUSH_API_KEY`; the owner pastes it, it is never written to a file, and without it the trend gate is off).
 # Until DATABASE_URL exists the job prints a notice and every later step is skipped. Each secret reaches only the step that needs
 # it (LUNARCRUSH_API_KEY: the pull step only); nothing reaches a script but through its environment.
