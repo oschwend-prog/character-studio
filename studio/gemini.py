@@ -81,7 +81,7 @@ _TIMEOUT = httpx.Timeout(180.0, connect=15.0)
 _BODY_CHARS = 300
 BUSY_STATUSES = frozenset({429, 500, 502, 503, 504})  # "busy, try later": asked again after a wait, never a 4xx refusal
 BUSY_WAITS_S = (5.0, 15.0, 45.0)  # the first live drop (2026-10-06) stopped on one 503 "high demand"
-FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.5-flash")  # asked in turn when the model stays busy (stable Flash ids, 2026-10-06)
+FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.5-flash")  # asked in turn when the model stays busy or times out (stable Flash ids, 2026-10-06)
 FALLBACK_SKIP_STATUSES = frozenset({400, 404})  # a fallback that does not take this request: the next one is asked
 
 STAR_KINDS = ("person", "dog", "animal", "none")
@@ -137,6 +137,15 @@ class GeminiError(RuntimeError):
     def __init__(self, message: str, status: int | None = None) -> None:
         super().__init__(message)
         self.status = status
+
+
+class GeminiTimeout(GeminiError):
+    """A call timed out (``httpx.TimeoutException``): no HTTP status. ``generate_json`` asks the next model of
+    ``FALLBACK_MODELS`` as it does for a busy one; ``kind`` is the httpx exception's name ("ReadTimeout")."""
+
+    def __init__(self, message: str, kind: str = "ReadTimeout") -> None:
+        super().__init__(message)
+        self.kind = kind
 
 
 class GeminiUnexpected(GeminiError):
@@ -195,6 +204,8 @@ class GeminiClient:
         for wait in (*BUSY_WAITS_S, None):
             try:
                 response = self._client.request(method, url, **kw)
+            except httpx.TimeoutException as e:
+                raise GeminiTimeout(f"the Gemini call failed ({type(e).__name__})", type(e).__name__) from None
             except httpx.HTTPError as e:
                 raise GeminiError(f"the Gemini call failed ({type(e).__name__})") from None
             if response.is_success:
@@ -317,23 +328,30 @@ class GeminiClient:
             "contents": [{"role": "user", "parts": [part, {"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": dict(schema), "temperature": 0.4},
         }
-        busy: GeminiError | None = None
+        busy: GeminiError | None = None  # the first model that stayed busy through every wait
+        timeout: GeminiTimeout | None = None  # the first model that timed out
         for model in (self.model, *(m for m in FALLBACK_MODELS if m != self.model)):
             try:
                 response = self._call(
                     "POST", f"{API_ROOT}/v1beta/models/{model}:generateContent",
                     headers={**self._headers(), "Content-Type": "application/json"}, json=body,
                 )
+            except GeminiTimeout as e:
+                timeout = timeout or e  # a timeout is not asked again after a wait (it took minutes): the next model is asked
+                continue
             except GeminiError as e:
-                if busy is None and e.status in BUSY_STATUSES:
-                    busy = e  # the chosen model stayed busy through every wait: the fallbacks are asked in turn
+                handed_over = busy is not None or timeout is not None  # the chosen model stayed busy or timed out: fallbacks in turn
+                if e.status in BUSY_STATUSES:
+                    busy = busy or e
                     continue
-                if busy is not None and (e.status in BUSY_STATUSES or e.status in FALLBACK_SKIP_STATUSES):
+                if handed_over and e.status in FALLBACK_SKIP_STATUSES:
                     continue
                 raise
             return parse_answer(_json_object(response, "generateContent"))
-        assert busy is not None
-        raise busy
+        if busy is not None:  # busy is the better news than a timeout: the first busy answer is what fails
+            raise busy
+        assert timeout is not None
+        raise GeminiTimeout(f"Gemini timed out on every model ({timeout.kind})", timeout.kind)
 
 
 def check_key(env: Mapping[str, str] | None = None, **kw: Any) -> str:

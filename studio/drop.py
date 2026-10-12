@@ -10,13 +10,22 @@ with the ``studio.add_drop`` RPC (migration 0012): a file drop is keyed ``owner-
 video goes to Storage ``sources/owner/<pick id>/<file>`` (``attach_clip``); a pasted link is the canonical TikTok / Instagram /
 YouTube URL. ``studio.request_job(pick, kind)`` (security definer, pg_net + the Vault secret ``github_dispatch_token``) records
 the request and fires the ``studio-drop`` GitHub workflow, which runs ``studio drop process`` or ``studio drop make``; a
-2-hourly ``studio drop sweep`` picks up anything left pending. ``drop.state`` moves::
+2-hourly ``studio drop sweep`` picks up anything left pending, in three parallel workers (``STUDIO_WORKER`` makes each worker's
+``job_id`` its own, so the lease keeps them off each other's drop; a drop another worker holds or has finished is no failure).
+``drop.state`` moves::
 
     uploading -> checking -> ready -----------(Make it: request_job make)----------> making -> made
                     |   \\-> blocked (a child as the star, a watermark, burned-in text, the wrong star, too short)  \\-> failed
                     \\-> waiting (a link the cloud could not fetch: the daily run on the Mac tries again)
 
 ``reason`` carries the one line the card shows (blocked, waiting, failed, or what a making job waits for).
+
+**A failed check retries itself when the cause is temporary** (task 12): the sweep (never the Mac's run) takes a drop ``failed``
+in its CHECK (reason "the look at the clip failed ...") again when ``transient_kind`` of the reason is ``timeout`` / ``busy``
+(Gemini timed out, answered 5xx or was busy: at most ``AUTO_RETRY_MAX`` automatic retries) or ``quota`` (HTTP 429 "exceeded your
+current quota": only once the quota has reset, i.e. after the latest 08:00 London). ``drop.auto_retries`` counts them and
+``drop.auto_retry_at`` stamps the last; the owner's Try again (``requested.process`` after that stamp) starts the count over. A
+failed MAKE is never retried by itself (it spends credits): the owner taps Make it again.
 
 **Whose clip it is** (owner 2026-10-06: "the core of the terminal is dropping our characters into my saved videos"). A drop is
 filed for a character the owner chose (``drop['character_by'] = 'owner'``) or for none: then the studio recommends one
@@ -83,8 +92,8 @@ record (``{"at", "by": "owner"}``, written only by ``request_job``; nothing in t
 created (``clip new``, ``fav_id`` = the pick, the pick ``queued``), the window trimmed and cropped (at least 409,600 pixels a
 frame), the credits reserved (``budget.reserve``: the monthly cap and the kill switch refuse), then the **Higgsfield API**
 (``studio.higgsfield_api``): our signed URL, the character's master + sheet of the star's body + close-up (refs.json
-``reference_urls``), a SHORT prompt ("replace the <star> with the <noun> from the reference images" + his part + gadgets),
-1080p. It is polled up to 25 minutes (longer: the next sweep polls again, never resubmits). Completed: the output is
+``reference_urls``), a SHORT prompt ("replace the <star> with the <noun> from the reference images" + the keep-the-scene line +
+his part + gadgets), 1080p. It is polled up to 25 minutes (longer: the next sweep polls again, never resubmits). Completed: the output is
 downloaded, the credits settled (the API reports no cost: the estimate for the trimmed seconds is booked), ``qa tech``, the
 original audio muxed back if it was lost, the Gemini frame QA (a leftover person, a watermark, the eyes), one automatic
 re-roll on a fail then stop, the master (``closeup: null``, music ``original``, the hook on screen), the upload, the caption +
@@ -132,6 +141,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import shutil
 import socket
 import tempfile
@@ -139,7 +149,7 @@ import uuid
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated, Any, NoReturn
 
@@ -180,6 +190,9 @@ S = ClipState
 DROP_STATES = ("uploading", "checking", "waiting", "ready", "blocked", "making", "made", "failed")
 PROCESS_FROM = frozenset({"uploading", "checking", "waiting"})
 CHECK_REQUEST_FROM = PROCESS_FROM | {"failed"}  # request_job(pick, 'process') (migration 0012) takes these states
+CHECK_FAILED = "the look at the clip failed"  # how the reason of a failed CHECK starts (a failed make never says it)
+AUTO_RETRY_MAX = 2  # a timeout / 5xx / busy failure of a check is taken again by the sweep this many times, then the owner's Try again
+QUOTA_RESET_HOUR = 8  # Google resets the daily quota at midnight Pacific = 08:00 London (07:00 in the weeks the clocks differ)
 PARTS = ("cameo", "featured", "star")
 ADJUST_KEYS = ("star", "part", "gadgets", "hook", "start_s", "length_s", "crop_x")
 WINDOW_CLASSIC = (12.0, 15.0)  # owner 2026-10-05: a classic keeps its whole recognisable section
@@ -283,9 +296,14 @@ def _unready(store: Store, pick: Favorite, now: datetime, **drop_changes: Any) -
 
 
 def job_id() -> str:
-    """Who is running: the GitHub run, else this machine and process."""
+    """Who is running: the GitHub run (and, in a sweep, which of its parallel workers: ``STUDIO_WORKER``, the matrix value of
+    ``studio-drop.yml``), else this machine and process. The lease (``claim``) knows its holder by this id, so the workers of
+    one run, which share the run id, must differ in it: two of them never check the same drop."""
     run = os.environ.get("GITHUB_RUN_ID")
-    return f"gh-{run}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}" if run else f"{socket.gethostname()}-{os.getpid()}"
+    if not run:
+        return f"{socket.gethostname()}-{os.getpid()}"
+    worker = (os.environ.get("STUDIO_WORKER") or "").strip()
+    return f"gh-{run}-{os.environ.get('GITHUB_RUN_ATTEMPT', '1')}" + (f"-w{worker}" if worker else "")
 
 
 def claim(store: Store, pick_id: str, kind: str, job: str, now: datetime) -> bool:
@@ -683,10 +701,17 @@ def effective(drop: Mapping[str, Any], *, lead_s: float = 0.0, swap_part: str | 
     }
 
 
+SWAP_KEEP_LINE = (  # owner 2026-10-08 (his swap prompt, two lines folded in): the images give the character only, the scene is the clip's
+    "Use the reference images for the character only. Keep the original's camera movement, framing, lighting and colour grading, "
+    "and match its colour grading."
+)
+
+
 def swap_prompt(star: str, noun: str, part: str, gadgets: list[str], performance: str | None = None) -> str:
-    """The SHORT Object swap prompt (Higgsfield's own form): who is replaced, by whom, his part, his gadgets, and the character's
+    """The SHORT Object swap prompt (Higgsfield's own form): who is replaced, by whom, ``SWAP_KEEP_LINE`` (the reference images
+    are for the character only; the clip's camera, framing, lighting and grading stay), his part, his gadgets, and the character's
     one performance line when his refs.json has one (``swap_performance``: how he performs the moves); without it, as before."""
-    lines = [f"Replace {star.strip().rstrip('.')} with the {noun} from the reference images."]
+    lines = [f"Replace {star.strip().rstrip('.')} with the {noun} from the reference images.", SWAP_KEEP_LINE]
     lines.append({
         "cameo": "Keep his motion minimal and natural; the scene stays the same.",
         "featured": "He follows the original performer's motion exactly; the scene stays the same.",
@@ -1106,21 +1131,39 @@ def process_drop(
     job: str | None = None,
     characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
     media_fallback: Any = None,
+    auto_retry: bool = False,
 ) -> Outcome:
     """Check a dropped video (free) and make it ``ready`` (see the module doc). ``KeyError`` for an unknown pick, ``DropError``
     for a pick that is not a drop or not at a step a check runs from; ``StorageError`` when our own Storage fails. When the
     owner chooses another character during the check, it starts again for him (up to ``CHANGE_RESTARTS`` times).
+    ``auto_retry`` (the sweep, for a drop ``pending`` listed as ``failed``): a failed check that ``auto_retry_kind`` still allows
+    goes back to ``checking`` under the lease (``drop.auto_retries`` + 1, ``drop.auto_retry_at``; ``requested`` untouched, so the
+    owner's own Try again stays recognisable) and is checked again; otherwise it is left as it is (busy). Without it a failed
+    drop is refused, as ever.
     ``media_fallback`` (``studio.hits.ScrapeCreators``, the cloud jobs pass it when the key is set): a link yt-dlp cannot fetch
     is taken from ScrapeCreators' copy of that one post (``studio.fetch.fetch_pick_clip``)."""
     now = now or now_london()
     job = job or job_id()
     pick = _load(store, pick_id)
     state = drop_of(pick)["state"]
-    if state not in PROCESS_FROM:
+    retaking = auto_retry and state == "failed"
+    if state not in PROCESS_FROM and not retaking:
         raise DropError(f"pick {pick_id} is {state}: a check runs on an uploading, checking or waiting drop")
     if not claim(store, pick_id, "process", job, now):
         return Outcome(pick_id, state, "another run is checking this video", detail={"busy": True})
     try:
+        # read again under the lease: a parallel worker of the same sweep may have finished this drop since it was listed
+        fresh = _load(store, pick_id)
+        now_state = drop_of(fresh)["state"]
+        if retaking and now_state == "failed":
+            if auto_retry_kind(fresh, now) is None:
+                return Outcome(pick_id, now_state, "this failed check is not taken again by itself", detail={"busy": True})
+            _update(
+                store, fresh, now, state="checking", reason=None, auto_retries=auto_retries_used(drop_of(fresh)) + 1,
+                auto_retry_at=now.isoformat(),
+            )
+        elif now_state not in PROCESS_FROM:
+            return Outcome(pick_id, now_state, "another run already checked this video", detail={"busy": True})
         for _ in range(CHANGE_RESTARTS + 1):
             try:
                 return _process(
@@ -1213,7 +1256,7 @@ def _process(
                 _unready(store, _still(store, pick.id, slug), now, state="blocked", reason=reason, **basics)
                 return Outcome(pick.id, "blocked", reason)
             except gemini.GeminiError as e:
-                reason = f"the look at the clip failed ({str(e)[:140]}): tap Try again"
+                reason = f"{CHECK_FAILED} ({str(e)[:140]}): tap Try again"
                 _unready(store, _still(store, pick.id, slug), now, state="failed", reason=reason, **basics)
                 return Outcome(pick.id, "failed", reason, ok=False)
         pick = _still(store, pick.id, slug)
@@ -1859,6 +1902,65 @@ def _fetch_age(pick: Favorite, now: datetime) -> tuple[int, str | None]:
     return days, max(tried) if tried else None
 
 
+# ---- a failed check that retries itself (task 12) -----------------------------------------------------------------------------
+
+
+def transient_kind(reason: str) -> str | None:
+    """Why a failed check failed, when the cause is temporary: ``"quota"`` (Gemini's daily quota: HTTP 429 "You exceeded your
+    current quota"), ``"timeout"`` (a timed-out call, or every model timed out) or ``"busy"`` (HTTP 5xx, another 429, "busy", "high
+    demand", "overloaded"); ``None`` for anything else (a refused key, a clip Gemini would not look at, an error of ours). The
+    reason is the one the drop recorded ("the look at the clip failed (...): tap Try again"). Pure: it reads the text only."""
+    if not isinstance(reason, str):
+        return None
+    low = reason.lower()
+    if "exceeded your current quota" in low:
+        return "quota"
+    if re.search(r"http (429|5\d\d)\b", low):  # an answer with a status comes first: a 504 "gateway timeout" is Gemini's, busy
+        return "busy"
+    if "timeout" in low or "timed out" in low:
+        return "timeout"
+    return "busy" if any(w in low for w in ("busy", "high demand", "overloaded")) else None
+
+
+def last_quota_reset(now: datetime) -> datetime:
+    """The most recent ``QUOTA_RESET_HOUR`` London at or before ``now``: a quota failure from before it is a new day's quota."""
+    local = now.astimezone(LONDON)
+    day: date = local.date() if local.time() >= time(QUOTA_RESET_HOUR) else local.date() - timedelta(days=1)
+    return datetime.combine(day, time(QUOTA_RESET_HOUR), tzinfo=LONDON)
+
+
+def auto_retries_used(d: Mapping[str, Any]) -> int:
+    """How many times the sweep has retaken this drop's failed check by itself (``drop.auto_retries``); the owner's Try again
+    resets it: a ``requested.process`` stamped after ``drop.auto_retry_at`` (``request_job`` and ``request_check`` write it; the
+    sweep's own retry never does) starts the count over."""
+    n = d.get("auto_retries")
+    used = n if isinstance(n, int) and not isinstance(n, bool) and n > 0 else 0
+    requested = d.get("requested")
+    asked = _moment(requested.get("process")) if isinstance(requested, Mapping) else None
+    last = _moment(d.get("auto_retry_at"))
+    return 0 if asked is not None and last is not None and asked > last else used
+
+
+def auto_retry_kind(pick: Favorite, now: datetime) -> str | None:
+    """Whether the sweep takes this drop's failed CHECK again by itself, and for what cause (``transient_kind``), else ``None``:
+
+    * only a drop ``failed`` with a check's reason (``CHECK_FAILED``): a make is never retried by itself (it costs credits);
+    * a timeout / 5xx / busy failure: at most ``AUTO_RETRY_MAX`` times (``auto_retries_used``);
+    * a daily-quota failure: once the quota has reset, i.e. the failure (``drop.at``) is before the latest 08:00 London
+      (``last_quota_reset``); once a day at most, so it is not capped."""
+    d = drop_of(pick)
+    reason = d.get("reason")
+    if d.get("state") != "failed" or pick.status not in ("approved", "queued") or not isinstance(reason, str):
+        return None
+    if not reason.startswith(CHECK_FAILED):
+        return None
+    kind = transient_kind(reason)
+    if kind == "quota":
+        failed = _moment(d.get("at"))
+        return kind if failed is not None and failed < last_quota_reset(now) else None
+    return kind if kind is not None and auto_retries_used(d) < AUTO_RETRY_MAX else None
+
+
 def pending(
     store: Store, *, include_waiting: bool = False, now: datetime | None = None, auto_retry: bool = False,
 ) -> list[dict[str, str]]:
@@ -1869,7 +1971,11 @@ def pending(
     An auto-filed drop (``drop.auto_filed``, the hits job's) is never the Mac's: with ``include_waiting`` it is left out of the
     checks (its make, after the owner's Make it, stays). For the cloud (no ``include_waiting``) a WAITING one is ``expire`` from
     its ``AUTO_FETCH_DAYS``th London day after filing on (``expire_unfetched``), and before that ``process`` again when
-    ``auto_retry`` (the sweep: the day's one-post downloads allow) and its last failed fetch was on an earlier London day."""
+    ``auto_retry`` (the sweep: the day's one-post downloads allow) and its last failed fetch was on an earlier London day.
+
+    For the cloud (no ``include_waiting``) a drop ``failed`` in its CHECK for a temporary cause is ``process`` again
+    (``auto_retry_kind``: a Gemini timeout, 5xx or busy answer up to ``AUTO_RETRY_MAX`` times; the daily quota once it has reset);
+    ``process_drop(auto_retry=True)`` moves it back to ``checking`` when the run claims it. A failed make is never listed."""
     now = now or now_london()
     today = now.astimezone(LONDON).date().isoformat()
     out: list[tuple[datetime | None, dict[str, str]]] = []
@@ -1889,6 +1995,10 @@ def pending(
             if age >= AUTO_FETCH_DAYS:
                 out.append((f.created_at, {"pick_id": f.id, "job": "expire", "state": state}))
             elif auto_retry and (last is None or last < today):
+                out.append((f.created_at, {"pick_id": f.id, "job": "process", "state": state}))
+            continue
+        if state == "failed":
+            if not include_waiting and auto_retry_kind(f, now) is not None:
                 out.append((f.created_at, {"pick_id": f.id, "job": "process", "state": state}))
             continue
         if auto and include_waiting and state != "making":
@@ -2163,22 +2273,49 @@ def pending_command(
     emit(rows)
 
 
+def _moved_on(store: Store, row: Mapping[str, str]) -> bool:
+    """Whether the drop is no longer where the sweep listed it (a parallel worker finished, expired or skipped it meanwhile):
+    still approved or queued, and still in the state ``pending`` saw. A pick that has vanished is left to the job to report."""
+    fresh = store.get_favorite(row["pick_id"])
+    if fresh is None or not is_drop(fresh.proposal):
+        return False
+    return fresh.status not in ("approved", "queued") or drop_of(fresh).get("state") != row["state"]
+
+
+def _expire_once(store: Store, pick_id: str, now: datetime) -> dict[str, Any]:
+    """``expire_unfetched`` under the pick's lease, so two sweep workers never expire the same drop (the loser is ``busy``)."""
+    job = job_id()
+    if not claim(store, pick_id, "expire", job, now):
+        return {"pick_id": pick_id, "ok": True, "busy": True, "reason": "another run holds this video"}
+    try:
+        return expire_unfetched(store, pick_id, now)
+    finally:
+        release(store, pick_id, job)
+
+
 @app.command("sweep")
 def sweep_command(
     include_waiting: Annotated[bool, typer.Option("--include-waiting", help="Also retry the waiting links (the Mac).")] = False,
 ) -> None:
-    """Run every pending drop job, one after another (the 2-hourly safety net). Exit 1 when one of them stopped on a failure."""
+    """Run every pending drop job, one after another (the 2-hourly safety net; the cloud runs three of these workers side by
+    side, ``STUDIO_WORKER``, and the lease keeps them off each other's drop). Exit 1 when one of them stopped on a failure: a
+    drop another worker holds (busy) or has already moved on is none."""
     store, storage = open_store(), open_storage()
     hf, client, media = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env(), _media(store)
     results: list[dict[str, Any]] = []
     failed = False
     for row in pending(store, include_waiting=include_waiting, auto_retry=not include_waiting and _auto_retry(media)):
         try:
+            if _moved_on(store, row):
+                results.append({"job": row["job"], "pick_id": row["pick_id"], "ok": True, "moved_on": True})
+                continue
             if row["job"] == "expire":
-                results.append({"job": "expire", **expire_unfetched(store, row["pick_id"])})
+                results.append({"job": "expire", **_expire_once(store, row["pick_id"], now_london())})
                 continue
             if row["job"] == "process":
-                outcome = process_drop(store, storage, row["pick_id"], gemini_client=client, media_fallback=media)
+                outcome = process_drop(
+                    store, storage, row["pick_id"], gemini_client=client, media_fallback=media, auto_retry=row["state"] == "failed",
+                )
             else:
                 outcome = make_drop(store, storage, row["pick_id"], hf=hf, gemini_client=client)
             results.append({"job": row["job"], **outcome.json()})

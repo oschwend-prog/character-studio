@@ -16,7 +16,8 @@ What is checked, in the order the owner's checklist (``docs/launch/go-live.md``)
 * GitHub: the four secrets exist and the publish / metrics / health workflows are enabled.
 * Drop a video (plan 2026-10-06): the GitHub secrets of the cloud jobs (``HF_API_KEY_ID``, ``HF_API_KEY_SECRET``,
   ``GEMINI_API_KEY``), the ``studio-drop`` workflow enabled, and the Supabase Vault secret ``github_dispatch_token`` that lets
-  the owner's button start it (only its presence is read, never its value).
+  the owner's button start it (only its presence is read, never its value). The ``studio-hits`` workflow (the daily cloud hits job,
+  terminal v3, migration 0016) is checked enabled with the others.
 * The ``postiz`` CLI is on PATH and ``postiz auth:status`` succeeds.
 * ``.claude/settings.json`` carries the deny rules of ``.claude/settings.json.proposed``.
 * No ``.env`` or other secret file is tracked in git.
@@ -61,7 +62,7 @@ KEYCHAIN_SOURCE = {
     "cs-supabase-service-key": "Supabase > Settings > API > service_role key",
     "cs-postiz-api-key": "Postiz > Settings > Public API",
 }
-WORKFLOWS = ("publish", "metrics", "health", "studio-drop")
+WORKFLOWS = ("publish", "metrics", "health", "studio-drop", "studio-hits")  # studio-hits: the daily cloud hits job (migration 0016)
 # The cloud jobs of "Drop a video": GitHub secrets only (they never sit on the Mac), each with where the owner makes it.
 DROP_SECRETS: tuple[tuple[str, str], ...] = (
     ("HF_KEY", "console.higgsfield.ai > API keys: the whole id:secret value the console copies, shown once"),

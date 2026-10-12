@@ -82,7 +82,7 @@ class World:
     gh_workflows: list[dict] = field(
         default_factory=lambda: [
             {"name": n, "path": f".github/workflows/{n}.yml", "state": "active"}
-            for n in ("ci", "publish", "metrics", "health", "studio-drop")
+            for n in ("ci", "publish", "metrics", "health", "studio-drop", "studio-hits")
         ]
     )
     gh_result: subprocess.CompletedProcess[str] | Exception | None = None  # overrides both gh calls
@@ -960,7 +960,23 @@ def test_the_drop_secrets_the_workflow_and_the_vault_token_pass_when_present(wor
     for name, _ in golive.DROP_SECRETS:
         assert checks[f"github:{name}"].status == "pass"
     assert checks["github:workflow:studio-drop"].status == "pass"
+    assert checks["github:workflow:studio-hits"].status == "pass"  # the daily cloud hits job (task 12)
     assert checks["drop:vault"].status == "pass" and checks["drop:vault"].title == "drop: vault secret github_dispatch_token"
+
+
+def test_the_hits_workflow_is_a_go_live_check_enabled_or_not(world):
+    assert "studio-hits" in golive.WORKFLOWS
+    for wf in world.gh_workflows:
+        if wf["name"] == "studio-hits":
+            wf["state"] = "disabled_manually"
+    checks = world.run()
+    assert failing(checks) == {"github:workflow:studio-hits"}
+    assert checks["github:workflow:studio-hits"].title == "github: workflow studio-hits enabled"
+    assert "disabled_manually" in checks["github:workflow:studio-hits"].detail
+    assert "gh workflow enable studio-hits.yml" in checks["github:workflow:studio-hits"].fix
+    world.gh_workflows = [w for w in world.gh_workflows if w["name"] != "studio-hits"]
+    c = world.run()["github:workflow:studio-hits"]
+    assert c.status == "fail" and "not found" in c.detail and ".github/workflows/studio-hits.yml" in c.fix
 
 
 def test_a_missing_drop_secret_fails_with_a_prompting_set_command(world):

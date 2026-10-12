@@ -413,8 +413,8 @@ def test_an_http_error_never_shows_the_key(clip):
     with pytest.raises(GeminiError) as info:
         deconstruct(client(fake), clip, REGINALD)
     assert info.value.status == 403 and KEY not in str(info.value)
-    with pytest.raises(GeminiError, match="ReadTimeout"):
-        deconstruct(client(Fake(httpx.ReadTimeout("slow"))), clip, REGINALD)
+    with pytest.raises(GeminiError, match="ConnectError"):  # not a timeout: nothing to hand over, it fails at once
+        deconstruct(client(Fake(httpx.ConnectError("no route"))), clip, REGINALD)
 
 
 def test_a_busy_model_is_asked_again_after_a_wait(clip):
@@ -448,6 +448,55 @@ def test_a_model_that_stays_busy_hands_over_to_the_fallbacks_in_turn(clip):
     with pytest.raises(GeminiError) as info:
         deconstruct(client(fake), clip, REGINALD)
     assert info.value.status == 503 and len(fake.requests) == len(busy) * (1 + len(FALLBACK_MODELS))
+
+
+def _models(fake: Fake) -> list[str]:
+    return [r.url.path.split("/models/")[1].split(":")[0] for r in fake.requests]
+
+
+def test_a_timeout_hands_over_to_the_next_model_like_a_busy_answer(clip):
+    # 2026-10-08: Gemini often took over 3 minutes and then timed out; the check failed at once instead of asking the next model
+    waits: list[float] = []
+    fake = Fake(httpx.ReadTimeout("slow"), (200, answer(GOOD)))
+    c = GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append)
+    assert deconstruct(c, clip, REGINALD)["caption"]["title"] == GOOD["caption"]["title"]
+    assert _models(fake) == [DEFAULT_MODEL, FALLBACK_MODELS[0]]
+    assert waits == []  # a timeout is not asked again after a wait: the next model is asked at once
+    fake = Fake(httpx.ConnectTimeout("slow"), httpx.ReadTimeout("slow"), (200, answer(GOOD)))  # any timeout, down the whole list
+    assert deconstruct(client(fake), clip, REGINALD)["hooks"]
+    assert _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS]
+
+
+def test_when_every_model_times_out_each_is_asked_once_and_the_error_says_so(clip):
+    fake = Fake(*[httpx.ReadTimeout("slow")] * (1 + len(FALLBACK_MODELS)))
+    with pytest.raises(GeminiError, match="Gemini timed out on every model") as info:
+        deconstruct(client(fake), clip, REGINALD)
+    assert isinstance(info.value, gemini.GeminiTimeout) and info.value.status is None
+    assert "ReadTimeout" in str(info.value) and KEY not in str(info.value)  # the kind of timeout stays in the recorded reason
+    assert _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS]  # each model at most once per call
+
+
+def test_a_timeout_and_a_busy_model_mix_down_the_list(clip):
+    busy = [(503, "high demand")] * (len(BUSY_WAITS_S) + 1)
+    # the chosen model busy, the first fallback times out, the last answers
+    fake = Fake(*busy, httpx.ReadTimeout("slow"), (200, answer(GOOD)))
+    assert deconstruct(client(fake), clip, REGINALD)["hooks"]
+    assert _models(fake) == [DEFAULT_MODEL] * len(busy) + list(FALLBACK_MODELS)
+    # the chosen model times out, a fallback does not take the request (404): the next one is asked
+    fake = Fake(httpx.ReadTimeout("slow"), (404, "no such model"), (200, answer(GOOD)))
+    assert deconstruct(client(fake), clip, REGINALD)["hooks"]
+    # a timeout first, then a model that stays busy, then a timeout: the busy answer is what fails (it is the better news)
+    fake = Fake(httpx.ReadTimeout("slow"), *busy, httpx.ReadTimeout("slow"))
+    with pytest.raises(GeminiError) as info:
+        deconstruct(client(fake), clip, REGINALD)
+    assert info.value.status == 503 and not isinstance(info.value, gemini.GeminiTimeout)
+
+
+def test_a_refusal_after_a_timeout_is_not_handed_on(clip):
+    fake = Fake(httpx.ReadTimeout("slow"), (403, f"API key {KEY} is not valid"))
+    with pytest.raises(GeminiError) as info:
+        deconstruct(client(fake), clip, REGINALD)
+    assert info.value.status == 403 and KEY not in str(info.value) and len(fake.requests) == 2
 
 
 def test_a_big_file_goes_through_the_files_api_and_is_deleted_afterwards(clip, monkeypatch):

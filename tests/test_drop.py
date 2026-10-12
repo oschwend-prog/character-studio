@@ -9,6 +9,7 @@ resumes where the clip is.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import shutil
 import subprocess
@@ -351,6 +352,118 @@ def test_a_second_run_on_the_same_drop_is_busy(world, portrait):
     assert [p["job"] for p in pending(store, now=later)] == ["process"]  # an abandoned lease expires
 
 
+# ---- three sweep workers in parallel (task 12): each has its own job id, so the lease tells them apart ---------------------------
+
+
+def test_the_job_id_carries_the_sweep_worker_so_two_workers_of_one_run_differ(monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    monkeypatch.delenv("STUDIO_WORKER", raising=False)
+    assert drop.job_id() == "gh-123-2"  # a dispatched run (one pick) is one worker: unchanged
+    ids = []
+    for worker in ("1", "2", "3"):
+        monkeypatch.setenv("STUDIO_WORKER", worker)
+        ids.append(drop.job_id())
+    assert ids == ["gh-123-2-w1", "gh-123-2-w2", "gh-123-2-w3"]
+    monkeypatch.setenv("STUDIO_WORKER", "  ")
+    assert drop.job_id() == "gh-123-2"  # an empty value is no worker
+    monkeypatch.delenv("GITHUB_RUN_ID")
+    monkeypatch.setenv("STUDIO_WORKER", "2")
+    assert "-w2" not in drop.job_id()  # off GitHub the machine and the process already tell runs apart
+
+
+def test_two_workers_of_the_same_run_never_take_the_same_drop(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    assert drop.claim(store, pid, "process", "gh-9-1-w1", NOW)
+    assert not drop.claim(store, pid, "process", "gh-9-1-w2", NOW)  # the second worker is refused
+    assert drop.claim(store, pid, "process", "gh-9-1-w1", NOW)  # the same worker keeps its own lease (unchanged)
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct()), now=NOW, job="gh-9-1-w3")
+    assert out.detail["busy"] and out.ok and out.state == "checking"
+
+
+def sweep_world(monkeypatch, tmp_path, store=None):
+    """The CLI's `drop sweep` on this store: no Gemini or Higgsfield client, no ScrapeCreators, the London clock at NOW."""
+    store, storage = store or make_store(), LocalStorage(tmp_path / "s")
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: storage)
+    monkeypatch.setattr(drop, "now_london", lambda: NOW)
+    monkeypatch.setattr(drop, "_media", lambda store_: None)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: None))
+    monkeypatch.setattr(drop.HiggsfieldClient, "from_env", classmethod(lambda cls, env=None, **kw: None))
+    return store, storage
+
+
+def test_a_pick_another_worker_holds_is_busy_and_never_fails_the_sweep(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = drop_file(store, storage, portrait)
+    real = drop.pending
+
+    def listed_then_taken(*a, **kw):
+        rows = real(*a, **kw)
+        assert drop.claim(store, pid, "process", "gh-9-1-w2", NOW)  # worker 2 takes it after this worker listed it
+        return rows
+
+    monkeypatch.setattr(drop, "pending", listed_then_taken)
+    monkeypatch.setenv("GITHUB_RUN_ID", "9")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("STUDIO_WORKER", "1")
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output  # busy is not a failure
+    (row,) = json.loads(r.output)["results"]
+    assert row["busy"] is True and row["ok"] is True and row["state"] == "checking"
+
+
+def test_a_drop_another_worker_finished_meanwhile_is_skipped_not_a_failure(monkeypatch, tmp_path, portrait):
+    """Three workers list the same drops and walk them in the same order: by the time one reaches a drop another has finished,
+    the drop is `ready` and a check refuses it (DropError). That is no failure of the sweep."""
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = ready_drop(store, storage, portrait)
+    stale = [{"pick_id": pid, "job": "process", "state": "checking"}]  # what this worker listed before the other one finished it
+    monkeypatch.setattr(drop, "pending", lambda *a, **kw: stale)
+    ran = []
+    monkeypatch.setattr(drop, "process_drop", lambda *a, **kw: ran.append(a) or drop.Outcome(pid, "ready"))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    (row,) = json.loads(r.output)["results"]
+    assert row["pick_id"] == pid and row["ok"] is True and row["moved_on"] is True and ran == []
+    # a hand-run check of a ready drop is still refused
+    with pytest.raises(DropError, match="ready"):
+        process_drop(store, storage, pid, gemini_client=FakeGemini(), now=NOW, job="t")
+
+
+def test_a_check_another_worker_finishes_between_listing_and_claiming_is_not_run_twice(world, portrait, monkeypatch):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    real, reads = drop._load, []
+
+    def load(store_, pick_id):
+        pick = real(store_, pick_id)
+        reads.append(pick_id)
+        if len(reads) == 1:  # the read before the claim still sees the state the drop had when it was listed
+            return dataclasses.replace(pick, proposal={**pick.proposal, "drop": {**pick.proposal["drop"], "state": "checking"}})
+        return pick
+
+    monkeypatch.setattr(drop, "_load", load)
+    g = FakeGemini()
+    out = process_drop(store, storage, pid, gemini_client=g, now=NOW, job="gh-9-1-w1")
+    assert out.ok and out.detail["busy"] and out.state == "ready" and g.calls == []  # not looked at a second time
+    assert "job" not in store.get_favorite(pid).proposal["drop"]  # the lease is given back
+
+
+def test_an_expiry_is_taken_by_one_worker_only(monkeypatch, tmp_path):
+    store, _ = sweep_world(monkeypatch, tmp_path)
+    old = auto_link(store, NOW - timedelta(days=3), tried=[(NOW - timedelta(days=3)).date().isoformat()])
+    stale = [{"pick_id": old.id, "job": "expire", "state": "waiting"}]
+    monkeypatch.setattr(drop, "pending", lambda *a, **kw: [*stale, *stale])  # two workers reach it, one after the other
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    first, second = json.loads(r.output)["results"]
+    assert first["skipped"] is True and first["job"] == "expire" and first["ok"] is True  # expire_unfetched's own answer
+    assert second["ok"] is True and second["moved_on"] is True  # the second finds it already skipped by the first
+    assert store.get_favorite(old.id).status == "skipped" and "job" not in store.get_favorite(old.id).proposal["drop"]
+
+
 def test_a_drop_is_never_in_the_daily_runs_queue(world, portrait):
     store, storage = world
     pid = ready_drop(store, storage, portrait)
@@ -577,8 +690,12 @@ def test_make_it_swaps_qas_masters_and_waits_for_the_owners_ok(world, portrait, 
     (sub,) = hf.submits
     refs = {r["slug"]: r for r in drop.seed.load_refs()}
     assert sub["image_urls"] == drop.seed.reference_images(refs["reginald"], "biped") and sub["resolution"] == "1080p"
-    assert sub["prompt"].startswith("Replace the man in the grey suit with the butler from the reference images.")
-    assert "black umbrella" in sub["prompt"] and len(sub["prompt"]) < 400
+    assert sub["prompt"].startswith(  # the owner's two lines follow the first line, ahead of his part and gadgets
+        "Replace the man in the grey suit with the butler from the reference images. Use the reference images for the character "
+        "only. Keep the original's camera movement, framing, lighting and colour grading, and match its colour grading. "
+        "He follows the original performer's motion exactly; the scene stays the same."
+    )
+    assert "black umbrella" in sub["prompt"] and len(sub["prompt"]) < 500
     assert sub["key"] == f"drop-{clip.id}-1" and pick.proposal["drop"]["make"]["idempotency_key"] == sub["key"]
     child = next(iter(store.list_sources(id=clip.source_id)))
     r = probe(Path(storage.root) / "sources" / child.storage_path, loudness=False)
@@ -1562,10 +1679,30 @@ def test_the_swap_prompt_adds_the_characters_performance_line():
     ref, _ = drop.character("franz")
     prompt = drop.swap_prompt("the man in the grey suit", "dachshund", "star", [], performance=ref["swap_performance"])
     assert prompt == (
-        "Replace the man in the grey suit with the dachshund from the reference images. He performs every beat with full "
-        f"energy; the scene stays the same. Performance: {ref['swap_performance']}."
+        "Replace the man in the grey suit with the dachshund from the reference images. Use the reference images for the character "
+        "only. Keep the original's camera movement, framing, lighting and colour grading, and match its colour grading. "
+        f"He performs every beat with full energy; the scene stays the same. Performance: {ref['swap_performance']}."
     )
-    assert len(prompt) < 400
+    assert drop.SWAP_KEEP_LINE in base and base.index(drop.SWAP_KEEP_LINE) < base.index("He follows")  # the line sits right after the first
+    assert len(prompt) < 700  # still a SHORT prompt (Higgsfield takes 10,000)
+
+
+def test_every_swap_prompt_carries_the_owners_two_lines_right_after_the_first():
+    keep = (
+        "Use the reference images for the character only. Keep the original's camera movement, framing, lighting and colour "
+        "grading, and match its colour grading."
+    )
+    assert drop.SWAP_KEEP_LINE == keep
+    first = "Replace the woman on the left with the butler from the reference images."
+    parts = {
+        "cameo": "Keep his motion minimal and natural; the scene stays the same.",
+        "featured": "He follows the original performer's motion exactly; the scene stays the same.",
+        "star": "He performs every beat with full energy; the scene stays the same.",
+    }
+    for part, line in parts.items():
+        assert drop.swap_prompt("the woman on the left.", "butler", part, ["gold pocket watch"], "same moves, all Reginald") == (
+            f"{first} {keep} {line} He wears or holds: gold pocket watch (no brand logos). Performance: same moves, all Reginald."
+        )
 
 
 def test_franz_is_made_as_the_star_with_his_performance_line(world, portrait, gen_out, fast_master):
@@ -2131,3 +2268,242 @@ def test_the_cloud_sweep_drops_the_stale_and_retries_the_due_only_while_download
     monkeypatch.setattr(drop, "_media", lambda store_: None)  # no key: yt-dlp alone may try again (free)
     assert CliRunner().invoke(app, ["drop", "pending", "--count"]).output.strip() == "1"
     assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 0 and seen == [due.id]
+
+
+# ---- a failed check that has a temporary cause retries itself (task 12) ----------------------------------------------------------
+
+_QUOTA_429 = (
+    'the look at the clip failed (Gemini answered HTTP 429: {\n  "error": {\n    "code": 429,\n    "message": "You exceeded your '
+    'current quota, please check your plan and bil): tap Try again'
+)
+_TRANSIENT_REASONS = [  # the strings process_drop really records, and what the sweep makes of them
+    ("the look at the clip failed (the Gemini call failed (ReadTimeout)): tap Try again", "timeout"),
+    ("the look at the clip failed (the Gemini call failed (ConnectTimeout)): tap Try again", "timeout"),
+    ("the look at the clip failed (Gemini timed out on every model (ReadTimeout)): tap Try again", "timeout"),
+    (_QUOTA_429, "quota"),
+    ("the look at the clip failed (Gemini answered HTTP 503: {\"error\": {\"message\": \"high demand\"}}): tap Try again", "busy"),
+    ("the look at the clip failed (Gemini answered HTTP 500: internal): tap Try again", "busy"),
+    ("the look at the clip failed (Gemini answered HTTP 502: bad gateway): tap Try again", "busy"),
+    ("the look at the clip failed (Gemini answered HTTP 504: gateway timeout): tap Try again", "busy"),
+    ("the look at the clip failed (Gemini answered HTTP 429: Resource has been exhausted): tap Try again", "busy"),  # a rate limit, not the day's
+    ("the look at the clip failed (the model is busy right now): tap Try again", "busy"),
+    ("the look at the clip failed (Gemini answered HTTP 403: API key not valid): tap Try again", None),
+    ("the look at the clip failed (Gemini answered HTTP 400: unsupported): tap Try again", None),
+    ("the look at the clip failed (Gemini answered HTTP 404: no such model): tap Try again", None),
+    ("the look at the clip failed (Gemini could not process the uploaded clip (state FAILED)): tap Try again", None),
+    ("the check stopped: KeyError: 'x'", None),
+    ("the master build failed (ValueError: bad): tap Make it again", None),
+    ("", None),
+]
+
+
+@pytest.mark.parametrize(("reason", "kind"), _TRANSIENT_REASONS)
+def test_transient_kind_reads_the_reasons_a_failed_check_records(reason, kind):
+    assert drop.transient_kind(reason) == kind
+
+
+def test_transient_kind_takes_no_other_input():
+    assert drop.transient_kind(None) is None  # type: ignore[arg-type]
+    assert drop.transient_kind(503) is None  # type: ignore[arg-type]
+
+
+def test_the_quota_resets_at_the_latest_0800_london():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    london = ZoneInfo("Europe/London")
+    for now, reset in (
+        (datetime(2026, 10, 12, 9, 0, tzinfo=london), datetime(2026, 10, 12, 8, 0, tzinfo=london)),
+        (datetime(2026, 10, 12, 8, 0, tzinfo=london), datetime(2026, 10, 12, 8, 0, tzinfo=london)),  # at 08:00 sharp: that day's
+        (datetime(2026, 10, 12, 7, 59, tzinfo=london), datetime(2026, 10, 11, 8, 0, tzinfo=london)),
+        (datetime(2026, 10, 12, 0, 5, tzinfo=london), datetime(2026, 10, 11, 8, 0, tzinfo=london)),
+        (datetime(2026, 10, 12, 23, 59, tzinfo=london), datetime(2026, 10, 12, 8, 0, tzinfo=london)),
+        (datetime(2026, 10, 26, 8, 30, tzinfo=london), datetime(2026, 10, 26, 8, 0, tzinfo=london)),  # the clocks went back on the 25th
+        (datetime(2026, 7, 1, 6, 30, tzinfo=ZoneInfo("UTC")), datetime(2026, 6, 30, 8, 0, tzinfo=london)),  # any zone in, London out
+    ):
+        assert drop.last_quota_reset(now) == reset, now
+        assert drop.last_quota_reset(now).utcoffset() == reset.utcoffset()
+
+
+def failed_check(store, storage, clip, reason, *, at=None, **drop_changes):
+    """A dropped video whose check failed with ``reason`` (the state ``process_drop`` leaves), at ``at`` (default: now)."""
+    pid = drop_file(store, storage, clip)
+    f = store.get_favorite(pid)
+    d = {**f.proposal["drop"], "state": "failed", "reason": reason, "at": (at or NOW).isoformat(), **drop_changes}
+    store.update_favorite(pid, proposal={**f.proposal, "drop": d})
+    return pid
+
+
+TIMEOUT_REASON = _TRANSIENT_REASONS[0][0]
+
+
+def test_pending_lists_a_check_that_timed_out_until_it_has_been_retried_twice(world, portrait):
+    store, storage = world
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
+    assert pending(store, now=NOW) == [{"pick_id": pid, "job": "process", "state": "failed"}]
+    d = store.get_favorite(pid).proposal["drop"]
+    for used in (1, 2):
+        store.update_favorite(pid, proposal={**store.get_favorite(pid).proposal, "drop": {**d, "auto_retries": used}})
+        assert [p["pick_id"] for p in pending(store, now=NOW)] == ([pid] if used < 2 else [])  # at most 2 automatic retries
+    assert pending(store, now=NOW, include_waiting=True) == []  # the Mac's daily run never takes it
+    assert drop.AUTO_RETRY_MAX == 2
+
+
+@pytest.mark.parametrize(("reason", "kind"), [r for r in _TRANSIENT_REASONS if r[1] in ("timeout", "busy")])
+def test_every_timeout_and_busy_reason_is_pending_again(world, portrait, reason, kind):
+    store, storage = world
+    pid = failed_check(store, storage, portrait, reason)
+    assert [p["pick_id"] for p in pending(store, now=NOW)] == [pid]
+    assert drop.auto_retry_kind(store.get_favorite(pid), NOW) == kind
+
+
+def test_a_check_that_will_never_work_stays_failed_for_the_owner(world, portrait):
+    store, storage = world
+    for reason, kind in _TRANSIENT_REASONS:
+        if kind is None:
+            failed_check(store, storage, portrait, reason)
+    assert pending(store, now=NOW) == []
+    failed_check(store, storage, portrait, None)  # no reason at all
+    assert pending(store, now=NOW) == []
+
+
+def test_a_failed_make_is_never_retried_by_itself_whatever_it_says(world, portrait):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)
+    f = store.get_favorite(pid)
+    for reason in (
+        "Higgsfield answered HTTP 503: busy, timed out", "the master build failed (TimeoutError): tap Make it again",
+        "the quality check failed twice: Gemini timed out", TIMEOUT_REASON.replace("the look at the clip failed", "the make failed"),
+    ):
+        store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": "failed", "reason": reason,
+                                                                     "at": NOW.isoformat()}})
+        assert pending(store, now=NOW) == [], reason
+        assert drop.auto_retry_kind(store.get_favorite(pid), NOW) is None
+
+
+def test_a_quota_failure_waits_for_the_quota_to_reset(world, portrait):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    store, storage = world
+    london = ZoneInfo("Europe/London")
+    pid = failed_check(store, storage, portrait, _QUOTA_429, at=datetime(2026, 10, 11, 21, 40, tzinfo=london))
+    evening = datetime(2026, 10, 11, 23, 0, tzinfo=london)
+    before_reset = datetime(2026, 10, 12, 7, 59, tzinfo=london)
+    after_reset = datetime(2026, 10, 12, 8, 0, tzinfo=london)
+    assert pending(store, now=evening) == [] and pending(store, now=before_reset) == []  # the same Pacific day: the quota is still gone
+    assert pending(store, now=after_reset) == [{"pick_id": pid, "job": "process", "state": "failed"}]
+    # a failure after that morning's reset waits for the next one
+    pid2 = failed_check(store, storage, portrait, _QUOTA_429, at=datetime(2026, 10, 12, 8, 30, tzinfo=london))
+    noon = datetime(2026, 10, 12, 12, 0, tzinfo=london)
+    assert [p["pick_id"] for p in pending(store, now=noon)] == [pid]
+    assert pid2 in [p["pick_id"] for p in pending(store, now=datetime(2026, 10, 13, 8, 0, tzinfo=london))]
+    # the 2-retry cap is the timeout's: a quota retry is limited by the reset (once a day at most), and counted
+    store.update_favorite(pid, proposal={**store.get_favorite(pid).proposal, "drop": {**store.get_favorite(pid).proposal["drop"], "auto_retries": 5}})
+    assert pid in [p["pick_id"] for p in pending(store, now=after_reset)]
+    # a quota failure with no usable time is not guessed at
+    pid3 = failed_check(store, storage, portrait, _QUOTA_429, at=None)
+    f3 = store.get_favorite(pid3)
+    store.update_favorite(pid3, proposal={**f3.proposal, "drop": {**f3.proposal["drop"], "at": "yesterday"}})
+    assert pid3 not in [p["pick_id"] for p in pending(store, now=after_reset)]
+
+
+def test_the_owners_try_again_starts_the_automatic_count_over(world, portrait):
+    store, storage = world
+    last = NOW - timedelta(hours=3)
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON, auto_retries=2, auto_retry_at=last.isoformat(),
+                       requested={"process": (last - timedelta(hours=1)).isoformat()})
+    assert pending(store, now=NOW) == [] and drop.auto_retries_used(drop.drop_of(store.get_favorite(pid))) == 2
+    f = store.get_favorite(pid)  # request_job / request_check stamp requested.process: that is the owner's tap, after the last retry
+    d = {**f.proposal["drop"], "requested": {"process": (last + timedelta(hours=1)).isoformat()}}
+    store.update_favorite(pid, proposal={**f.proposal, "drop": d})
+    assert drop.auto_retries_used(d) == 0 and [p["pick_id"] for p in pending(store, now=NOW)] == [pid]
+    for junk in (None, "x", True, -3, 1.5):  # a count the database should never hold counts as none
+        assert drop.auto_retries_used({"auto_retries": junk}) == 0
+    assert drop.auto_retries_used({"auto_retries": 1, "requested": "not a mapping"}) == 1
+
+
+def test_a_leased_failed_check_is_not_listed(world, portrait):
+    store, storage = world
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
+    assert drop.claim(store, pid, "process", "gh-1-1-w1", NOW)
+    assert pending(store, now=NOW) == []
+
+
+def test_a_timed_out_check_is_taken_again_and_counted(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    timeout = gemini.GeminiTimeout("Gemini timed out on every model (ReadTimeout)", "ReadTimeout")
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(timeout), now=NOW, job="t")
+    assert out.state == "failed" and "Gemini timed out on every model (ReadTimeout)" in out.reason and "tap Try again" in out.reason
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["reason"].startswith(drop.CHECK_FAILED) and "auto_retries" not in d
+    with pytest.raises(DropError, match="failed"):  # by hand a failed drop is still refused (the owner's Try again moves it to checking)
+        process_drop(store, storage, pid, gemini_client=FakeGemini(), now=NOW, job="t")
+    later = NOW + timedelta(minutes=30)
+    g = FakeGemini(deconstruct())
+    out = process_drop(store, storage, pid, gemini_client=g, now=later, job="gh-1-1-w2", auto_retry=True)
+    assert out.ok and out.state == "ready" and len(g.calls) == 1
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["auto_retries"] == 1 and d["auto_retry_at"] == later.isoformat() and d["reason"] is None and "job" not in d
+    assert "process" not in (d.get("requested") or {}) or d["requested"]["process"] != later.isoformat()  # not the owner's tap
+
+
+def test_a_check_that_keeps_timing_out_is_retaken_twice_then_left_for_the_owner(world, portrait):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    timeout = gemini.GeminiTimeout("the Gemini call failed (ReadTimeout)", "ReadTimeout")
+    assert process_drop(store, storage, pid, gemini_client=FakeGemini(timeout), now=NOW, job="t").state == "failed"
+    for n in (1, 2):
+        assert [p["pick_id"] for p in pending(store, now=NOW)] == [pid]
+        out = process_drop(store, storage, pid, gemini_client=FakeGemini(timeout), now=NOW + timedelta(hours=n), job="w", auto_retry=True)
+        assert out.state == "failed" and not out.ok
+        assert store.get_favorite(pid).proposal["drop"]["auto_retries"] == n
+    assert pending(store, now=NOW + timedelta(hours=3)) == []  # two automatic retries spent: the owner's Try again is next
+    g = FakeGemini()
+    out = process_drop(store, storage, pid, gemini_client=g, now=NOW + timedelta(hours=3), job="w", auto_retry=True)
+    assert out.ok and out.detail["busy"] and out.state == "failed" and g.calls == []  # a stale listing never runs a third time
+
+
+def test_the_sweep_runs_a_failed_check_again_and_a_busy_one_is_no_failure(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: FakeGemini(deconstruct())))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    (row,) = json.loads(r.output)["results"]
+    assert row["job"] == "process" and row["pick_id"] == pid and row["state"] == "ready" and row["ok"] is True
+    assert store.get_favorite(pid).proposal["drop"]["auto_retries"] == 1
+    # the cloud's `drop pending --count` (the workflow's early stop) counts the same drops
+    pid2 = failed_check(store, storage, portrait, TIMEOUT_REASON)
+    r = CliRunner().invoke(app, ["drop", "pending", "--count"])
+    assert r.output.strip() == "1"
+    # another worker takes it between the listing and this worker's turn: skipped, no failure
+    real = drop.pending
+
+    def listed_then_taken(*a, **kw):
+        rows = real(*a, **kw)
+        assert drop.claim(store, pid2, "process", "gh-9-1-w2", NOW)
+        return rows
+
+    monkeypatch.setattr(drop, "pending", listed_then_taken)
+    monkeypatch.setenv("GITHUB_RUN_ID", "9")
+    monkeypatch.setenv("STUDIO_WORKER", "1")
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    (row,) = json.loads(r.output)["results"]
+    assert row["busy"] is True and row["ok"] is True and row["state"] == "failed"
+
+
+def test_a_failed_check_moved_on_by_a_parallel_worker_is_skipped(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
+    stale = [{"pick_id": pid, "job": "process", "state": "failed"}]
+    f = store.get_favorite(pid)  # worker 2 already took it back to checking
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": "checking"}})
+    monkeypatch.setattr(drop, "pending", lambda *a, **kw: stale)
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    (row,) = json.loads(r.output)["results"]
+    assert row["moved_on"] is True and row["ok"] is True

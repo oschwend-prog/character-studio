@@ -216,6 +216,27 @@ def test_a_manual_run_can_check_the_keys_for_free_instead_of_sweeping():
     assert 'elif [ "$COMMAND" = "check-keys" ]; then\n            uv run studio drop check-keys' in command
 
 
+def test_a_sweep_runs_three_identical_workers_in_parallel_and_one_pick_or_a_key_check_runs_one():
+    """A sweep checked its clips one after another (about 5 minutes each) and hit the 60-minute limit after ~11: the repo is public,
+    so Actions minutes are free, and three workers share the drops (the lease keeps them off each other's)."""
+    t = text("studio-drop")
+    assert re.search(
+        r"(?m)^    strategy:\n      fail-fast: false\n      matrix:\n        worker: "
+        r"\$\{\{ fromJSON\(\(github\.event_name == 'repository_dispatch' \|\| inputs\.job == 'check-keys'\) && '\[1\]' \|\| '\[1,2,3\]'\) \}\}$",
+        t,
+    )
+    assert t.count("matrix:") == 1 and t.count("fail-fast: false") == 1  # one list for the one job; a failed worker stops no other
+    command = steps("studio-drop")[-1]
+    # each worker tells the lease who it is: studio.drop.job_id() appends it to the run id (gh-<run>-<attempt>-w<worker>)
+    assert "STUDIO_WORKER: ${{ matrix.worker }}" in command
+    assert t.count("matrix.worker") == 1
+    assert "env:" not in t.split("    steps:")[0].split("jobs:")[1]  # still no job-level env (the worker number is the step's)
+    # nothing else about the job changed: the 60-minute limit, the never-cancelling per-pick group, the secrets gate
+    assert re.search(r"(?m)^    timeout-minutes: 60$", t)
+    assert re.search(r"(?m)^concurrency:\n  group: studio-drop-\$\{\{ github\.event\.client_payload\.pick_id \|\| 'sweep' \}\}\n  cancel-in-progress: false$", t)
+    assert "uv run studio drop pending --count" in t and "steps.pending.outputs.count != '0'" in t  # the "nothing pending" early stop
+
+
 def test_drop_installs_ffmpeg_and_yt_dlp_only_when_there_is_work():
     t = text("studio-drop")
     assert "sudo apt-get update" in t and "sudo apt-get install -y ffmpeg fonts-dejavu-core fontconfig" in t

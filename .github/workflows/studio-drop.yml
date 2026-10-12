@@ -18,10 +18,17 @@
 # is taken from ScrapeCreators' copy of that ONE post (download_media, 10 credits); without it such a link waits as before. The
 # pending count reads it too, so it counts a waiting auto-filed link only when the sweep would try it (the day's downloads allow).
 #
-# One job per pick: the concurrency group is the pick id (every sweep shares the group `studio-drop-sweep`); `studio drop` also
-# takes a lease on the pick, so a sweep and a dispatched job never work on the same drop at once. Nothing is ever cancelled
-# mid-job. The pick id is checked as a uuid and reaches the command through the environment only (never pasted into a script).
+# One run per pick: the concurrency group is the pick id (every sweep shares the group `studio-drop-sweep`); `studio drop` also
+# takes a lease on the pick, so a sweep and a dispatched run never work on the same drop at once. Nothing is ever cancelled
+# mid-run. The pick id is checked as a uuid and reaches the command through the environment only (never pasted into a script).
 # A sweep with nothing pending stops before installing ffmpeg and yt-dlp (it bills about a minute).
+#
+# Three sweep workers (task 12, 2026-10-08): a check takes minutes (Gemini), one worker did about 11 in its 60 minutes, and the
+# repository is public (Actions minutes are free). A sweep (the schedule, or a manual run with job=sweep) therefore runs three
+# identical copies of the job side by side (matrix `worker` 1-3, fail-fast off: a failed worker stops no other); a dispatched
+# run (one pick) and the key check run one. Each exports STUDIO_WORKER, which `studio.drop.job_id()` appends to the run id
+# (gh-<run>-<attempt>-w<worker>), so the lease tells the workers apart: all three list the same drops in the same order, the
+# first takes a drop, the others find it busy (or already done) and go on to the next. Both are no failure of the sweep.
 name: studio-drop
 
 on:
@@ -48,6 +55,10 @@ jobs:
   drop:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        worker: ${{ fromJSON((github.event_name == 'repository_dispatch' || inputs.job == 'check-keys') && '[1]' || '[1,2,3]') }}
     steps:
       - name: Check secrets
         id: gate
@@ -118,6 +129,7 @@ jobs:
           SCRAPECREATORS_API_KEY: ${{ secrets.SCRAPECREATORS_API_KEY }}
           COMMAND: ${{ steps.job.outputs.command }}
           PICK: ${{ steps.job.outputs.pick }}
+          STUDIO_WORKER: ${{ matrix.worker }}
         run: |
           if [ "$COMMAND" = "sweep" ]; then
             uv run studio drop sweep
