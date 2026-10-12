@@ -517,3 +517,304 @@ def test_a_pending_floor_or_a_missing_reading_never_counts_as_failed():
     assert weekly.floor_failures({"sends_per_1k": 0.0, "skip_rate": 90.0}, floors) == ["hook"]  # sends has no floor yet
     assert weekly.floor_failures({}, floors) == []  # nothing read: nothing failed
     assert weekly.floor_failures({"watched_pct": 1.0}, floors) == []  # no floor for it at all
+
+
+# ---- lifts against the others (plan 4.3) ----------------------------------------------------------------------------------------------
+
+
+def mc(i: int, x: float | None, slug: str = "franz", **features: Any) -> Clip:
+    """A posted clip ``k<i>`` with an ``outlier_x`` (unless ``x`` is None) and the given tags."""
+    feats = dict(features)
+    if x is not None:
+        feats["outlier_x"] = x
+    return Clip(id=f"k{i}", character_slug=slug, mode="dropin", state="posted", features=feats, created_at=T0 + i * D)
+
+
+def two_sides(xs_with: list[float], xs_without: list[float], feature: str = "setting", value: str = "kitchen", other: str = "garden") -> list[Clip]:
+    return [mc(i, x, **{feature: value}) for i, x in enumerate(xs_with)] + [mc(100 + i, x, **{feature: other}) for i, x in enumerate(xs_without)]
+
+
+def find(lifts: list[weekly.SideLift], feature: str, value: Any) -> weekly.SideLift:
+    return next(lf for lf in lifts if lf.feature == feature and lf.value == value)
+
+
+def test_the_lift_is_the_followers_median_against_the_others_median_not_against_everybody():
+    clips = two_sides([2.0] * 5, [1.0] * 5)
+    kitchen = find(weekly.side_lifts(clips), "setting", "kitchen")
+    assert (kitchen.n, kitchen.n_others, kitchen.median, kitchen.median_others) == (5, 5, 2.0, 1.0)
+    assert kitchen.lift == pytest.approx(2.0)  # 4.3: at least 1.5x the OTHERS' median (review.Lift divides by the median of all ten: 1.33)
+    assert kitchen.hits == 0 and len(kitchen.clip_ids) == 5 and set(kitchen.clip_ids) == {f"k{i}" for i in range(5)}
+    garden = find(weekly.side_lifts(clips), "setting", "garden")
+    assert garden.lift == pytest.approx(0.5)
+
+
+def test_hits_are_the_followers_with_outlier_x_3_or_more():
+    kitchen = find(weekly.side_lifts(two_sides([3.0, 2.99, 5.0, 1.0, 1.0], [1.0] * 5)), "setting", "kitchen")
+    assert kitchen.hits == 2
+
+
+def test_clips_without_an_outlier_x_or_without_the_tag_are_not_on_either_side():
+    clips = two_sides([2.0] * 5, [1.0] * 5) + [mc(200 + i, None, setting="kitchen") for i in range(3)] + [mc(300 + i, 9.0) for i in range(3)]
+    kitchen = find(weekly.side_lifts(clips), "setting", "kitchen")
+    assert (kitchen.n, kitchen.n_others, kitchen.median_others) == (5, 5, 1.0)  # the unmeasured ones and the untagged ones count nowhere
+
+
+def test_a_group_under_5_is_not_listed_and_the_default_is_the_pre_registered_5():
+    assert weekly.side_lifts(two_sides([2.0] * 4, [1.0] * 5)) == [] or all(lf.value != "kitchen" for lf in weekly.side_lifts(two_sides([2.0] * 4, [1.0] * 5)))
+    assert any(lf.value == "kitchen" for lf in weekly.side_lifts(two_sides([2.0] * 5, [1.0] * 5)))
+    assert any(lf.value == "kitchen" for lf in weekly.side_lifts(two_sides([2.0] * 2, [1.0] * 5), min_n=2))
+
+
+def test_a_lift_against_a_zero_median_is_undefined_not_infinite():
+    lf = find(weekly.side_lifts(two_sides([2.0] * 5, [0.0] * 5)), "setting", "kitchen")
+    assert lf.median_others == 0.0 and lf.lift is None
+
+
+@pytest.mark.parametrize(
+    ("xs_with", "n_without", "x_without", "expected"),
+    [
+        ([1.5] * 5, 5, 1.0, True),  # exactly 1.5 with 5 each side
+        ([1.4999] * 5, 5, 1.0, False),
+        ([1.5] * 5, 4, 1.0, False),  # only 4 on the other side
+        ([1.5] * 4, 5, 1.0, False),
+        ([3.0] * 7, 9, 1.0, True),
+    ],
+)
+def test_do_more_needs_a_lift_of_1_5_with_5_each_side(xs_with, n_without, x_without, expected):
+    lifts = weekly.side_lifts(two_sides(xs_with, [x_without] * n_without), min_n=1)
+    pick = weekly.do_more([lf for lf in lifts if lf.value == "kitchen"])
+    assert (pick is not None) is expected
+
+
+@pytest.mark.parametrize(
+    ("n_with", "x_with", "n_without", "expected"),
+    [
+        (8, 0.7, 8, True),  # exactly 0.7 with 8 each side
+        (8, 0.7001, 8, False),
+        (7, 0.7, 8, False),
+        (8, 0.7, 7, False),
+        (9, 0.3, 12, True),
+    ],
+)
+def test_stop_needs_a_lift_of_0_7_or_less_with_8_each_side(n_with, x_with, n_without, expected):
+    lifts = weekly.side_lifts(two_sides([x_with] * n_with, [1.0] * n_without), min_n=1)
+    pick = weekly.stop([lf for lf in lifts if lf.value == "kitchen"])
+    assert (pick is not None) is expected
+
+
+def test_do_more_and_stop_pick_the_strongest_and_the_weakest():
+    clips = (
+        [mc(i, 4.0, setting="kitchen") for i in range(8)] + [mc(10 + i, 2.0, setting="garden") for i in range(8)]
+        + [mc(20 + i, 0.5, setting="roof") for i in range(8)] + [mc(30 + i, 1.0, prop="ball") for i in range(8)] + [mc(40 + i, 1.0, prop="box") for i in range(8)]
+    )
+    lifts = weekly.side_lifts(clips)
+    best, worst = weekly.do_more(lifts), weekly.stop(lifts)
+    assert best is not None and (best.feature, best.value) == ("setting", "kitchen")
+    assert worst is not None and (worst.feature, worst.value) == ("setting", "roof")
+    assert weekly.do_more([]) is None and weekly.stop([]) is None
+
+
+# ---- rule candidates and the second look (plan 4.3) ------------------------------------------------------------------------------------
+
+
+def candidates_of(clips: list[Clip]) -> list[weekly.SideLift]:
+    return weekly.rule_candidates(weekly.side_lifts(clips, min_n=1))
+
+
+def test_a_rule_candidate_needs_5_each_side_a_lift_of_1_5_and_a_hit():
+    ok = two_sides([3.0, 3.0, 3.0, 3.0, 3.0], [1.0] * 5)
+    assert [(c.feature, c.value) for c in candidates_of(ok)] == [("setting", "kitchen")]
+    assert candidates_of(two_sides([1.5] * 5, [1.0] * 5)) == []  # a lift of 1.5 but no hit among the followers
+    assert candidates_of(two_sides([2.9, 3.0, 2.0, 2.0, 2.0], [1.0] * 5)) != []  # one hit is enough
+    assert candidates_of(two_sides([4.0, 3.0, 3.0, 3.0, 3.0], [2.0] * 5))  # lift 1.5 exactly (3.0 / 2.0), with hits
+    assert candidates_of(two_sides([4.0, 3.5, 2.99, 2.99, 2.99], [2.0] * 5)) == []  # median 2.99: lift 1.495
+    assert candidates_of(two_sides([3.0] * 5, [1.0] * 4)) == []  # only 4 on the other side
+    assert candidates_of(two_sides([3.0] * 4, [1.0] * 5)) == []  # only 4 followers
+
+
+def test_tags_that_are_not_content_are_never_rule_candidates():
+    clips = [mc(i, 5.0, hook_by="bandit") for i in range(5)] + [mc(10 + i, 1.0, hook_by="studio") for i in range(5)]
+    assert candidates_of(clips) == []  # who chose the hook is a test, not a rule about clips
+    clips = [mc(i, 5.0, explore_pick=True) for i in range(5)] + [mc(10 + i, 1.0, explore_pick=False) for i in range(5)]
+    assert candidates_of(clips) == []
+
+
+def lifts_all(clips: list[Clip]) -> list[weekly.SideLift]:
+    return weekly.side_lifts(clips, min_n=1)
+
+
+WEEK1, WEEK2 = date(2026, 10, 19), date(2026, 10, 26)
+
+
+def test_a_new_candidate_is_stored_and_not_yet_a_proposal():
+    clips = two_sides([3.0] * 5, [1.0] * 5)
+    stored, ready = weekly.update_candidates([], lifts_all(clips), measured=10, week=WEEK1)
+    assert ready == [] and len(stored) == 1
+    c = stored[0]
+    assert (c["feature"], c["value"], c["status"], c["since_week"], c["measured"]) == ("setting", "kitchen", "candidate", "2026-10-19", 10)
+    assert (c["n"], c["n_others"], c["median"], c["median_others"], c["lift"], c["hits"]) == (5, 5, 3.0, 1.0, 3.0, 5)
+    assert c["clip_ids"] == sorted(c["clip_ids"]) and len(c["clip_ids"]) == 5
+    json.dumps(stored)
+
+
+def test_the_second_look_makes_it_ready_when_next_weeks_posts_still_show_1_2():
+    first = weekly.update_candidates([], lifts_all(two_sides([3.0] * 5, [1.0] * 5)), measured=10, week=WEEK1)[0]
+    # next week: two more kitchen posts and one garden post: still 3.0 vs 1.0
+    more = two_sides([3.0] * 7, [1.0] * 6)
+    stored, ready = weekly.update_candidates(first, lifts_all(more), measured=13, week=WEEK2)
+    assert [r["feature"] for r in ready] == ["setting"] and ready[0]["status"] == "ready" and ready[0]["since_week"] == "2026-10-19"
+    assert ready[0]["repeat"] is False and ready[0]["n"] == 7 and ready[0]["n_others"] == 6
+    assert [c["status"] for c in stored] == ["ready"]
+
+
+@pytest.mark.parametrize(("x_with", "expected"), [(1.2, True), (1.1999, False)])
+def test_the_second_look_needs_a_lift_of_1_2_exactly_or_more(x_with, expected):
+    first = weekly.update_candidates([], lifts_all(two_sides([3.0] * 5, [1.0] * 5)), measured=10, week=WEEK1)[0]
+    now = two_sides([x_with] * 6, [1.0] * 6)  # the lift has fallen to x_with
+    stored, ready = weekly.update_candidates(first, lifts_all(now), measured=12, week=WEEK2)
+    assert bool(ready) is expected
+    assert [c["status"] for c in stored] == (["ready"] if expected else [])  # below 1.2: it leaves the list
+
+
+def test_without_new_posts_there_is_no_second_look():
+    clips = two_sides([3.0] * 5, [1.0] * 5)
+    first = weekly.update_candidates([], lifts_all(clips), measured=10, week=WEEK1)[0]
+    stored, ready = weekly.update_candidates(first, lifts_all(clips), measured=10, week=WEEK2)  # the same ten posts again (a rerun)
+    assert ready == [] and [c["status"] for c in stored] == ["candidate"] and stored[0]["since_week"] == "2026-10-19"
+
+
+def test_a_candidate_that_lost_one_side_is_not_ready():
+    first = weekly.update_candidates([], lifts_all(two_sides([3.0] * 5, [1.0] * 5)), measured=10, week=WEEK1)[0]
+    stored, ready = weekly.update_candidates(first, lifts_all([mc(i, 3.0, setting="kitchen") for i in range(8)]), measured=12, week=WEEK2)
+    assert ready == []  # no clip on the other side any more: nothing to compare
+
+
+def test_a_ready_rule_that_is_still_ready_next_week_is_marked_a_repeat():
+    first = weekly.update_candidates([], lifts_all(two_sides([3.0] * 5, [1.0] * 5)), measured=10, week=WEEK1)[0]
+    clips = two_sides([3.0] * 7, [1.0] * 6)
+    ready1 = weekly.update_candidates(first, lifts_all(clips), measured=13, week=WEEK2)[0]
+    stored, ready = weekly.update_candidates(ready1, lifts_all(two_sides([3.0] * 8, [1.0] * 8)), measured=16, week=date(2026, 11, 2))
+    assert ready[0]["repeat"] is True and ready[0]["since_week"] == "2026-10-19"
+
+
+def test_a_fresh_candidate_that_meets_the_entry_conditions_is_added_beside_the_old_ones():
+    first = weekly.update_candidates([], lifts_all(two_sides([3.0] * 5, [1.0] * 5)), measured=10, week=WEEK1)[0]
+    clips = two_sides([3.0] * 6, [1.0] * 6) + [mc(500 + i, 4.0, prop="ball") for i in range(5)] + [mc(600 + i, 1.0, prop="box") for i in range(5)]
+    stored, ready = weekly.update_candidates(first, lifts_all(clips), measured=22, week=WEEK2)
+    assert {(c["feature"], c["status"]) for c in stored} == {("setting", "ready"), ("prop", "candidate")}
+    assert [r["feature"] for r in ready] == ["setting"]
+
+
+# ---- the hook arms: standings and the retire rule (plan 3.3) --------------------------------------------------------------------------
+
+
+def arms_row(slug: str, arms: dict[str, tuple[int, int]], *, mode: str = "thompson", readings: int = 5, tallied: int | None = None) -> dict[str, Any]:
+    return {
+        "character": slug, "mode": mode, "readings": readings, "readings_needed": 3, "pending": 0,
+        "tallied": sum(w + l for w, l in arms.values()) if tallied is None else tallied,
+        "arms": [{"pattern": p, "wins": w, "losses": l, "uses": w + l} for p, (w, l) in arms.items()],
+    }
+
+
+def standings(rows: list[dict[str, Any]], outliers: dict[tuple[str, str], list[float]] | None = None) -> list[dict[str, Any]]:
+    return weekly.arm_standings({"characters": rows}, outliers or {}, min_uses=6)
+
+
+def test_standings_show_wins_losses_win_rate_and_the_median_outlier_x_of_each_arm():
+    rows = [arms_row("reginald", {"false-premise": (3, 1), "understatement": (1, 3), "trend-label": (0, 0)})]
+    (r,) = standings(rows, {("reginald", "false-premise"): [1.0, 2.0, 3.0], ("reginald", "understatement"): [0.5]})
+    by = {a["pattern"]: a for a in r["arms"]}
+    assert (by["false-premise"]["wins"], by["false-premise"]["losses"], by["false-premise"]["uses"], by["false-premise"]["win_rate"]) == (3, 1, 4, 0.75)
+    assert (by["false-premise"]["median_outlier_x"], by["false-premise"]["n_outlier"]) == (2.0, 3)
+    assert by["trend-label"]["win_rate"] is None and by["trend-label"]["median_outlier_x"] is None  # nothing yet: none, not 0
+    assert r["leading"] == {"pattern": "false-premise", "wins": 3, "uses": 4} and r["fewest_uses"] == 0
+
+
+def test_the_leading_arm_is_the_best_win_rate_then_the_most_uses_then_the_registry_order():
+    r = standings([arms_row("franz", {"ego-claim": (1, 1), "when-relatable": (2, 2), "myth-bust": (0, 3)})])[0]
+    assert r["leading"]["pattern"] == "when-relatable"  # 50 % with 4 uses beats 50 % with 2
+    r = standings([arms_row("franz", {"ego-claim": (1, 1), "when-relatable": (1, 1)})])[0]
+    assert r["leading"]["pattern"] == "ego-claim"  # a full tie: the first in the registry
+    assert standings([arms_row("franz", {"ego-claim": (0, 0), "when-relatable": (0, 0)})])[0]["leading"] is None
+
+
+def test_an_arm_is_proposed_for_retirement_after_10_tallied_uses_with_20_percent_wins_or_fewer_and_a_median_of_0_7_or_less():
+    arms = {"ego-claim": (2, 8), "when-relatable": (5, 5), "myth-bust": (4, 4)}  # ego-claim: 10 uses, exactly 20 % wins
+    low = {("franz", "ego-claim"): [0.7, 0.5, 0.9]}  # median 0.7: on the line
+    (p,) = weekly.retire_proposals(standings([arms_row("franz", arms)], low))
+    assert (p["kind"], p["character"], p["arm"], p["uses"], p["wins"], p["win_rate"], p["median_outlier_x"]) == ("arm_retire", "franz", "ego-claim", 10, 2, 0.2, 0.7)
+    for label, row, out in (
+        ("9 uses", {**arms, "ego-claim": (1, 8)}, low),
+        ("21 % wins", {**arms, "ego-claim": (3, 11)}, low),  # 14 uses, 21.4 %
+        ("median 0.71", arms, {("franz", "ego-claim"): [0.71]}),
+        ("no median", arms, {}),
+    ):
+        assert weekly.retire_proposals(standings([arms_row("franz", row)], out)) == [], label
+
+
+def test_an_arm_is_never_retired_when_it_would_leave_fewer_than_two():
+    two = arms_row("lenny", {"mid-deal": (0, 12), "ego-claim": (5, 5)})
+    assert weekly.retire_proposals(standings([two], {("lenny", "mid-deal"): [0.1]})) == []  # the registry needs two arms per character
+
+
+def test_there_is_no_add_proposal_because_the_plan_gives_no_rule_for_one():
+    assert not hasattr(weekly, "add_proposals")
+
+
+# ---- the playbook ---------------------------------------------------------------------------------------------------------------------
+
+
+def test_a_format_that_keeps_or_kills_and_a_proven_hook_become_rules_with_their_numbers():
+    clips = (
+        [mc(i, 2.0, format_id="swap_trend") for i in range(5)]  # keep: median 2.0 over 5
+        + [mc(10 + i, 0.5, format_id="swap_classic") for i in range(8)]  # kill: median 0.5 over 8
+        + [mc(20 + i, 1.0, format_id="recreate") for i in range(3)]  # fewer than 5: watching
+    )
+    rules, watching = weekly.playbook_items(clips)
+    titles = [r["title"] for r in rules]
+    assert "Keep format `swap_trend`" in titles and "Stop format `swap_classic`" in titles
+    keep = next(r for r in rules if r["title"] == "Keep format `swap_trend`")
+    assert "median outlier_x 2.00 over 5 posts" in keep["detail"]
+    assert any("recreate" in w and "3 " in w for w in watching)
+    assert all("recreate" not in t for t in titles)
+
+
+def test_a_proven_hook_needs_5_measured_uses_before_it_is_a_rule():
+    few = [mc(i, 4.0, hook_pattern="understatement") for i in range(4)]  # 4 hits in 4 uses: proven by the bar, but only 4 posts behind it
+    rules, watching = weekly.playbook_items(few)
+    assert rules == [] and any("understatement" in w for w in watching)
+    five = [mc(i, 4.0 if i < 2 else 1.0, hook_pattern="understatement") for i in range(5)]
+    rules, _ = weekly.playbook_items(five)
+    assert [r["title"] for r in rules] == ["Hook pattern `understatement` is proven"]
+    assert "2 hits in its last 5 uses" in rules[0]["detail"]
+
+
+def test_a_tag_that_beats_the_others_is_a_rule_only_with_5_posts_on_each_side():
+    clips = two_sides([3.0] * 5, [1.0] * 5, feature="prop", value="ball", other="box")
+    rules, _ = weekly.playbook_items(clips)
+    works = next(r for r in rules if r["title"] == "Works: `prop` = `ball`")
+    assert "3.00 against 1.00" in works["detail"] and "5 against 5 posts" in works["detail"]
+    avoid_clips = two_sides([0.5] * 8, [1.0] * 8, feature="prop", value="ball", other="box")
+    rules, _ = weekly.playbook_items(avoid_clips)
+    assert "Avoid: `prop` = `ball`" in [r["title"] for r in rules]
+    rules, _ = weekly.playbook_items(two_sides([3.0] * 5, [1.0] * 4, feature="prop", value="ball", other="box"))
+    assert rules == []
+
+
+def test_rendering_carries_the_date_a_rule_entered_and_gives_new_rules_today():
+    rules = [{"title": "Keep format `swap_trend`", "detail": "median outlier_x 2.00 over 5 posts"}]
+    text = weekly.render_playbook("Franz", rules, ["format `recreate`: 3 measured posts, median outlier_x 1.00"], {}, date(2026, 10, 19))
+    assert text.startswith("# Franz: playbook\n")
+    assert "- **Keep format `swap_trend`**: median outlier_x 2.00 over 5 posts · since 2026-10-19" in text
+    assert "## Watching\n\n- format `recreate`: 3 measured posts, median outlier_x 1.00\n" in text
+    assert text.endswith("\n") and not text.endswith("\n\n")
+    since = weekly.read_since(text)
+    assert since == {"Keep format `swap_trend`": "2026-10-19"}
+    again = weekly.render_playbook("Franz", rules, [], since, date(2026, 11, 2))
+    assert "since 2026-10-19" in again and "2026-11-02" not in again  # the rule keeps the day it entered
+    assert weekly.render_playbook("Franz", rules, [], since, date(2026, 11, 2)) == again  # deterministic
+
+
+def test_a_playbook_with_nothing_to_say_says_so():
+    text = weekly.render_playbook("Lenny Gold", [], [], {}, date(2026, 10, 19))
+    assert "_No rule yet" in text and "## Watching" not in text

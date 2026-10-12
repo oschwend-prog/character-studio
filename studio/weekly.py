@@ -7,18 +7,21 @@ items 10-11): ``studio review weekly`` and ``studio learn score-test``. Determin
 
 from __future__ import annotations
 
+import json
+import re
 import statistics
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
 
 import typer
 
+from studio import review
 from studio.cli_support import emit, open_store
 from studio.config import LONDON, now_london
 from studio.metrics import post_reads, posted_at
-from studio.models import Platform, PostStatus, Snapshot
+from studio.models import HOOK_PATTERNS, Clip, Platform, PostStatus, Snapshot
 from studio.store import Store
 
 INSTAGRAM = Platform.instagram.value
@@ -45,6 +48,18 @@ FLOOR_METRICS: tuple[tuple[str, str], ...] = (
 )
 FLOOR_FAILS = {"skip_rate": "hook", "watched_pct": "hold", "sends_per_1k": "sends", "follows_per_1k": "follows"}  # what failing each one means
 FLOOR_FLAG_MIN = 2  # a post below two of them is flagged
+
+# ---- what the digest and the proposals call a finding: the plan's numbers (4.3 and 3.3, FROZEN) ----
+
+DO_MORE_LIFT, DO_MORE_MIN_N = 1.5, 5  # 4.3 entry 2-3: a lift of 1.5 with 5 clips on each side
+STOP_LIFT, STOP_MIN_N = 0.7, 8  # the kill line: a lift of 0.7 or less with 8 on each side
+RULE_READY_LIFT = 1.2  # 4.3 entry 4: next week's posts, added in, still show at least 1.2x
+CALL_MIN_POSTS = 10  # under 10 measured posts line 5 says "too few to call" (SKILL.md)
+PLAYBOOK_MIN_POSTS = 5  # a playbook rule needs 5 posts behind it (SKILL.md step 6)
+ARM_RETIRE_MIN_USES, ARM_RETIRE_MAX_WIN_RATE, ARM_RETIRE_MAX_MEDIAN = 10, 0.20, 0.7  # 3.3: retire an arm
+ARMS_MIN = 2  # the registry needs at least two arms per character
+# Tags that say who chose or how a clip was made, not what is in it: a lift on one of them is no rule about clips.
+NOT_A_RULE = frozenset({"hit_rules_version", "explore_pick", "hook_by", "version_index", "hook_text", "hook_index"})
 
 
 # ---- Spearman (no new dependency) -------------------------------------------------------------------------------------------------------
@@ -365,3 +380,288 @@ def floor_failures(values: dict[str, float], floors: dict[str, Any]) -> list[str
 def flagged(failures: Sequence[str]) -> bool:
     """A post is flagged when it is below two floors or more (they diagnose; they never kill or change anything)."""
     return len(failures) >= FLOOR_FLAG_MIN
+
+
+# ---- lifts against the others, rule candidates, the second look (plan 4.3) -------------------------------------------------------------
+
+
+def _value_key(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, default=str)  # True and 1 stay apart (as in review.feature_lifts)
+
+
+def _shown(value: Any) -> str:
+    return str(value).lower() if isinstance(value, bool) else str(value)
+
+
+@dataclass(frozen=True)
+class SideLift:
+    """One tag value measured the way 4.3 writes it: ``n`` measured clips carry ``feature == value`` (``median``), ``n_others`` carry
+    the tag with another value (``median_others``); ``lift`` is the first median over the second (None when there is no other
+    side, or its median is 0). ``hits`` counts the followers with ``outlier_x >= 3``. A clip without the tag is on neither side."""
+
+    feature: str
+    value: Any
+    n: int
+    n_others: int
+    median: float
+    median_others: float | None
+    hits: int
+    clip_ids: tuple[str, ...]
+
+    @property
+    def lift(self) -> float | None:
+        return self.median / self.median_others if self.median_others else None
+
+    @property
+    def key(self) -> str:
+        return f"{self.feature}={_value_key(self.value)}"
+
+    @property
+    def label(self) -> str:
+        return f"{self.feature} = {_shown(self.value)}"
+
+
+def side_lifts(clips: Sequence[Clip], min_n: int = review.LIFT_MIN_N) -> list[SideLift]:
+    """One ``SideLift`` per (tag, value) that at least ``min_n`` measured clips carry (the groups of ``review.feature_lifts``), each
+    set against the clips that carry the same tag with another value. Same order as ``feature_lifts``."""
+    rated = [(c, x) for c in clips if (x := review.clip_outlier_x(c)) is not None]
+    out: list[SideLift] = []
+    for lift in review.feature_lifts(list(clips), min_n=min_n):
+        key = _value_key(lift.value)
+        with_x: list[tuple[Clip, float]] = []
+        others: list[float] = []
+        for clip, x in rated:
+            value = clip.features.get(lift.feature)
+            if value is None:
+                continue
+            if _value_key(value) == key:
+                with_x.append((clip, x))
+            else:
+                others.append(x)
+        out.append(
+            SideLift(
+                feature=lift.feature, value=lift.value, n=len(with_x), n_others=len(others),
+                median=float(statistics.median(x for _, x in with_x)),
+                median_others=float(statistics.median(others)) if others else None,
+                hits=sum(x >= review.HIT_X for _, x in with_x), clip_ids=tuple(sorted(str(c.id) for c, _ in with_x)),
+            )
+        )
+    return out
+
+
+def _content(lifts: Iterable[SideLift]) -> list[SideLift]:
+    return [lf for lf in lifts if lf.feature not in NOT_A_RULE and lf.lift is not None]
+
+
+def do_more(lifts: Iterable[SideLift]) -> SideLift | None:
+    """The strongest DO MORE: a lift of at least 1.5 with at least 5 clips on each side (ties: more clips, then the name)."""
+    ok = [lf for lf in _content(lifts) if lf.lift >= DO_MORE_LIFT and lf.n >= DO_MORE_MIN_N and lf.n_others >= DO_MORE_MIN_N]  # type: ignore[operator]
+    return min(ok, key=lambda lf: (-lf.lift, -lf.n, lf.feature, str(lf.value)), default=None)  # type: ignore[operator]
+
+
+def stop(lifts: Iterable[SideLift]) -> SideLift | None:
+    """The weakest STOP: a lift of at most 0.7 with at least 8 clips on each side (ties: more clips, then the name)."""
+    ok = [lf for lf in _content(lifts) if lf.lift <= STOP_LIFT and lf.n >= STOP_MIN_N and lf.n_others >= STOP_MIN_N]  # type: ignore[operator]
+    return min(ok, key=lambda lf: (lf.lift, -lf.n, lf.feature, str(lf.value)), default=None)
+
+
+def rule_candidates(lifts: Iterable[SideLift]) -> list[SideLift]:
+    """Entry conditions 1-3 of a rule in ``config/hit_rules.md`` (4.3): a tag measures it, at least 5 measured clips on each side, a
+    median at least 1.5x the others', and at least one hit among the clips that follow it."""
+    return [
+        lf for lf in _content(lifts)
+        if lf.lift >= DO_MORE_LIFT and lf.n >= DO_MORE_MIN_N and lf.n_others >= DO_MORE_MIN_N and lf.hits >= 1  # type: ignore[operator]
+    ]
+
+
+def _record(lf: SideLift, *, status: str, since: str, measured: int, repeat: bool = False) -> dict[str, Any]:
+    rec: dict[str, Any] = {
+        "scope": "studio", "feature": lf.feature, "value": lf.value, "key": lf.key, "label": lf.label, "status": status,
+        "n": lf.n, "n_others": lf.n_others, "median": round(lf.median, 3),
+        "median_others": None if lf.median_others is None else round(lf.median_others, 3),
+        "lift": None if lf.lift is None else round(lf.lift, 3), "hits": lf.hits, "clip_ids": list(lf.clip_ids),
+        "measured": measured, "since_week": since,
+    }
+    if status == "ready":
+        rec["repeat"] = repeat
+    return rec
+
+
+def update_candidates(
+    previous: Sequence[Mapping[str, Any]], lifts: Sequence[SideLift], *, measured: int, week: date,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The rule candidates after this week's look (4.3). ``previous`` are the candidates the last weekly run of an EARLIER week
+    stored, ``lifts`` this week's ``side_lifts`` (all of them, ``min_n=1``) and ``measured`` the measured clips studio-wide now.
+
+    A candidate (entry conditions 1-3 now) is stored with the week it first appeared. **Entry condition 4, the second look**: a
+    candidate of the previous run whose lift, with the posts added since (``measured`` has grown), is still at least 1.2 with 5 clips
+    on each side becomes ``ready``: a rule proposal. A rule that was already ``ready`` and still is stays ``ready`` (marked
+    ``repeat``); one that fell below 1.2 leaves the list. Returns ``(everything to store, the ready ones)``."""
+    by_value = {(lf.feature, _value_key(lf.value)): lf for lf in lifts}
+    now = {lf.key: lf for lf in rule_candidates(lifts)}
+    earlier = {str(c["key"]): c for c in previous if "key" in c and "feature" in c}
+    stored: dict[str, dict[str, Any]] = {}
+    for key, old in earlier.items():
+        lf = by_value.get((str(old["feature"]), _value_key(old.get("value"))))
+        was_ready = old.get("status") == "ready"
+        grown = measured > int(old.get("measured", measured))
+        if (
+            lf is not None and lf.lift is not None and lf.lift >= RULE_READY_LIFT
+            and lf.n >= DO_MORE_MIN_N and lf.n_others >= DO_MORE_MIN_N and (was_ready or grown)
+        ):
+            stored[key] = _record(lf, status="ready", since=str(old.get("since_week") or week.isoformat()), measured=measured, repeat=was_ready)
+    for key, lf in now.items():
+        if key not in stored:
+            since = str(earlier[key].get("since_week")) if key in earlier else week.isoformat()
+            stored[key] = _record(lf, status="candidate", since=since, measured=measured)
+    ordered = [stored[k] for k in sorted(stored)]
+    return ordered, [r for r in ordered if r["status"] == "ready"]
+
+
+# ---- the hook arms: standings and the retire rule (plan 3.3) --------------------------------------------------------------------------
+
+
+def arm_outliers(store: Store, registry: Any) -> dict[tuple[str, str], list[float]]:
+    """``{(character, hook pattern): [outlier_x of its tallied clips]}``: the clips the bandit tallies (``learn.TALLIED_BY``, a real
+    pattern, made on or after the registry's start) that have an ``outlier_x``."""
+    from studio import learn  # learn imports the metrics module, not this one: kept local so the CLI wiring has no import cycle
+
+    out: dict[tuple[str, str], list[float]] = {}
+    for clip in store.list_clips():
+        f = clip.features
+        pattern = f.get("hook_pattern")
+        if pattern not in HOOK_PATTERNS or f.get("hook_by") not in learn.TALLIED_BY:
+            continue
+        if clip.created_at is not None and clip.created_at.astimezone(LONDON).date() < registry.start:
+            continue
+        if (x := review.clip_outlier_x(clip)) is not None:
+            out.setdefault((clip.character_slug, str(pattern)), []).append(x)
+    return out
+
+
+def arm_standings(report: Mapping[str, Any], outliers: Mapping[tuple[str, str], Sequence[float]], *, min_uses: int) -> list[dict[str, Any]]:
+    """Each character's arms from ``learn.arms_report``: wins, losses, uses, win rate (None with no use) and the median ``outlier_x``
+    of the arm's tallied clips (None with none), the leading arm (best win rate, then more uses, then the registry's order; None when
+    nothing is tallied) and the fewest uses of any arm (against ``min_uses``, the tally the plan wants per arm)."""
+    rows: list[dict[str, Any]] = []
+    for row in report.get("characters", []):
+        slug = row["character"]
+        arms = []
+        for a in row["arms"]:
+            xs = list(outliers.get((slug, a["pattern"]), ()))
+            uses = int(a["uses"])
+            arms.append(
+                {
+                    "pattern": a["pattern"], "wins": int(a["wins"]), "losses": int(a["losses"]), "uses": uses,
+                    "win_rate": round(a["wins"] / uses, 4) if uses else None,
+                    "median_outlier_x": round(statistics.median(xs), 3) if xs else None, "n_outlier": len(xs),
+                }
+            )
+        used = [(i, a) for i, a in enumerate(arms) if a["uses"] > 0]
+        best = min(used, key=lambda t: (-t[1]["win_rate"], -t[1]["uses"], t[0]), default=None)
+        rows.append(
+            {
+                "character": slug, "mode": row.get("mode"), "readings": row.get("readings"), "readings_needed": row.get("readings_needed"),
+                "tallied": row.get("tallied", 0), "pending": row.get("pending", 0), "min_uses": min_uses, "arms": arms,
+                "leading": None if best is None else {"pattern": best[1]["pattern"], "wins": best[1]["wins"], "uses": best[1]["uses"]},
+                "fewest_uses": min((a["uses"] for a in arms), default=0),
+            }
+        )
+    return rows
+
+
+def retire_proposals(standings: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """The only arm change the plan gives a rule for (3.3): retire an arm after at least 10 tallied uses with 20 % wins or fewer and a
+    median ``outlier_x`` of 0.7 or less. Not when it would leave a character with fewer than two arms (the registry needs two).
+    Adding an arm is only ever from outside evidence (a research doc), so there is no add rule here."""
+    out: list[dict[str, Any]] = []
+    for row in standings:
+        if len(row["arms"]) <= ARMS_MIN:
+            continue
+        for a in row["arms"]:
+            if (
+                a["uses"] >= ARM_RETIRE_MIN_USES and a["win_rate"] is not None and a["win_rate"] <= ARM_RETIRE_MAX_WIN_RATE
+                and a["median_outlier_x"] is not None and a["median_outlier_x"] <= ARM_RETIRE_MAX_MEDIAN
+            ):
+                out.append(
+                    {
+                        "kind": "arm_retire", "character": row["character"], "arm": a["pattern"], "uses": a["uses"], "wins": a["wins"],
+                        "win_rate": a["win_rate"], "median_outlier_x": a["median_outlier_x"], "n_outlier": a["n_outlier"],
+                    }
+                )
+    return out
+
+
+# ---- the playbook (SKILL.md step 6: a rule needs 5 posts behind it) --------------------------------------------------------------------
+
+_PLAYBOOK_SINCE = re.compile(r"^- \*\*(?P<title>.+?)\*\*: .* · since (?P<day>\d{4}-\d{2}-\d{2})$")
+_PLAYBOOK_OWN_BARS = frozenset({"format_id", "hook_pattern"})  # they have their own lines (the format and hook bars)
+
+
+def playbook_items(clips: Sequence[Clip]) -> tuple[list[dict[str, str]], list[str]]:
+    """(the rules, the Watching lines) of one character's playbook, from his posted clips. A rule needs at least 5 measured posts
+    behind it: a format the bar keeps (median 1.5 over 5) or kills (0.7 over 8), a hook pattern the bar calls proven (2 hits in its
+    last 10 uses) with at least 5 measured uses, a tag value that beats the others (``DO_MORE``) or loses to them (``STOP``) with
+    posts on both sides. Anything with fewer posts goes under Watching. Sorted, so the same data always gives the same text."""
+    rules: list[dict[str, str]] = []
+    watching: list[str] = []
+    for fmt in review.format_stats(list(clips)):
+        m = fmt.median_outlier_x
+        if fmt.verdict in ("keep", "kill") and m is not None:
+            verb = "Keep" if fmt.verdict == "keep" else "Stop"
+            bar = f"{review.FORMAT_KEEP_MEDIAN:g}x over {review.FORMAT_KEEP_MIN_N}" if fmt.verdict == "keep" else f"{review.FORMAT_KILL_MEDIAN:g}x over {review.FORMAT_KILL_MIN_N}"
+            rules.append({"title": f"{verb} format `{fmt.format_id}`", "detail": f"median outlier_x {m:.2f} over {fmt.n} posts (the {fmt.verdict} line is {bar})"})
+        elif 0 < fmt.n < PLAYBOOK_MIN_POSTS and m is not None:
+            watching.append(f"format `{fmt.format_id}`: {fmt.n} measured post{'s' if fmt.n != 1 else ''}, median outlier_x {m:.2f}")
+    proven = review.hook_proven(list(clips))
+    for pattern, xs in sorted(review.hook_uses(list(clips)).items()):
+        hits = sum(x >= review.HIT_X for x in xs)
+        if proven.get(pattern) and len(xs) >= PLAYBOOK_MIN_POSTS:
+            rules.append(
+                {
+                    "title": f"Hook pattern `{pattern}` is proven",
+                    "detail": f"{hits} hits in its last {len(xs)} uses (the bar: {review.HOOK_MIN_HITS} hits in the last {review.HOOK_WINDOW})",
+                }
+            )
+        elif 0 < len(xs) < PLAYBOOK_MIN_POSTS:
+            watching.append(f"hook pattern `{pattern}`: {len(xs)} measured post{'s' if len(xs) != 1 else ''}, {hits} hit{'s' if hits != 1 else ''}")
+    lifts = [lf for lf in side_lifts(clips) if lf.feature not in _PLAYBOOK_OWN_BARS]
+    for lf in _content(lifts):
+        if lf.n_others < DO_MORE_MIN_N:
+            continue
+        detail = f"median outlier_x {lf.median:.2f} against {lf.median_others:.2f} for the others ({lf.n} against {lf.n_others} posts)"
+        if lf.lift >= DO_MORE_LIFT:  # type: ignore[operator]
+            rules.append({"title": f"Works: `{lf.feature}` = `{_shown(lf.value)}`", "detail": detail})
+        elif lf.lift <= STOP_LIFT and lf.n >= STOP_MIN_N and lf.n_others >= STOP_MIN_N:  # type: ignore[operator]
+            rules.append({"title": f"Avoid: `{lf.feature}` = `{_shown(lf.value)}`", "detail": detail})
+    return sorted(rules, key=lambda r: r["title"]), sorted(watching)
+
+
+def read_since(text: str | None) -> dict[str, str]:
+    """``{rule title: the day it entered}`` read from an existing playbook, so a regenerated one keeps each rule's date."""
+    out: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        if m := _PLAYBOOK_SINCE.match(line):
+            out[m["title"]] = m["day"]
+    return out
+
+
+def render_playbook(name: str, rules: Sequence[Mapping[str, str]], watching: Sequence[str], since: Mapping[str, str], today: date) -> str:
+    """The playbook text. Each rule carries its numbers and the day it entered (``since``, kept from the old file; ``today`` for a
+    new rule). Deterministic: the same inputs give the same text, so a quiet week changes nothing."""
+    lines = [
+        f"# {name}: playbook",
+        "",
+        "Written by `studio review weekly` from the data and rewritten every Monday: do not edit it by hand. A rule enters only with at "
+        f"least {PLAYBOOK_MIN_POSTS} posts behind it, with its numbers and the day it entered; anything with fewer posts is under Watching.",
+        "",
+        "## Rules",
+        "",
+    ]
+    if rules:
+        lines += [f"- **{r['title']}**: {r['detail']} · since {since.get(r['title'], today.isoformat())}" for r in rules]
+    else:
+        lines.append(f"_No rule yet: a rule needs at least {PLAYBOOK_MIN_POSTS} measured posts behind it._")
+    if watching:
+        lines += ["", "## Watching", ""] + [f"- {w}" for w in watching]
+    return "\n".join(lines) + "\n"
