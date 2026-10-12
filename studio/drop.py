@@ -111,8 +111,9 @@ every 4th beat, and the first hook coming in word by word on the beat. Both need
 (``has_beat_source``: a silent ``in_app`` master, a clip with no sound) takes no position in them and carries neither key. The
 master step turns the clip's two keys into the spec's ``edits`` (``master.edits_from_arms``; a clip with neither key is built exactly
 as before) and, once the master is built and checked, writes what it really applied on the clip: ``features['zoom_pulses']`` (the
-count; 0 when the sound had no beat after all) and ``features['hook_entrance']`` (the entrance shown: the kit's own, or
-``word_pop``), ``clips.set_edit_tags``, so the analysis leaves out a clip whose edit did not happen. The Recreate path assigns no
+count; 0 when the sound had no beat after all), ``features['hook_entrance']`` (the entrance shown: the kit's own, or
+``word_pop``) and ``features['beats']`` (the beats of its sound, measured for the control arm too), ``clips.set_edit_tags``, so
+the analysis leaves out a clip with no beat (both arms) or whose edit did not happen (the treated arm). The Recreate path assigns no
 test arms (it writes ``test_arms`` ``{}``), so it is not part of G and H.
 
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's

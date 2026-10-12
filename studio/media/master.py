@@ -71,11 +71,13 @@ master's sound (``_beat_grid``), whatever the kit:
     The first hook pill comes in one word more on each beat (``entrance_frames`` with ``word_pop``, the DJ kit's own code), in place
     of the kit's entrance.
 
-A spec without ``edits`` (or with both off) builds exactly as before: no beat is even measured. When an edit is asked for and the
-sound has no beat (a silent ``in_app`` master, or nothing the analysis hears), the master renders without it and says so:
-``MasterSpec.applied`` is filled by ``build_master`` with what really happened, ``{"zoom_pulses": <count>, "hook_entrance": <name>}``
-(0 and the kit's own entrance when nothing was applied), so the analysis leaves such a clip out. ``applied`` stays ``{}`` for a
-spec without ``edits``.
+A spec without ``edits`` builds exactly as before: no beat is even measured, ``applied`` stays ``{}``. A spec WITH ``edits``, both
+off included, always has its beat measured and reports it, so the control arm is filtered like the treated one: ``build_master``
+fills ``MasterSpec.applied`` with what really happened, ``{"zoom_pulses": <count>, "hook_entrance": <name>, "beats": <count>}``.
+Nothing else changes for a clip with both edits off (the graph is the unedited one). When an edit is asked for and the sound has no
+beat (a silent ``in_app`` master, or nothing the analysis hears), the master renders without it: ``zoom_pulses`` 0, the kit's own
+entrance, ``beats`` 0. The analysis leaves a master with ``beats`` 0 out of BOTH arms, and an arm that is on but whose edit did
+not happen (``zoom_pulses`` 0, or ``hook_entrance`` not ``word_pop``, with a beat found) out of the treated arm.
 
 CLI: ``studio master build --spec <json> [--clip <id>]`` builds, runs the master QA and prints JSON; it
 exits 1 when the master has QA problems (the JSON says which) and 2 for anything the caller must fix.
@@ -942,7 +944,9 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
         base_s = intro_len + _duration(dance_n) + outro_len
         beats: list[float] = []
         drop_s: float | None = None
-        if entrance == "word_pop" or hook_edit == "drop_flash" or zoom_on or pop_on:  # the DJ's kit and tests G, H need the beat
+        # The DJ's kit needs the beat; so does any spec with ``edits`` (tests G, H), even with both off: the control arm has its beat
+        # measured and recorded too, so the analysis can leave a master with no beat out of BOTH arms. ``edits`` None: not measured.
+        if entrance == "word_pop" or hook_edit == "drop_flash" or edits is not None:
             beats, drop_s = _beat_grid(spec, out_time(base_s, slow), work)
         pulses: list[float] = []  # test G: the zoom pulses, in seconds of the picture (the finished timeline before any pause)
         if zoom_on and beats:
@@ -1058,7 +1062,7 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
             shutil.move(story_video, story_file(out))
         shutil.move(finished, out)
     if edits is not None:  # what the tests asked for and what the master really shows (module docstring)
-        spec.applied = {"zoom_pulses": len(pulses), "hook_entrance": first_entrance}
+        spec.applied = {"zoom_pulses": len(pulses), "hook_entrance": first_entrance, "beats": len(beats)}
     return out
 
 

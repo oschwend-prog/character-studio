@@ -2916,11 +2916,11 @@ def test_the_clips_two_coins_become_the_masters_edits_and_what_was_applied_is_wr
     world, portrait, gen_out, monkeypatch, synth_video, experiments_on
 ):
     coins = reginalds_first_coins()  # the real make path hands them out: the clip carries zoom and word_pop
-    store, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 4, "hook_entrance": "slam"})
+    store, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 4, "hook_entrance": "slam", "beats": 20})
     assert {k: clip.features["test_arms"][k] for k in ("zoom", "word_pop")} == coins
     assert specs[-1].edits == {"zoom_pulses": coins["zoom"], "word_pop": coins["word_pop"]}
     f = clip.features
-    assert (f["zoom_pulses"], f["hook_entrance"]) == (4, "slam")
+    assert (f["zoom_pulses"], f["hook_entrance"], f["beats"]) == (4, "slam", 20)
     assert clips.learn_problems(f) == []
 
 
@@ -2928,17 +2928,17 @@ def test_a_master_that_found_no_beat_is_recorded_so_the_analysis_leaves_it_out(
     world, portrait, gen_out, monkeypatch, synth_video, experiments_on
 ):
     coins = reginalds_first_coins()
-    _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 0, "hook_entrance": "none"})
+    _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 0, "hook_entrance": "none", "beats": 0})
     assert specs[-1].edits is not None  # the arms asked, the master heard no beat and applied neither
-    assert (clip.features["zoom_pulses"], clip.features["hook_entrance"]) == (0, "none")
+    assert (clip.features["zoom_pulses"], clip.features["hook_entrance"], clip.features["beats"]) == (0, "none", 0)
     assert {k: clip.features["test_arms"][k] for k in ("zoom", "word_pop")} == coins  # the arm stays: it is what the coin said
 
 
 def test_a_clip_without_the_two_coins_is_built_as_before_and_writes_no_edit_tags(world, portrait, gen_out, monkeypatch, synth_video):
     """Every test is off here (conftest): no coin, so no ``edits`` on the spec at all: the same master as before the tests."""
-    _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 9, "hook_entrance": "slam"})
+    _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, {"zoom_pulses": 9, "hook_entrance": "slam", "beats": 9})
     assert specs[-1].edits is None
-    assert "zoom_pulses" not in clip.features and "hook_entrance" not in clip.features and clip.features["test_arms"] == {}
+    assert not clips.EDIT_FEATURES & clip.features.keys() and clip.features["test_arms"] == {}
 
 
 def test_a_silent_masters_clip_takes_no_position_and_is_built_without_edits(world, portrait, experiments_on):
@@ -2954,4 +2954,4 @@ def test_a_silent_masters_clip_takes_no_position_and_is_built_without_edits(worl
 def test_an_edit_the_master_did_not_report_writes_nothing(world, portrait, gen_out, monkeypatch, synth_video, experiments_on):
     _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, None)
     assert specs[-1].edits is not None and specs[-1].applied == {}  # a build that says nothing (a fake, an older master)
-    assert "zoom_pulses" not in clip.features and "hook_entrance" not in clip.features
+    assert not clips.EDIT_FEATURES & clip.features.keys()

@@ -23,8 +23,9 @@ with no sound to follow (a silent ``in_app`` master, a clip with no sound; ``dro
 ``assign_blocks(..., beats=False)`` leaves those tests out: the clip gets no ``zoom`` / ``word_pop`` key, so it takes no position
 (a position is counted from the clips that carry the key) and the next master with beats takes the place it did not use; every
 block of the eligible clips still holds each arm exactly its places. The master may still find no beat in the sound after all: it
-then renders without the edit and records so (``zoom_pulses`` 0, ``hook_entrance`` the kit's: ``master.build_master``), and the
-analysis leaves that clip out.
+measures the beat for every clip that carries a coin, the control arm too, and records ``beats`` next to ``zoom_pulses`` and
+``hook_entrance`` (``master.build_master``); a master with ``beats`` 0 is rendered without the edit and left out of BOTH arms by the
+analysis, and so is an arm that is on with a beat found but no edit placed.
 
 **Test A** (section 3.2) is a tag, not a coin: ``explore_pick`` is true when the clip's score is below the median score of the
 character's checked drops (ready, being made or made, ``drop.checked_scores``: so the median does not move while a batch is made;

@@ -45,12 +45,14 @@ Two more are the publisher's (``PUBLISH_FEATURES``, terminal v3 spec section 11,
 (the clip's first comment went out with its Instagram Reel) and ``trial_reel`` (the Reel went out as a Trial Reel), both true or
 false, written by ``set_publish_tags`` after a successful post (``studio.publish.base``); like the master's two they are not needed at
 creation and are checked when present.
-Two are the master's edit record for tests G and H (``EDIT_FEATURES``, learning plan 3.9 and 3.10): ``zoom_pulses`` (how many zoom
-pulses the master really has, 0 when none) and ``hook_entrance`` (the entrance of the first hook it really shows: a kit's name or
-``word_pop``), written by ``set_edit_tags`` after the master is built (``drop._master``, from ``MasterSpec.applied``). They are
-OPTIONAL: a clip made before the tests, or one that took no position in them, does not have them (``new_clip`` does not ask for
-them), and when they are there they are checked. The analysis reads them next to ``test_arms``: an arm whose edit was not applied
-(``zoom_pulses`` 0 under ``zoom: true``, the kit's entrance under ``word_pop: true``) is left out.
+Three are the master's edit record for tests G and H (``EDIT_FEATURES``, learning plan 3.9 and 3.10): ``zoom_pulses`` (how many zoom
+pulses the master really has, 0 when none), ``hook_entrance`` (the entrance of the first hook it really shows: a kit's name or
+``word_pop``) and ``beats`` (how many beats the master's sound has, 0 when none: measured for every clip that carries one of the
+two coins, the control arm too), written by ``set_edit_tags`` after the master is built (``drop._master``, from
+``MasterSpec.applied``). They are OPTIONAL: a clip made before the tests, or one that took no position in them, does not have them
+(``new_clip`` does not ask for them), and when they are there they are checked. The analysis reads them next to ``test_arms``: a
+master with ``beats`` 0 is left out of both arms, and an arm that is on but whose edit did not happen (``zoom_pulses`` 0 under
+``zoom: true``, the kit's entrance under ``word_pop: true``) is left out of the treated arm.
 
 ``transition`` and ``set_fields`` write only ``SETTABLE_FIELDS``. The state never changes through
 ``set_fields`` (or ``store.update_clip`` anywhere else): that is the whole point of the table.
@@ -178,11 +180,12 @@ LEARN_FEATURES = frozenset(
         "trial_reel",  # true / false: the Reel went out as an Instagram Trial Reel (the publisher)
         "zoom_pulses",  # whole number: the zoom pulses the master really has (test G; the master, optional)
         "hook_entrance",  # the entrance of the first hook the master really shows (test H; the master, optional)
+        "beats",  # whole number: the beats the master's sound has, 0 for none (tests G, H, both arms; the master, optional)
     }
 )
 MASTER_FEATURES = frozenset({"length_s", "length_bucket"})  # written by the master (set_length), not at creation
 PUBLISH_FEATURES = frozenset({"first_comment_posted", "trial_reel"})  # written by the publisher after a post (set_publish_tags)
-EDIT_KEYS = ("zoom_pulses", "hook_entrance")
+EDIT_KEYS = ("zoom_pulses", "hook_entrance", "beats")
 EDIT_FEATURES = frozenset(EDIT_KEYS)  # written by the master for tests G, H (set_edit_tags); optional
 OPTIONAL_LEARN = MASTER_FEATURES | PUBLISH_FEATURES | EDIT_FEATURES  # not asked for at creation; checked when present
 LEARN_VALUES: dict[str, tuple[Any, ...]] = {
@@ -207,7 +210,7 @@ HOOK_TAGS = ("hook_text", "hook_pattern", "hook_index", "hook_by")  # what set_h
 _RULES_VERSION = re.compile(r"v\d+")  # gemini.hit_rules_version: v<N>, or "none"
 _WHOLE_RANGES: dict[str, tuple[int, int | None]] = {  # whole numbers (never a bool) from low to high (None: no top)
     "hook_index": (0, 3), "version_index": (1, 3), "days_since_trend_peak": (0, None), "episode": (1, None),
-    "score_total": (0, 100), "score_potential": (0, 10), "score_swap": (0, 10), "zoom_pulses": (0, None),
+    "score_total": (0, 100), "score_potential": (0, 10), "score_swap": (0, 10), "zoom_pulses": (0, None), "beats": (0, None),
 }
 
 MAX_REROLLS = 1
@@ -419,8 +422,8 @@ def set_length(store: Store, clip_id: str, seconds: float) -> Clip:
 
 
 def set_edit_tags(store: Store, clip_id: str, tags: Mapping[str, Any]) -> Clip:
-    """Write the master's edit record on the clip (``EDIT_FEATURES``, tests G and H): ``zoom_pulses`` (a whole number, 0 for none)
-    and ``hook_entrance`` (``LEARN_VALUES``), keeping every other feature. A remake overwrites what an earlier build recorded.
+    """Write the master's edit record on the clip (``EDIT_FEATURES``, tests G and H): ``zoom_pulses`` and ``beats`` (whole numbers,
+    0 for none) and ``hook_entrance`` (``LEARN_VALUES``), keeping every other feature. A remake overwrites what an earlier build recorded.
     ``KeyError`` for an unknown clip, ``ValueError`` (nothing written) for another key or a value outside its vocabulary."""
     unknown = sorted(set(tags) - EDIT_FEATURES)
     if unknown:

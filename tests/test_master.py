@@ -11,6 +11,7 @@ import json
 import math
 import re
 import shutil
+import struct
 import subprocess
 import wave
 from pathlib import Path
@@ -1897,19 +1898,30 @@ def test_cli_master_build_reports_what_the_edits_applied(tmp_path, monkeypatch, 
     assert "edits_applied" not in json.loads(CliRunner().invoke(app, ["master", "build", "--spec", str(path)]).stdout)
 
 
-@pytest.mark.parametrize("edits", [None, {}, {"zoom_pulses": False, "word_pop": False}], ids=["none", "empty", "both off"])
-def test_a_master_without_edits_or_with_both_off_keeps_its_graphs_byte_for_byte(tmp_path, monkeypatch, edits):
-    """Review focus: a spec without the ``edits`` key renders exactly as it did; both arms off changes nothing either (no beat
-    is even measured)."""
+def test_a_master_without_edits_keeps_its_graphs_byte_for_byte_and_measures_no_beat(tmp_path, monkeypatch):
+    """Review focus: a spec without the ``edits`` key renders exactly as it did, and no beat is even measured."""
     pin_text_metrics(monkeypatch)
     monkeypatch.setattr(master, "_beat_grid", lambda *a, **k: pytest.fail("no edit asked for a beat"))
+    dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 6)
+    spec = spec_for(tmp_path, dance, beat)
+    assert graphs_of(spec, monkeypatch) == NO_STYLE_GRAPHS["closeup"]
+    enhanced = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2_until_s=1.5, enhancements=ENHANCED)
+    assert graphs_of(enhanced, monkeypatch) == NO_STYLE_GRAPHS["enhanced"]
+    assert spec.applied == {} == enhanced.applied  # nothing to report: the clip carries no coin
+
+
+@pytest.mark.parametrize("edits", [{}, {"zoom_pulses": False, "word_pop": False}], ids=["empty", "both off"])
+def test_both_edits_off_changes_no_graph_but_the_beat_is_measured_and_recorded(tmp_path, monkeypatch, edits):
+    """Review fix I-1: a clip in the control arm of G and H also has its beat measured, so the analysis can leave a master with no
+    beat out of BOTH arms. Nothing else changes: the graphs are the unedited ones, byte for byte."""
+    pin_text_metrics(monkeypatch)
+    beats_of(monkeypatch, grid(0.5, 6))
     dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 6)
     spec = spec_for(tmp_path, dance, beat, edits=edits)
     assert graphs_of(spec, monkeypatch) == NO_STYLE_GRAPHS["closeup"]
     enhanced = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2_until_s=1.5, enhancements=ENHANCED, edits=edits)
     assert graphs_of(enhanced, monkeypatch) == NO_STYLE_GRAPHS["enhanced"]
-    assert spec.applied == ({} if edits is None else {"zoom_pulses": 0, "hook_entrance": "none"})
-    assert enhanced.applied == spec.applied
+    assert spec.applied == enhanced.applied == {"zoom_pulses": 0, "hook_entrance": "none", "beats": 6}
 
 
 def beats_of(monkeypatch, beats: list[float], drop_s: float = 1.0) -> None:
@@ -1929,7 +1941,7 @@ def test_zoom_pulses_go_after_the_zoom_hits_and_the_slowmo_and_before_the_hook_e
     assert master.zoom_pulses_filter("vs", "zp", [1.0, 5.0]) in picture
     assert picture.index("[z0]") < picture.index("[vs]") < picture.index("[zp]") < picture.index("[he]")
     assert picture.index("[he]") < picture.index("[tn]") < picture.index("[o0]"), "then the kit's edit and tone, the captions last"
-    assert spec.applied == {"zoom_pulses": 2, "hook_entrance": "slam"}  # franz's own entrance: only G is on
+    assert spec.applied == {"zoom_pulses": 2, "hook_entrance": "slam", "beats": 12}  # franz's own entrance: only G is on
 
 
 def test_the_pulses_zoom_the_picture_on_their_beats_and_nothing_else(tmp_path, monkeypatch, synth_video):
@@ -1940,7 +1952,7 @@ def test_the_pulses_zoom_the_picture_on_their_beats_and_nothing_else(tmp_path, m
     plain = build_master(spec_for(tmp_path, src, audio, closeup=None, hook1=[], hook2=[], out=tmp_path / "plain.mp4"))
     spec = spec_for(tmp_path, src, audio, closeup=None, hook1=[], hook2=[], edits={"zoom_pulses": True}, out=tmp_path / "pulsed.mp4")
     pulsed = build_master(spec)
-    assert spec.applied == {"zoom_pulses": 2, "hook_entrance": "none"}  # at 1.0 and 3.0
+    assert spec.applied == {"zoom_pulses": 2, "hook_entrance": "none", "beats": 12}  # at 1.0 and 3.0
 
     def diff(t: float) -> float:
         a, b = frame_at(pulsed, t, tmp_path), frame_at(plain, t, tmp_path)
@@ -1985,12 +1997,12 @@ def test_pulses_need_a_beat_and_a_master_without_one_renders_without_them(tmp_pa
         plain = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=["Absolutely not."], hook2_until_s=1.5, **who)
         edited = dataclasses.replace(plain, edits={"zoom_pulses": True, "word_pop": True})
         assert graphs_of(edited, monkeypatch)[0] == graphs_of(plain, monkeypatch)[0]
-        assert edited.applied == {"zoom_pulses": 0, "hook_entrance": entrance}
+        assert edited.applied == {"zoom_pulses": 0, "hook_entrance": entrance, "beats": 0}
     monkeypatch.setattr(master, "_beat_grid", real_beat_grid)
     silent = spec_for(tmp_path, dance, None, closeup=None, hook1=[], hook2=["Absolutely not."], hook2_until_s=1.5, music="in_app",
                       edits={"zoom_pulses": True, "word_pop": True})  # fmt: skip
     assert build_master(silent).is_file()  # a silent master has no beat: the real _beat_grid says so
-    assert silent.applied == {"zoom_pulses": 0, "hook_entrance": "none"}
+    assert silent.applied == {"zoom_pulses": 0, "hook_entrance": "none", "beats": 0}
 
 
 def test_word_pop_brings_the_first_hook_in_word_by_word_on_the_beat_whatever_the_kit(tmp_path, monkeypatch):
@@ -2002,8 +2014,8 @@ def test_word_pop_brings_the_first_hook_in_word_by_word_on_the_beat_whatever_the
     kit_own = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=hook, hook2_until_s=2.8, character="franz",
                        edits={"word_pop": False}, out=tmp_path / "kit.mp4")  # fmt: skip
     pop_out, kit_out = build_master(popped), build_master(kit_own)
-    assert popped.applied == {"zoom_pulses": 0, "hook_entrance": "word_pop"}
-    assert kit_own.applied == {"zoom_pulses": 0, "hook_entrance": "slam"}
+    assert popped.applied == {"zoom_pulses": 0, "hook_entrance": "word_pop", "beats": 6}
+    assert kit_own.applied == {"zoom_pulses": 0, "hook_entrance": "slam", "beats": 6}
     cream = lambda out, t: count_near(frame_at(out, t, tmp_path), PILL_BOX, CREAM)  # noqa: E731
     words = [cream(pop_out, t) for t in (0.15, 0.5, 1.0, 1.5, 2.0)]
     assert words[0] < 100, "nothing before the first beat"
@@ -2020,3 +2032,91 @@ def test_word_pop_off_leaves_the_kits_entrance_exactly_as_it_was(tmp_path, monke
         off = dataclasses.replace(plain, edits={"zoom_pulses": False, "word_pop": False})
         assert graphs_of(off, monkeypatch) == graphs_of(plain, monkeypatch), slug
         assert off.applied["hook_entrance"] == kit(slug)["entrance"] and off.applied["zoom_pulses"] == 0, slug
+        assert off.applied["beats"] == 0, slug  # a plain tone has no beat
+
+
+def test_a_control_arm_master_with_no_beat_records_beats_zero_and_one_with_a_beat_records_the_count(tmp_path, monkeypatch):
+    """Review fix I-1: both arms carry the beat count, so a master with no beat is left out of BOTH (a plain tone has none)."""
+    dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 4)
+    for arm, edits in (("control", {"zoom_pulses": False, "word_pop": False}), ("treated", {"zoom_pulses": True, "word_pop": True})):
+        spec = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=["Absolutely not."], hook2_until_s=1.5, edits=edits)
+        build_master(spec)  # the real _beat_grid on a steady tone: no beat
+        assert spec.applied == {"zoom_pulses": 0, "hook_entrance": "none", "beats": 0}, arm
+    silent = spec_for(tmp_path, dance, None, closeup=None, hook1=[], hook2=[], music="in_app", edits={"zoom_pulses": False})
+    build_master(silent)
+    assert silent.applied == {"zoom_pulses": 0, "hook_entrance": "none", "beats": 0}
+    beats_of(monkeypatch, grid(0.5, 5))
+    counted = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=[], edits={"zoom_pulses": False})
+    build_master(counted)
+    assert counted.applied["beats"] == 5
+
+
+def test_an_arm_on_with_a_beat_found_but_no_pulse_placed_says_so(tmp_path, monkeypatch):
+    """Beats exist but none falls where a pulse may go (all before the hook's first second): ``beats`` > 0 and ``zoom_pulses`` 0, so
+    the analysis can tell it from a master with no beat and leave it out of the treated arm all the same."""
+    beats_of(monkeypatch, [0.2, 0.7])
+    dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 4)
+    spec = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=[], edits={"zoom_pulses": True})
+    build_master(spec)
+    assert spec.applied == {"zoom_pulses": 0, "hook_entrance": "none", "beats": 2}
+
+
+def click_track(path: Path, bpm: float, seconds: float, offset: float, rate: int = 44100) -> Path:
+    """A mono WAV of short 1.5 kHz bursts on a beat (the first ``offset`` s in, then every 60 / bpm s), silence between."""
+    samples = [0] * int(seconds * rate)
+    t = offset
+    while t < seconds - 0.05:
+        start = int(t * rate)
+        for n in range(int(0.03 * rate)):
+            samples[start + n] = int(22000 * math.sin(2 * math.pi * 1500 * n / rate) * (1 - n / (0.03 * rate)))
+        t += 60.0 / bpm
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"".join(struct.pack("<h", s) for s in samples))
+    return path
+
+
+def pulse_times_in(graph: str) -> list[float]:
+    """The ``at_s`` of every pulse of the zoom-pulses step of a picture graph (each appears in the expression once per use)."""
+    found = re.findall(r"\(t-([0-9.]+)\)/0\.25", graph)
+    return sorted({float(x) for x in found})
+
+
+def click_onsets(video: Path, tmp_path: Path) -> list[float]:
+    """When the clicks start in the finished master's own sound (after loudnorm): the samples that rise over a third of the peak
+    after at least 0.2 s of quiet."""
+    samples, _, rate = read_wav(s16_of(video, tmp_path))
+    peak = max(abs(s) for s in samples)
+    onsets, last = [], -1.0
+    for i, s in enumerate(samples):
+        if abs(s) > peak / 3:
+            if i / rate - last > 0.2:
+                onsets.append(i / rate)
+            last = i / rate
+    return onsets
+
+
+@pytest.mark.parametrize(
+    ("who", "lead", "audio_offset"),
+    [({}, 0.0, 0.0), ({"character": "reginald"}, 0.4, 0.0), ({}, 0.0, 0.25)],
+    ids=["plain", "with the pause (lead 0.4 s)", "audio offset 0.25 s"],
+)
+def test_pulses_land_on_the_clicks_of_a_real_120_bpm_track(tmp_path, monkeypatch, who, lead, audio_offset):
+    """Review M-1, the real ``_beat_grid`` / ``estimate_beat`` (no stub): clicks at 0.25 + 0.5 k s of the track. The pulses fall on
+    clicks (within 40 ms), the first one at or after the hook's first second of the FINISHED master, and in the finished master's own
+    sound the click is there, ``lead`` later, at the pulse's time plus the pause."""
+    dance, track = flat_video(tmp_path / "dance.mp4", 9), click_track(tmp_path / "clicks.wav", 120, 12, offset=0.25)
+    spec = spec_for(tmp_path, dance, track, closeup=None, hook1=[], hook2=["Wait."], hook2_until_s=3.0, edits={"zoom_pulses": True},
+                    audio_offset_s=audio_offset, **who)  # fmt: skip
+    picture = graphs_of(spec, monkeypatch)[0]
+    pulses = pulse_times_in(picture)
+    clicks = [0.25 - audio_offset + 0.5 * k for k in range(40) if 0.25 - audio_offset + 0.5 * k >= 0]  # of the picture's time
+    assert len(pulses) >= 3 and spec.applied["zoom_pulses"] == len(pulses) and spec.applied["beats"] >= 10, (pulses, spec.applied)
+    assert all(min(abs(p - c) for c in clicks) < 0.04 for p in pulses), (pulses, clicks[:12])
+    assert pulses[0] >= 1.0 - lead - 1e-6, "not in the first second of the finished master"
+    assert all(b - a >= 1.0 for a, b in zip(pulses, pulses[1:])) and all(abs((b - a) - 2.0) < 0.05 for a, b in zip(pulses, pulses[1:]))
+    assert spec.out.is_file()  # the graph run above built it
+    finished = click_onsets(spec.out, tmp_path)
+    assert all(min(abs(p + lead - c) for c in finished) < 0.04 for p in pulses), (pulses, lead, finished[:12])

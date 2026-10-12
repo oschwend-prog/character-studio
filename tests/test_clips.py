@@ -467,11 +467,11 @@ def test_the_learning_tags_are_the_plans():
         "hook_index", "hook_by", "caption_line1", "first_comment_kind", "trend_stage", "days_since_trend_peak", "sound_type",
         "sound_rising", "length_s", "length_bucket", "score_bucket", "score_total", "score_potential", "score_swap", "part",
         "family_id", "version_index", "series", "episode", "hit_rules_version", "source_kind", "test_arms", "explore_pick",
-        "first_comment_posted", "trial_reel", "zoom_pulses", "hook_entrance",
+        "first_comment_posted", "trial_reel", "zoom_pulses", "hook_entrance", "beats",
     }
     assert clips.MASTER_FEATURES == {"length_s", "length_bucket"} < clips.LEARN_FEATURES  # the master writes these two
     assert clips.PUBLISH_FEATURES == {"first_comment_posted", "trial_reel"} < clips.LEARN_FEATURES  # the publisher, these two
-    assert clips.EDIT_FEATURES == {"zoom_pulses", "hook_entrance"} < clips.LEARN_FEATURES  # the master (tests G, H); optional
+    assert clips.EDIT_FEATURES == {"zoom_pulses", "hook_entrance", "beats"} < clips.LEARN_FEATURES  # the master (tests G, H); optional
     assert {"first_comment_posted", "trial_reel"} <= clips.LEARN_BOOLS
     assert not clips.LEARN_FEATURES & REQUIRED_FEATURES  # format_id and hook_pattern stay required for every clip
     v = clips.LEARN_VALUES
@@ -613,19 +613,20 @@ def test_set_publish_tags_writes_the_publishers_learning_tags():
 
 
 def test_the_edit_tags_are_optional_learning_tags_checked_when_present():
-    """Tests G and H (plan 3.9, 3.10): the master records ``zoom_pulses`` (a count) and ``hook_entrance`` (a kit's entrance name).
-    Clips made before them lack both and stay valid; a value that is there must be right."""
+    """Tests G and H (plan 3.9, 3.10): the master records ``zoom_pulses`` and ``beats`` (counts) and ``hook_entrance`` (a kit's
+    entrance name). Clips made before them lack all three and stay valid; a value that is there must be right."""
     from studio.seed import STYLE_ENTRANCES
 
     assert clips.LEARN_VALUES["hook_entrance"] == STYLE_ENTRANCES  # one vocabulary
     store = make_store()
     assert clips.learn_problems(LEARN) == [] and new_clip(store, "biscuit", None, Mode.recreate, LEARN)  # absent: fine
-    full = {**LEARN, "zoom_pulses": 0, "hook_entrance": "slam"}
+    full = {**LEARN, "zoom_pulses": 0, "hook_entrance": "slam", "beats": 0}
     assert clips.learn_problems(full) == [] and new_clip(store, "biscuit", None, Mode.recreate, full)
-    assert clips.learn_problems({**LEARN, "zoom_pulses": 7, "hook_entrance": "word_pop"}) == []
+    assert clips.learn_problems({**LEARN, "zoom_pulses": 7, "hook_entrance": "word_pop", "beats": 31}) == []
     for bad, message in (
         ({"zoom_pulses": -1}, "zoom_pulses"), ({"zoom_pulses": True}, "zoom_pulses"), ({"zoom_pulses": 2.5}, "zoom_pulses"),
         ({"zoom_pulses": None}, "zoom_pulses"), ({"hook_entrance": "spin"}, "hook_entrance"), ({"hook_entrance": None}, "hook_entrance"),
+        ({"beats": -1}, "beats"), ({"beats": True}, "beats"), ({"beats": 1.5}, "beats"), ({"beats": None}, "beats"),
     ):
         assert any(message in problem for problem in clips.learn_problems({**LEARN, **bad})), bad
         with pytest.raises(ValueError, match=message):
@@ -635,12 +636,13 @@ def test_the_edit_tags_are_optional_learning_tags_checked_when_present():
 def test_set_edit_tags_writes_what_the_master_applied():
     store = make_store()
     clip = new_clip(store, "biscuit", None, Mode.recreate, LEARN)
-    out = clips.set_edit_tags(store, clip.id, {"zoom_pulses": 3, "hook_entrance": "word_pop"})
-    assert (out.features["zoom_pulses"], out.features["hook_entrance"]) == (3, "word_pop")
+    out = clips.set_edit_tags(store, clip.id, {"zoom_pulses": 3, "hook_entrance": "word_pop", "beats": 17})
+    assert (out.features["zoom_pulses"], out.features["hook_entrance"], out.features["beats"]) == (3, "word_pop", 17)
     assert {k: out.features[k] for k in LEARN} == LEARN and clips.learn_problems(out.features) == []  # the other tags are kept
-    again = clips.set_edit_tags(store, clip.id, {"zoom_pulses": 0, "hook_entrance": "slam"})  # a remake says what it did this time
-    assert (again.features["zoom_pulses"], again.features["hook_entrance"]) == (0, "slam")
-    for bad, message in (({"zoom_pulses": "3"}, "zoom_pulses"), ({"hook_entrance": "spin"}, "hook_entrance"), ({"hook_index": 1}, "zoom_pulses, hook_entrance")):
+    again = clips.set_edit_tags(store, clip.id, {"zoom_pulses": 0, "hook_entrance": "slam", "beats": 0})  # a remake says what it did
+    assert (again.features["zoom_pulses"], again.features["hook_entrance"], again.features["beats"]) == (0, "slam", 0)
+    for bad, message in (({"zoom_pulses": "3"}, "zoom_pulses"), ({"hook_entrance": "spin"}, "hook_entrance"), ({"beats": "2"}, "beats"),
+        ({"hook_index": 1}, "zoom_pulses, hook_entrance, beats")):
         with pytest.raises(ValueError, match=message):
             clips.set_edit_tags(store, clip.id, bad)
     with pytest.raises(KeyError):
