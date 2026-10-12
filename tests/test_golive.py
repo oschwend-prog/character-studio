@@ -82,7 +82,7 @@ class World:
     gh_workflows: list[dict] = field(
         default_factory=lambda: [
             {"name": n, "path": f".github/workflows/{n}.yml", "state": "active"}
-            for n in ("ci", "publish", "metrics", "health", "studio-drop", "studio-hits")
+            for n in ("ci", "publish", "metrics", "health", "studio-drop", "studio-hits", "studio-weekly")
         ]
     )
     gh_result: subprocess.CompletedProcess[str] | Exception | None = None  # overrides both gh calls
@@ -992,6 +992,17 @@ def test_the_hits_workflow_is_a_go_live_check_enabled_or_not(world):
     world.gh_workflows = [w for w in world.gh_workflows if w["name"] != "studio-hits"]
     c = world.run()["github:workflow:studio-hits"]
     assert c.status == "fail" and "not found" in c.detail and ".github/workflows/studio-hits.yml" in c.fix
+
+
+def test_the_weekly_workflow_is_a_go_live_check_enabled_or_not(world):
+    assert "studio-weekly" in golive.WORKFLOWS  # the Monday review in the cloud (task 16)
+    assert world.run()["github:workflow:studio-weekly"].status == "pass"
+    for wf in world.gh_workflows:
+        if wf["name"] == "studio-weekly":
+            wf["state"] = "disabled_manually"
+    checks = world.run()
+    assert failing(checks) == {"github:workflow:studio-weekly"}
+    assert "gh workflow enable studio-weekly.yml" in checks["github:workflow:studio-weekly"].fix
 
 
 def test_a_missing_drop_secret_fails_with_a_prompting_set_command(world):
