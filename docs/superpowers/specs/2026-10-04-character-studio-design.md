@@ -179,7 +179,7 @@ Each task's prompt is one line that invokes the project skill (`/daily-run`, `/w
 4. **Generate**: `studio budget reserve` → `generate_video` with `hf_mult_motion_control`, character reference + driving video, 1080p → `jobs_wait` → `studio budget settle`.
 5. **QA**: `studio qa tech` (resolution ≥ 1080×1920, 23–60 fps, duration 7–15 s, bitrate floor, audio present) → extract 6 frames → Claude checks identity vs reference, hands, face, flicker, melting, extra limbs. Fail → one re-roll; second fail → dropped and logged.
 6. **Master** (`studio master`): 1080×1920, 30 fps, H.264 High ~15 Mbps, AAC 320k, loudness −14 LUFS (same chain as faceless-youtube `master.mjs`), hook text burned in with the character's font, inside TikTok/Reels safe zones.
-7. **Caption**: hook line, caption and 3–5 hashtags in the character's voice (from `bible.md`); AI disclosure in caption and bio.
+7. **Caption**: hook line, caption and 3–4 hashtags (plus the series tag: 5 at most) in the character's voice (from `bible.md`); AI disclosure in caption and bio.
 8. `studio queue`.
 
 Hard limits per run: maximum clips = the day's plan; maximum one re-roll per clip; stop on any budget refusal.

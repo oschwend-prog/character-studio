@@ -33,7 +33,7 @@ benchmark, "best practice" or community number replaces them, before or after se
 - AI disclosure on every post: `studio.captions` adds the line, the Instagram AI label is set. Never
   remove, soften or "humanize" it; no de-AI pass touches the disclosure.
 - The caption formula in the bible (`## Voice (captions)`) is the owner's rule; skills refine wording inside
-  it, never replace it. 3-5 hashtags; never #fyp, #foryou, #foryoupage, #viral or #explore.
+  it, never replace it. 3-4 hashtags (the series tag is added separately: 5 at most); never #fyp, #foryou, #foryoupage, #viral or #explore.
 - Credit the original creator and song; never keep another creator's watermark or handle.
 - The automation never scrapes TikTok or Instagram on its own and uses no paid scraping keys (Apify and the like); the
   owner's own saved TikTok/Instagram clips, dropped in the terminal, are the main source.

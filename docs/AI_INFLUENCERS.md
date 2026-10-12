@@ -146,7 +146,7 @@ Smaller differences, no decision needed (both are kept):
 - **Strand A launch rule:** the first posts of a channel are absolute hits people know, mainstream "cool" classics the owner recognises (not internet memes). Scored Instagram/TikTok viral clips follow.
 - **Lengths:** classics 12–15 s, other clips 8–10 s, 16 s maximum.
 - **Ending:** no eye close-up, flash or sound at the end.
-- **Captions:** the caption playbook in the daily-run skill: a searchable title line, the joke in the character's voice, one rotating engagement line, the credit, 3–5 hashtags and a first comment.
+- **Captions:** the caption playbook in the daily-run skill: a searchable title line, the joke in the character's voice, one rotating engagement line, the credit, 3–4 hashtags (plus the character's series tag: 5 at most) and a first comment.
 - **Paid amplification:** Launchpoint (creator campaigns at ~$1 per 1,000 views), only as a capped test after the week-3 review ([roadmap.md](roadmap.md)).
 - **Strand B pipeline**, which strand A's "Drop a video" flow mirrors:
   1. Scout a viral format.

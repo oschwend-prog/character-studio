@@ -36,7 +36,7 @@ Cadence (Lean): Biscuit Mon/Wed/Fri, Reginald Tue/Thu/Sat, 18:00–19:00 UK; the
 | 9 | POV: you asked for "a little music" | Escalating routine in the hall | none | A little. As requested. | POV |
 | 10 | The house dog taught him this. | **Crossover**: Reginald + Biscuit dance together | bow tie on Biscuit | @biscuit — we do not speak of this. | Crossover (both accounts) |
 
-## Hashtags (3–5 per post, rotate)
+## Hashtags (3–4 per post, rotate; the series tag makes it 5 at most)
 - Biscuit: #dachshund #sausagedog #doxie #dogsoftiktok #dancingdog #aicharacter
 - Reginald: #butler #britishhumour #deadpan #dancetrend #aicharacter
 

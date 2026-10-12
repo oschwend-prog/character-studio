@@ -12,6 +12,6 @@ conflict with this summary or with a skill.
 
 Every caption follows the bible's post formula: searchable title (at most 40 characters), the joke in the
 character's voice, ONE engagement line (rotate send trigger, question, series tease), the credit line, the
-AI disclosure (added automatically), 3-5 hashtags.
+AI disclosure (added automatically), 3-4 hashtags (the character's series tag is added when the clip is made: 5 at most).
 
 Catchphrases and signature moves are proposals until the owner confirms them (see each bible).

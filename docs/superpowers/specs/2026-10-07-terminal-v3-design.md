@@ -180,7 +180,7 @@ values, the first is the post and the next are comments; Instagram settings `pos
    (`<clip>-story.mp4`, the master with the AI label burned in at y 1450-1600, written by the master build and recorded as
    `features.story_path`), never the plain master; a clip without it gets no Story ("no labelled story video"). A new switch
    `reach.stories` in `config/scan.json` is off by default. No Story follows a Trial Reel.
-3. **Hashtags (3-5):** the trend's exact tag, the niche, the format, `#oddeyes` and the character's own series tag
+3. **Hashtags (3-4, plus the series tag = 5 at most):** the trend's exact tag, the niche, the format, `#oddeyes` and the character's own series tag
    (`characters/<slug>/refs.json` `style.series_tag`: Franz `#sausagecomingthrough`, Reginald `#asyouwere`, Lenny
    `#yourewelcome`); never #fyp/#foryou/#viral/#explore. *Fix round 1:* Gemini writes 3-4 and the series tag is written into
    the clip's own hashtags when the clip is made (Make it, `clip set --hashtag`), so stored = previewed = posted; the

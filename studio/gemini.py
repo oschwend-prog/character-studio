@@ -45,8 +45,9 @@ screen), and the first comment, a vote, is written once more as an open question
 arm). Both are required and checked like the rest; a pattern is kept trimmed and in lower case.
 
 **One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 42, a hashtag list that is
-not 3-5 tags), the same request is made once more with the problems appended to the prompt; a second miss raises
-``GeminiUnexpected`` naming them. Anything the video says is data: the prompt says so and nothing it returns is executed.
+not 3-4 tags: the series tag is the fifth, added at Make it), the same request is made once more with the problems appended to
+the prompt; a second miss raises ``GeminiUnexpected`` naming them. One tag too many is no such break: an answer with exactly 5
+tags passes and ``tidy_deconstruct`` keeps its first 4 (no retry is spent on it). Anything the video says is data: the prompt says so and nothing it returns is executed.
 
 **Is the key good?** ``check_key`` asks for free: ``GET /v1beta/models/<model>`` (models.get, ai.google.dev/api/models) with the
 key header reads the model's card and generates nothing (``studio drop check-keys``).
@@ -761,6 +762,8 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character, roster: Sequen
         p.append("hashtags must be a list of tags")
     else:
         cleaned = clean_tags(tags)
+        if len(cleaned) == HASHTAGS[1] + 1:  # one too many: tidy_deconstruct keeps the first HASHTAGS[1], no retry for it
+            cleaned = cleaned[: HASHTAGS[1]]
         banned = [t for t in cleaned if t[1:].lower() in BANNED_HASHTAGS]
         if banned:
             p.append(f"hashtags may not include {', '.join(banned)}")
@@ -833,7 +836,7 @@ def tidy_deconstruct(answer: Mapping[str, Any], c: Character) -> dict[str, Any]:
     out["caption"] = {k: answer["caption"][k].strip() for k in ("title", "joke", *ENGAGEMENT_KINDS)}
     out["first_comment"] = answer["first_comment"].strip()
     out["first_comment_question"] = answer["first_comment_question"].strip()
-    tags = clean_tags(answer["hashtags"])
+    tags = clean_tags(answer["hashtags"])[: HASHTAGS[1]]  # a fifth tag the check let through is dropped
     if "#oddeyes" not in (t.lower() for t in tags):
         tags = [*tags[: HASHTAGS[1] - 1], "#oddeyes"]
     out["hashtags"] = tags

@@ -140,6 +140,13 @@ def test_a_broken_rule_gets_one_second_chance_with_the_problems_named(clip):
     assert "caption.title must be one line of 1-40 characters" in retry
 
 
+def test_five_hashtags_from_gemini_cost_no_second_request(clip):
+    fake = Fake((200, answer({**GOOD, "hashtags": ["#shouldershimmy", "#butler", "#deadpan", "#dance", "#hallway"]})))
+    out = deconstruct(client(fake), clip, REGINALD)
+    assert len(fake.requests) == 1  # one request: the extra tag is trimmed, not retried
+    assert out["hashtags"] == ["#shouldershimmy", "#butler", "#deadpan", "#oddeyes"]  # the first 4 kept, #oddeyes always in
+
+
 def test_a_second_miss_fails_loudly(clip):
     bad = {**GOOD, "hooks": ["only one"]}
     with pytest.raises(GeminiUnexpected, match="hooks must be 3 lines"):
@@ -157,7 +164,7 @@ def test_a_second_miss_fails_loudly(clip):
         ({"camera": "drone"}, "camera must be one of"),
         ({"hashtags": ["#fyp", "#butler", "#deadpan"]}, "may not include #fyp"),
         ({"hashtags": ["#butler"]}, "3-4 distinct tags"),
-        ({"hashtags": ["#a", "#b", "#c", "#d", "#oddeyes"]}, "3-4 distinct tags"),  # the series tag is the fifth, added at Make it
+        ({"hashtags": ["#a", "#b", "#c", "#d", "#e", "#oddeyes"]}, "3-4 distinct tags"),  # two over: only ONE too many is trimmed
         ({"first_comment": "two\nlines"}, "first_comment"),
         ({"suggested_part": "lead"}, "suggested_part"),
         ({"recommended": "reginald"}, "recommended must be an object"),
@@ -237,6 +244,20 @@ def test_gemini_is_asked_for_3_4_hashtags_because_the_series_tag_is_added_separa
     assert line.startswith(" 3-4:") and "series tag is added separately" in line and "#oddeyes" in line
     full = gemini.tidy_deconstruct({**GOOD, "hashtags": ["#a", "#b", "#c", "#d"]}, REGINALD)["hashtags"]
     assert full == ["#a", "#b", "#c", "#oddeyes"]  # four at most, #oddeyes always in
+
+
+def test_a_fifth_hashtag_is_trimmed_not_retried():
+    """Task 14 item 3: Gemini gave one tag over the 3-4 asked for. That is not a rule break worth a second request: the check passes
+    and the tidied answer keeps the first 4 (the series tag, added at Make it, is the fifth)."""
+    five = {**GOOD, "hashtags": ["#a", "#b", "#c", "#d", "#e"]}
+    assert deconstruct_problems(five, REGINALD) == []
+    assert gemini.tidy_deconstruct(five, REGINALD)["hashtags"] == ["#a", "#b", "#c", "#oddeyes"]
+    with_eyes = {**GOOD, "hashtags": ["#a", "#oddeyes", "#c", "#d", "#e"]}
+    assert gemini.tidy_deconstruct(with_eyes, REGINALD)["hashtags"] == ["#a", "#oddeyes", "#c", "#d"]
+    assert deconstruct_problems({**GOOD, "hashtags": ["#a", "#a", "#b", "#c", "#d", "#D"]}, REGINALD) == []  # four distinct tags
+    # a refused tag in the dropped fifth place costs nothing, one among the kept four still does
+    assert deconstruct_problems({**GOOD, "hashtags": ["#a", "#b", "#c", "#d", "#fyp"]}, REGINALD) == []
+    assert any("#fyp" in p for p in deconstruct_problems({**GOOD, "hashtags": ["#fyp", "#b", "#c", "#d", "#e"]}, REGINALD))
 
 
 def test_the_hook_patterns_and_the_question_are_asked_for_and_tidied(clip):
