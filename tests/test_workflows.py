@@ -456,10 +456,38 @@ def test_weekly_propose_commits_as_the_bot_on_a_branch_per_week_and_opens_the_pu
     step = weekly_step("Open the pull request")
     assert "GH_TOKEN: ${{ github.token }}" in step and "GH_REPO: ${{ github.repository }}" in step
     assert 'git config user.name "github-actions[bot]"' in step and "41898282+github-actions[bot]@users.noreply.github.com" in step
-    assert 'branch="weekly/$monday"' in step and 'git checkout -B "$branch"' in step and 'git push --force origin "$branch"' in step
+    assert 'branch="weekly/$monday"' in step and 'git checkout -B "$branch"' in step
     assert "cp -R weekly-out/. ." in step and "git add docs/weekly" in step
     assert 'gh pr create --base build/slice1 --head "$branch"' in step and '--body-file "docs/weekly/$monday.md"' in step
     assert "git push origin main" not in step and "--base main" not in step
+
+
+def test_weekly_propose_stages_only_the_playbooks_and_the_weekly_doc():
+    step = weekly_step("Open the pull request")
+    assert "git add docs/weekly" in step and "git add characters/*/playbook.md" in step
+    assert not re.search(r"git add (-A|--all|\.|characters)(\s|$)", step)  # nothing else the artifact might carry reaches the commit
+
+
+def test_weekly_propose_does_not_fail_on_a_rerun_with_nothing_new_to_commit():
+    step = weekly_step("Open the pull request")
+    assert 'git diff --cached --quiet || git commit -m "chore: weekly review $monday (playbooks and proposals)"' in step
+    assert not re.search(r"(?m)^\s*git commit ", step)  # a bare commit exits 1 when the files equal the base
+
+
+def test_weekly_propose_pushes_with_a_lease_after_a_fetch_not_a_blind_force():
+    step = weekly_step("Open the pull request")
+    assert 'git fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"' in step
+    assert 'git push --force-with-lease origin "$branch"' in step
+    assert "--force origin" not in step
+    assert step.index("git fetch origin") < step.index("git push --force-with-lease")
+
+
+def test_weekly_propose_updates_the_body_of_a_pull_request_that_is_already_open():
+    step = weekly_step("Open the pull request")
+    assert 'gh pr list --head "$branch"' in step and "--state open" in step
+    assert 'gh pr edit "$open_pr" --body-file "docs/weekly/$monday.md"' in step
+    assert step.index("gh pr edit") < step.index("gh pr create")  # an open one is edited, a missing one is created
+    assert "setting off or PR already open" in step.split("gh pr create", 1)[1]
 
 
 def test_weekly_a_refused_pull_request_prints_the_compare_link_and_the_job_still_passes():

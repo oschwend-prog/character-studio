@@ -13,8 +13,10 @@
 #    one review per live character, logs one `weekly` run (the terminal reads it) and, only when a playbook changed or a NEW proposal
 #    exists (a hit-rule or hook-arm proposal), writes the files of the proposal into `weekly-out/` (characters/<slug>/playbook.md and
 #    docs/weekly/<monday>.md). The files are uploaded as an artifact; the output `propose` says whether there are any.
-# 2. Job `propose` (only when `propose` is true): no secret, no database. It copies the files into a checkout of build/slice1, commits
-#    them on the branch `weekly/<monday>` as github-actions[bot], pushes it and opens a pull request with the digest as its body.
+# 2. Job `propose` (only when `propose` is true): no secret, no database. It copies the files into a checkout of build/slice1, stages
+#    only docs/weekly and characters/*/playbook.md, commits them on the branch `weekly/<monday>` as github-actions[bot] (no commit,
+#    and no failure, when the files equal the base: a rerun), fetches the branch and pushes it with --force-with-lease, then opens a pull
+#    request with the digest as its body, or, when one is already open for the branch, replaces its body (`gh pr edit`).
 #    Merging that PR is the owner's approval: the rules reach the check only through a merged file. If the repository setting "Allow
 #    GitHub Actions to create and approve pull requests" is off (it is today), `gh pr create` fails: the branch is pushed anyway and the
 #    step prints the compare link into the run's summary (the terminal's Today card links the same address) and passes.
@@ -123,12 +125,20 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "$branch"
           git add docs/weekly
-          if [ -d characters ]; then git add characters; fi
-          git commit -m "chore: weekly review $monday (playbooks and proposals)"
-          git push --force origin "$branch"
-          if gh pr create --base build/slice1 --head "$branch" --title "Weekly review $monday" --body-file "docs/weekly/$monday.md"; then
+          if compgen -G 'characters/*/playbook.md' > /dev/null; then git add characters/*/playbook.md; fi
+          git diff --cached --quiet || git commit -m "chore: weekly review $monday (playbooks and proposals)"
+          git fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch" || true
+          git push --force-with-lease origin "$branch"
+          open_pr="$(gh pr list --head "$branch" --base build/slice1 --state open --json number --jq '.[0].number // empty' || true)"
+          if [ -n "$open_pr" ]; then
+            if gh pr edit "$open_pr" --body-file "docs/weekly/$monday.md"; then
+              echo "pull request #$open_pr is open: its body is updated"
+            else
+              echo "::notice::pull request #$open_pr is open but its body could not be updated"
+            fi
+          elif gh pr create --base build/slice1 --head "$branch" --title "Weekly review $monday" --body-file "docs/weekly/$monday.md"; then
             echo "pull request opened for $branch"
           else
-            echo "::notice::gh pr create failed (the setting that lets Actions create pull requests is off?): open it by hand"
+            echo "::notice::gh pr create failed (setting off or PR already open? The setting is \"Allow GitHub Actions to create and approve pull requests\"): open it by hand"
             { echo "### Weekly review $monday"; echo; echo "The branch \`$branch\` is pushed. Open the pull request: $compare"; } >> "$GITHUB_STEP_SUMMARY"
           fi
