@@ -1,8 +1,60 @@
 """The weekly review in the cloud (learning plan ``docs/launch/measurement-and-learning-plan.md`` sections 3.2, 3.8, 4.1-4.3, 6.1 and build
 items 10-11): ``studio review weekly`` and ``studio learn score-test``. Deterministic code only, no Claude: the Monday cloud job
-(``.github/workflows/studio-weekly.yml``) runs it.
+(``.github/workflows/studio-weekly.yml``, 06:15 UTC) runs it, so the numbers, the digest, the reviews and the proposals no longer
+wait for the Mac. Sections 3 and 4.3 of the plan are frozen: every threshold below is a module constant with its test at the exact
+boundary, never a parameter or a config value.
 
-(This docstring grows with the module: see the sections below.)
+``studio review weekly [--week YYYY-MM-DD|2026-W42] [--out-dir PATH] [--dry-run]``
+    The week is Monday to Sunday, London; the default is the last finished week (the Monday run reviews the week that just ended).
+    Everything is read from the store; ``--dry-run`` prints the same JSON and writes nothing (not even the Instagram guard's cut).
+    Otherwise it (1) applies the binding Instagram guard (``review.review_payload``), (2) saves one ``reviews`` row per LIVE
+    character (``review.save_review``: the character's title line and his five lines, ``bar_status`` the code's bar), (3) writes the
+    proposal files under ``--out-dir`` (below) and (4) logs ONE ``weekly`` run (the path ``studio run log`` uses) whose ``summary`` is
+    the full digest text. Rerunning a week rewrites its reviews and logs another run. Exit 0 unless the database fails (2 for a
+    caller error: no ``DATABASE_URL``, a bad ``--week``, a broken test registry). A part with no data yet is a note (the run stays
+    ``ok``); a part that crashes is a note too, the digest still comes and the run is logged as ``error``.
+
+**The digest** (plan 6.1; the terminal's Today card shows it): a studio header of two lines (credits this month against the cap and
+the cost per 1K views; the warnings ``studio.health`` raises and the proposals waiting), then for every live character his title
+(``Reginald · week of 12 Oct · bar: not yet (9 of 20 posts, day 14 of 28)``) and five lines: 1 Result, 2 Audience, 3 Hook, 4 Tests,
+5 Next. A character with no post yet has the one line ``no posts yet``. Every number sits next to a comparison and its n; a
+number that does not exist yet is ``none yet`` with the reason, never 0. Figures are Instagram's (the reach channel); the 7-day
+``outlier_x`` of a post exists 7 days after it. Followers, follows, reach, skip rate and watch time reach the cloud only with
+Instagram's own API (plan Task 9) or the Mac's vidIQ ingest, so until then they read ``none yet``.
+
+``runs.details`` of the logged run (the terminal reads it)::
+
+    {"week": "2026-10-12",                      # the Monday of the week reviewed
+     "digest": {"header": [line1, line2],
+                "characters": [{"slug", "name", "bar", "bar_status", "title", "lines": [...5 strings, labelled "1 Result    ..."]}]},
+     "score_test": {"label", "n", "needed", "look", "rho", "rho_potential", "rho_swap", "buckets", "note"},   # test A
+     "floors": {"computed", "basis", "fixed_on": {metric: day|null}, "studio": {...}, "characters": {slug: {...}}},   # plan 3.8
+     "proposals": [{"kind": "hit_rule" | "arm_retire" | "playbook", ...its numbers and clip ids...}],
+     "proposal_url": "https://github.com/.../compare/build/slice1...weekly/<monday>?expand=1" | null,
+     "candidates": [...],                       # rule candidates waiting for their second look (4.3)
+     "arms": [...], "warnings": [...], "notes": [...], "playbooks": {slug: {"changed", "path", ...}}, "generated_at": iso}
+
+**Test A, the score test** (3.2; ``score_test``, ``studio learn score-test``): Spearman rho (average ranks, no dependency) of
+``score_total`` against the Instagram ``outlier_x`` of the posted drops, pooled over the characters and ordered by when the figure
+became available (post + 7 days). Interim look at the first 20 (rho >= 0.45 validated, rho <= 0 failed, else unproven), final look
+at the first 40 (rho >= 0.31 validated, else failed); no peeking (21..39 never recompute the interim); a decided interim ends the
+test; a middle 80 % of the scores under 15 points wide is ``uninformative``, never ``failed``.
+
+**The floors** (3.8; ``compute_floors``): from the Instagram posts of Mon 5 to Sun 18 Oct (London days) the median of sends per 1K
+(shares), follows per 1K and watched %, and his median skip rate as a ceiling; per character when he has 4 readings, else the
+studio-wide median; pending below 6 readings studio-wide ("no data in the cloud yet" when there is none at all). The first weekly run
+for a week that ends on or after Sun 18 Oct stores them in its ``details.floors``; every later run copies the fixed ones from the
+latest run that has them and only fills the pending ones, writing down the day (a fixed floor is never recomputed). They diagnose
+only: from Mon 19 Oct a post below two of them is named on the Hook line with what failed (hook, hold, sends, follows).
+
+**Proposals** (4.1, 4.3, 3.3): a rule candidate is a tag value that passes entry conditions 1-3 (5 clips on each side, a median at
+least 1.5x the others', a hit among the followers); the run after next week's posts have been added makes it ``ready`` if it still
+shows 1.2x. An arm is proposed for retirement after 10 tallied uses with 20 % wins or fewer and a median ``outlier_x`` of 0.7 or
+less (no rule exists for adding one). ``characters/<slug>/playbook.md`` is regenerated from the data (a rule needs 5 posts behind it,
+fewer goes under Watching; each rule keeps the day it entered). Under ``--out-dir`` the run writes the changed playbooks and
+``docs/weekly/<monday>.md`` (the digest and the proposals with their numbers and clip ids), only when a playbook changed or a NEW
+proposal exists, and sets ``proposal_url``; otherwise nothing is written and ``proposal_url`` is null. ``config/hit_rules.md`` is never
+edited by code: a ready rule is a proposal with its numbers, and the owner (or a Claude session) writes the rule text.
 """
 
 from __future__ import annotations
@@ -956,3 +1008,329 @@ def next_line(*, measured: int, lifts: Sequence[SideLift], needs: Sequence[str])
 def with_labels(lines: Sequence[str]) -> list[str]:
     """The five lines with their labels, as 6.1's example shows them (``1 Result    ...``)."""
     return [f"{label:<10}  {line}" for label, line in zip(LINE_LABELS, lines, strict=True)]
+
+
+# ---- the studio header (two lines) -------------------------------------------------------------------------------------------------------
+
+
+def _prev_month(month: str) -> str:
+    year, mon = (int(p) for p in month.split("-"))
+    return f"{year - 1:04d}-12" if mon == 1 else f"{year:04d}-{mon - 1:02d}"
+
+
+def month_cost(store: Store, month: str, facts: Mapping[str, Sequence[PostFact]]) -> dict[str, Any]:
+    """The month's real spend (settled credits), the views its posts have so far (their best reading; posts posted in the London
+    month) and the cost per 1K views, None while there are no views: the number is left out, never 0."""
+    spent = budget.spend(store, month)
+    posts = [f for fs in facts.values() for f in fs if f.posted_at.astimezone(LONDON).strftime("%Y-%m") == month and f.peak_views is not None]
+    views = sum(f.peak_views for f in posts if f.peak_views is not None)
+    return {
+        "month": month, "settled": spent.settled, "reserved": spent.reserved, "committed": spent.committed,
+        "views": views, "posts": len(posts), "per_1k": round(spent.settled / views * 1000, 2) if views > 0 else None,
+    }
+
+
+def studio_header(
+    store: Store, now: datetime, facts: Mapping[str, Sequence[PostFact]], warnings: Sequence[str], waiting: Mapping[str, int],
+) -> list[str]:
+    """The two lines above the characters: the credits this month against the cap and the cost per 1K views (against last month's),
+    then the warnings that fired (``studio.health``'s checks, only the ones that are not ok) and the proposals waiting."""
+    month = budget.month_key(now)
+    cap = store.get_settings().monthly_cap_credits
+    now_m, before = month_cost(store, month, facts), month_cost(store, _prev_month(month), facts)
+    pct = f"{now_m['committed'] * 100 / cap:.0f} %, " if cap > 0 else ""
+    credits = f"Credits {now_m['committed']:,} of {cap:,} this month ({pct}{now_m['reserved']:,} still reserved; last month {before['committed']:,})"
+    if now_m["per_1k"] is None:
+        cost = "cost per 1K views: none yet (no views read this month)"
+    else:
+        last = f"{before['per_1k']:.1f}" if before["per_1k"] is not None else "none yet"
+        cost = f"cost per 1K views {now_m['per_1k']:.1f} credits (n {now_m['views']:,} views from {_s(now_m['posts'], 'post')}; last month {last})"
+    shown = [w if len(w) <= 110 else w[:109] + "…" for w in warnings[:2]]
+    more = f" +{len(warnings) - 2} more" if len(warnings) > 2 else ""
+    flagged = f"{len(warnings)} ({'; '.join(shown)}{more})" if warnings else "none"
+    queue = ", ".join(f"{n} {name}" for name, n in waiting.items() if n) or "none"
+    return [f"{credits} · {cost}", f"Warnings: {flagged} · Proposals waiting: {queue}"]
+
+
+# ---- the weekly document (the PR) ------------------------------------------------------------------------------------------------------
+
+
+def proposal_url(monday: date) -> str:
+    return f"{PROPOSAL_REPO}/compare/{PROPOSAL_BASE}...weekly/{monday.isoformat()}?expand=1"
+
+
+def render_week_doc(
+    window: WeekWindow, header: Sequence[str], blocks: Sequence[Mapping[str, Any]], proposals: Sequence[Mapping[str, Any]],
+    score: Mapping[str, Any], floors: Mapping[str, Any], standings: Sequence[Mapping[str, Any]],
+) -> str:
+    """``docs/weekly/<monday>.md`` and the PR's body: the digest, then every proposal with its numbers and clip ids. Nothing in it
+    changes a rule by itself: merging the PR is the owner's approval, and ``config/hit_rules.md`` is only ever edited by a person."""
+    out = [f"# Weekly review: {window.label()}", "", "```text", *header, ""]
+    for block in blocks:
+        out += [block["title"], *block["lines"], ""]
+    out[-1:] = ["```", "", "## Proposals", ""]
+    rules = [p for p in proposals if p["kind"] == "hit_rule"]
+    arms = [p for p in proposals if p["kind"] == "arm_retire"]
+    plays = [p for p in proposals if p["kind"] == "playbook"]
+    if not (rules or arms or plays):
+        out += ["Nothing to decide this week.", ""]
+    if rules:
+        out += ["### Hit rules (`config/hit_rules.md`)", "", "A rule here passed all four entry conditions of plan 4.3. The rule text is yours to write; nothing edits the file.", ""]
+        for r in rules:
+            again = " (proposed last week too)" if r.get("repeat") else ""
+            out += [
+                f"- `{r['label']}`{again}: median outlier_x {r['median']} against {r['median_others']} for the others, lift {r['lift']}, "
+                f"n {r['n']} v {r['n_others']}, {_s(r['hits'], 'hit')} among the {r['n']}; first seen the week of {r['since_week']}.",
+                f"  - clips: {', '.join(r['clip_ids'])}",
+            ]
+        out.append("")
+    if arms:
+        out += ["### Hook arms (`config/experiments.json`, test B)", "", "Plan 3.3 retires an arm after 10 tallied uses with 20 % wins or fewer and a median outlier_x of 0.7 or less.", ""]
+        out += [
+            f"- retire `{a['arm']}` for {a['character']}: {a['wins']} wins in {a['uses']} uses ({a['win_rate'] * 100:.0f} %), median outlier_x {a['median_outlier_x']} over {a['n_outlier']} clips."
+            for a in arms
+        ]
+        out.append("")
+    if plays:
+        out += ["### Playbooks", ""] + [f"- `{p['path']}`: regenerated from the data ({p['rules']} rules)." for p in plays] + [""]
+    out += ["## The tests and the floors", "", f"- Score test (test A): {score['label']}. {score['note']}"]
+    if floors.get("computed"):
+        pending = [m for m, e in floors["studio"].items() if e["status"] == "pending"]
+        out.append(
+            "- Floors (plan 3.8): " + ("all four fixed." if not pending else f"pending: {', '.join(pending)}; fixed: "
+            + (", ".join(f"{m} {e['value']:.1f} (n {e['n']})" for m, e in floors['studio'].items() if e['status'] == 'fixed') or "none") + ".")
+        )
+    else:
+        out.append(f"- Floors (plan 3.8): {floors.get('reason', 'not set yet')}")
+    for row in standings:
+        arms_text = ", ".join(f"{a['pattern']} {a['wins']}-{a['losses']}" for a in row["arms"])
+        out.append(f"- Hook arms of {row['character']} (wins-losses, {row['tallied']} tallied): {arms_text}.")
+    return "\n".join(out).rstrip() + "\n"
+
+
+# ---- the run ---------------------------------------------------------------------------------------------------------------------------
+
+
+def _norm(text: str) -> str:
+    return text.replace("\r\n", "\n").rstrip("\n") + "\n"
+
+
+def _median_or_none(values: Sequence[float]) -> float | None:
+    return statistics.median(values) if values else None
+
+
+def _snapshots_of(store: Store, account_id: str) -> list[Snapshot]:
+    return [s for p in store.list_posts(account_id=account_id) for s in store.snapshots_for(p.id) if s.captured_at is not None]
+
+
+def _window_values(snaps: Sequence[Snapshot], field: str, end: datetime) -> list[float]:
+    """The ``field`` of the snapshots captured in the 7 days up to ``end`` (as ``studio review data`` reads them), None left out."""
+    return [float(v) for s in snaps if end - WEEK_LEN < s.captured_at <= end and (v := getattr(s, field)) is not None]  # type: ignore[operator]
+
+
+def _weekly_runs(store: Store) -> list[Run]:
+    runs = [r for r in store.list_runs(kind=RunKind.weekly) if isinstance(r.details, dict) and isinstance(r.details.get("week"), str)]
+    return sorted(runs, key=lambda r: (r.started_at or datetime.min.replace(tzinfo=LONDON), r.id or ""))
+
+
+def run_weekly(
+    store: Store, now: datetime, *, monday: date | None = None, out_dir: Path | None = None, dry_run: bool = False,
+    repo_root: Path | None = None, registry: experiments.Registry | None = None,
+) -> dict[str, Any]:
+    """The Monday review (module doc). Reads everything, builds the digest, the score test, the floors, the proposals and the
+    playbooks, and (unless ``dry_run``) applies the Instagram guard, saves one review per live character, writes the PR files under
+    ``out_dir`` and logs one ``weekly`` run. Returns the JSON the command prints. A part that crashes is a note, the run is then
+    logged as ``error``; a part with no data is a note and the run stays ``ok``."""
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError(f"now must be timezone-aware (never naive), got {now!r}")
+    monday = monday or default_week(now)
+    window = week_window(monday)
+    registry = registry or experiments.load_experiments()
+    root = repo_root or experiments.ROOT
+    today = now.astimezone(LONDON).date()
+    notes: list[str] = []
+    failures: list[str] = []
+
+    def part(name: str, fn: Any, default: Any) -> Any:
+        try:
+            return fn()
+        except Exception as e:  # noqa: BLE001  one broken part must not cost the owner the whole digest
+            failures.append(f"{name} failed: {type(e).__name__}: {e}")
+            return default
+
+    payload = review.review_payload(store, now, apply_guard=not dry_run)
+    characters = {c.slug: c for c in store.characters()}
+    live = _ordered(slug for slug, c in characters.items() if c.status == "live")
+    facts = post_facts(store)
+    clips = [c for c in store.list_clips() if c.state is ClipState.posted or review.clip_outlier_x(c) is not None]
+    measured_total = sum(1 for c in clips if review.clip_outlier_x(c) is not None)
+    runs = _weekly_runs(store)
+    earlier = [r for r in runs if r.details["week"] < monday.isoformat()]
+
+    # test A
+    observations = part("score test: observations", lambda: score_observations(store), [])
+    score = part(
+        "score test", lambda: score_test(observations),
+        {"label": "unproven", "n": 0, "needed": SCORE_INTERIM_N, "look": None, "rho": None, "rho_potential": None, "rho_swap": None, "buckets": [],
+         "note": "The score test could not be computed: see the notes."},
+    )
+    scored_by = {c.id: c.character_slug for c in clips}
+
+    # the floors (frozen once fixed)
+    earlier_floors = next((r.details["floors"] for r in reversed(runs) if isinstance(r.details.get("floors"), dict) and r.details["floors"].get("computed")), None)
+
+    def make_floors() -> dict[str, Any]:
+        if earlier_floors is None and not floors_due(monday):
+            return {"computed": False, "reason": f"set after Sun {FLOORS_TO.day} Oct, by the first review of a week that ends then or later"}
+        return compute_floors(floor_readings(store), live, today=today, previous=earlier_floors)
+
+    floors = part("floors", make_floors, {"computed": False, "reason": "failed, see notes"})
+    pending = [m for m, e in floors.get("studio", {}).items() if e["status"] == "pending"]
+    if floors.get("computed") and pending:
+        notes.append("floors pending: " + "; ".join(f"{m} ({floors['studio'][m]['reason']})" for m in pending))
+
+    # rule candidates (4.3), arms (3.3)
+    previous_candidates = next((r.details["candidates"] for r in reversed(earlier) if isinstance(r.details.get("candidates"), list)), [])
+    candidates, ready = part(
+        "rule candidates", lambda: update_candidates(previous_candidates, side_lifts(clips, min_n=1), measured=measured_total, week=monday), ([], [])
+    )
+    arm_report = part("hook arms", lambda: learn.arms_report(store, registry, now), {"characters": []})
+    min_uses = int(registry.test("B").params.get("min_n", {}).get("tallied_per_arm", 6))
+    standings = part("hook arm standings", lambda: arm_standings(arm_report, arm_outliers(store, registry), min_uses=min_uses), [])
+    retire = retire_proposals(standings)
+    earlier_proposals = next((r.details["proposals"] for r in reversed(earlier) if isinstance(r.details.get("proposals"), list)), [])
+    already = {(p.get("kind"), p.get("character"), p.get("arm")) for p in earlier_proposals if isinstance(p, dict)}
+    proposals: list[dict[str, Any]] = [{"kind": "hit_rule", **r} for r in ready]
+    proposals += [{**a, "repeat": ("arm_retire", a["character"], a["arm"]) in already} for a in retire]
+
+    # the playbooks
+    playbooks: dict[str, dict[str, Any]] = {}
+    texts: dict[str, str] = {}
+    for slug in live:
+
+        def make_playbook(slug: str = slug) -> None:
+            his = [c for c in clips if c.character_slug == slug]
+            rules, watching = playbook_items(his)
+            path = root / "characters" / slug / "playbook.md"
+            old = path.read_text(encoding="utf-8") if path.exists() else None
+            text = render_playbook(characters[slug].name, rules, watching, read_since(old), today)
+            changed = (old is None and bool(rules or watching)) or (old is not None and _norm(old) != _norm(text))
+            playbooks[slug] = {"changed": changed, "path": f"characters/{slug}/playbook.md", "rules": len(rules), "watching": len(watching)}
+            if changed:
+                texts[slug] = text
+                proposals.append({"kind": "playbook", "character": slug, "path": f"characters/{slug}/playbook.md", "rules": len(rules)})
+
+        part(f"playbook of {slug}", make_playbook, None)
+
+    # the digest
+    rows = {r["character"]: r for r in standings}
+    blocks: list[dict[str, Any]] = []
+    for slug in live:
+        name = characters[slug].name
+        ev = review.character_evidence(store, slug, now)
+        title = f"{name} · {window.label()} · bar: {bar_text(ev)}"
+        his_facts = facts.get(slug, [])
+        base = {"slug": slug, "name": name, "bar": bar_text(ev), "bar_status": ev.bar, "title": title}
+        if not his_facts:
+            blocks.append({**base, "lines": ["no posts yet"]})
+            continue
+        his_clips = [c for c in clips if c.character_slug == slug]
+        account = next((a for a in store.accounts(slug) if a.platform.value == INSTAGRAM), None)
+        snaps = _snapshots_of(store, account.id) if account else []
+        guard = next((g for g in payload["ig_guard"] if account and g["account_id"] == account.id), None)
+        mine = [f for f in his_facts if window.start <= f.posted_at < window.end]
+        follows = [f.metrics["follows_per_1k"] for f in mine if f.platform == INSTAGRAM and f.metrics and "follows_per_1k" in f.metrics]
+        char_floors = floors.get("characters", {}).get(slug, {}) if floors.get("computed") else {}
+        skip_values = _window_values(snaps, "skip_rate", now)
+        reach_values = _window_values(snaps, "non_follower_pct", now)
+        flagged_posts = []
+        for f in mine:
+            if f.platform == INSTAGRAM and f.posted_at.astimezone(LONDON).date() >= FLOORS_APPLY_FROM and char_floors:
+                failed = floor_failures(dict(f.metrics or {}), char_floors)
+                if flagged(failed):
+                    flagged_posts.append((_quote(f.hook, "a clip without a hook"), failed))
+        needs = []
+        if ev.bar in ("promote", "kill"):
+            needs.append(f"the bar says {ev.bar.upper()}: your call")
+        if guard and (guard.get("applied") or guard.get("fires")):
+            needs.append(f"the guard {'cut' if guard.get('applied') else 'fired on'} {guard['handle']}: look at why reach fell")
+        if playbooks.get(slug, {}).get("changed"):
+            needs.append("merge the playbook PR")
+        needs += [f"retire hook arm {a['arm']}? (merge or leave it)" for a in retire if a["character"] == slug]
+        lines = [
+            result_line(window, his_facts),
+            audience_line(
+                follows=_median_or_none(follows), follows_n=len(follows), follows_floor=char_floors.get("follows_per_1k"),
+                reach=guard["non_follower_pct_this_week"] if guard else None,
+                reach_prev=guard["non_follower_pct_previous_week"] if guard else None, reach_n=len(reach_values), guard=guard,
+            ),
+            hook_line(
+                skip=_median_or_none(skip_values), skip_n=len(skip_values), ceiling=char_floors.get("skip_rate"), row=rows.get(slug),
+                flagged_posts=flagged_posts,
+            ),
+            tests_line(slug, registry, score, sum(1 for o in observations if scored_by.get(o.clip_id) == slug), rows.get(slug), his_clips),
+            next_line(measured=sum(1 for c in his_clips if review.clip_outlier_x(c) is not None), lifts=side_lifts(his_clips), needs=needs),
+        ]
+        blocks.append({**base, "lines": with_labels(lines)})
+
+    waiting = {
+        "hit rule": sum(1 for p in proposals if p["kind"] == "hit_rule"),
+        "arm": sum(1 for p in proposals if p["kind"] == "arm_retire"),
+        "playbook": sum(1 for p in proposals if p["kind"] == "playbook"),
+    }
+    warnings = health.check(store, now)
+    header = studio_header(store, now, facts, warnings, waiting)
+    summary = "\n".join(header) + "\n\n" + "\n\n".join("\n".join([b["title"], *b["lines"]]) for b in blocks)
+
+    # the files for the proposal job
+    new_work = any(p["kind"] in ("hit_rule", "arm_retire") and not p.get("repeat") for p in proposals) or any(p["changed"] for p in playbooks.values())
+    files: dict[str, str] = {}
+    if new_work:
+        files = {f"characters/{slug}/playbook.md": text for slug, text in texts.items()}
+        files[f"docs/weekly/{monday.isoformat()}.md"] = render_week_doc(window, header, blocks, proposals, score, floors, standings)
+    url = proposal_url(monday) if files and (out_dir is not None or dry_run) else None
+
+    if score["n"] < SCORE_INTERIM_N:
+        notes.append(f"score test: {score['n']} of {SCORE_INTERIM_N} observations, no look yet")
+    notes += failures
+    details: dict[str, Any] = {
+        "week": monday.isoformat(),
+        "digest": {"header": header, "characters": [{k: b[k] for k in ("slug", "name", "bar", "bar_status", "title", "lines")} for b in blocks]},
+        "score_test": score, "floors": floors, "proposals": proposals, "proposal_url": url,
+        "candidates": candidates, "arms": standings, "warnings": warnings, "notes": notes, "playbooks": playbooks,
+        "generated_at": now.isoformat(),
+    }
+    health.validate_details(details)
+    status = RunStatus.error if failures else RunStatus.ok
+    result: dict[str, Any] = {**details, "summary": summary, "status": status.value, "dry_run": dry_run, "run_id": None, "reviews_saved": [], "files": []}
+    if dry_run:
+        result["would_write"] = sorted(files)
+        return result
+
+    for block in blocks:
+        report = "\n".join([block["title"], *block["lines"]])
+        review.save_review(store, monday, block["slug"], report, block["bar_status"])
+        result["reviews_saved"].append(block["slug"])
+    if out_dir is not None:
+        for rel, text in files.items():
+            target = out_dir / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8")
+        result["files"] = sorted(files)
+    result["run_id"] = store.add_run(Run(kind=RunKind.weekly, status=status, started_at=now, finished_at=now, summary=summary, details=details)).id
+    return result
+
+
+def weekly_command(
+    week: Annotated[str | None, typer.Option(help="The week to review: an ISO week like 2026-W42 or any YYYY-MM-DD in it (default: the last finished week).")] = None,
+    out_dir: Annotated[Path | None, typer.Option("--out-dir", help="Write the proposal files (playbooks, docs/weekly/<monday>.md) here, mirroring the repo's paths.")] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print the digest and the JSON; write nothing (no guard cut, no review, no run, no file).")] = False,
+) -> None:
+    """The weekly review (the Monday cloud job): the digest, the score test, the floors and the proposals; saves one review per live
+    character and logs one run. Rerunning the same week rewrites its reviews and logs another run. Prints the run's JSON."""
+    try:
+        monday = review.parse_week(week) if week else None
+        result = run_weekly(open_store(), now_london(), monday=monday, out_dir=out_dir, dry_run=dry_run)
+    except ValueError as e:
+        fail(str(e))
+    emit(result)

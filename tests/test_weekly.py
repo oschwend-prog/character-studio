@@ -959,3 +959,380 @@ def test_the_bar_phrase_matches_the_plans_example():
     assert weekly.bar_text(ev) == "not yet (9 of 20 posts, day 14 of 28)"
     assert weekly.bar_text(CharacterEvidence(slug="x", bar="continue", posts=22, first_post_at=MON, age=timedelta(days=31), mature_posts={}, median_views_7d={}, max_views=None)) == "continue (22 posts, day 31)"
     assert weekly.bar_text(CharacterEvidence(slug="x", bar="not_yet", posts=0, first_post_at=None, age=None, mature_posts={}, median_views_7d={}, max_views=None)) == "not yet (0 of 20 posts, day 0 of 28)"
+
+
+# ---- the whole run on a small studio ---------------------------------------------------------------------------------------------------
+
+NOW = datetime(2026, 10, 19, 6, 15, tzinfo=LONDON)  # the first Monday run: it reviews 12-18 Oct and sets the floors
+MONDAY = date(2026, 10, 12)
+
+
+def metrics(i: int) -> dict[str, Any]:
+    """Readings of a post taken a week after it went out."""
+    return {"views": 1000, "shares": 10 + i, "follows": i, "watched_pct": 40.0 + i, "skip_rate": 50.0 - i}
+
+
+def first_weeks() -> World:
+    """Franz posted 10 times between 5 and 16 Oct (the first five have 7-day figures by now), Reginald 3 times, Lenny not yet."""
+    w = World()
+    days = [datetime(2026, 10, d, 19, 0, tzinfo=LONDON) for d in (5, 6, 7, 8, 9, 12, 13, 14, 15, 16)]
+    v7 = [100, 100, 100, 300, 50, None, None, None, None, None]
+    for i, (at, v) in enumerate(zip(days, v7, strict=True)):
+        w.post("franz", at, v7=v, hook=f"Franz hook {i}", snaps=[metrics(i)], features={"setting": "kitchen" if i % 2 else "garden"})
+    for i in range(3):
+        w.post("reginald", datetime(2026, 10, 13 + i, 19, 30, tzinfo=LONDON), v72=500 + i, hook=f"Reg hook {i}", snaps=[metrics(20 + i)])
+    return w
+
+
+def run(w: World, tmp_path: Path, **kw: Any) -> dict[str, Any]:
+    kw.setdefault("out_dir", tmp_path / "out")
+    kw.setdefault("repo_root", tmp_path / "repo")
+    return weekly.run_weekly(w.store, kw.pop("now", NOW), **kw)
+
+
+def test_the_first_monday_run_builds_the_digest_saves_the_reviews_and_logs_one_run(tmp_path):
+    w = first_weeks()
+    out = run(w, tmp_path)
+    assert out["week"] == "2026-10-12" and out["status"] == "ok" and out["dry_run"] is False
+    header = out["digest"]["header"]
+    assert len(header) == 2 and header[0].startswith("Credits 0 of 6,000 this month") and header[1].startswith("Warnings: none · Proposals waiting: ")
+    assert [c["slug"] for c in out["digest"]["characters"]] == ["franz", "reginald", "lenny"]  # the owner's order
+    franz, reginald, lenny = out["digest"]["characters"]
+    assert franz["bar"] == "not yet (10 of 20 posts, day 13 of 28)" and franz["bar_status"] == "not_yet"
+    assert franz["title"] == "Franz · week of 12 Oct · bar: not yet (10 of 20 posts, day 13 of 28)"
+    assert [ln.split("  ")[0].strip() for ln in franz["lines"]] == ["1 Result", "2 Audience", "3 Hook", "4 Tests", "5 Next"]
+    assert lenny["lines"] == ["no posts yet"] and lenny["bar_status"] == "not_yet"
+    assert "too few to call" in franz["lines"][4] and "needs you:" in franz["lines"][4]
+    # reviews: one per live character for the Monday of the week, with the code's bar
+    reviews = {r.character_slug: r for r in w.store.list_reviews()}
+    assert set(reviews) == {"franz", "reginald", "lenny"} and all(r.week == MONDAY and r.bar_status == "not_yet" for r in reviews.values())
+    assert reviews["franz"].report_md.startswith(franz["title"] + "\n1 Result") and reviews["lenny"].report_md == lenny["title"] + "\nno posts yet"
+    # one run, kind weekly, status ok, the digest as its summary and the structured details the terminal reads
+    (run_row,) = w.store.list_runs(kind="weekly")
+    assert run_row.status.value == "ok" and run_row.summary == out["summary"] and run_row.id == out["run_id"]
+    d = run_row.details
+    assert {"week", "digest", "score_test", "floors", "proposals", "proposal_url"} <= set(d)
+    assert d["week"] == "2026-10-12" and d["digest"]["header"] == header and d["score_test"]["label"] == "unproven"
+    json.dumps(d)  # strict JSON: nothing the database could not store
+    assert out["summary"].startswith(header[0]) and franz["title"] in out["summary"]
+
+
+def test_the_baseline_week_sets_the_floors_on_the_first_run_and_pending_ones_say_why(tmp_path):
+    out = run(first_weeks(), tmp_path)
+    f = out["floors"]
+    assert f["computed"] is True and f["basis"]["from"] == "2026-10-05" and f["basis"]["to"] == "2026-10-18"
+    sends = f["studio"]["sends_per_1k"]
+    assert sends["status"] == "fixed" and sends["n"] == 13 and f["fixed_on"]["sends_per_1k"] == "2026-10-19"  # 10 + 3 readings
+    assert f["characters"]["franz"]["sends_per_1k"]["basis"] == "character" and f["characters"]["lenny"]["sends_per_1k"]["basis"] == "studio"
+    assert f["characters"]["franz"]["skip_rate"]["kind"] == "ceiling"
+    assert any(n.startswith("score test: 0 of 20") for n in out["notes"])
+
+
+def test_floors_with_no_data_yet_are_pending_with_the_reason(tmp_path):
+    w = World()
+    w.post("franz", datetime(2026, 10, 13, 19, 0, tzinfo=LONDON), v72=100)
+    out = run(w, tmp_path)
+    for metric, _ in weekly.FLOOR_METRICS:
+        assert out["floors"]["studio"][metric] == {"kind": out["floors"]["studio"][metric]["kind"], "status": "pending", "n": 0, "needed": 6, "reason": "no data in the cloud yet"}
+    assert any(n.startswith("floors pending:") and "no data in the cloud yet" in n for n in out["notes"])
+    assert out["status"] == "ok"  # a part with no data is a note, not an error
+
+
+def test_a_week_that_ends_before_the_baseline_is_over_sets_no_floors(tmp_path):
+    out = run(first_weeks(), tmp_path, monday=date(2026, 10, 5), now=datetime(2026, 10, 12, 6, 15, tzinfo=LONDON))
+    assert out["floors"]["computed"] is False and "18 Oct" in out["floors"]["reason"]
+
+
+def test_later_runs_copy_the_fixed_floors_and_never_recompute_them(tmp_path):
+    w = first_weeks()
+    first = run(w, tmp_path)
+    # a lot of new readings arrive: a recount would change every median
+    for i in range(6):
+        w.post("franz", datetime(2026, 10, 20 + i % 3, 19, 0, tzinfo=LONDON), snaps=[{"views": 1000, "shares": 900, "follows": 90, "watched_pct": 99.0, "skip_rate": 5.0}])
+    w.post("franz", datetime(2026, 10, 12, 20, 0, tzinfo=LONDON), snaps=[{"views": 1000, "shares": 999}])  # even a late baseline post
+    second = run(w, tmp_path, monday=date(2026, 10, 19), now=datetime(2026, 10, 26, 6, 15, tzinfo=LONDON))
+    assert second["floors"]["studio"] == first["floors"]["studio"] and second["floors"]["characters"] == first["floors"]["characters"]
+    assert second["floors"]["fixed_on"] == first["floors"]["fixed_on"]
+
+
+def test_a_floor_that_was_pending_is_filled_by_a_later_run_with_the_date_written_down(tmp_path):
+    w = World()
+    for i in range(3):
+        w.post("franz", datetime(2026, 10, 13 + i, 19, 0, tzinfo=LONDON), snaps=[{"views": 1000, "shares": 10 + i}])
+    first = run(w, tmp_path)
+    assert first["floors"]["studio"]["sends_per_1k"]["status"] == "pending" and first["floors"]["fixed_on"]["sends_per_1k"] is None
+    for i in range(3):
+        w.post("franz", datetime(2026, 10, 16 + i, 19, 0, tzinfo=LONDON), snaps=[{"views": 1000, "shares": 20 + i}])
+    second = run(w, tmp_path, monday=date(2026, 10, 19), now=datetime(2026, 10, 26, 6, 15, tzinfo=LONDON))
+    assert second["floors"]["studio"]["sends_per_1k"]["status"] == "fixed" and second["floors"]["fixed_on"]["sends_per_1k"] == "2026-10-26"
+
+
+def test_rerunning_the_same_week_rewrites_its_reviews_and_logs_another_run(tmp_path):
+    w = first_weeks()
+    run(w, tmp_path)
+    run(w, tmp_path)
+    assert len(w.store.list_reviews()) == 3  # rewritten, not duplicated
+    assert len(w.store.list_runs(kind="weekly")) == 2
+
+
+def test_a_dry_run_prints_everything_and_writes_nothing(tmp_path):
+    w = first_weeks()
+    # an Instagram guard that would fire: reach fell by more than 40 % in a week
+    acct = w.account("franz")
+    p = w.store.list_posts(account_id=acct.id)[0]
+    w.store.add_snapshot(Snapshot(post_id=p.id, captured_at=NOW - 10 * D, views=10, non_follower_pct=90.0))
+    w.store.add_snapshot(Snapshot(post_id=p.id, captured_at=NOW - 2 * D, views=10, non_follower_pct=40.0))
+    out = run(w, tmp_path, dry_run=True)
+    assert out["dry_run"] is True and out["run_id"] is None and out["reviews_saved"] == [] and out["files"] == []
+    assert w.store.list_reviews() == [] and w.store.list_runs() == []
+    assert w.store.accounts("franz")[0].dropin_share != 0.20  # the binding guard is not applied by a dry run
+    assert "would cut franz.ig to 0.20" in out["digest"]["characters"][0]["lines"][1]
+    assert not (tmp_path / "out").exists()
+    real = run(w, tmp_path)
+    assert w.store.accounts("franz")[0].dropin_share == 0.20 and "guard: cut franz.ig to 0.20" in real["digest"]["characters"][0]["lines"][1]
+    assert "needs you: the guard cut franz.ig" in real["digest"]["characters"][0]["lines"][4]
+
+
+def test_the_audience_line_reads_the_weeks_reach_and_follows_and_the_hook_line_the_skip_rate(tmp_path):
+    w = first_weeks()
+    acct = w.account("franz")
+    p = w.store.list_posts(account_id=acct.id)[0]
+    for days, pct in ((10, 95.0), (3, 97.0), (2, 99.0)):
+        w.store.add_snapshot(Snapshot(post_id=p.id, captured_at=NOW - days * D, views=10, non_follower_pct=pct, skip_rate=41.0))
+    out = run(w, tmp_path)
+    lines = out["digest"]["characters"][0]["lines"]
+    assert "non-follower reach 98 % (last week 95 %; n 2)" in lines[1] and "guard: no change" in lines[1]
+    assert "followers: none yet" in lines[1] and "follows per 1K " in lines[1]
+    # the week's skip readings: the five baseline posts' of 13-17 Oct (50 .. 46) and the two added ones (41): median 47, n 7
+    assert "skip rate 47 % (ceiling " in lines[2] and "; n 7)" in lines[2]
+
+
+def test_the_credits_and_the_cost_per_1k_views_are_in_the_header(tmp_path):
+    from studio.models import LedgerEntry
+
+    w = first_weeks()
+    clip = w.store.list_clips()[0]
+    w.store.ledger_add(LedgerEntry(clip_id=clip.id, month="2026-10", kind="settle", credits=91))
+    out = run(w, tmp_path)
+    line = out["digest"]["header"][0]
+    assert line.startswith("Credits 91 of 6,000 this month (2 %, 0 still reserved; last month 0)")
+    assert "cost per 1K views" in line and "credits (n " in line and "last month none yet)" in line
+
+
+def test_a_warning_that_fired_is_in_the_header(tmp_path):
+    w = first_weeks()
+    post = w.store.list_posts()[0]
+    w.store.update_post(post.id, status="failed", error="Postiz said no")
+    out = run(w, tmp_path)
+    assert out["digest"]["header"][1].startswith("Warnings: 1 (post ") and "is failed" in out["digest"]["header"][1]
+    assert len(out["warnings"]) == 1 and out["warnings"][0] in out["digest"]["header"][1]
+
+
+def test_a_part_that_crashes_is_a_note_the_digest_still_comes_and_the_run_is_logged_as_an_error(tmp_path, monkeypatch):
+    w = first_weeks()
+
+    def boom(_):
+        raise RuntimeError("no way")
+
+    monkeypatch.setattr(weekly, "score_test", boom)
+    out = run(w, tmp_path)
+    assert out["status"] == "error" and any(n.startswith("score test failed: RuntimeError: no way") for n in out["notes"])
+    assert len(out["digest"]["characters"]) == 3 and w.store.list_runs(kind="weekly")[0].status.value == "error"
+    assert w.store.list_runs(kind="weekly")[0].details["score_test"]["label"] == "unproven"  # the empty test, not a crash
+
+
+def test_only_live_characters_are_reviewed(tmp_path):
+    w = first_weeks()
+    w.store.upsert_character(Character(slug="biscuit", name="Biscuit", status="paused"))
+    w.store.upsert_character(Character(slug="reginald", name="Reginald", status="designing"))
+    out = run(w, tmp_path)
+    assert [c["slug"] for c in out["digest"]["characters"]] == ["franz", "lenny"]
+
+
+# ---- the proposals, the playbooks and the files for the proposal job -------------------------------------------------------------------
+
+
+def measured_world() -> World:
+    """Franz with 10 measured clips split between two settings: kitchen (5, median 3.5, hits) against garden (5, median 1.0)."""
+    w = World()
+    for i in range(10):
+        kitchen = i < 5
+        w.post(
+            "franz", datetime(2026, 9, 29, 19, 0, tzinfo=LONDON) + i * D, hook=f"hook {i}",
+            features={"setting": "kitchen" if kitchen else "garden", "outlier_x": 3.5 if kitchen else 1.0, "hook_pattern": "none", "format_id": "swap_trend"},
+        )
+    return w
+
+
+WEEK2_NOW = datetime(2026, 10, 26, 6, 15, tzinfo=LONDON)
+
+
+def test_a_rule_candidate_waits_a_week_and_becomes_a_proposal_when_the_next_weeks_posts_still_show_it(tmp_path):
+    w = measured_world()
+    first = run(w, tmp_path)
+    assert [c["status"] for c in first["candidates"]] == ["candidate"] and first["candidates"][0]["feature"] == "setting"
+    assert [p for p in first["proposals"] if p["kind"] == "hit_rule"] == []
+    # next week: two more kitchen posts and one garden post
+    for i, (setting, x) in enumerate([("kitchen", 3.0), ("kitchen", 3.0), ("garden", 1.0)]):
+        w.post("franz", datetime(2026, 10, 13 + i, 19, 0, tzinfo=LONDON), features={"setting": setting, "outlier_x": x, "hook_pattern": "none", "format_id": "swap_trend"})
+    second = run(w, tmp_path, monday=date(2026, 10, 19), now=WEEK2_NOW)
+    (rule,) = [p for p in second["proposals"] if p["kind"] == "hit_rule"]
+    assert rule["feature"] == "setting" and rule["value"] == "kitchen" and rule["status"] == "ready" and rule["repeat"] is False
+    assert (rule["n"], rule["n_others"], rule["hits"]) == (7, 6, 7) and len(rule["clip_ids"]) == 7 and rule["since_week"] == "2026-10-12"
+    assert second["digest"]["header"][1].endswith("Proposals waiting: 1 hit rule, 1 playbook")
+    assert "docs/weekly/2026-10-19.md" in second["files"]
+    assert second["proposal_url"] == "https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-19?expand=1"
+
+
+def test_rerunning_the_same_week_is_not_a_second_look(tmp_path):
+    w = measured_world()
+    run(w, tmp_path)
+    again = run(w, tmp_path)  # the same data, the same week
+    assert [p for p in again["proposals"] if p["kind"] == "hit_rule"] == []
+    later = run(w, tmp_path, monday=date(2026, 10, 19), now=WEEK2_NOW)  # a week later with no new posts: still no new data to look at
+    assert [p for p in later["proposals"] if p["kind"] == "hit_rule"] == [] and [c["status"] for c in later["candidates"]] == ["candidate"]
+
+
+def test_the_proposal_files_are_the_changed_playbooks_and_the_weekly_doc_and_nothing_when_nothing_changed(tmp_path):
+    w = measured_world()
+    out = tmp_path / "out"
+    first = run(w, tmp_path)
+    assert "characters/franz/playbook.md" in first["files"] and f"docs/weekly/2026-10-12.md" in first["files"]
+    playbook = (out / "characters/franz/playbook.md").read_text(encoding="utf-8")
+    assert playbook.startswith("# Franz: playbook\n") and "Works: `setting` = `kitchen`" in playbook and "since 2026-10-19" in playbook
+    assert not (out / "characters/reginald").exists() and not (out / "characters/lenny").exists()  # nothing to say: no file
+    doc = (out / "docs/weekly/2026-10-12.md").read_text(encoding="utf-8")
+    assert doc.startswith("# Weekly review: week of 12 Oct\n") and "Franz · week of 12 Oct" in doc and "## Proposals" in doc
+    assert first["proposal_url"] and first["proposal_url"].endswith("weekly/2026-10-12?expand=1")
+    # the owner merged the PR: the playbook is in the repo now. The same data again changes nothing, so no files and no URL
+    repo = tmp_path / "repo"
+    (repo / "characters/franz").mkdir(parents=True)
+    (repo / "characters/franz/playbook.md").write_text(playbook, encoding="utf-8")
+    quiet = run(w, tmp_path, out_dir=tmp_path / "out2", repo_root=repo, monday=date(2026, 10, 19), now=WEEK2_NOW)
+    assert quiet["files"] == [] and quiet["proposal_url"] is None and not (tmp_path / "out2").exists()
+    assert quiet["playbooks"]["franz"]["changed"] is False
+    assert "Proposals waiting: none" in quiet["digest"]["header"][1]
+
+
+def test_a_rule_keeps_the_day_it_entered_when_the_playbook_is_regenerated(tmp_path):
+    w = measured_world()
+    first = run(w, tmp_path)
+    assert first["playbooks"]["franz"]["changed"]
+    repo = tmp_path / "repo"
+    (repo / "characters/franz").mkdir(parents=True)
+    (repo / "characters/franz/playbook.md").write_text((tmp_path / "out/characters/franz/playbook.md").read_text(encoding="utf-8"), encoding="utf-8")
+    for i in range(2):  # new data changes the numbers of the rule, so the file is rewritten ...
+        w.post("franz", datetime(2026, 10, 13 + i, 19, 0, tzinfo=LONDON), features={"setting": "kitchen", "outlier_x": 5.0, "hook_pattern": "none", "format_id": "swap_trend"})
+    second = run(w, tmp_path, out_dir=tmp_path / "out2", repo_root=repo, monday=date(2026, 10, 19), now=WEEK2_NOW)
+    text = (tmp_path / "out2/characters/franz/playbook.md").read_text(encoding="utf-8")
+    assert second["playbooks"]["franz"]["changed"] and "since 2026-10-19" in text and "2026-10-26" not in text  # ... but it keeps its entry day
+
+
+def test_a_proposal_that_was_made_last_week_and_is_still_waiting_does_not_open_a_new_pr(tmp_path):
+    w = measured_world()
+    run(w, tmp_path)  # week of 12 Oct: the candidate
+    for i, (setting, x) in enumerate([("kitchen", 3.0), ("kitchen", 3.0), ("garden", 1.0)]):
+        w.post("franz", datetime(2026, 10, 13 + i, 19, 0, tzinfo=LONDON), features={"setting": setting, "outlier_x": x, "hook_pattern": "none", "format_id": "swap_trend"})
+    repo = tmp_path / "repo"
+    (repo / "characters/franz").mkdir(parents=True)
+    second = run(w, tmp_path, out_dir=tmp_path / "out2", repo_root=repo, monday=date(2026, 10, 19), now=WEEK2_NOW)
+    assert second["proposal_url"]
+    (repo / "characters/franz/playbook.md").write_text((tmp_path / "out2/characters/franz/playbook.md").read_text(encoding="utf-8"), encoding="utf-8")
+    third = run(w, tmp_path, out_dir=tmp_path / "out3", repo_root=repo, monday=date(2026, 10, 26), now=datetime(2026, 11, 2, 6, 15, tzinfo=LONDON))
+    (rule,) = [p for p in third["proposals"] if p["kind"] == "hit_rule"]
+    assert rule["repeat"] is True  # still waiting ...
+    assert third["files"] == [] and third["proposal_url"] is None  # ... but nothing new to put in front of him
+    assert "Proposals waiting: 1 hit rule" in third["digest"]["header"][1]
+
+
+def test_an_arm_retire_proposal_comes_from_the_tally_and_is_a_proposal_to_merge(tmp_path, experiments_on):
+    w = World()
+    w.baseline("reginald", datetime(2026, 10, 13, 19, 30, tzinfo=LONDON), v72=100)  # the 72-hour readings x72 is measured against
+    # twelve tallied uses of one arm that each lost (x72 below 1) and have a poor outlier_x
+    for i in range(12):
+        w.post(
+            "reginald", datetime(2026, 10, 16, 19, 30, tzinfo=LONDON) + i * D, v72=10, v7=40,
+            features={"hook_pattern": "understatement", "hook_by": "bandit", "outlier_x": 0.4},
+            created=datetime(2026, 10, 14, 12, 0, tzinfo=LONDON),
+        )
+    out = run(w, tmp_path, now=datetime(2026, 11, 9, 6, 15, tzinfo=LONDON), monday=date(2026, 11, 2))
+    retire = [p for p in out["proposals"] if p["kind"] == "arm_retire"]
+    assert [(p["character"], p["arm"]) for p in retire] == [("reginald", "understatement")] and retire[0]["win_rate"] == 0.0
+    assert any("retire hook arm understatement" in ln for ln in out["digest"]["characters"][1]["lines"][4:])
+    assert "Proposals waiting: 1 arm" in out["digest"]["header"][1] or "1 arm" in out["digest"]["header"][1]
+    doc = (tmp_path / "out/docs/weekly/2026-11-02.md").read_text(encoding="utf-8")
+    assert "retire `understatement` for reginald" in doc
+
+
+def test_the_test_registry_decides_which_tests_the_tests_line_names(tmp_path, experiments_on):
+    w = first_weeks()
+    out = run(w, tmp_path)
+    tests = out["digest"]["characters"][0]["lines"][3]
+    assert "score test 0 of 20, his 0 (not a verdict)" in tests and "hook test" in tests and "not a verdict" in tests
+    off = run(first_weeks(), tmp_path)  # the same data, with the live registry (A and B on, C off)
+    assert "test C" not in off["digest"]["characters"][0]["lines"][3]  # a test that is off is not named
+
+
+def test_with_every_test_off_the_tests_line_says_so(tmp_path):
+    out = run(first_weeks(), tmp_path)  # the suite's default registry has every test off
+    assert out["digest"]["characters"][0]["lines"][3].endswith("no test is on")
+
+
+def test_a_post_below_two_floors_is_flagged_on_the_hook_line_from_week_3(tmp_path):
+    w = first_weeks()
+    first = run(w, tmp_path)
+    assert first["floors"]["characters"]["franz"]["watched_pct"]["status"] == "fixed"
+    # week 3: a post with every reading far below the floors, and one in the baseline weeks (not diagnosed)
+    w.post("franz", datetime(2026, 10, 20, 19, 0, tzinfo=LONDON), hook="A weak one", snaps=[{"views": 1000, "shares": 0, "follows": 0, "watched_pct": 5.0, "skip_rate": 95.0}])
+    w.post("franz", datetime(2026, 10, 17, 19, 0, tzinfo=LONDON), hook="Baseline weak", snaps=[{"views": 1000, "shares": 0, "follows": 0, "watched_pct": 5.0, "skip_rate": 95.0}])
+    out = run(w, tmp_path, monday=date(2026, 10, 19), now=WEEK2_NOW)
+    hook_line = out["digest"]["characters"][0]["lines"][2]
+    assert "below 2 floors: “A weak one” (hook, hold, sends, follows)" in hook_line and "Baseline weak" not in hook_line
+
+
+def test_the_summary_and_the_details_agree(tmp_path):
+    out = run(first_weeks(), tmp_path)
+    for block in out["digest"]["characters"]:
+        assert block["title"] in out["summary"] and all(line in out["summary"] for line in block["lines"])
+    assert all(line in out["summary"] for line in out["digest"]["header"])
+
+
+# ---- the command -----------------------------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def cli_world(monkeypatch, tmp_path):
+    w = first_weeks()
+    monkeypatch.setattr(weekly, "open_store", lambda: w.store)
+    monkeypatch.setattr(weekly, "now_london", lambda: NOW)
+    monkeypatch.setattr(experiments, "ROOT", tmp_path / "repo")
+    return w
+
+
+def test_the_command_prints_the_run_as_json_and_writes_the_files(cli_world, tmp_path):
+    r = CliRunner().invoke(app, ["review", "weekly", "--out-dir", str(tmp_path / "weekly-out")])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert out["week"] == "2026-10-12" and out["status"] == "ok" and len(out["digest"]["header"]) == 2 and out["run_id"]
+    assert len(cli_world.store.list_runs(kind="weekly")) == 1 and len(cli_world.store.list_reviews()) == 3
+
+
+def test_the_command_takes_an_iso_week_or_a_date(cli_world):
+    for value in ("2026-W41", "2026-10-07"):  # the week of 5 Oct
+        r = CliRunner().invoke(app, ["review", "weekly", "--week", value, "--dry-run"])
+        assert r.exit_code == 0, r.output
+        assert json.loads(r.stdout)["week"] == "2026-10-05"
+    bad = CliRunner().invoke(app, ["review", "weekly", "--week", "last tuesday"])
+    assert bad.exit_code == 2 and "week must be" in bad.output
+
+
+def test_the_command_dry_run_writes_nothing(cli_world, tmp_path):
+    r = CliRunner().invoke(app, ["review", "weekly", "--dry-run", "--out-dir", str(tmp_path / "x")])
+    assert r.exit_code == 0 and json.loads(r.stdout)["dry_run"] is True
+    assert cli_world.store.list_runs() == [] and cli_world.store.list_reviews() == [] and not (tmp_path / "x").exists()
+
+
+def test_the_command_without_a_database_is_a_caller_error(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    r = CliRunner().invoke(app, ["review", "weekly"])
+    assert r.exit_code == 2 and "DATABASE_URL" in r.output
