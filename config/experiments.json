@@ -92,7 +92,7 @@
       "eligible": "masters with beats (the clip's own audio or ai_beat); a silent in_app master, or a clip with no sound, takes no position",
       "min_n": {"zoom": 10, "none": 10},
       "decision": {"zoom_for_all_if_ratio_at_least": 1.3},
-      "note": "otherwise no pulses (the default wins ties); secondary, report only: x72, skip rate, watched %; no credits (ffmpeg only)"
+      "note": "otherwise no pulses (the default wins ties); a master with beats 0 is left out of both arms, so is arm on with zoom_pulses 0; secondary, report only: x72, skip rate, watched %; no credits (ffmpeg only)"
     },
     "H": {
       "name": "the first hook pops in word by word on the beat",
@@ -107,7 +107,7 @@
       "eligible": "masters with beats (the clip's own audio or ai_beat); a silent in_app master, or a clip with no sound, takes no position",
       "min_n": {"word_pop": 10, "kit_entrance": 10},
       "decision": {"word_pop_for_all_if_ratio_at_least": 1.3},
-      "note": "otherwise the kits' own entrances (the default wins ties); secondary, report only: x72, skip rate, watched %; no credits (PIL and ffmpeg only)"
+      "note": "otherwise the kits' own entrances (the default wins ties); a master with beats 0 is left out of both arms, so is arm on with hook_entrance not word_pop; secondary, report only: x72, skip rate, watched %; no credits (PIL and ffmpeg only)"
     }
   }
 }

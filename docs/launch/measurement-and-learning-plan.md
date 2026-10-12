@@ -270,10 +270,18 @@ Source: `docs/research/2026-10-08-video-tools.md` section 4.3, rank 1. It costs 
   the hook's first second; picture only, so the dance stays in sync with the sound and the captions are never zoomed) against
   **none** (the master as it is made today).
 - **Eligible:** masters with beats: the clip's own audio (`original`) or an `ai_beat`. A silent `in_app` master, or a clip with no
-  sound, is not eligible and takes no position in the coin. A master that finds no beat after all is rendered without pulses and
-  tagged `zoom_pulses: 0`, so the analysis leaves it out (missing data is left out, never counted).
+  sound, is not eligible and takes no position in the coin. Eligible is decided before the master exists, so a master can still
+  find no beat in its sound after all. The master measures the beat for EVERY clip that carries a coin, the control arm too, and
+  records `beats` (the count) next to `zoom_pulses`. **A master with `beats: 0` is left out of both arms** (it is rendered
+  without pulses whatever its coin said), and **"arm on, beat found, 0 pulses placed"** (`beats` > 0, `zoom_pulses` 0: no beat
+  fell where a pulse may go) is left out of the treated arm (missing data is left out, never counted). Without this the control
+  arm would keep the masters with no beat and the comparison would be "masters with a beat" against "all masters".
+  *(Clarified on Mon 12 Oct 2026, still before any data: the analysis rule only; no threshold, arm or coin changed.)*
 - **Assignment:** the block coin per character, blocks of 4 (two of each arm in a random order), key `zoom` in `test_arms`.
-  The master records what it really did: `zoom_pulses` (the count).
+  The master records what it really did: `zoom_pulses` (the count) and `beats`.
+- **Known limit [I]:** the pulse sits on every 4th detected **beat** counted from the first beat after the hook's first second,
+  not on a detected **downbeat**: the analysis (`analyze.estimate_beat`) finds beats, not bars, so a pulse can fall on beat 2 or 3
+  of a bar. A null result for G says "pulses on every 4th beat do not beat none", not "pulses on the bar do not work".
 - **Primary:** `outlier_x` (Instagram). **Secondary, report only:** `x72`, skip rate, watched %.
 - **Minimum:** 10 and 10 pooled.
 - **Decision:** pulses >= 1.3x none on median `outlier_x` -> zoom pulses become the default for every eligible master. Otherwise
@@ -287,9 +295,11 @@ Source: `docs/research/2026-10-08-video-tools.md` section 4.3, rank 1. It costs 
 - **Arms:** **word pop** (the first hook comes in one word more on each beat, `word_pop`, the code the DJ's kit uses, whatever
   the character's own kit does) against **the kit's own entrance** (Franz fade-rise, Lenny slam, Reginald none: exactly as today).
 - **Eligible:** as test G (masters with beats; a silent `in_app` master takes no position). A master that finds no beat after all
-  keeps the kit's entrance and is tagged with it (`hook_entrance`), so the analysis leaves it out.
+  keeps the kit's entrance and is tagged with it (`hook_entrance`) and `beats: 0` (measured for both arms, as in G): **it is
+  left out of both arms**; so is "arm on, beat found, but the first hook did not come in word by word" (`hook_entrance` not
+  `word_pop`, e.g. a clip with no hook words) from the treated arm.
 - **Assignment:** a block coin of its own per character, blocks of 4, key `word_pop` in `test_arms`. It is not G's coin: the two
-  tests run on the same posts and never line up. The master records `hook_entrance` (the name of the entrance it really showed).
+  tests run on the same posts and never line up. The master records `hook_entrance` (the name of the entrance it really showed) and `beats`.
 - **Primary:** `outlier_x` (Instagram). **Secondary, report only:** `x72`, skip rate (this test changes the first second), watched %.
 - **Minimum:** 10 and 10 pooled.
 - **Decision:** word pop >= 1.3x the kit's entrance on median `outlier_x` -> `word_pop` becomes every character's entrance for the
