@@ -635,6 +635,42 @@ def test_add_drop_files_a_file_and_dedupes_a_link_per_character(world):
         add_drop(store, "reginald", "https://vm.tiktok.com/abc/", NOW)
 
 
+def test_a_link_dropped_again_keeps_the_earlier_drops_keys_and_the_new_keys_win_like_migration_0017(world):
+    """Final review M2: the CLI's duplicate path files the same drop as the terminal's studio.add_drop (0017), not a replacement."""
+    store, _ = world
+    first, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    earlier = {
+        "state": "ready", "hooks": ["a", "b"], "window": {"start_s": 1, "length_s": 8}, "adjust": {"hook": "x"}, "own_footage": True,
+        "score": 81, "hit_rules_version": 3, "auto_filed": True, "hit": {"id": "h", "lane": "general"}, "fetch_days": ["2026-10-10"],
+        "job": {"holder": "run-7", "at": NOW.isoformat()}, "reason": "old", "character_by": "studio",
+    }
+    store.update_favorite(first.id, proposal={**first.proposal, "hold_reason": "x", "drop": {**first.proposal["drop"], **earlier}})
+    later = NOW + timedelta(hours=1)
+    again, dup = add_drop(store, "reginald", TIKTOK, later)
+    d = again.proposal["drop"]
+    assert dup and again.id == first.id and again.status == "approved" and "hold_reason" not in again.proposal
+    assert d["hooks"] == ["a", "b"] and d["window"] == {"start_s": 1, "length_s": 8} and d["adjust"] == {"hook": "x"}  # kept
+    assert d["job"] == earlier["job"]  # a live worker's lease stays
+    for gone in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days"):  # describes the earlier drop, not this one
+        assert gone not in d, gone
+    assert d["state"] == "checking" and d["kind"] == "link" and d["reason"] is None and d["own_footage"] is False  # the new keys win
+    assert d["character_by"] == "owner" and d["at"] == later.isoformat() and again.proposal["decision"]["at"] == later.isoformat()
+
+
+def test_a_new_drops_own_tags_win_over_the_strip_and_a_drop_that_is_no_object_counts_as_empty(world):
+    store, _ = world
+    first, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    store.update_favorite(first.id, proposal={**first.proposal, "drop": {**first.proposal["drop"], "auto_filed": True, "score": 5}})
+    again, _ = add_drop(store, "reginald", TIKTOK, NOW, auto_filed=True, hit={"id": "h2", "lane": "reginald"})
+    assert again.proposal["drop"]["auto_filed"] is True and again.proposal["drop"]["hit"] == {"id": "h2", "lane": "reginald"}
+    assert "score" not in again.proposal["drop"]
+    for junk in (None, [], "text", 7):  # a drop the studio never wrote: replaced, not merged
+        store.update_favorite(first.id, proposal={**again.proposal, "drop": junk})
+        out, dup = add_drop(store, "reginald", TIKTOK, NOW)
+        assert dup and isinstance(out.proposal["drop"], dict) and out.proposal["drop"]["state"] == "checking", junk
+        assert set(out.proposal["drop"]) == {"state", "kind", "at", "reason", "own_footage", "character_by"}, junk
+
+
 def test_a_saved_file_is_dropped_from_the_mac_exactly_as_the_terminal_does(world, tmp_path):
     # owner 2026-10-06: "let's make some with the videos I saved" (inbox/drops): upload to sources/owner/<pick>/, attach
     store, storage = world

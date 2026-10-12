@@ -799,6 +799,10 @@ def next_engagement(store: Store, slug: str, clip_id: str | None = None) -> str:
 
 # ---- adding a drop (the terminal's RPC does the same: studio.add_drop, migration 0012) ----------------------------------------
 
+# What a link dropped again does not inherit from the drop it files over (migration 0017's strip list, final review M1): the check's
+# score and rules version, and the hits job's tags. `job` stays: it holds a live worker's lease.
+MERGE_STRIP = ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days")
+
 
 def add_drop(
     store: Store, character_slug: str | None, link: str | None, now: datetime | None = None, *, own_footage: bool = False,
@@ -807,7 +811,8 @@ def add_drop(
 ) -> tuple[Favorite, bool]:
     """File a drop: ``(pick, duplicate)``. A file (``link`` None) is a new pick keyed ``owner-drop:<id>`` at ``uploading``; a link
     is its canonical URL at ``checking``, and a link already a pick of this character becomes that pick's drop (a pick already
-    queued or made is returned as it is, ``duplicate`` True). ``own_footage`` (owner 2026-10-06, for reporting later): the owner's
+    queued or made is returned as it is, ``duplicate`` True); the earlier drop's keys stay under the new drop's (``MERGE_STRIP`` aside),
+    exactly as 0017's ``studio.add_drop`` merges them. ``own_footage`` (owner 2026-10-06, for reporting later): the owner's
     own recording or footage used with permission; the default is a downloaded clip (False). It does not change the generation.
 
     ``character_slug`` None (owner 2026-10-06, the Drop box's "Recommend"): the studio chooses after the check
@@ -858,7 +863,9 @@ def add_drop(
         if by == "studio" and f.character_slug in {c.slug for c in store.characters() if c.status != "paused"}:
             character_slug = f.character_slug  # the pick's own character is the provisional one while he is not paused
         proposal = {k: v for k, v in f.proposal.items() if k != "hold_reason"}
-        proposal.update(decision=record, drop=drop)
+        earlier = f.proposal.get("drop")  # the earlier drop's keys stay, the new ones win (migration 0017); no object counts as empty
+        kept = {k: v for k, v in earlier.items() if k not in MERGE_STRIP} if isinstance(earlier, Mapping) else {}
+        proposal.update(decision=record, drop={**kept, **drop})
         return store.update_favorite(f.id, status="approved", character_slug=character_slug, proposal=proposal), True
     return store.add_favorite(Favorite(
         url=canonical, platform=platform, origin="owner", character_slug=character_slug,
