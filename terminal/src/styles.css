@@ -1289,6 +1289,8 @@ button.cc-pic, a.cc-pic { cursor: pointer; }
 }
 .week-proposal:hover { background: var(--panel-2); }
 .week-proposal svg { flex: none; width: 14px; height: 14px; color: var(--ink-2); }
+.week-problem { display: flex; flex-direction: column; gap: 4px; }
+.week-problem p { margin: 0; overflow-wrap: anywhere; }
 .week-head { display: flex; flex-direction: column; gap: 4px; }
 .week-head p { margin: 0; overflow-wrap: anywhere; }
 .week-who { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; }

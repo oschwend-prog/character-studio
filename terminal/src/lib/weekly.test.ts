@@ -1,6 +1,6 @@
 // The weekly review on Today (learning plan 6.1, Task 16): reading the latest `weekly` run, and the score test's label on a clip's score.
 import { describe, expect, it } from 'vitest';
-import { FIRST_WEEKLY_NOTE, parseWeekly, rankOrderFor, scoreNote, scoreTestOf, splitLine, weekLabel } from './weekly';
+import { FIRST_WEEKLY_NOTE, NO_WEEKLY_NOTE, emptyWeeklyNote, parseWeekly, rankOrderFor, scoreNote, scoreTestOf, splitLine, weekLabel } from './weekly';
 import type { RunRow } from './types';
 
 const digest = {
@@ -94,6 +94,34 @@ describe('weekLabel', () => {
 
 it('says when the first review is due', () => {
   expect(FIRST_WEEKLY_NOTE).toBe('The first weekly review runs on Monday 19 October.');
+});
+
+describe('the line before any weekly review exists', () => {
+  it('says the first one is due only until the end of Monday 19 October, London', () => {
+    expect(emptyWeeklyNote(new Date('2026-10-12T09:00:00Z'))).toBe(FIRST_WEEKLY_NOTE);
+    expect(emptyWeeklyNote(new Date('2026-10-19T12:00:00Z'))).toBe(FIRST_WEEKLY_NOTE); // Monday itself: the job may still be on its way
+    expect(emptyWeeklyNote(new Date('2026-10-19T22:59:59Z'))).toBe(FIRST_WEEKLY_NOTE); // 23:59 in London (BST)
+  });
+
+  it('then sends him to the job: nothing came', () => {
+    expect(NO_WEEKLY_NOTE).toBe('No weekly review yet: check the studio-weekly job on GitHub.');
+    expect(emptyWeeklyNote(new Date('2026-10-19T23:00:00Z'))).toBe(NO_WEEKLY_NOTE); // 00:00 Tuesday 20 October in London
+    expect(emptyWeeklyNote(new Date('2026-10-20T08:00:00Z'))).toBe(NO_WEEKLY_NOTE);
+    expect(emptyWeeklyNote(new Date('2026-12-01T08:00:00Z'))).toBe(NO_WEEKLY_NOTE);
+  });
+});
+
+describe('a review that did not run clean', () => {
+  it('carries its status and the notes of the run', () => {
+    const w = parseWeekly(run({ week: '2026-10-12', digest, notes: ['floors pending: sends_per_1k (no data in the cloud yet)', 'score test failed: RuntimeError: no way', 7, null] }, { status: 'error' }));
+    expect(w!.status).toBe('error');
+    expect(w!.notes).toEqual(['floors pending: sends_per_1k (no data in the cloud yet)', 'score test failed: RuntimeError: no way']);
+  });
+
+  it('has no notes when the run carries none', () => {
+    expect(parseWeekly(run({ week: '2026-10-12', digest }))!.notes).toEqual([]);
+    expect(parseWeekly(run({ week: '2026-10-12', digest, notes: 'nope' }))!.notes).toEqual([]);
+  });
 });
 
 describe('the score test label (test A, plan 3.2)', () => {

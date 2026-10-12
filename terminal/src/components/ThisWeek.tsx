@@ -5,7 +5,7 @@
 import { ExternalLink } from 'lucide-react';
 import { useMemo } from 'react';
 import { useStudio } from '../lib/store';
-import { FIRST_WEEKLY_NOTE, parseWeekly, splitLine, type WeeklyDigest } from '../lib/weekly';
+import { emptyWeeklyNote, parseWeekly, splitLine, type WeeklyDigest } from '../lib/weekly';
 import { Livery, Section } from './ui';
 
 export function ThisWeek() {
@@ -15,12 +15,12 @@ export function ThisWeek() {
   return <WeekCard week={week} />;
 }
 
-/** The card itself (no store): the digest, or the one muted line before the first review. */
-export function WeekCard({ week }: { week: WeeklyDigest | null }) {
+/** The card itself (no store): the digest, or the one muted line when there is no review (`now` is the clock, for tests). */
+export function WeekCard({ week, now }: { week: WeeklyDigest | null; now?: Date }) {
   if (!week) {
     return (
       <Section id="this-week" title="This week">
-        <p className="small muted" style={{ margin: 0 }}>{FIRST_WEEKLY_NOTE}</p>
+        <p className="small muted" style={{ margin: 0 }}>{emptyWeeklyNote(now)}</p>
       </Section>
     );
   }
@@ -34,6 +34,12 @@ export function WeekCard({ week }: { week: WeeklyDigest | null }) {
             <ExternalLink aria-hidden="true" />
             <span className="sr-only">(opens GitHub in a new tab)</span>
           </a>
+        )}
+        {week.status !== 'ok' && (
+          <div className="panel-pad week-problem" role="status">
+            <p className="small"><span className="tag action">Review status: {week.status}</span> Part of this review did not run clean; the numbers below may be incomplete.</p>
+            {week.notes.map((note, i) => <p key={i} className="small muted">{note}</p>)}
+          </div>
         )}
         {week.header.length > 0 && (
           <div className="panel-pad week-head">

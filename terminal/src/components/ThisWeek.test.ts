@@ -12,9 +12,9 @@ import { WeekCard } from './ThisWeek';
 
 const URL_ = 'https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-12?expand=1';
 
-const week = (over: Record<string, unknown> = {}): WeeklyDigest =>
+const week = (over: Record<string, unknown> = {}, status = 'ok'): WeeklyDigest =>
   parseWeekly({
-    id: 'r', kind: 'weekly', started_at: '2026-10-19T06:15:00Z', finished_at: '2026-10-19T06:16:00Z', status: 'ok', summary: '',
+    id: 'r', kind: 'weekly', started_at: '2026-10-19T06:15:00Z', finished_at: '2026-10-19T06:16:00Z', status, summary: '',
     details: {
       week: '2026-10-12',
       digest: {
@@ -32,7 +32,7 @@ const week = (over: Record<string, unknown> = {}): WeeklyDigest =>
     },
   } as RunRow)!;
 
-const html = (w: WeeklyDigest | null) => renderToStaticMarkup(createElement(WeekCard, { week: w }));
+const html = (w: WeeklyDigest | null, now = new Date('2026-10-19T08:00:00Z')) => renderToStaticMarkup(createElement(WeekCard, { week: w, now }));
 
 describe('WeekCard', () => {
   it('shows the week, the two header lines, each character with his bar and his five labelled lines', () => {
@@ -67,9 +67,35 @@ describe('WeekCard', () => {
   });
 
   it('before the first review it is one muted line', () => {
-    const out = html(null);
+    const out = html(null, new Date('2026-10-14T10:00:00Z'));
     expect(out).toContain('The first weekly review runs on Monday 19 October.');
     expect(out).not.toContain('class="panel');
+  });
+
+  it('once Monday 19 October is over without a review, it sends him to the job instead', () => {
+    const out = html(null, new Date('2026-10-20T10:00:00Z'));
+    expect(out).toContain('No weekly review yet: check the studio-weekly job on GitHub.');
+    expect(out).not.toContain('The first weekly review runs on Monday 19 October.');
+  });
+
+  it('a clean review shows no problem line', () => {
+    const out = html(week());
+    expect(out).not.toContain('week-problem');
+  });
+
+  it('a review that ended in error shows its status and its notes above the lines', () => {
+    const out = html(week({ notes: ['score test failed: RuntimeError: no way', 'digest of reginald failed: RuntimeError: boom'] }, 'error'));
+    expect(out).toContain('week-problem');
+    expect(out).toContain('Review status: error');
+    expect(out).toContain('score test failed: RuntimeError: no way');
+    expect(out).toContain('digest of reginald failed: RuntimeError: boom');
+    expect(out.indexOf('week-problem')).toBeLessThan(out.indexOf('week-char'));
+    expect(out).toContain('<dt class="label">Result</dt>'); // the digest is still there
+  });
+
+  it('shows the status of any run that is not ok, even with no notes', () => {
+    const out = html(week({}, 'running'));
+    expect(out).toContain('Review status: running');
   });
 });
 

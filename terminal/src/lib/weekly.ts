@@ -1,10 +1,20 @@
 // The weekly review on Today (learning plan 6.1 and build item 11, Task 16): the latest `weekly` run of studio.runs, read defensively
 // (it is JSON written by the cloud job `studio review weekly`, shape documented in studio/weekly.py), and the score test's label that
 // goes beside a clip's score. Pure functions; no browser.
+import { londonDayKey } from './format';
 import type { RunRow } from './types';
 
 /** What Today says before the first review has run. */
 export const FIRST_WEEKLY_NOTE = 'The first weekly review runs on Monday 19 October.';
+/** What Today says once Monday 19 October is over and still no review exists: the job did not deliver. */
+export const NO_WEEKLY_NOTE = 'No weekly review yet: check the studio-weekly job on GitHub.';
+/** The London day the first review is due (YYYY-MM-DD): from the day after it, no review means something is wrong. */
+const FIRST_WEEKLY_DAY = '2026-10-19';
+
+/** The one muted line when there is no review: "due on Monday" until the end of that Monday (London), then "check the job". */
+export function emptyWeeklyNote(now: Date = new Date()): string {
+  return londonDayKey(now) <= FIRST_WEEKLY_DAY ? FIRST_WEEKLY_NOTE : NO_WEEKLY_NOTE;
+}
 
 /** One character of the digest: his title line and his five labelled lines ("1 Result    ..."), or the one line "no posts yet". */
 export interface WeeklyCharacter {
@@ -22,8 +32,11 @@ export interface WeeklyDigest {
   week: string;
   /** "week of 12 Oct". */
   label: string;
+  /** The run's status: `ok`, or `error` when a part of the review failed (its notes say which). */
   status: string;
   ranAt: string;
+  /** The run's notes (parts with no data yet, parts that failed); shown on the card only when the status is not `ok`. */
+  notes: string[];
   /** The studio header: credits against the cap and the cost per 1K views; the warnings and the proposals waiting. */
   header: string[];
   characters: WeeklyCharacter[];
@@ -62,6 +75,7 @@ export function parseWeekly(run: RunRow | null | undefined): WeeklyDigest | null
     label: weekLabel(d.week),
     status: run.status,
     ranAt: run.finished_at ?? run.started_at,
+    notes: strings(d.notes),
     header: strings(d.digest.header),
     characters,
     proposalUrl: typeof url === 'string' && url.startsWith('https://') ? url : null,
