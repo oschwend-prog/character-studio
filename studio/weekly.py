@@ -12,16 +12,17 @@ import re
 import statistics
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
-from typing import Any
+from datetime import date, datetime, time, timedelta
+from pathlib import Path
+from typing import Annotated, Any
 
 import typer
 
-from studio import review
-from studio.cli_support import emit, open_store
+from studio import budget, experiments, health, learn, review
+from studio.cli_support import emit, fail, open_store
 from studio.config import LONDON, now_london
-from studio.metrics import post_reads, posted_at
-from studio.models import HOOK_PATTERNS, Clip, Platform, PostStatus, Snapshot
+from studio.metrics import MIN_PRIORS, post_reads, posted_at
+from studio.models import HOOK_PATTERNS, Clip, ClipState, Platform, PostStatus, Run, RunKind, RunStatus, Snapshot
 from studio.store import Store
 
 INSTAGRAM = Platform.instagram.value
@@ -34,6 +35,7 @@ SCORE_FINAL_VALIDATED_RHO = 0.31  # at 40: rho >= 0.31 validated, else failed
 SCORE_MIN_SPAN = 15  # the middle 80 % of the scores spans fewer points than this: uninformative (never failed)
 SCORE_BUCKET_WIDTH = 20
 OUTLIER_LAG = timedelta(days=7)  # a clip's outlier_x exists 7 days after its post (``metrics.views_at_7d``)
+WEEK_LEN = timedelta(days=7)
 
 # ---- the mechanism floors: the plan's procedure (3.8, FROZEN) ----
 
@@ -524,8 +526,6 @@ def update_candidates(
 def arm_outliers(store: Store, registry: Any) -> dict[tuple[str, str], list[float]]:
     """``{(character, hook pattern): [outlier_x of its tallied clips]}``: the clips the bandit tallies (``learn.TALLIED_BY``, a real
     pattern, made on or after the registry's start) that have an ``outlier_x``."""
-    from studio import learn  # learn imports the metrics module, not this one: kept local so the CLI wiring has no import cycle
-
     out: dict[tuple[str, str], list[float]] = {}
     for clip in store.list_clips():
         f = clip.features
@@ -665,3 +665,294 @@ def render_playbook(name: str, rules: Sequence[Mapping[str, str]], watching: Seq
     if watching:
         lines += ["", "## Watching", ""] + [f"- {w}" for w in watching]
     return "\n".join(lines) + "\n"
+
+
+# ---- the week --------------------------------------------------------------------------------------------------------------------------
+
+ROSTER_ORDER = ("franz", "reginald", "lenny")  # the owner's order (terminal/src/lib/roster.ts); any other live character follows by slug
+PROPOSAL_REPO = "https://github.com/oschwend-prog/character-studio"
+PROPOSAL_BASE = "build/slice1"
+LINE_LABELS = ("1 Result", "2 Audience", "3 Hook", "4 Tests", "5 Next")
+HOOK_CHARS = 40
+
+
+@dataclass(frozen=True)
+class WeekWindow:
+    """A week, Monday 00:00 to the next Monday 00:00 London (``end`` excluded)."""
+
+    monday: date
+    start: datetime
+    end: datetime
+
+    @property
+    def sunday(self) -> date:
+        return self.monday + timedelta(days=6)
+
+    def label(self) -> str:
+        return f"week of {self.monday.day} {self.monday.strftime('%b')}"
+
+
+def week_window(monday: date) -> WeekWindow:
+    """The window of the week starting on ``monday`` (aware London datetimes; a DST change inside it is handled by the zone)."""
+    if monday.weekday() != 0:
+        raise ValueError(f"{monday} is not a Monday")
+    return WeekWindow(
+        monday=monday, start=datetime.combine(monday, time.min, tzinfo=LONDON),
+        end=datetime.combine(monday + timedelta(days=7), time.min, tzinfo=LONDON),
+    )
+
+
+def default_week(now: datetime) -> date:
+    """The Monday of the last finished week: the Monday run reviews the week that just ended (Mon 19 Oct reviews 12-18 Oct)."""
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError(f"now must be timezone-aware (never naive), got {now!r}")
+    today = now.astimezone(LONDON).date()
+    return today - timedelta(days=today.weekday() + 7)
+
+
+def _ordered(slugs: Iterable[str]) -> list[str]:
+    return sorted(slugs, key=lambda s: (ROSTER_ORDER.index(s) if s in ROSTER_ORDER else len(ROSTER_ORDER), s))
+
+
+# ---- a post as the digest sees it ------------------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class PostFact:
+    """One posted post: when, where, its best views reading so far, its ``outlier_x`` (None until it has one) and the floor metrics of
+    its snapshots (``post_metric_values``). ``available_at`` is when its 7-day figure exists."""
+
+    post_id: str
+    clip_id: str
+    platform: str
+    posted_at: datetime
+    peak_views: int | None = None
+    outlier_x: float | None = None
+    hook: str | None = None
+    metrics: Mapping[str, float] | None = None
+
+    @property
+    def available_at(self) -> datetime:
+        return self.posted_at + OUTLIER_LAG
+
+
+def post_facts(store: Store) -> dict[str, list[PostFact]]:
+    """``{character: [PostFact]}`` for every posted post of every account, oldest first."""
+    reads = {r.post_id: r for r in post_reads(store)}
+    hooks = {c.id: c.hook for c in store.list_clips()}
+    out: dict[str, list[PostFact]] = {}
+    for account in store.accounts():
+        for post in store.list_posts(account_id=account.id, status=PostStatus.posted):
+            snaps = store.snapshots_for(post.id)
+            views = [s.views for s in snaps if s.views is not None]
+            read = reads.get(post.id)
+            out.setdefault(account.character_slug, []).append(
+                PostFact(
+                    post_id=post.id, clip_id=post.clip_id, platform=account.platform.value, posted_at=posted_at(post),
+                    peak_views=max(views) if views else None, outlier_x=read.outlier_x if read else None,
+                    hook=hooks.get(post.clip_id), metrics=post_metric_values(snaps),
+                )
+            )
+    for facts in out.values():
+        facts.sort(key=lambda f: (f.posted_at, f.post_id))
+    return out
+
+
+# ---- the five lines of a character (plan 6.1) --------------------------------------------------------------------------------------------
+
+
+def _s(n: int, word: str) -> str:
+    return f"{n} {word}{'' if n == 1 else 's'}"
+
+
+def _quote(text: str | None, fallback: str) -> str:
+    text = " ".join((text or "").split())
+    if not text:
+        return fallback
+    return f"“{text[: HOOK_CHARS - 1] + '…' if len(text) > HOOK_CHARS else text}”"
+
+
+def bar_text(ev: review.CharacterEvidence) -> str:
+    """The character bar as one phrase: ``not yet (9 of 20 posts, day 14 of 28)``; the verdict itself is the code's (``review``)."""
+    days = int(ev.age.days) if ev.age is not None else 0
+    if ev.bar == "not_yet":
+        return f"not yet ({ev.posts} of {review.CHARACTER_MIN_POSTS} posts, day {days} of {review.CHARACTER_MIN_AGE.days})"
+    return f"{ev.bar} ({_s(ev.posts, 'post')}, day {days})"
+
+
+def _median_as_of(facts: Sequence[PostFact], moment: datetime) -> tuple[float | None, int]:
+    xs = [f.outlier_x for f in facts if f.platform == INSTAGRAM and f.outlier_x is not None and f.available_at <= moment]
+    return (statistics.median(xs) if xs else None), len(xs)
+
+
+def result_line(week: WeekWindow, facts: Sequence[PostFact]) -> str:
+    """Line 1: posts this week against last week; the median ``outlier_x`` of the Instagram posts that have one (cumulative to the
+    week's end, against the same to the week before; n beside it) or why there is none; the hits (``outlier_x >= 3``) among them; the
+    best post of the week with its raw views (and its ``outlier_x`` when it has one)."""
+    mine = [f for f in facts if week.start <= f.posted_at < week.end]
+    before = [f for f in facts if week.start - WEEK_LEN <= f.posted_at < week.start]
+    med, k = _median_as_of(facts, week.end)
+    prev, kp = _median_as_of(facts, week.start)
+    parts = [f"{_s(len(mine), 'post')} (last week {len(before)})"]
+    if med is None:
+        ig = [f for f in facts if f.platform == INSTAGRAM and f.posted_at < week.end]
+        if not ig:
+            why = "no Instagram post yet"
+        elif min(f.posted_at for f in ig) + OUTLIER_LAG > week.end:
+            why = "the 7-day figure comes 7 days after a post"
+        else:
+            why = f"each post needs {MIN_PRIORS} earlier ones with a 7-day figure"
+        parts += [f"median outlier_x: none yet ({why})", "hits: none yet (nothing measured)"]
+    else:
+        last = f"{prev:.1f} n {kp}" if prev is not None else "none yet"
+        parts.append(f"median outlier_x {med:.1f} (n {k}; last week {last})")
+        hits = sum(1 for f in facts if f.platform == INSTAGRAM and f.outlier_x is not None and f.available_at <= week.end and f.outlier_x >= review.HIT_X)
+        parts.append(f"{_s(hits, 'hit')} of {k} measured")
+    seen = [f for f in mine if f.peak_views is not None]
+    if seen:
+        best = max(seen, key=lambda f: (f.peak_views, f.post_id))
+        x = f" ({best.outlier_x:.1f}x)" if best.outlier_x is not None else ""
+        parts.append(f"best {_quote(best.hook, 'a clip without a hook')} {best.peak_views:,} views{x}")
+    else:
+        parts.append("best: none yet (no views read this week)" if mine else "best: no post this week")
+    return " · ".join(parts)
+
+
+def _floor_note(entry: Mapping[str, Any] | None, word: str = "floor") -> str:
+    if entry is None:
+        return f"{word} pending"
+    if entry.get("status") == "fixed":
+        return f"{word} {entry['value']:.1f}"
+    return f"{word} pending: {entry.get('reason', FLOOR_NO_DATA)}"
+
+
+def guard_text(entry: Mapping[str, Any] | None) -> str:
+    """The Instagram guard's state from ``review_payload``'s ``ig_guard`` entry of his account."""
+    if entry is None:
+        return "guard: no Instagram account"
+    drop = entry.get("drop_pct")
+    if entry.get("applied"):
+        return f"guard: cut {entry['handle']} to {entry['new_dropin_share']:.2f} (reach down {drop:.0f} %)"
+    if entry.get("fires") and entry.get("new_dropin_share") is not None:
+        return f"guard: would cut {entry['handle']} to {entry['new_dropin_share']:.2f} (reach down {drop:.0f} %), nothing written"
+    if entry.get("fires"):
+        return f"guard: fired (reach down {drop:.0f} %), the share is already at or under {review.IG_GUARD_DROPIN_SHARE:.2f}"
+    if entry.get("non_follower_pct_previous_week") is None or entry.get("non_follower_pct_this_week") is None:
+        return "guard: no change (it needs a reach reading in both weeks)"
+    return "guard: no change"
+
+
+def audience_line(
+    *, follows: float | None, follows_n: int, follows_floor: Mapping[str, Any] | None, reach: float | None, reach_prev: float | None,
+    reach_n: int, guard: Mapping[str, Any] | None,
+) -> str:
+    """Line 2: followers (no follower count reaches the cloud yet), follows per 1K against its floor, non-follower reach against last
+    week, and the guard's state."""
+    parts = ["followers: none yet (no follower count in the cloud yet)"]
+    if follows is None:
+        parts.append("follows per 1K: none yet (no follows data in the cloud yet)")
+    else:
+        parts.append(f"follows per 1K {follows:.1f} ({_floor_note(follows_floor)}; n {follows_n})")
+    if reach is None:
+        parts.append("non-follower reach: none yet (no reach data in the cloud yet)")
+    else:
+        last = f"{reach_prev:.0f} %" if reach_prev is not None else "none yet"
+        parts.append(f"non-follower reach {reach:.0f} % (last week {last}; n {reach_n})")
+    parts.append(guard_text(guard))
+    return " · ".join(parts)
+
+
+def hook_line(
+    *, skip: float | None, skip_n: int, ceiling: Mapping[str, Any] | None, row: Mapping[str, Any] | None,
+    flagged_posts: Sequence[tuple[str, Sequence[str]]],
+) -> str:
+    """Line 3: the median skip rate against his ceiling, the bandit's leading pattern with its n ("too few to call" until the arm has
+    the tally the plan wants), and the posts below two floors with what failed (hook, hold, sends, follows)."""
+    if skip is None:
+        parts = ["skip rate: none yet (no skip-rate data in the cloud yet)"]
+    else:
+        cap = f"ceiling {ceiling['value']:.0f} %" if ceiling and ceiling.get("status") == "fixed" else _floor_note(ceiling, "ceiling")
+        parts = [f"skip rate {skip:.0f} % ({cap}; n {skip_n})"]
+    if row is None:
+        parts.append("hook test: this character has no hook arms")
+    elif row["leading"] is None:
+        why = (
+            f"rotating, {row['readings']} of {row['readings_needed']} readings before it can learn"
+            if row.get("mode") == "rotation" else "nothing tallied yet"
+        )
+        parts.append(f"leading: none yet ({why})")
+    else:
+        lead = row["leading"]
+        weak = " (too few to call)" if lead["uses"] < row["min_uses"] else ""
+        parts.append(f"leading: {lead['pattern']}, {lead['wins']} wins of {lead['uses']}{weak}")
+    for hook, failed in flagged_posts[:2]:
+        parts.append(f"below 2 floors: {hook} ({', '.join(failed)})")
+    return " · ".join(parts)
+
+
+def _tests_parts(
+    slug: str, registry: experiments.Registry, score: Mapping[str, Any], his_scored: int, row: Mapping[str, Any] | None, his_clips: Sequence[Clip],
+) -> list[str]:
+    parts: list[str] = []
+    for test in registry.tests.values():
+        if not test.on:
+            continue
+        if test.id == "A":
+            if score["label"] in ("validated", "failed"):
+                parts.append(f"score test {score['label']} at {score['look']} (rho {score['rho']:.2f})")
+            elif score["label"] == "uninformative":
+                parts.append(f"score test uninformative at {score['look']}: raise the exploration picks")
+            else:
+                interim = " (interim: unproven, not a verdict)" if score["look"] else " (not a verdict)"
+                parts.append(f"score test {score['n']} of {score['needed']}, his {his_scored}{interim}")
+        elif test.id == "B":
+            if row is None:
+                continue
+            if row.get("mode") == "rotation" and row["tallied"] == 0:
+                parts.append(f"hook test rotating, {row['readings']} of {row['readings_needed']} readings so far (not a verdict)")
+            else:
+                done = row["fewest_uses"] >= row["min_uses"]
+                parts.append(
+                    f"hook test {row['tallied']} tallied, fewest arm {row['fewest_uses']} of {row['min_uses']}"
+                    + ("" if done else " (not a verdict)")
+                )
+        else:
+            counts: dict[str, int] = {}
+            for clip in his_clips:
+                arms = clip.features.get("test_arms")
+                if isinstance(arms, Mapping) and test.key in arms:
+                    counts[_shown(arms[test.key])] = counts.get(_shown(arms[test.key]), 0) + 1
+            have = " v ".join(f"{counts.get(_shown(a), 0)}" for a in test.counts) if test.counts else str(sum(counts.values()))
+            need = " v ".join(str(v) for v in test.params.get("min_n", {}).values())
+            parts.append(f"test {test.id} {test.name} {have} (need {need}; not a verdict)")
+    return parts
+
+
+def tests_line(
+    slug: str, registry: experiments.Registry, score: Mapping[str, Any], his_scored: int, row: Mapping[str, Any] | None,
+    his_clips: Sequence[Clip],
+) -> str:
+    """Line 4: n so far against n needed for each test that is on in ``config/experiments.json`` (A: the score test, pooled over the
+    characters with his share; B: the hook arms; any other block-coin test: its arms' counts), each marked "not a verdict" before its look."""
+    parts = _tests_parts(slug, registry, score, his_scored, row, his_clips)
+    return " · ".join(parts) if parts else "no test is on"
+
+
+def _lift_text(lf: SideLift) -> str:
+    return f"{lf.label} (median {lf.median:.1f}x against {lf.median_others:.1f}x for the others; n {lf.n} v {lf.n_others})"
+
+
+def next_line(*, measured: int, lifts: Sequence[SideLift], needs: Sequence[str]) -> str:
+    """Line 5: under 10 measured posts "too few to call"; else one STOP and one DO MORE from the lifts (or "nothing clear"); then
+    "needs you:" the decisions waiting for him, or "nothing"."""
+    if measured < CALL_MIN_POSTS:
+        verdict = f"too few to call ({measured} of {CALL_MIN_POSTS} measured posts)"
+    else:
+        up, down = do_more(lifts), stop(lifts)
+        verdict = f"STOP {_lift_text(down) if down else 'nothing clear'} · DO MORE {_lift_text(up) if up else 'nothing clear'}"
+    return f"{verdict} · needs you: {'; '.join(needs) if needs else 'nothing'}"
+
+
+def with_labels(lines: Sequence[str]) -> list[str]:
+    """The five lines with their labels, as 6.1's example shows them (``1 Result    ...``)."""
+    return [f"{label:<10}  {line}" for label, line in zip(LINE_LABELS, lines, strict=True)]

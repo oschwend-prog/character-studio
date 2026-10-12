@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import random
 import statistics
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from collections.abc import Sequence
@@ -818,3 +818,144 @@ def test_rendering_carries_the_date_a_rule_entered_and_gives_new_rules_today():
 def test_a_playbook_with_nothing_to_say_says_so():
     text = weekly.render_playbook("Lenny Gold", [], [], {}, date(2026, 10, 19))
     assert "_No rule yet" in text and "## Watching" not in text
+
+
+# ---- the week and the five lines ------------------------------------------------------------------------------------------------------
+
+
+def test_the_default_week_is_the_last_finished_one():
+    assert weekly.default_week(datetime(2026, 10, 19, 6, 15, tzinfo=LONDON)) == date(2026, 10, 12)  # the Monday run reviews 12-18 Oct
+    assert weekly.default_week(datetime(2026, 10, 25, 23, 59, tzinfo=LONDON)) == date(2026, 10, 12)  # Sunday: the week is not over
+    assert weekly.default_week(datetime(2026, 10, 26, 0, 0, tzinfo=LONDON)) == date(2026, 10, 19)
+    assert weekly.default_week(datetime(2026, 10, 18, 23, 0, tzinfo=timezone.utc)) == date(2026, 10, 12)  # 23:00 UTC is already Mon 19 Oct 00:00 in London (BST)
+    assert weekly.default_week(datetime(2026, 10, 18, 22, 59, tzinfo=timezone.utc)) == date(2026, 10, 5)  # one minute earlier it is still Sunday
+    with pytest.raises(ValueError):
+        weekly.default_week(datetime(2026, 10, 19, 6, 15))
+
+
+def test_a_week_is_monday_to_sunday_london_across_the_clock_change():
+    w = weekly.week_window(date(2026, 10, 19))
+    assert w.start == datetime(2026, 10, 19, 0, 0, tzinfo=LONDON) and w.end == datetime(2026, 10, 26, 0, 0, tzinfo=LONDON)
+    assert w.sunday == date(2026, 10, 25) and w.label() == "week of 19 Oct"
+    cc = weekly.week_window(date(2026, 10, 26))  # BST ends Sun 25 Oct 2026: this week starts in GMT
+    assert cc.start.utcoffset() == timedelta(0) and weekly.week_window(date(2026, 10, 19)).start.utcoffset() == timedelta(hours=1)
+    with pytest.raises(ValueError):
+        weekly.week_window(date(2026, 10, 20))
+
+
+WEEK = weekly.week_window(date(2026, 10, 12))
+MON = datetime(2026, 10, 12, 19, 0, tzinfo=LONDON)
+
+
+def fact(i: int, at: datetime, *, views: int | None = None, x: float | None = None, hook: str | None = None, platform: str = "instagram", **metrics: float) -> weekly.PostFact:
+    return weekly.PostFact(post_id=f"p{i}", clip_id=f"k{i}", platform=platform, posted_at=at, peak_views=views, outlier_x=x, hook=hook, metrics=metrics)
+
+
+def test_the_result_line_has_posts_the_median_with_its_n_the_hits_and_the_best_post_beside_last_week():
+    older = [fact(i, MON - 14 * D + i * D, x=v) for i, v in enumerate([0.9, 0.9])]  # their 7-day figures are in before last week ended
+    last = [fact(10 + i, MON - 7 * D + i * D, x=v) for i, v in enumerate([1.0, 1.2, 1.4, 3.2])]  # week before: figures arrive from 7 days on
+    mine = [fact(20, MON, views=2300, x=None, hook="First day as head butler."), fact(21, MON + D, views=800)]
+    line = weekly.result_line(WEEK, [*older, *last, *mine])
+    assert line.startswith("2 posts (last week 4) · median outlier_x ")
+    assert "best “First day as head butler.” 2,300 views" in line
+    assert "(n " in line and "last week " in line and "hit" in line and "measured" in line
+
+
+def test_the_median_is_cumulative_to_the_weeks_end_against_the_same_a_week_earlier():
+    # posts from 5-9 Oct have their 7-day figure by 12-16 Oct; the week to Sun 18 Oct includes them, the week before does not
+    early = [fact(i, datetime(2026, 10, 5, 19, 0, tzinfo=LONDON) + i * D, x=v) for i, v in enumerate([1.0, 2.0, 3.0])]
+    line = weekly.result_line(WEEK, early)
+    assert "median outlier_x 2.0 (n 3; last week none yet)" in line and "1 hit of 3 measured" in line
+
+
+def test_a_post_without_its_7_day_figure_by_the_weeks_end_is_not_counted_and_the_reason_is_given():
+    fresh = [fact(1, datetime(2026, 10, 15, 19, 0, tzinfo=LONDON), views=500)]
+    line = weekly.result_line(WEEK, fresh)
+    assert "median outlier_x: none yet (the 7-day figure comes 7 days after a post)" in line and "hits: none yet" in line
+    old_but_no_baseline = [fact(i, datetime(2026, 10, 1, 19, 0, tzinfo=LONDON) + i * H, x=None) for i in range(2)]
+    assert "each post needs 3 earlier ones with a 7-day figure" in weekly.result_line(WEEK, old_but_no_baseline)
+    assert "no Instagram post yet" in weekly.result_line(WEEK, [fact(1, MON, views=10, platform="tiktok")])
+
+
+def test_only_instagram_figures_make_the_median_and_a_quiet_week_says_so():
+    early = [fact(i, datetime(2026, 10, 5, 19, 0, tzinfo=LONDON), x=9.0, platform="tiktok") for i in range(3)]
+    assert "none yet" in weekly.result_line(WEEK, early)
+    assert "best: no post this week" in weekly.result_line(WEEK, early)
+    assert "best: none yet (no views read this week)" in weekly.result_line(WEEK, [fact(1, MON)])
+
+
+def test_a_long_hook_is_cut_and_a_missing_one_is_named():
+    long = fact(1, MON, views=10, hook="x" * 100)
+    assert "“" + "x" * 39 + "…”" in weekly.result_line(WEEK, [long])
+    assert "a clip without a hook" in weekly.result_line(WEEK, [fact(1, MON, views=10)])
+
+
+def test_the_audience_line_shows_follows_reach_and_the_guard_each_with_its_comparison_or_why_it_is_missing():
+    empty = weekly.audience_line(follows=None, follows_n=0, follows_floor=None, reach=None, reach_prev=None, reach_n=0, guard=None)
+    assert "followers: none yet (no follower count in the cloud yet)" in empty
+    assert "follows per 1K: none yet (no follows data in the cloud yet)" in empty and "non-follower reach: none yet" in empty
+    assert "guard: no Instagram account" in empty
+    full = weekly.audience_line(
+        follows=3.8, follows_n=4, follows_floor={"status": "fixed", "value": 3.0}, reach=97.2, reach_prev=99.0, reach_n=6,
+        guard={"handle": "franz.ig", "fires": False, "applied": False, "non_follower_pct_previous_week": 99.0, "non_follower_pct_this_week": 97.2},
+    )
+    assert "follows per 1K 3.8 (floor 3.0; n 4)" in full and "non-follower reach 97 % (last week 99 %; n 6)" in full and full.endswith("guard: no change")
+    pending = weekly.audience_line(follows=1.0, follows_n=2, follows_floor={"status": "pending", "reason": "2 of 6 readings studio-wide so far"}, reach=None, reach_prev=None, reach_n=0, guard=None)
+    assert "floor pending: 2 of 6 readings studio-wide so far" in pending
+
+
+def test_the_guard_text_says_what_the_code_did():
+    base = {"handle": "franz.ig", "non_follower_pct_previous_week": 90.0, "non_follower_pct_this_week": 50.0, "drop_pct": 44.4}
+    assert weekly.guard_text({**base, "fires": True, "applied": True, "new_dropin_share": 0.2}) == "guard: cut franz.ig to 0.20 (reach down 44 %)"
+    assert "would cut franz.ig to 0.20" in weekly.guard_text({**base, "fires": True, "applied": False, "new_dropin_share": 0.2})
+    assert "already at or under 0.20" in weekly.guard_text({**base, "fires": True, "applied": False, "new_dropin_share": None})
+    assert weekly.guard_text({"handle": "x", "fires": False, "non_follower_pct_previous_week": None, "non_follower_pct_this_week": 80.0}) == (
+        "guard: no change (it needs a reach reading in both weeks)"
+    )
+
+
+def lead_row(**kw: Any) -> dict[str, Any]:
+    row = {"mode": "thompson", "readings": 5, "readings_needed": 3, "tallied": 4, "min_uses": 6, "fewest_uses": 1, "leading": {"pattern": "false-premise", "wins": 3, "uses": 4}}
+    return {**row, **kw}
+
+
+def test_the_hook_line_has_skip_rate_against_the_ceiling_the_leading_pattern_and_flags():
+    line = weekly.hook_line(skip=41.0, skip_n=5, ceiling={"status": "fixed", "value": 45.0}, row=lead_row(), flagged_posts=[("“First day.”", ["hook", "hold"])])
+    assert line == "skip rate 41 % (ceiling 45 %; n 5) · leading: false-premise, 3 wins of 4 (too few to call) · below 2 floors: “First day.” (hook, hold)"
+    firm = weekly.hook_line(skip=41.0, skip_n=5, ceiling={"status": "fixed", "value": 45.0}, row=lead_row(leading={"pattern": "false-premise", "wins": 5, "uses": 6}), flagged_posts=[])
+    assert "leading: false-premise, 5 wins of 6" in firm and "too few" not in firm
+
+
+def test_the_hook_line_says_why_a_part_is_missing():
+    line = weekly.hook_line(skip=None, skip_n=0, ceiling=None, row=lead_row(leading=None, mode="rotation", tallied=0), flagged_posts=[])
+    assert "skip rate: none yet (no skip-rate data in the cloud yet)" in line and "leading: none yet (rotating, 5 of 3 readings before it can learn)" in line
+    pend = weekly.hook_line(skip=40.0, skip_n=3, ceiling={"status": "pending", "reason": "no data in the cloud yet"}, row=None, flagged_posts=[])
+    assert "ceiling pending: no data in the cloud yet" in pend and "no hook arms" in pend
+    assert "nothing tallied yet" in weekly.hook_line(skip=None, skip_n=0, ceiling=None, row=lead_row(leading=None), flagged_posts=[])
+    two = weekly.hook_line(skip=None, skip_n=0, ceiling=None, row=lead_row(), flagged_posts=[("a", ["hook", "hold"]), ("b", ["hook", "sends"]), ("c", ["hold", "sends"])])
+    assert "below 2 floors: a (hook, hold)" in two and "below 2 floors: b" in two and "below 2 floors: c" not in two  # at most two are named
+
+
+def test_next_says_too_few_to_call_under_10_measured_posts_and_always_names_what_needs_you():
+    assert weekly.next_line(measured=9, lifts=[], needs=[]) == "too few to call (9 of 10 measured posts) · needs you: nothing"
+    assert weekly.next_line(measured=0, lifts=[], needs=["the bar says PROMOTE"]).endswith("needs you: the bar says PROMOTE")
+    assert weekly.next_line(measured=10, lifts=[], needs=[]) == "STOP nothing clear · DO MORE nothing clear · needs you: nothing"
+    lifts = weekly.side_lifts([mc(i, 4.0, setting="kitchen") for i in range(9)] + [mc(20 + i, 1.0, setting="garden") for i in range(9)])
+    line = weekly.next_line(measured=18, lifts=lifts, needs=["merge the playbook PR", "retire arm x"])
+    assert "DO MORE setting = kitchen (median 4.0x against 1.0x for the others; n 9 v 9)" in line
+    assert "STOP setting = garden (median 1.0x against 4.0x for the others; n 9 v 9)" in line  # the garden lift is 0.25
+    assert line.endswith("needs you: merge the playbook PR; retire arm x")
+
+
+def test_the_labels_are_those_of_the_plans_example():
+    out = weekly.with_labels(["a", "b", "c", "d", "e"])
+    assert out == ["1 Result    a", "2 Audience  b", "3 Hook      c", "4 Tests     d", "5 Next      e"]
+
+
+def test_the_bar_phrase_matches_the_plans_example():
+    from studio.review import CharacterEvidence
+
+    ev = CharacterEvidence(slug="reginald", bar="not_yet", posts=9, first_post_at=MON, age=timedelta(days=14, hours=3), mature_posts={}, median_views_7d={}, max_views=None)
+    assert weekly.bar_text(ev) == "not yet (9 of 20 posts, day 14 of 28)"
+    assert weekly.bar_text(CharacterEvidence(slug="x", bar="continue", posts=22, first_post_at=MON, age=timedelta(days=31), mature_posts={}, median_views_7d={}, max_views=None)) == "continue (22 posts, day 31)"
+    assert weekly.bar_text(CharacterEvidence(slug="x", bar="not_yet", posts=0, first_post_at=None, age=None, mature_posts={}, median_views_7d={}, max_views=None)) == "not yet (0 of 20 posts, day 0 of 28)"
