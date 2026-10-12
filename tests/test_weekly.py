@@ -1006,10 +1006,10 @@ def test_a_long_hook_is_cut_and_a_missing_one_is_named():
 
 
 def test_the_audience_line_shows_follows_reach_and_the_guard_each_with_its_comparison_or_why_it_is_missing():
-    empty = weekly.audience_line(follows=None, follows_n=0, follows_floor=None, reach=None, reach_prev=None, reach_n=0, guard=None)
-    assert "followers: none yet (no follower count in the cloud yet)" in empty
-    assert "follows per 1K: none yet (no follows data in the cloud yet)" in empty and "non-follower reach: none yet" in empty
-    assert "guard: no Instagram account" in empty
+    partial = weekly.audience_line(follows=None, follows_n=0, follows_floor=None, reach=97.0, reach_prev=None, reach_n=1, guard=None)
+    assert "followers: none yet (no follower count in the cloud yet)" in partial  # some data: every figure keeps its own phrase
+    assert "follows per 1K: none yet (no follows data in the cloud yet)" in partial and "non-follower reach 97 % (last week none yet; n 1)" in partial
+    assert "guard: no Instagram account" in partial
     full = weekly.audience_line(
         follows=3.8, follows_n=4, follows_floor={"status": "fixed", "value": 3.0}, reach=97.2, reach_prev=99.0, reach_n=6,
         guard={"handle": "franz.ig", "fires": False, "applied": False, "non_follower_pct_previous_week": 99.0, "non_follower_pct_this_week": 97.2},
@@ -1017,6 +1017,18 @@ def test_the_audience_line_shows_follows_reach_and_the_guard_each_with_its_compa
     assert "follows per 1K 3.8 (floor 3.0; n 4)" in full and "non-follower reach 97 % (last week 99 %; n 6)" in full and full.endswith("guard: no change")
     pending = weekly.audience_line(follows=1.0, follows_n=2, follows_floor={"status": "pending", "reason": "2 of 6 readings studio-wide so far"}, reach=None, reach_prev=None, reach_n=0, guard=None)
     assert "floor pending: 2 of 6 readings studio-wide so far" in pending
+
+
+def test_with_no_audience_figure_at_all_the_audience_line_is_one_short_phrase():
+    empty = weekly.audience_line(follows=None, follows_n=0, follows_floor=None, reach=None, reach_prev=None, reach_n=0, guard=None)
+    assert empty == "no follower, follows or reach data in the cloud yet · guard: no Instagram account"
+    guard = {"handle": "x", "fires": False, "applied": False, "non_follower_pct_previous_week": None, "non_follower_pct_this_week": None}
+    assert weekly.audience_line(follows=None, follows_n=0, follows_floor=None, reach=None, reach_prev=None, reach_n=0, guard=guard) == (
+        "no follower, follows or reach data in the cloud yet · guard: no change"  # no repeat of the missing reach reading
+    )
+    only_follows = weekly.audience_line(follows=2.0, follows_n=1, follows_floor=None, reach=None, reach_prev=None, reach_n=0, guard=guard)
+    assert "non-follower reach: none yet (no reach data in the cloud yet)" in only_follows and "follows per 1K 2.0" in only_follows
+    assert only_follows.endswith("guard: no change (it needs a reach reading in both weeks)")  # partial data: the per-figure form stays
 
 
 def test_the_guard_text_says_what_the_code_did():
@@ -1234,7 +1246,23 @@ def test_the_credits_and_the_cost_per_1k_views_are_in_the_header(tmp_path):
     out = run(w, tmp_path)
     line = out["digest"]["header"][0]
     assert line.startswith("Credits 91 of 6,000 this month (2 %, 0 still reserved; last month 0)")
-    assert "cost per 1K views" in line and "credits (n " in line and "last month none yet)" in line
+    assert "cost per 1K views 7.0 credits (n 13,000 views" in line and "last month none yet)" in line  # under 100: one decimal
+
+
+def test_a_cost_per_1k_views_of_100_credits_or_more_is_in_whole_credits_in_the_header(tmp_path):
+    from studio.models import LedgerEntry
+
+    w = first_weeks()
+    clip = w.store.list_clips()[0]
+    w.store.ledger_add(LedgerEntry(clip_id=clip.id, month="2026-10", kind="settle", credits=2000))
+    line = run(w, tmp_path)["digest"]["header"][0]
+    assert "cost per 1K views 154 credits (n 13,000 views" in line  # 2000 credits over 13,000 views: 153.8
+
+
+def test_the_cost_per_1k_views_has_no_decimals_from_100_credits():
+    assert weekly.per_1k_text(4.2) == "4.2"  # under 100: one decimal, as before
+    assert weekly.per_1k_text(99.94) == "99.9" and weekly.per_1k_text(100.0) == "100" and weekly.per_1k_text(11461.5) == "11,462"
+    assert weekly.per_1k_text(2500.4) == "2,500"
 
 
 def test_a_warning_that_fired_is_in_the_header(tmp_path):
@@ -1497,7 +1525,10 @@ def test_the_test_registry_decides_which_tests_the_tests_line_names(tmp_path, ex
     w = first_weeks()
     out = run(w, tmp_path)
     tests = out["digest"]["characters"][0]["lines"][3]
-    assert "score test 0 of 20, his 0 (not a verdict)" in tests and "hook test" in tests and "not a verdict" in tests
+    assert "score test 0 of 20 measured clips, 0 of them Franz's (not a verdict)" in tests and "hook test" in tests and "not a verdict" in tests
+    # the two edit tests carry short labels, not their long names
+    assert "test G zoom pulses 0 v 0 (need 10 v 10; not a verdict)" in tests and "test H word pop 0 v 0 (need 10 v 10; not a verdict)" in tests
+    assert "on the beat" not in tests and "word by word" not in tests
     off = run(first_weeks(), tmp_path)  # the same data, with the live registry (A and B on, C off)
     assert "test C" not in off["digest"]["characters"][0]["lines"][3]  # a test that is off is not named
 

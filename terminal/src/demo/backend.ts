@@ -780,16 +780,16 @@ export class DemoBackend implements Backend {
           characters: [
             block('franz', bar(9, 14), [
               '1 Result    5 posts (last week 4) · median outlier_x 1.1 (n 4; last week none yet) · 1 hit of 4 measured · best “Dog tax.” 2,300 views (4.2x)',
-              '2 Audience  followers: none yet (no follower count in the cloud yet) · follows per 1K: none yet (no follows data in the cloud yet) · non-follower reach: none yet (no reach data in the cloud yet) · guard: no change (it needs a reach reading in both weeks)',
+              '2 Audience  no follower, follows or reach data in the cloud yet · guard: no change',
               '3 Hook      skip rate: none yet (no skip-rate data in the cloud yet) · leading: ego-claim, 3 wins of 4 (too few to call)',
-              '4 Tests     score test 14 of 20, his 5 (not a verdict) · hook test 6 tallied, fewest arm 1 of 6 (not a verdict)',
+              '4 Tests     score test 14 of 20 measured clips, 5 of them Franz\'s (not a verdict) · hook test 6 tallied, fewest arm 1 of 6 (not a verdict)',
               '5 Next      too few to call (4 of 10 measured posts) · needs you: nothing',
             ]),
             block('reginald', bar(6, 6), [
               '1 Result    3 posts (last week 3) · median outlier_x: none yet (the 7-day figure comes 7 days after a post) · hits: none yet (nothing measured) · best “First day as head butler.” 900 views',
-              '2 Audience  followers: none yet (no follower count in the cloud yet) · follows per 1K: none yet (no follows data in the cloud yet) · non-follower reach: none yet (no reach data in the cloud yet) · guard: no change (it needs a reach reading in both weeks)',
+              '2 Audience  no follower, follows or reach data in the cloud yet · guard: no change',
               '3 Hook      skip rate: none yet (no skip-rate data in the cloud yet) · leading: none yet (rotating, 1 of 3 readings before it can learn)',
-              '4 Tests     score test 14 of 20, his 4 (not a verdict) · hook test rotating, 1 of 3 readings so far (not a verdict)',
+              '4 Tests     score test 14 of 20 measured clips, 4 of them Reginald\'s (not a verdict) · hook test rotating, 1 of 3 readings so far (not a verdict)',
               '5 Next      too few to call (0 of 10 measured posts) · needs you: nothing',
             ]),
             block('lenny', bar(0, 0), ['no posts yet']),

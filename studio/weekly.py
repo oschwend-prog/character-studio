@@ -978,8 +978,9 @@ def _floor_note(entry: Mapping[str, Any] | None, word: str = "floor") -> str:
     return f"{word} pending: {entry.get('reason', FLOOR_NO_DATA)}"
 
 
-def guard_text(entry: Mapping[str, Any] | None) -> str:
-    """The Instagram guard's state from ``review_payload``'s ``ig_guard`` entry of his account."""
+def guard_text(entry: Mapping[str, Any] | None, *, brief: bool = False) -> str:
+    """The Instagram guard's state from ``review_payload``'s ``ig_guard`` entry of his account. ``brief`` leaves out the reason a missing
+    reach reading would add (the audience line has already said there is no reach data)."""
     if entry is None:
         return "guard: no Instagram account"
     drop = entry.get("drop_pct")
@@ -989,7 +990,7 @@ def guard_text(entry: Mapping[str, Any] | None) -> str:
         return f"guard: would cut {entry['handle']} to {entry['new_dropin_share']:.2f} (reach down {drop:.0f} %), nothing written"
     if entry.get("fires"):
         return f"guard: fired (reach down {drop:.0f} %), the share is already at or under {review.IG_GUARD_DROPIN_SHARE:.2f}"
-    if entry.get("non_follower_pct_previous_week") is None or entry.get("non_follower_pct_this_week") is None:
+    if not brief and (entry.get("non_follower_pct_previous_week") is None or entry.get("non_follower_pct_this_week") is None):
         return "guard: no change (it needs a reach reading in both weeks)"
     return "guard: no change"
 
@@ -999,7 +1000,10 @@ def audience_line(
     reach_n: int, guard: Mapping[str, Any] | None,
 ) -> str:
     """Line 2: followers (no follower count reaches the cloud yet), follows per 1K against its floor, non-follower reach against last
-    week, and the guard's state."""
+    week, and the guard's state. With no follows and no reach figure at all (so nothing but the missing follower count) the three
+    figures are one short phrase; any data keeps every figure's own phrase."""
+    if follows is None and reach is None:
+        return " · ".join(["no follower, follows or reach data in the cloud yet", guard_text(guard, brief=True)])
     parts = ["followers: none yet (no follower count in the cloud yet)"]
     if follows is None:
         parts.append("follows per 1K: none yet (no follows data in the cloud yet)")
@@ -1042,8 +1046,12 @@ def hook_line(
     return " · ".join(parts)
 
 
+TEST_LABELS = {"G": "zoom pulses", "H": "word pop"}  # the digest's short names for the edit tests (any other test shows its registry name)
+
+
 def _tests_parts(
     slug: str, registry: experiments.Registry, score: Mapping[str, Any], his_scored: int, row: Mapping[str, Any] | None, his_clips: Sequence[Clip],
+    name: str | None = None,
 ) -> list[str]:
     parts: list[str] = []
     for test in registry.tests.values():
@@ -1056,7 +1064,7 @@ def _tests_parts(
                 parts.append(f"score test uninformative at {score['look']}: raise the exploration picks")
             else:
                 interim = " (interim: unproven, not a verdict)" if score["look"] else " (not a verdict)"
-                parts.append(f"score test {score['n']} of {score['needed']}, his {his_scored}{interim}")
+                parts.append(f"score test {score['n']} of {score['needed']} measured clips, {his_scored} of them {name or slug}'s{interim}")
         elif test.id == "B":
             if row is None:
                 continue
@@ -1076,17 +1084,18 @@ def _tests_parts(
                     counts[_shown(arms[test.key])] = counts.get(_shown(arms[test.key]), 0) + 1
             have = " v ".join(f"{counts.get(_shown(a), 0)}" for a in test.counts) if test.counts else str(sum(counts.values()))
             need = " v ".join(str(v) for v in test.params.get("min_n", {}).values())
-            parts.append(f"test {test.id} {test.name} {have} (need {need}; not a verdict)")
+            parts.append(f"test {test.id} {TEST_LABELS.get(test.id, test.name)} {have} (need {need}; not a verdict)")
     return parts
 
 
 def tests_line(
     slug: str, registry: experiments.Registry, score: Mapping[str, Any], his_scored: int, row: Mapping[str, Any] | None,
-    his_clips: Sequence[Clip],
+    his_clips: Sequence[Clip], name: str | None = None,
 ) -> str:
     """Line 4: n so far against n needed for each test that is on in ``config/experiments.json`` (A: the score test, pooled over the
-    characters with his share; B: the hook arms; any other block-coin test: its arms' counts), each marked "not a verdict" before its look."""
-    parts = _tests_parts(slug, registry, score, his_scored, row, his_clips)
+    characters, with how many of those measured clips are his (``his_scored``, by his ``name``); B: the hook arms; any other block-coin
+    test: its arms' counts), each marked "not a verdict" before its look."""
+    parts = _tests_parts(slug, registry, score, his_scored, row, his_clips, name)
     return " · ".join(parts) if parts else "no test is on"
 
 
@@ -1130,6 +1139,11 @@ def month_cost(store: Store, month: str, facts: Mapping[str, Sequence[PostFact]]
     }
 
 
+def per_1k_text(credits: float) -> str:
+    """The cost per 1K views: one decimal under 100 credits, whole credits (with a thousands comma) from 100 up, where a decimal is noise."""
+    return f"{credits:,.0f}" if credits >= 100 else f"{credits:.1f}"
+
+
 def studio_header(
     store: Store, now: datetime, facts: Mapping[str, Sequence[PostFact]], warnings: Sequence[str], waiting: Mapping[str, int],
 ) -> list[str]:
@@ -1143,8 +1157,8 @@ def studio_header(
     if now_m["per_1k"] is None:
         cost = "cost per 1K views: none yet (no views read this month)"
     else:
-        last = f"{before['per_1k']:.1f}" if before["per_1k"] is not None else "none yet"
-        cost = f"cost per 1K views {now_m['per_1k']:.1f} credits (n {now_m['views']:,} views from {_s(now_m['posts'], 'post')}; last month {last})"
+        last = per_1k_text(before["per_1k"]) if before["per_1k"] is not None else "none yet"
+        cost = f"cost per 1K views {per_1k_text(now_m['per_1k'])} credits (n {now_m['views']:,} views from {_s(now_m['posts'], 'post')}; last month {last})"
     shown = [w if len(w) <= 110 else w[:109] + "…" for w in warnings[:2]]
     more = f" +{len(warnings) - 2} more" if len(warnings) > 2 else ""
     flagged = f"{len(warnings)} ({'; '.join(shown)}{more})" if warnings else "none"
@@ -1373,7 +1387,7 @@ def run_weekly(
                 skip=_median_or_none(skip_values), skip_n=len(skip_values), ceiling=char_floors.get("skip_rate"), row=rows.get(slug),
                 flagged_posts=flagged_posts,
             ),
-            tests_line(slug, registry, score, sum(1 for o in observations if scored_by.get(o.clip_id) == slug), rows.get(slug), his_clips),
+            tests_line(slug, registry, score, sum(1 for o in observations if scored_by.get(o.clip_id) == slug), rows.get(slug), his_clips, name),
             next_line(measured=sum(1 for c in his_clips if review.clip_outlier_x(c) is not None), lifts=side_lifts(his_clips), needs=needs),
         ]
         return {**base, "lines": with_labels(lines)}
