@@ -287,8 +287,11 @@ def trend_curve(rows: Iterable[Row], as_of: date | None = None) -> Curve | None:
     ``as_of`` is the latest full day (yesterday, London). A trend nobody posts about any more has no rows after its last post, so
     reading the series "as of its last row" would call a dead small trend a peak. When the last row is more than ``STALE_DAYS``
     before ``as_of`` the series has stopped: the days up to ``as_of`` are days of nothing posted. A last row at most that many
-    days behind is LunarCrush's usual lag and changes nothing; without ``as_of`` the series is read as of its last row."""
+    days behind is LunarCrush's usual lag and changes nothing; without ``as_of`` the series is read as of its last row. Rows dated
+    after ``as_of`` (today's part day) are left out: a part day would drag the last smoothed value down."""
     rows = list(rows)
+    if as_of is not None:
+        rows = [r for r in rows if r.day <= as_of]
     source = source_of(rows)
     by_day: dict[date, int] = {}
     for r in rows:

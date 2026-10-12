@@ -141,12 +141,22 @@ def test_a_series_that_stops_long_before_yesterday_is_read_as_of_yesterday_so_a_
     assert curve.smoothed[-1][0] == date(2026, 10, 6)  # padded with days of nothing up to yesterday
 
 
+def test_a_part_day_dated_after_as_of_is_left_out_so_it_cannot_turn_rising_into_fading():
+    values = [1000, 1100, 1200, 1500, 2500, 4000, 7000, 11_000, 16_000, 24_000]
+    yesterday = D0 + timedelta(days=len(values) - 1)
+    full = series(values)
+    with_today = [*full, Row(yesterday + timedelta(days=1), 400, None), Row(yesterday + timedelta(days=2), 9, None)]  # today's part day and a later one
+    assert trend_curve(full, as_of=yesterday).stage == "rising"
+    assert trend_curve(with_today, as_of=yesterday) == trend_curve(full, as_of=yesterday)  # the rows after as_of are not in it
+    assert trend_curve(with_today).stage != "rising"  # without as_of the rows are read as they come, as before
+
+
 def test_a_lag_of_two_days_is_not_stale_but_three_days_is():
     values = [1000, 1100, 1200, 1500, 2500, 4000, 7000, 11_000, 16_000, 24_000]
     assert D0 + timedelta(days=len(values) - 1) == date(2026, 9, 17)  # the last row
     assert trend_curve(series(values), as_of=date(2026, 9, 19)) == trend_curve(series(values))  # two days behind: LunarCrush's usual lag
     assert trend_curve(series(values), as_of=date(2026, 9, 20)).stage != "rising"  # three days: the trend has stopped being sampled
-    assert trend_curve(series(values), as_of=date(2026, 9, 1)) == trend_curve(series(values))  # an as_of before the series changes nothing
+    assert trend_curve(series(values), as_of=date(2026, 9, 1)) is None  # every row is dated after as_of: nothing to read
 
 
 def test_the_summed_total_stands_in_when_the_answer_has_no_tiktok_column():
