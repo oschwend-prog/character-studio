@@ -17,7 +17,7 @@ new subsystem (a week or more). Line numbers in `studio/drop.py` move while it i
 2. **Every post is read four times:** at 1 h (is it alive?), 24 h, 72 h (the first real read; never delete or repost before it) and 7 days (the verdict).
 3. **Today the cloud only gets counts** from Postiz (views, likes, comments, shares, saves). Skip rate, watch time, non-follower reach, follows and followers per day are missing, so the Instagram guard and the mechanism floors cannot work yet. Plan Task 9 (Instagram's own API) fixes this; it waits for the owner's Meta app.
 4. **Every clip today carries the same format and hook tags**, so the bars cannot tell anything apart. The first build is 13 fixed tags written when a clip is made (section 2). Data not tagged now is lost for good.
-5. **Six tests are pre-registered here** (section 3): the clip score, a hook bandit, Trial Reels, own series against swaps, length, and vote against question.
+5. **Six tests are pre-registered here** (section 3): the clip score, a hook bandit, Trial Reels, own series against swaps, length, and vote against question. Two more, on how a master is cut (zoom pulses on the beat, the hook popping in word by word), were added on 12 Oct before any data (3.9, 3.10).
 6. **Honest about size:** at 20 posts we can only see big effects (a doubling, or a rank correlation of 0.45 or more). We cannot see a 20-30 % gain or name a hook winner per character within 6 weeks.
 7. **Code changes nothing on its own** except the binding Instagram guard and the bandit's choice among hooks the owner approved. Every rule change goes through a weekly pull request with its numbers; merging it is the owner's approval.
 8. **Early warnings:** 0 views at 3 h on 2 posts in a row means an Account Status check; the guard; a skip-rate jump; data gaps.
@@ -261,6 +261,41 @@ pick (`proposal.drop.score`), not on the clip [E: system-review §B1].
   - This fills a procedural gap. It does not change a bar.
 - **What floors do:** they diagnose. A post below two of them is flagged with what failed (hook, hold, sends, follows). They never kill anything; only the bars do.
 
+### 3.9 Test G: zoom pulses on the beat
+
+*Owner decision, Mon 12 Oct 2026, before any data (binding, pre-registered like tests E and F; added to the first six).
+Source: `docs/research/2026-10-08-video-tools.md` section 4.3, rank 1. It costs no credits (ffmpeg only).*
+
+- **Arms:** **zoom pulses** (a punch-in, `zoom_hit` scale 1.06, 0.25 s, on every 4th beat of the master, from the first beat after
+  the hook's first second; picture only, so the dance stays in sync with the sound and the captions are never zoomed) against
+  **none** (the master as it is made today).
+- **Eligible:** masters with beats: the clip's own audio (`original`) or an `ai_beat`. A silent `in_app` master, or a clip with no
+  sound, is not eligible and takes no position in the coin. A master that finds no beat after all is rendered without pulses and
+  tagged `zoom_pulses: 0`, so the analysis leaves it out (missing data is left out, never counted).
+- **Assignment:** the block coin per character, blocks of 4 (two of each arm in a random order), key `zoom` in `test_arms`.
+  The master records what it really did: `zoom_pulses` (the count).
+- **Primary:** `outlier_x` (Instagram). **Secondary, report only:** `x72`, skip rate, watched %.
+- **Minimum:** 10 and 10 pooled.
+- **Decision:** pulses >= 1.3x none on median `outlier_x` -> zoom pulses become the default for every eligible master. Otherwise
+  keep the default (no pulses): the default wins ties.
+
+### 3.10 Test H: the hook comes in word by word on the beat
+
+*Owner decision, Mon 12 Oct 2026, before any data (binding, pre-registered like tests E and F). Source:
+`docs/research/2026-10-08-video-tools.md` section 4.3, rank 2. It costs no credits (PIL and ffmpeg only).*
+
+- **Arms:** **word pop** (the first hook comes in one word more on each beat, `word_pop`, the code the DJ's kit uses, whatever
+  the character's own kit does) against **the kit's own entrance** (Franz fade-rise, Lenny slam, Reginald none: exactly as today).
+- **Eligible:** as test G (masters with beats; a silent `in_app` master takes no position). A master that finds no beat after all
+  keeps the kit's entrance and is tagged with it (`hook_entrance`), so the analysis leaves it out.
+- **Assignment:** a block coin of its own per character, blocks of 4, key `word_pop` in `test_arms`. It is not G's coin: the two
+  tests run on the same posts and never line up. The master records `hook_entrance` (the name of the entrance it really showed).
+- **Primary:** `outlier_x` (Instagram). **Secondary, report only:** `x72`, skip rate (this test changes the first second), watched %.
+- **Minimum:** 10 and 10 pooled.
+- **Decision:** word pop >= 1.3x the kit's entrance on median `outlier_x` -> `word_pop` becomes every character's entrance for the
+  first hook. Otherwise keep the kits' own entrances: the default wins ties.
+- **Note [I]:** G and H share the same posts, so each comparison averages the other out (section 3.0); their interaction is not read.
+
 ---
 
 ## 4. Decision rules and cadence
@@ -406,6 +441,8 @@ Deciding these before any 7-day data keeps them from being renegotiations.
 - Floors: the procedure in section 3.8 as written (set Sun 18 Oct).
 - Later the same day, still before any data: **test C off**. Every video goes out as a normal Reel (shared to the grid);
   `config/experiments.json` C is `off` and every account's `reach.trial_reels` stays false.
+- Later the same day, still before any data: **tests G and H on** (3.9 zoom pulses on the beat, 3.10 the hook popping in word by
+  word; no credits, rule 1.3x on `outlier_x`, the default wins ties); `config/experiments.json` version 2.
 
 ---
 
