@@ -14,6 +14,7 @@ from studio import (
     golive,
     health,
     hits,
+    learn,
     metrics,
     planning,
     publish,
@@ -52,6 +53,7 @@ app.add_typer(seed.app, name="seed")
 app.add_typer(golive.app, name="golive")
 app.add_typer(drop.app, name="drop")
 app.add_typer(hits.app, name="hits")
+app.add_typer(learn.app, name="learn")
 app.add_typer(health.run_app, name="run")
 app.command("health")(health.health_command)
 

@@ -97,10 +97,13 @@ the owner's latest Adjust). A drop checked before this build is made with ``none
 --all-ready`` gives the ready ones their labels first).
 
 **The learning tests at Make it** (``docs/launch/measurement-and-learning-plan.md`` section 3, ``config/experiments.json``,
-``studio.experiments``). When a clip is created, under the settings row lock: every active block-coin test writes its arm into
-``features['test_arms']`` (test C: ``trial``, true / false, the clip's Trial Reel coin, read by the publisher) and test A tags
-``explore_pick`` (the clip's score is below the median of the character's ready scores, ``ready_scores``). A test that is ``off``,
-or not started, assigns nothing; a broken registry stops the make before anything is reserved.
+``studio.experiments``, ``studio.learn``). When a clip is created, under the settings row lock: every active block-coin test writes
+its arm into ``features['test_arms']`` (test C: ``trial``, true / false, the clip's Trial Reel coin, read by the publisher); test A
+tags ``explore_pick`` (the clip's score is below the median of the character's ready scores, ``ready_scores``); test B, the hook
+bandit, draws a hook pattern for the character and puts the check's candidate of that pattern on screen: ``test_arms['hook']`` is
+the pattern, ``hook_by`` is ``bandit`` and the draw is kept in ``drop['make']['bandit']`` so the master renders the same hook
+(``effective``). The owner's own hook (his Adjust changed it) is never drawn over (``hook_by`` ``owner``, no ``hook`` arm). A test that
+is ``off``, or not started, assigns nothing; a broken registry stops the make before anything is reserved.
 
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
 record (``{"at", "by": "owner"}``, written only by ``request_job``; nothing in this CLI writes it). The owner's Adjust
@@ -172,7 +175,7 @@ from typing import Annotated, Any, NoReturn
 
 import typer
 
-from studio import budget, clips, experiments, fetch, gemini, seed, sources
+from studio import budget, clips, experiments, fetch, gemini, learn, seed, sources
 from studio.budget import BudgetRefused
 from studio.captions import compose_content, with_series_tag
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
@@ -709,16 +712,21 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any], *, lead_s: float = 0.0
 def effective(drop: Mapping[str, Any], *, lead_s: float = 0.0, swap_part: str | None = None) -> dict[str, Any]:
     """What the make job uses: the process job's choices with the owner's Adjust on top (``lead_s``: see ``validate_adjust``).
     His part: the owner's Adjust, else the character's own (refs.json ``swap_part``, read at Make it: Franz performs as the star),
-    else the check's suggestion, else featured."""
+    else the check's suggestion, else featured. His hook: the owner's Adjust when it changed the check's hook, else the one the hook
+    bandit drew at Make it (``drop['make']['bandit']``, learning test B), else the check's first."""
     adjust = validate_adjust(drop.get("adjust"), drop, lead_s=lead_s)
     window = drop.get("window") or {}
     star = drop.get("star") or {}
+    hook = adjust.get("hook", drop.get("hook"))
+    chosen = bandit_hook(drop)
+    if chosen is not None and ("hook" not in adjust or _same_line(adjust["hook"], drop.get("hook"))):
+        hook = chosen  # the bandit's draw, unless the owner's Adjust changed the hook (his own line always wins)
     return {
         "star": adjust.get("star", star.get("description")),
         "body": star.get("body"),
         "part": adjust.get("part") or swap_part or drop.get("part") or "featured",
         "gadgets": adjust.get("gadgets", drop.get("gadgets", [])),
-        "hook": adjust.get("hook", drop.get("hook")),
+        "hook": hook,
         "start_s": adjust.get("start_s", float(window.get("start_s", 0.0))),
         "length_s": adjust.get("length_s", float(window.get("length_s", 0.0))),
         "crop_x": adjust["crop_x"] if "crop_x" in adjust else drop.get("crop_x"),
@@ -1436,11 +1444,31 @@ def _same_line(a: Any, b: Any) -> bool:
     return isinstance(a, str) and isinstance(b, str) and " ".join(a.split()).casefold() == " ".join(b.split()).casefold()
 
 
+def _bandit(drop: Mapping[str, Any]) -> Mapping[str, Any] | None:
+    """The hook the bandit drew at Make it (``drop['make']['bandit']``: ``learn.Choice.as_dict``), or None."""
+    b = (drop.get("make") or {}).get("bandit")
+    return b if isinstance(b, Mapping) and isinstance(b.get("hook"), str) and b["hook"].strip() else None
+
+
+def bandit_hook(drop: Mapping[str, Any]) -> str | None:
+    """The text of the hook the bandit drew, or None."""
+    b = _bandit(drop)
+    return b["hook"] if b else None
+
+
+def owner_changed_hook(drop: Mapping[str, Any]) -> bool:
+    """Did the owner's Adjust put a hook of his own on the clip: one that differs from the check's (an Adjust that kept the
+    default changed nothing)."""
+    adjusted = (drop.get("adjust") or {}).get("hook")
+    return isinstance(adjusted, str) and not _same_line(adjusted, drop.get("hook"))
+
+
 def _hook_tags(drop: Mapping[str, Any], look: Mapping[str, Any], hook: Any) -> dict[str, Any]:
     """Which hook went on screen (learning plan tag 3). ``hook_index`` 1-3 = the check's hook of that place (case and spaces
     aside), with the pattern the check gave it (``"none"`` for a check made before the labels); 0 = none of them (the owner's own
     line): its pattern is ``"owner"``, never guessed from the nearest one. ``hook_by`` is ``owner`` when his Adjust changed the
-    hook (an Adjust that kept the default changed nothing), else ``studio`` (``bandit`` is the hook test's, not built yet)."""
+    hook (an Adjust that kept the default changed nothing), ``bandit`` when it is the hook the bandit drew at Make it
+    (``drop['make']['bandit']``, test B: its own pattern and place), else ``studio``."""
     hooks = list(look.get("hooks") or drop.get("hooks") or [])
     labels = list(look.get("hook_patterns") or [])
     index = next((i for i, h in enumerate(hooks) if _same_line(h, hook)), None)
@@ -1448,9 +1476,12 @@ def _hook_tags(drop: Mapping[str, Any], look: Mapping[str, Any], hook: Any) -> d
         pattern = "owner"
     else:
         pattern = labels[index] if index < len(labels) and labels[index] in HOOK_PATTERNS else "none"
-    adjusted = (drop.get("adjust") or {}).get("hook")
-    by = "owner" if isinstance(adjusted, str) and not _same_line(adjusted, drop.get("hook")) else "studio"
-    return {"hook_pattern": pattern, "hook_index": 0 if index is None else index + 1, "hook_by": by}
+    if owner_changed_hook(drop):
+        return {"hook_pattern": pattern, "hook_index": 0 if index is None else index + 1, "hook_by": "owner"}
+    drawn = _bandit(drop)
+    if drawn is not None and _same_line(hook, drawn["hook"]) and drawn.get("pattern") in HOOK_PATTERNS and _whole(drawn.get("index"), 0) is not None:
+        return {"hook_pattern": drawn["pattern"], "hook_index": drawn["index"] + 1, "hook_by": "bandit"}
+    return {"hook_pattern": pattern, "hook_index": 0 if index is None else index + 1, "hook_by": "studio"}
 
 
 def _whole(value: Any, low: int) -> int | None:
@@ -1685,14 +1716,25 @@ def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part:
         if clip is not None:
             return clip
     registry = experiments.load_experiments()  # a broken registry stops the make here, before anything is reserved or paid
+    look = drop.get("deconstruct") or {}
+    state = learn.bandit_state(store, registry) if registry.is_active("B", now) and not owner_changed_hook(drop) else None
     with store.transaction():
         store.get_settings()  # the settings row lock: two makes of one character never read the same place in a test's block
         arms, explore = _tests_at_make(store, pick, now, registry)
+        choice = None if state is None else learn.choose_hook(
+            store, registry, pick.character_slug, pick.id, list(look.get("hooks") or drop.get("hooks") or []),
+            list(look.get("hook_patterns") or []), moment=bool((look.get("moment_name") or "").strip()), now=now, state=state,
+        )  # the hook bandit (test B): the owner's own hook is never drawn over
+        extra: dict[str, Any] = {}
+        if choice is not None:
+            extra = {"bandit": choice.as_dict()}
+            drop = {**drop, "make": {**(drop.get("make") or {}), **extra}}
+            arms = {**arms, "hook": choice.pattern}
         eff = effective(drop, swap_part=swap_part)
         kind = next_engagement(store, pick.character_slug)
         features = _features(pick, drop, eff, kind, version_index(store, pick), test_arms=arms, explore_pick=explore)
         clip = clips.new_clip(store, pick.character_slug, None, Mode.dropin, features)
-        pick = _record_make(store, pick, now, clip_id=clip.id, attempt=0)
+        pick = _record_make(store, pick, now, clip_id=clip.id, attempt=0, **extra)
     mark_favorite(store, pick.id, "queued", clip_id=clip.id)
     return clip
 
