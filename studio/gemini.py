@@ -46,7 +46,10 @@ arm). Both are required and checked like the rest; a pattern is kept trimmed and
 for a character the hook bandit (test B, ``config/experiments.json``) has arms for, the check writes ONE hook for each of his
 patterns instead of three free ones (``HookArms``: 3 or 4 hooks and as many labels, still in one call, still ``hooks`` /
 ``hook_patterns`` in the same order), so the draw at Make it always finds a candidate; ``trend-label`` is asked only for a clip
-with a moment name (without one its slot carries another pattern). Without arms the check is as it was: 3 hooks.
+with a moment name (without one its slot carries another pattern). Without arms the check is as it was: 3 hooks. The arms fail
+OPEN: the first answer must carry a hook of every arm (a gap gets the one second chance, with the missing pattern named), but the
+retry is held to the hooks' shape alone (N hooks, N valid labels, the length cap), so an arm the model still misses simply has
+no candidate and the check ends ready; the draw at Make it then falls through to an arm that has one.
 
 **One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 42, a hashtag list that is
 not 3-4 tags: the series tag is the fifth, added at Make it), the same request is made once more with the problems appended to
@@ -788,11 +791,13 @@ def _text(value: Any, limit: int, *, allow_empty: bool = False) -> bool:
 
 def deconstruct_problems(
     answer: Mapping[str, Any], c: Character, roster: Sequence[Character] = (), hook_arms: HookArms | None = None,
+    strict_arms: bool = True,
 ) -> list[str]:
     """The rules a deconstruct answer breaks (empty = usable). Shape errors and length errors alike: see ``generate_json``.
     ``roster`` = the characters the recommendation may name (none given: ``c`` alone). With ``hook_arms`` the answer has one hook
-    and one label per arm and a hook of every arm's pattern (``HookArms.required``: ``trend-label`` only for a clip with a moment
-    name); without, three hooks in any patterns."""
+    and one label per arm and, when ``strict_arms``, a hook of every arm's pattern (``HookArms.required``: ``trend-label`` only for
+    a clip with a moment name); without, three hooks in any patterns. ``strict_arms`` False holds the hooks to their shape alone
+    (``deconstruct`` does so for the retry: an arm still missing is an arm with no candidate, never a failed check)."""
     p: list[str] = []
     missing = [k for k in DECONSTRUCT_SCHEMA["required"] if k not in answer]
     if missing:
@@ -845,7 +850,7 @@ def deconstruct_problems(
     labels = answer["hook_patterns"]
     if not isinstance(labels, list) or len(labels) != slots or not all(_pattern(x) in HOOK_PATTERNS for x in labels):
         p.append(f"hook_patterns must be {slots} of {', '.join(HOOK_PATTERNS)}, one per hook in the same order")
-    elif hook_arms is not None:
+    elif hook_arms is not None and strict_arms:
         missing = [name for name in hook_arms.required(answer["moment_name"]) if name not in {_pattern(x) for x in labels}]
         if missing:
             p.append(f"hook_patterns must include {', '.join(missing)}: one hook for each of {', '.join(hook_arms.patterns)}")
@@ -965,12 +970,19 @@ def deconstruct(
 ) -> dict[str, Any]:
     """The deconstruct of ``clip`` (an mp4 proxy) for character ``c``, with the recommendation among ``roster`` (none given:
     ``c`` alone) and his latest hooks to steer away from (``used_hooks``): checked and tidied (see the module doc). With
-    ``hook_arms`` (the hook bandit's patterns for ``c``) it writes one hook for each, in the same single call."""
+    ``hook_arms`` (the hook bandit's patterns for ``c``) it writes one hook for each, in the same single call: the first answer is
+    held to every arm (a missing pattern gets the one second chance, named), the retry to the hooks' shape alone, so an arm the
+    model still misses has no candidate and the check ends ready (the bandit falls through to an arm that has one)."""
     crew = crew_of(c, roster)
     prompt = deconstruct_prompt(c, crew, used_hooks, hook_arms)
-    answer = client.generate_json(
-        clip, "video/mp4", prompt, deconstruct_schema(crew, hook_arms), check=lambda a: deconstruct_problems(a, c, crew, hook_arms),
-    )
+    asked = 0
+
+    def check(a: dict[str, Any]) -> list[str]:
+        nonlocal asked
+        asked += 1  # ``generate_json`` checks the first answer, and the retry's answer if there is one
+        return deconstruct_problems(a, c, crew, hook_arms, strict_arms=asked == 1)
+
+    answer = client.generate_json(clip, "video/mp4", prompt, deconstruct_schema(crew, hook_arms), check=check)
     return tidy_deconstruct(answer, c)
 
 

@@ -3165,12 +3165,55 @@ def test_a_check_with_four_arms_stores_four_hooks_and_the_adjust_sheet_gets_all_
     assert d["hooks"] == hooks and d["deconstruct"]["hook_patterns"] == patterns and d["hook"] == hooks[0]
 
 
-def test_an_answer_that_misses_an_arm_breaks_the_rules_the_client_checks_it_by(world, portrait, experiments_on):
+def answering_client(*answers) -> tuple[gemini.GeminiClient, list]:
+    """The real client over a mock transport answering with ``answers`` in turn (nothing leaves the machine); the list is the requests."""
+    import httpx
+
+    queue, seen = list(answers), []
+
+    def handler(request):
+        seen.append(request)
+        body = {"candidates": [{"content": {"role": "model", "parts": [{"text": json.dumps(queue.pop(0))}]}, "finishReason": "STOP"}]}
+        return httpx.Response(200, json=body)
+
+    return gemini.GeminiClient("k", transport=httpx.MockTransport(handler), sleep=lambda s: None), seen
+
+
+def test_a_first_answer_that_misses_an_arm_is_asked_again_and_a_second_miss_still_ends_ready(world, portrait, experiments_on):
+    """Final review I1: the arm coverage fails open. The retry names the gap; if the model still misses, that arm has no candidate,
+    the check ends ready (not failed, not red) and the draw falls through to an arm that has one."""
     store, storage = world
     pid = drop_file(store, storage, portrait)
-    wrong = deconstruct(hook_patterns=["understatement", "false-premise", "understatement"])  # no trend-label although the clip has a moment
-    out = process_drop(store, storage, pid, gemini_client=FakeGemini(wrong), now=B_DAY, job="t")  # FakeGemini runs the check function
-    assert out.state == "failed" and "hook_patterns must include trend-label" in out.reason
+    gap = deconstruct(hook_patterns=["understatement", "false-premise", "understatement"])  # no trend-label although the clip has a moment
+    client, seen = answering_client(gap, gap)
+    out = process_drop(store, storage, pid, gemini_client=client, now=B_DAY, job="t")
+    assert out.ok and out.state == "ready" and len(seen) == 2  # asked once more, then taken as it is
+    assert "hook_patterns must include trend-label" in json.loads(seen[1].content)["contents"][0]["parts"][1]["text"]
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["state"] == "ready" and d["reason"] is None and d["hooks"] == gap["hooks"]
+    look = d["deconstruct"]
+    state = drop.learn.BanditState(readings={"reginald": 20})
+    registry = drop.experiments.load_experiments()
+    chosen = {
+        drop.learn.choose_hook(
+            store, registry, "reginald", f"pick-{i}", look["hooks"], look["hook_patterns"], moment=True, now=B_DAY, state=state,
+        ).pattern
+        for i in range(60)
+    }
+    assert chosen == {"understatement", "false-premise"}  # trend-label has no candidate: the others are drawn, never "no choice"
+
+
+def test_an_answer_with_every_arm_is_taken_at_once_and_a_broken_shape_still_fails_the_check(world, portrait, experiments_on):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    good = deconstruct(hook_patterns=["understatement", "false-premise", "trend-label"])
+    client, seen = answering_client(good)
+    assert process_drop(store, storage, pid, gemini_client=client, now=B_DAY, job="t").state == "ready" and len(seen) == 1
+    other = drop_file(store, storage, portrait)
+    short = deconstruct(hooks=["One.", "Two."], hook_patterns=["understatement", "false-premise"])  # 2 hooks where 3 are asked
+    client, seen = answering_client(short, short)
+    out = process_drop(store, storage, other, gemini_client=client, now=B_DAY, job="t")
+    assert out.state == "failed" and "hooks must be 3 lines" in out.reason and len(seen) == 2
 
 
 def test_a_bandit_draw_always_finds_a_candidate_when_the_check_wrote_one_hook_per_arm(world, portrait, experiments_on):

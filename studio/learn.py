@@ -35,9 +35,10 @@ rests on (the first snapshot of the window, which never moves).
 5. *The order.* The shares are sampled without replacement by a generator seeded from the registry seed, the character and the pick, so
    the same pick and data always give the same order; the first arm with a candidate wins.
 
-The floor and the ceiling are on the draws. Since the check writes one hook per arm, every draw finds a candidate and the shares of
+The floor and the ceiling are on the draws. Since the check writes one hook per arm, a draw finds a candidate and the shares of
 the posts that go out are the draw's. (A clip checked before that has 3 free hooks, so its draw may fall through to the next arm of
-the order; and a clip with no moment name has no ``trend-label`` hook: its slot carries another pattern.)
+the order; a clip with no moment name has no ``trend-label`` hook: its slot carries another pattern; and an arm the model missed
+twice has no hook either: the check fails open, see ``studio.gemini``.)
 
 ``studio learn arms [--character SLUG]`` prints (read-only) each character's arms with wins, losses, the tally used and the
 current draw probabilities, as JSON.
