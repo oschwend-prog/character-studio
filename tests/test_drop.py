@@ -696,6 +696,7 @@ def test_a_link_dropped_again_keeps_the_earlier_drops_keys_and_the_new_keys_win_
     earlier = {
         "state": "ready", "hooks": ["a", "b"], "window": {"start_s": 1, "length_s": 8}, "adjust": {"hook": "x"}, "own_footage": True,
         "score": 81, "hit_rules_version": 3, "auto_filed": True, "hit": {"id": "h", "lane": "general"}, "fetch_days": ["2026-10-10"],
+        "trend_stage": "rising", "days_since_trend_peak": 4, "sound_rising": True,  # the hits job's LunarCrush reading at filing (task 18)
         "job": {"holder": "run-7", "at": NOW.isoformat()}, "reason": "old", "character_by": "studio",
     }
     store.update_favorite(first.id, proposal={**first.proposal, "hold_reason": "x", "drop": {**first.proposal["drop"], **earlier}})
@@ -705,8 +706,9 @@ def test_a_link_dropped_again_keeps_the_earlier_drops_keys_and_the_new_keys_win_
     assert dup and again.id == first.id and again.status == "approved" and "hold_reason" not in again.proposal
     assert d["hooks"] == ["a", "b"] and d["window"] == {"start_s": 1, "length_s": 8} and d["adjust"] == {"hook": "x"}  # kept
     assert d["job"] == earlier["job"]  # a live worker's lease stays
-    for gone in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days"):  # describes the earlier drop, not this one
+    for gone in drop.MERGE_STRIP:  # describes the earlier drop, not this one
         assert gone not in d, gone
+    assert set(drop.MERGE_STRIP) == {"score", "hit_rules_version", "auto_filed", "hit", "fetch_days", *drop.TREND_TAGS}
     assert d["state"] == "checking" and d["kind"] == "link" and d["reason"] is None and d["own_footage"] is False  # the new keys win
     assert d["character_by"] == "owner" and d["at"] == later.isoformat() and again.proposal["decision"]["at"] == later.isoformat()
 
@@ -715,8 +717,11 @@ def test_a_new_drops_own_tags_win_over_the_strip_and_a_drop_that_is_no_object_co
     store, _ = world
     first, _ = add_drop(store, "reginald", TIKTOK, NOW)
     store.update_favorite(first.id, proposal={**first.proposal, "drop": {**first.proposal["drop"], "auto_filed": True, "score": 5}})
-    again, _ = add_drop(store, "reginald", TIKTOK, NOW, auto_filed=True, hit={"id": "h2", "lane": "reginald"})
+    again, _ = add_drop(
+        store, "reginald", TIKTOK, NOW, auto_filed=True, hit={"id": "h2", "lane": "reginald"}, trend={"trend_stage": "peak", "sound_rising": False},
+    )
     assert again.proposal["drop"]["auto_filed"] is True and again.proposal["drop"]["hit"] == {"id": "h2", "lane": "reginald"}
+    assert again.proposal["drop"]["trend_stage"] == "peak" and again.proposal["drop"]["sound_rising"] is False  # the new reading wins
     assert "score" not in again.proposal["drop"]
     for junk in (None, [], "text", 7):  # a drop the studio never wrote: replaced, not merged
         store.update_favorite(first.id, proposal={**again.proposal, "drop": junk})

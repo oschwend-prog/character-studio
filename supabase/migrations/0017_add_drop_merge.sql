@@ -9,12 +9,15 @@
 -- before; only the keys the new drop does not mention survive. A `drop` that is missing or not an object is treated as empty
 -- (jsonb 'null' || object would make an array).
 --
--- THE STRIP LIST (final review M1): five keys describe the earlier drop, not the owner's new one, and are removed before the merge:
+-- THE STRIP LIST (final review M1, task 19 review M2): eight keys describe the earlier drop, not the owner's new one, and are
+-- removed before the merge:
 -- `score` and `hit_rules_version` (a drop back at 'checking' has no score until the check ends ready again, the invariant
--- `request_recheck` and `set_drop_character` keep), and `auto_filed`, `hit` and `fetch_days` (the hits job's tags: a link the owner
+-- `request_recheck` and `set_drop_character` keep); `auto_filed`, `hit` and `fetch_days` (the hits job's tags: a link the owner
 -- drops himself is an owner drop, not an auto-filed one, so learning tags it `owner_saved`, the lane's daily auto-file quota does not
--- count it and the 3-day fetch skip starts over). `job` is kept on purpose: it holds a live worker's lease. This migration has never
--- been applied anywhere, so it is amended in place (no 0018).
+-- count it and the 3-day fetch skip starts over); and `trend_stage`, `days_since_trend_peak` and `sound_rising` (the LunarCrush
+-- reading of the trend the same hits job wrote onto the drop's top level when it filed the link, task 18: `learn_tags` would tag the
+-- clip with a reading taken days before the owner dropped it himself). `job` is kept on purpose: it holds a live worker's lease.
+-- This migration has never been applied anywhere, so it is amended in place (no 0018).
 --
 -- Additive / replacing only, schema studio only: ONE function, `create or replace` with the signature, the language, the
 -- security (invoker, empty search_path) and the grants of 0015's add_drop (the latest definition: 0013's was re-created there);
@@ -103,7 +106,7 @@ begin
            -- but not its score, rules version or the hits job's tags (see THE STRIP LIST above); `job` stays: a live lease
            proposal = (fa.proposal - 'hold_reason') || jsonb_build_object('decision', rec, 'drop',
                         (case when jsonb_typeof(fa.proposal -> 'drop') = 'object'
-                         then (fa.proposal -> 'drop') - 'score' - 'hit_rules_version' - 'auto_filed' - 'hit' - 'fetch_days'
+                         then (fa.proposal -> 'drop') - 'score' - 'hit_rules_version' - 'auto_filed' - 'hit' - 'fetch_days' - 'trend_stage' - 'days_since_trend_peak' - 'sound_rising'
                          else '{}'::jsonb end) || drop_)
      where fa.id = f.id
     returning fa.* into f;
