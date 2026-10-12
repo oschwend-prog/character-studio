@@ -503,6 +503,25 @@ def test_the_next_clips_follow_the_rotation_through_the_warm_up(experiments_on):
     assert patterns[2] in ("false-premise", "understatement") and patterns[3] in ("false-premise", "understatement")
 
 
+FOUR_LOOK = {
+    **LOOK,
+    "hooks": ["I invented this walk.", "When the hallway is your runway.", "They said a dog cannot do this.", "The shoulder shimmy, as ordered."],
+    "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "trend-label"],
+}
+
+
+def test_with_one_hook_per_arm_every_arm_has_a_candidate_and_the_fourth_hook_is_tagged_four(experiments_on):
+    """Franz has four arms; the check now writes four hooks. The warm-up rotation puts each on screen in turn, no clip falls back to
+    the check's first hook, and the fourth hook is ``hook_index`` 4 (a range of 0-3 would have refused the clip)."""
+    store = World().store
+    seen = []
+    for _ in range(4):
+        f = store.get_clip(made(store, add_pick(store, slug="franz", look=FOUR_LOOK)).id).features
+        assert f["hook_by"] == "bandit" and clips.learn_problems(f) == []
+        seen.append((f["test_arms"]["hook"], f["hook_index"], f["hook_text"]))
+    assert seen == [(p, i + 1, h) for i, (p, h) in enumerate(zip(FOUR_LOOK["hook_patterns"], FOUR_LOOK["hooks"], strict=True))]
+
+
 def test_the_owners_own_hook_always_wins_and_is_not_drawn(experiments_on):
     store = World().store
     pick = add_pick(store, adjust={"hook": "Tea is at four."})

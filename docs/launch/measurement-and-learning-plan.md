@@ -174,7 +174,7 @@ pick (`proposal.drop.score`), not on the clip [E: system-review §B1].
   - Reginald: `false-premise`, `understatement`, `trend-label`
   - Lenny: `mid-deal`, `when-relatable`, `ego-claim`, `trend-label`
   - `trend-label` is available only when the clip has a moment name; otherwise the draw is among the others.
-  - Change needed: Gemini writes one hook per arm (3-4, not always 3) and labels each.
+  - Change needed: Gemini writes one hook per arm (3-4, not always 3) and labels each. Built 13 Oct (task 19): the check asks for one hook for each of the character's arms in the same single call (`gemini.HookArms`); `trend-label`'s slot carries another pattern for a clip with no moment name; a character with no arms keeps 3 free hooks.
 - **How it works, in plain words:** each hook pattern keeps a tally of wins and losses for that character. Before a post, the bandit draws one random number per pattern from a curve shaped by its tally. A pattern with many wins tends to draw high. A pattern with few uses has a wide curve and sometimes draws highest, so it keeps being tried. The highest draw goes on screen. Winners get used more, and the others are never dropped by accident. (This is Thompson sampling; each curve is a Beta(wins + 1, losses + 1) distribution.)
 - **Win:** the post's views at 72 h beat the median 72-hour views of the account's last 15 earlier posts (at least 3 needed) [E: system-review §B3.3]. A post with no 72-hour reading is neither a win nor a loss.
 - **Guard rails:**

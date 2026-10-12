@@ -54,7 +54,8 @@ terminal's Adjust refuses a longer section before Make it, as ``validate_adjust`
 **Process** (``process_drop``, free): the clip (``source ingest-owner`` for a file, ``source fetch`` with no Recreate fallback
 for a link), a probe, the free local analysis (``source analyze``: cuts, beat, the best window), the Gemini **deconstruct**
 (``studio.gemini``: people, the star and where and whether the star is a child, children anywhere (recorded only), a watermark or
-handle, burned-in text, setting, what happens, his part, gadgets from the traits card, 3 hooks in the bible voice with their
+handle, burned-in text, setting, what happens, his part, gadgets from the traits card, 3 hooks (one per arm of the hook bandit when
+test B has arms for him: 3 or 4, ``hook_arms_for``) in the bible voice with their
 patterns, a playbook caption, a first comment and its question variant, hashtags) or, without the key, the one the daily run
 wrote by hand (``--deconstruct-file``), the checks, the window (``drop_window``: a classic 12-15 s, any other
 clip 8-10 s, inside one shot, on the beat), the crop of a landscape clip around the star, the price (``planning.estimate_credits``
@@ -474,6 +475,22 @@ def family_spans(store: Store, pick: Favorite) -> list[dict[str, Any]]:
         if _finite(start) and _finite(length) and length > 0:
             out.append({"start_s": round(float(start), 2), "end_s": round(float(start) + float(length), 2), "what": "version"})
     return sorted(out, key=lambda x: (x["start_s"], x["end_s"]))
+
+
+def hook_arms_for(slug: str, now: datetime) -> gemini.HookArms | None:
+    """The hook patterns the check writes ONE hook for, for this character: his arms of test B (``config/experiments.json``) while
+    the test is on and has started, else ``None`` (three free hooks, as before). A registry that cannot be read is no reason to stop
+    a free look: it gives ``None`` here (Make it stops on it by itself, ``_new_or_current_clip``) and says so in the log."""
+    try:
+        registry = experiments.load_experiments()
+    except ValueError as e:
+        log.warning("drop check: the test registry cannot be read (%s): three free hooks", str(e)[:140])
+        return None
+    if not registry.is_active("B", now):
+        return None
+    test = registry.test("B")
+    arms = learn.arms_of(test, slug)  # all of them: trend-label is asked for when the clip turns out to have a moment name
+    return gemini.HookArms(arms, needs_moment=tuple(a for a in arms if a in (test.params.get("needs_moment_name") or ()))) if arms else None
 
 
 def used_hooks(store: Store, slug: str, exclude_pick_id: str | None = None) -> list[str]:
@@ -1316,13 +1333,15 @@ def _process(
         else:
             proxy = clipwork.proxy_clip(local, work / "proxy.mp4")
             try:
-                look = gemini.deconstruct(client, proxy, who, crew, used_hooks(store, slug, pick.id))
+                look = gemini.deconstruct(client, proxy, who, crew, used_hooks(store, slug, pick.id), hook_arms_for(slug, now))
                 recommended = look["recommended"]  # the one the card shows (the second look is asked in his voice only)
                 if by_studio and recommended["slug"] != slug and recommended["slug"] not in in_family:
                     _switch(store, pick.id, slug, recommended["slug"])
                     slug = recommended["slug"]
                     ref, who = character(slug, characters_dir)
-                    look = gemini.deconstruct(client, proxy, who, crew, used_hooks(store, slug, pick.id))  # once more, his voice
+                    look = gemini.deconstruct(  # once more, his voice (and his arms)
+                        client, proxy, who, crew, used_hooks(store, slug, pick.id), hook_arms_for(slug, now),
+                    )
             except gemini.GeminiBlocked as e:
                 reason = f"Gemini would not look at this clip ({e}): we cannot use it"
                 _unready(store, _still(store, pick.id, slug), now, state="blocked", reason=reason, **basics)
@@ -1501,7 +1520,7 @@ def owner_chose_hook(drop: Mapping[str, Any]) -> bool:
 
 
 def _hook_tags(drop: Mapping[str, Any], look: Mapping[str, Any], hook: Any) -> dict[str, Any]:
-    """Which hook went on screen (learning plan tag 3). ``hook_index`` 1-3 = the check's hook of that place (case and spaces
+    """Which hook went on screen (learning plan tag 3). ``hook_index`` 1-N = the check's hook of that place (3, or one per bandit arm) (case and spaces
     aside), with the pattern the check gave it (``"none"`` for a check made before the labels); 0 = none of them (the owner's own
     line): its pattern is ``"owner"``, never guessed from the nearest one. ``hook_by`` is ``owner`` when his Adjust saved a
     hook (any explicit choice, the check's first included: ``owner_chose_hook``), ``bandit`` when it is the hook the bandit drew at Make it

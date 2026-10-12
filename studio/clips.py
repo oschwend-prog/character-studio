@@ -153,7 +153,7 @@ REQUIRED_FEATURES = frozenset(
 # ---- the learning tags (see the module doc) ----
 LEARN_FEATURES = frozenset(
     {
-        "hook_index",  # which of the check's hooks is on screen: 1-3 (1 = the first, the default); 0 = none of them
+        "hook_index",  # which of the check's hooks is on screen: 1-3, or 1-4 with a hook per bandit arm (1 = the first, the default); 0 = none
         "hook_by",  # who chose the hook: studio, owner (his Adjust changed it), bandit (test B, later)
         "caption_line1",
         "first_comment_kind",
@@ -208,8 +208,9 @@ LEARN_BOOLS = frozenset({"sound_rising", "explore_pick", "first_comment_posted",
 LEARN_NULLABLE = frozenset({"days_since_trend_peak", "episode", "score_total", "score_potential", "score_swap"})
 HOOK_TAGS = ("hook_text", "hook_pattern", "hook_index", "hook_by")  # what set_hook_tags may write
 _RULES_VERSION = re.compile(r"v\d+")  # gemini.hit_rules_version: v<N>, or "none"
-_WHOLE_RANGES: dict[str, tuple[int, int | None]] = {  # whole numbers (never a bool) from low to high (None: no top)
-    "hook_index": (0, 3), "version_index": (1, 3), "days_since_trend_peak": (0, None), "episode": (1, None),
+# whole numbers (never a bool) from low to high (None: no top); the check writes one hook per bandit arm, at most one per pattern
+_WHOLE_RANGES: dict[str, tuple[int, int | None]] = {
+    "hook_index": (0, len(HOOK_PATTERNS)), "version_index": (1, 3), "days_since_trend_peak": (0, None), "episode": (1, None),
     "score_total": (0, 100), "score_potential": (0, 10), "score_swap": (0, 10), "zoom_pulses": (0, None), "beats": (0, None),
 }
 

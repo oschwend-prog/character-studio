@@ -859,3 +859,76 @@ def test_a_429_that_is_not_the_last_answer_is_still_asked_again(clip):
     fake = Fake((429, google_429("GenerateRequestsPerMinutePerProjectPerModel-FreeTier")), (200, answer(GOOD)))
     c = GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append)
     assert deconstruct(c, clip, REGINALD)["hooks"] and waits == [BUSY_WAITS_S[0]]
+
+
+# ---- one hook per arm of the hook bandit (test B), instead of three free hooks (task 15 concern 1) -------------------------------
+
+FRANZ_ARMS = gemini.HookArms(("ego-claim", "when-relatable", "myth-bust", "trend-label"), needs_moment=("trend-label",))
+REGINALD_ARMS = gemini.HookArms(("false-premise", "understatement", "trend-label"), needs_moment=("trend-label",))
+FOUR = {
+    "hooks": ["I invented this walk.", "When the hallway is your runway.", "They said a dog cannot do this.", "The shoulder shimmy, as ordered."],
+    "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "trend-label"],
+}
+
+
+def test_the_prompt_asks_for_one_hook_per_arm_and_without_arms_for_three_free_ones():
+    free = gemini.deconstruct_prompt(REGINALD)
+    assert "- hooks: 3 different on-screen hooks" in free and "one of the three names it" in free  # unchanged without arms
+    prompt = gemini.deconstruct_prompt(REGINALD, hook_arms=FRANZ_ARMS)
+    hooks = prompt.split("- hooks:", 1)[1].split("\n- hook_patterns:", 1)[0]
+    assert hooks.lstrip().startswith("4 different on-screen hooks") and "ONE hook for each of these patterns" in hooks
+    for name in FRANZ_ARMS.patterns:
+        assert f"{name} ({gemini.HOOK_PATTERN_WORDS[name]})" in hooks  # each arm, with what the pattern is
+    assert "of the three" not in hooks and "the strongest first" in hooks
+    assert "trend-label names the clip's trend or moment" in hooks and "another pattern" in hooks  # no moment name: that slot is free
+    labels = prompt.split("- hook_patterns:", 1)[1].split("\n- ", 1)[0]
+    assert "(4 names)" in labels and all(name in labels for name in gemini.HOOK_PATTERNS)  # the label may be any of the seven
+    ungated = gemini.deconstruct_prompt(REGINALD, hook_arms=gemini.HookArms(("ego-claim", "myth-bust", "false-premise")))
+    assert "3 different on-screen hooks" in ungated and "trend-label names" not in ungated  # no arm needs a moment name: no such rule
+
+
+def test_the_schema_asks_for_as_many_hooks_as_arms():
+    free = gemini.deconstruct_schema((REGINALD,))
+    assert free == gemini.deconstruct_schema((REGINALD,), hook_arms=None) and free["properties"]["hooks"]["minItems"] == 3
+    four = gemini.deconstruct_schema((REGINALD,), hook_arms=FRANZ_ARMS)
+    for key in ("hooks", "hook_patterns"):
+        assert (four["properties"][key]["minItems"], four["properties"][key]["maxItems"]) == (4, 4)
+    assert gemini.DECONSTRUCT_SCHEMA["properties"]["hooks"]["maxItems"] == 3  # the module's own schema is not changed
+
+
+def test_the_check_wants_every_arm_pattern_once_and_trend_label_only_with_a_moment_name():
+    ok = {**GOOD, **FOUR}
+    assert gemini.deconstruct_problems(ok, REGINALD, hook_arms=FRANZ_ARMS) == []
+    short = gemini.deconstruct_problems(GOOD, REGINALD, hook_arms=FRANZ_ARMS)  # three hooks where four are asked
+    assert any(p.startswith("hooks must be 4 lines") for p in short) and any(p.startswith("hook_patterns must be 4 of") for p in short)
+    gap = {**ok, "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "myth-bust"]}  # trend-label missing although the clip has a moment name
+    (problem,) = gemini.deconstruct_problems(gap, REGINALD, hook_arms=FRANZ_ARMS)
+    assert "must include trend-label" in problem and "one hook for each of ego-claim, when-relatable, myth-bust, trend-label" in problem
+    no_moment = {**gap, "moment_name": ""}  # no moment name: trend-label is no arm, its slot may carry another pattern
+    assert gemini.deconstruct_problems(no_moment, REGINALD, hook_arms=FRANZ_ARMS) == []
+    missing = {**no_moment, "hook_patterns": ["ego-claim", "when-relatable", "when-relatable", "myth-bust"][:3] + ["ego-claim"]}
+    assert any("must include myth-bust" in p for p in gemini.deconstruct_problems(missing, REGINALD, hook_arms=FRANZ_ARMS))
+    # without arms the rules are the old ones: three hooks, any patterns
+    assert gemini.deconstruct_problems(GOOD, REGINALD) == [] and gemini.deconstruct_problems(ok, REGINALD) != []
+
+
+def test_a_deconstruct_with_arms_is_one_call_and_keeps_the_stored_shape(clip):
+    fake = Fake((200, answer({**GOOD, **FOUR})))
+    out = deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)
+    (req,) = fake.requests  # still ONE Gemini call
+    cfg = json.loads(req.content)["generationConfig"]
+    assert cfg["responseJsonSchema"] == gemini.deconstruct_schema((REGINALD,), hook_arms=FRANZ_ARMS)
+    assert out["hooks"] == FOUR["hooks"] and out["hook_patterns"] == FOUR["hook_patterns"]  # lists in the same order, as before
+    assert out["caption"]["title"] and out["hashtags"] and out["first_comment_question"]  # the caption and hashtag rules are untouched
+
+
+def test_an_answer_missing_an_arm_gets_the_one_second_chance_with_the_gap_named(clip):
+    gap = {**GOOD, **FOUR, "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "myth-bust"]}
+    fake = Fake((200, answer(gap)), (200, answer({**GOOD, **FOUR})))
+    out = deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)
+    assert out["hook_patterns"] == FOUR["hook_patterns"] and len(fake.requests) == 2
+    retry = json.loads(fake.requests[1].content)["contents"][0]["parts"][1]["text"]
+    assert "hook_patterns must include trend-label" in retry
+    fake = Fake((200, answer(gap)), (200, answer(gap)))
+    with pytest.raises(gemini.GeminiUnexpected, match="broke the rules twice"):
+        deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)

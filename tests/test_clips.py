@@ -540,7 +540,7 @@ def test_every_clip_made_from_a_pick_needs_the_learning_tags():
         ({"format_id": "drop_object_swap"}, "format_id"),
         ({"hook_pattern": "drop"}, "hook_pattern"),
         ({"hook_by": "bandito"}, "hook_by"),
-        ({"hook_index": 4}, "hook_index"),
+        ({"hook_index": 8}, "hook_index"),  # at most one hook per pattern: 7 (the check writes 3, or one per arm of the bandit: 4)
         ({"hook_index": True}, "hook_index"),
         ({"caption_line1": "hook-first"}, "caption_line1"),
         ({"first_comment_kind": "poll"}, "first_comment_kind"),
@@ -1089,3 +1089,10 @@ def test_cli_new_features_from_a_file(cli_store, tmp_path):
     r = run("new", "--character", "biscuit", "--mode", "recreate", "--features", "{}", "--features-file", str(f))
     assert r.exit_code == 2 and "--features" in r.output
     assert cli_store.list_clips()[0].features["hook_text"] == NASTY and len(cli_store.list_clips()) == 1
+
+
+def test_the_hook_of_a_fourth_arm_can_be_on_screen():
+    """The check writes one hook per arm of the hook bandit: Franz and Lenny have four, so ``hook_index`` goes up to 4 and beyond."""
+    for index in (0, 1, 4, 7):
+        assert clips.learn_problems({**LEARN, "hook_index": index}) == [], index
+    assert any("hook_index" in p for p in clips.learn_problems({**LEARN, "hook_index": 8}))

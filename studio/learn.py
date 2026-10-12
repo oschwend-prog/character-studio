@@ -1,6 +1,7 @@
 """The hook bandit (learning plan section 3.3, test B, build item 9) and ``studio learn arms``.
 
-**What it does.** The check (Gemini) writes 3 hook candidates for every dropped clip, each labelled with one of the 7 hook patterns
+**What it does.** The check (Gemini) writes ONE hook candidate for each arm of the character (3 or 4 in one call; ``gemini.HookArms``,
+``drop.hook_arms_for``; a character with no arms gets 3 free hooks), each labelled with one of the 7 hook patterns
 (``drop.deconstruct.hook_patterns``). At Make it, ``choose_hook`` draws a pattern among the character's arms
 (``config/experiments.json`` test B: Franz ``ego-claim``, ``when-relatable``, ``myth-bust``, ``trend-label``; Reginald
 ``false-premise``, ``understatement``, ``trend-label``; Lenny ``mid-deal``, ``when-relatable``, ``ego-claim``, ``trend-label``) and the
@@ -34,8 +35,9 @@ rests on (the first snapshot of the window, which never moves).
 5. *The order.* The shares are sampled without replacement by a generator seeded from the registry seed, the character and the pick, so
    the same pick and data always give the same order; the first arm with a candidate wins.
 
-The floor and the ceiling are on the draws. Until the check writes one hook per arm, the candidates it gives decide which arms can
-win, so the shares of the posts that really go out can differ from the draw's.
+The floor and the ceiling are on the draws. Since the check writes one hook per arm, every draw finds a candidate and the shares of
+the posts that go out are the draw's. (A clip checked before that has 3 free hooks, so its draw may fall through to the next arm of
+the order; and a clip with no moment name has no ``trend-label`` hook: its slot carries another pattern.)
 
 ``studio learn arms [--character SLUG]`` prints (read-only) each character's arms with wins, losses, the tally used and the
 current draw probabilities, as JSON.

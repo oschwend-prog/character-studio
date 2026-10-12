@@ -42,7 +42,11 @@ version, ``v<N> · <date>`` (learning plan section 4.3; the rules are ``R<n>`` l
 **What the clip will be tagged with** (``docs/launch/measurement-and-learning-plan.md`` section 2). Each of the 3 hooks gets one
 of the 7 hook patterns (``HOOK_PATTERNS``, ``hook_patterns`` in the same order: the clip carries the pattern of the hook on
 screen), and the first comment, a vote, is written once more as an open question (``first_comment_question``, test F's other
-arm). Both are required and checked like the rest; a pattern is kept trimmed and in lower case.
+arm). Both are required and checked like the rest; a pattern is kept trimmed and in lower case. **One hook per arm** (task 19):
+for a character the hook bandit (test B, ``config/experiments.json``) has arms for, the check writes ONE hook for each of his
+patterns instead of three free ones (``HookArms``: 3 or 4 hooks and as many labels, still in one call, still ``hooks`` /
+``hook_patterns`` in the same order), so the draw at Make it always finds a candidate; ``trend-label`` is asked only for a clip
+with a moment name (without one its slot carries another pattern). Without arms the check is as it was: 3 hooks.
 
 **One second chance.** When the answer breaks one of our rules (a title over 40 characters, a hook over 42, a hashtag list that is
 not 3-4 tags: the series tag is the fifth, added at Make it), the same request is made once more with the problems appended to
@@ -517,6 +521,33 @@ _SPANS = {
     "maxItems": SPANS_MAX,
 }
 
+HOOKS_FREE = 3  # hooks the check writes when the hook bandit has no arms for the character: three, in any patterns
+
+
+@dataclass(frozen=True)
+class HookArms:
+    """The hook patterns the hook bandit (test B) draws among for a character, in the registry's order (``patterns``), and which of
+    them exist only for a clip with a moment name (``needs_moment``: ``trend-label``). The check then writes ONE hook for each, so
+    the draw at Make it always finds a candidate; ``studio.drop.hook_arms_for`` reads them from ``config/experiments.json``."""
+
+    patterns: tuple[str, ...]
+    needs_moment: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        unknown = [p for p in (*self.patterns, *self.needs_moment) if p not in HOOK_PATTERNS]
+        if not self.patterns or unknown or len(set(self.patterns)) != len(self.patterns):
+            raise ValueError(f"hook arms must be distinct hook patterns, got {self.patterns!r} (gated {self.needs_moment!r})")
+
+    @property
+    def count(self) -> int:
+        return len(self.patterns)
+
+    def required(self, moment_name: Any) -> list[str]:
+        """The patterns the answer must carry a hook of: all the arms, but those that need a moment name when the clip has none."""
+        named = isinstance(moment_name, str) and bool(moment_name.strip())
+        return [p for p in self.patterns if named or p not in self.needs_moment]
+
+
 DECONSTRUCT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -624,10 +655,14 @@ def crew_of(c: Character, roster: Sequence[Character] = ()) -> tuple[Character, 
     return tuple(roster) or (c,)
 
 
-def deconstruct_schema(roster: Sequence[Character]) -> dict[str, Any]:
-    """``DECONSTRUCT_SCHEMA`` with the recommended slug limited to the roster's slugs (the schema Gemini is given)."""
+def deconstruct_schema(roster: Sequence[Character], hook_arms: HookArms | None = None) -> dict[str, Any]:
+    """``DECONSTRUCT_SCHEMA`` with the recommended slug limited to the roster's slugs and, with ``hook_arms``, one hook (and one
+    pattern label) per arm instead of three (the schema Gemini is given)."""
     schema = json.loads(json.dumps(DECONSTRUCT_SCHEMA))
     schema["properties"]["recommended"]["properties"]["slug"]["enum"] = [r.slug for r in roster]
+    if hook_arms is not None:
+        for key in ("hooks", "hook_patterns"):
+            schema["properties"][key]["minItems"] = schema["properties"][key]["maxItems"] = hook_arms.count
     return schema
 
 
@@ -653,9 +688,40 @@ def used_hooks_block(c: Character, used_hooks: Sequence[str]) -> str:
     return f"Angles already used: take a different one (the latest hooks of {c.name}'s clips, newest first):\n{items}\n\n"
 
 
-def deconstruct_prompt(c: Character, roster: Sequence[Character] = (), used_hooks: Sequence[str] = ()) -> str:
+def _hook_lines(c: Character, arms: HookArms | None) -> str:
+    """The prompt's two bullets about the hooks: three free hooks, or (with the bandit's ``arms``) one hook for each of its patterns."""
+    patterns = "; ".join(f"{name} ({HOOK_PATTERN_WORDS[name]})" for name in HOOK_PATTERNS)
+    if arms is None:
+        return f"""- hooks: {HOOKS_FREE} different on-screen hooks in {c.name}'s voice, at most 7 words and {HOOK_MAX} characters each: the line in the \
+caption pill for the first seconds, read with the sound off, so it must land in one glance. Each one is ONE claim the clip proves \
+within its first 3 seconds, TRUE to what happens in this clip (the video pays it off), and opens a gap the viewer needs the clip \
+to close: a deadpan understatement of an absurd moment, a mundane frame on a wild one, a confident claim the clip proves wrong. \
+Use a different angle for each; the strongest first. When the clip has a trend or moment name, one of the three names it. Never \
+explain the joke, never a greeting, never "POV:" or "wait for it", never mention AI.
+- hook_patterns: the pattern of each hook, in the same order as hooks ({HOOKS_FREE} names), each one of: {patterns}."""
+    wanted = "; ".join(f"{name} ({HOOK_PATTERN_WORDS[name]})" for name in arms.patterns)
+    gated = [name for name in arms.patterns if name in arms.needs_moment]
+    gate = (
+        f" {', '.join(gated)} {'names' if len(gated) == 1 else 'name'} the clip's trend or moment, so write {'it' if len(gated) == 1 else 'them'} "
+        "only when the clip has one (moment_name); when it has none, use that slot for a hook of another pattern from the list under "
+        "hook_patterns and label it with that pattern."
+        if gated else ""
+    )
+    return f"""- hooks: {arms.count} different on-screen hooks in {c.name}'s voice, ONE hook for each of these patterns: {wanted}. At most 7 words \
+and {HOOK_MAX} characters each: the line in the caption pill for the first seconds, read with the sound off, so it must land in one \
+glance. Each one is ONE claim the clip proves within its first 3 seconds, TRUE to what happens in this clip (the video pays it off), \
+and opens a gap the viewer needs the clip to close. Write every hook the way its pattern says, with a different angle for each; \
+the strongest first, whichever pattern it has.{gate} Never explain the joke, never a greeting, never "POV:" or "wait for it", \
+never mention AI.
+- hook_patterns: the pattern of each hook, in the same order as hooks ({arms.count} names), each one of: {patterns}."""
+
+
+def deconstruct_prompt(
+    c: Character, roster: Sequence[Character] = (), used_hooks: Sequence[str] = (), hook_arms: HookArms | None = None,
+) -> str:
     """Our prompt for the deconstruct of a dropped clip (see the module doc); ``roster`` = the characters it may recommend,
-    ``used_hooks`` = the character's latest hooks, newest first (``used_hooks_block``)."""
+    ``used_hooks`` = the character's latest hooks, newest first (``used_hooks_block``), ``hook_arms`` = the hook bandit's patterns
+    for the character (one hook for each; none: three free hooks)."""
     crew = crew_of(c, roster)
     balance = f" {BALANCE_RULE}" if any(r.ready_clips is not None for r in crew) else ""
     angles = used_hooks_block(c, used_hooks)
@@ -683,14 +749,7 @@ use is judged, so time them closely: a caption in the first seconds only is one 
 - classic: true only for a famous moment almost everyone knows; moment_name: its name or the trend's name ("" when none).
 - suggested_part: cameo, featured or star (how big {c.name}'s part should be).
 - gadgets: 0-3 names copied exactly from the gadget list below that would make this clip better.
-- hooks: 3 different on-screen hooks in {c.name}'s voice, at most 7 words and {HOOK_MAX} characters each: the line in the \
-caption pill for the first seconds, read with the sound off, so it must land in one glance. Each one is ONE claim the clip proves \
-within its first 3 seconds, TRUE to what happens in this clip (the video pays it off), and opens a gap the viewer needs the clip \
-to close: a deadpan understatement of an absurd moment, a mundane frame on a wild one, a confident claim the clip proves wrong. \
-Use a different angle for each; the strongest first. When the clip has a trend or moment name, one of the three names it. Never \
-explain the joke, never a greeting, never "POV:" or "wait for it", never mention AI.
-- hook_patterns: the pattern of each hook, in the same order as hooks (3 names), each one of: \
-{"; ".join(f"{name} ({HOOK_PATTERN_WORDS[name]})" for name in HOOK_PATTERNS)}.
+{_hook_lines(c, hook_arms)}
 - caption: title = a searchable label of at most {TITLE_MAX} characters, "<famous moment or format> · {c.edition or c.noun} edition", carrying \
 a literal search phrase (the moment's name or a search keyword below); joke = one line in {c.name}'s voice (at most {JOKE_MAX} \
 characters); send = a send trigger ("send this to ..."); question = a question to the viewer; tease = a series tease ("next \
@@ -727,9 +786,13 @@ def _text(value: Any, limit: int, *, allow_empty: bool = False) -> bool:
     return isinstance(value, str) and (allow_empty or bool(value.strip())) and len(value) <= limit and "\n" not in value.strip()
 
 
-def deconstruct_problems(answer: Mapping[str, Any], c: Character, roster: Sequence[Character] = ()) -> list[str]:
+def deconstruct_problems(
+    answer: Mapping[str, Any], c: Character, roster: Sequence[Character] = (), hook_arms: HookArms | None = None,
+) -> list[str]:
     """The rules a deconstruct answer breaks (empty = usable). Shape errors and length errors alike: see ``generate_json``.
-    ``roster`` = the characters the recommendation may name (none given: ``c`` alone)."""
+    ``roster`` = the characters the recommendation may name (none given: ``c`` alone). With ``hook_arms`` the answer has one hook
+    and one label per arm and a hook of every arm's pattern (``HookArms.required``: ``trend-label`` only for a clip with a moment
+    name); without, three hooks in any patterns."""
     p: list[str] = []
     missing = [k for k in DECONSTRUCT_SCHEMA["required"] if k not in answer]
     if missing:
@@ -775,12 +838,17 @@ def deconstruct_problems(answer: Mapping[str, Any], c: Character, roster: Sequen
     gadgets = answer["gadgets"]
     if not isinstance(gadgets, list) or len(gadgets) > GADGETS_MAX or not all(isinstance(g, str) for g in gadgets):
         p.append(f"gadgets must be a list of at most {GADGETS_MAX} names")
+    slots = hook_arms.count if hook_arms is not None else HOOKS_FREE
     hooks = answer["hooks"]
-    if not isinstance(hooks, list) or len(hooks) != 3 or not all(_text(h, HOOK_MAX) for h in hooks):
-        p.append(f"hooks must be 3 lines of 1-{HOOK_MAX} characters each")
+    if not isinstance(hooks, list) or len(hooks) != slots or not all(_text(h, HOOK_MAX) for h in hooks):
+        p.append(f"hooks must be {slots} lines of 1-{HOOK_MAX} characters each")
     labels = answer["hook_patterns"]
-    if not isinstance(labels, list) or len(labels) != 3 or not all(_pattern(x) in HOOK_PATTERNS for x in labels):
-        p.append(f"hook_patterns must be 3 of {', '.join(HOOK_PATTERNS)}, one per hook in the same order")
+    if not isinstance(labels, list) or len(labels) != slots or not all(_pattern(x) in HOOK_PATTERNS for x in labels):
+        p.append(f"hook_patterns must be {slots} of {', '.join(HOOK_PATTERNS)}, one per hook in the same order")
+    elif hook_arms is not None:
+        missing = [name for name in hook_arms.required(answer["moment_name"]) if name not in {_pattern(x) for x in labels}]
+        if missing:
+            p.append(f"hook_patterns must include {', '.join(missing)}: one hook for each of {', '.join(hook_arms.patterns)}")
     cap = answer["caption"]
     if not isinstance(cap, Mapping):
         p.append("caption must be an object")
@@ -892,14 +960,16 @@ def tidy_deconstruct(answer: Mapping[str, Any], c: Character) -> dict[str, Any]:
 
 
 def deconstruct(
-    client: GeminiClient, clip: Path | str, c: Character, roster: Sequence[Character] = (), used_hooks: Sequence[str] = ()
+    client: GeminiClient, clip: Path | str, c: Character, roster: Sequence[Character] = (), used_hooks: Sequence[str] = (),
+    hook_arms: HookArms | None = None,
 ) -> dict[str, Any]:
     """The deconstruct of ``clip`` (an mp4 proxy) for character ``c``, with the recommendation among ``roster`` (none given:
-    ``c`` alone) and his latest hooks to steer away from (``used_hooks``): checked and tidied (see the module doc)."""
+    ``c`` alone) and his latest hooks to steer away from (``used_hooks``): checked and tidied (see the module doc). With
+    ``hook_arms`` (the hook bandit's patterns for ``c``) it writes one hook for each, in the same single call."""
     crew = crew_of(c, roster)
-    prompt = deconstruct_prompt(c, crew, used_hooks)
+    prompt = deconstruct_prompt(c, crew, used_hooks, hook_arms)
     answer = client.generate_json(
-        clip, "video/mp4", prompt, deconstruct_schema(crew), check=lambda a: deconstruct_problems(a, c, crew),
+        clip, "video/mp4", prompt, deconstruct_schema(crew, hook_arms), check=lambda a: deconstruct_problems(a, c, crew, hook_arms),
     )
     return tidy_deconstruct(answer, c)
 
@@ -990,7 +1060,7 @@ def frame_qa(client: GeminiClient, sheet: Path | str, c: Character, frames: int 
 
 __all__ = [
     "Character", "DECONSTRUCT_SCHEMA", "DEFAULT_MODEL", "FRAME_QA_SCHEMA", "FrameVerdict", "GeminiBlocked", "GeminiClient",
-    "GeminiError", "GeminiUnexpected", "HOOK_PATTERNS", "bible_section", "crew_of", "deconstruct", "deconstruct_problems",
+    "GeminiError", "GeminiQuota", "GeminiUnexpected", "HOOK_PATTERNS", "HookArms", "bible_section", "crew_of", "deconstruct", "deconstruct_problems",
     "deconstruct_schema", "frame_qa", "hit_rules", "hit_rules_version", "judge_frames", "parse_answer", "potential_problems",
     "recommendation_problems", "roster_card", "tidy_deconstruct", "used_hooks_block",
 ]

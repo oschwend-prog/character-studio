@@ -13,7 +13,7 @@ import dataclasses
 import json
 import shutil
 import subprocess
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -3110,6 +3110,85 @@ def test_a_single_process_run_that_hits_a_retrying_quota_429_exits_0_and_any_oth
         gemini.GeminiError("Gemini answered HTTP 403: API key not valid", 403))))
     r = CliRunner().invoke(app, ["drop", "process", pid2])
     assert r.exit_code == 1 and "will_retry" not in json.loads(r.output)
+
+
+# ---- the check writes one hook per arm of the hook bandit (task 15 concern 1) ----------------------------------------------------------
+
+B_DAY = datetime(2026, 10, 13, 12, 0, tzinfo=drop.LONDON)  # a Tuesday: test B has started (12 Oct)
+
+
+def test_hook_arms_for_reads_the_bandits_arms_of_the_character(experiments_on):
+    franz = drop.hook_arms_for("franz", B_DAY)
+    assert franz == gemini.HookArms(("ego-claim", "when-relatable", "myth-bust", "trend-label"), needs_moment=("trend-label",))
+    assert drop.hook_arms_for("reginald", B_DAY).patterns == ("false-premise", "understatement", "trend-label")
+    assert drop.hook_arms_for("biscuit", B_DAY) is None  # no arms in the registry: three free hooks
+    assert drop.hook_arms_for("franz", datetime(2026, 10, 11, 12, 0, tzinfo=drop.LONDON)) is None  # test B has not started
+
+
+def test_no_arms_while_test_b_is_off_or_the_registry_is_broken(tmp_path, monkeypatch, caplog):
+    assert drop.hook_arms_for("franz", B_DAY) is None  # the suite's registry has every test off
+    bad = tmp_path / "experiments.json"
+    bad.write_text("nope")
+    monkeypatch.setattr(drop.experiments, "EXPERIMENTS_PATH", bad)
+    with caplog.at_level("WARNING", logger="studio.drop"):
+        assert drop.hook_arms_for("franz", B_DAY) is None  # a free look is never stopped by it: three free hooks (Make it stops itself)
+    assert "test registry" in caplog.text
+
+
+def test_the_check_asks_one_gemini_call_for_one_hook_per_arm_and_stores_them_in_the_same_shape(world, portrait, experiments_on):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)  # Reginald: false-premise, understatement, trend-label (the clip has a moment name)
+    patterns = ["understatement", "trend-label", "false-premise"]
+    g = FakeGemini(deconstruct(hook_patterns=patterns))  # FakeGemini runs the check function: the arms are in it, or this raises
+    out = process_drop(store, storage, pid, gemini_client=g, now=B_DAY, job="t")
+    assert out.state == "ready" and len(g.calls) == 1
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["hooks"] == deconstruct()["hooks"] and d["deconstruct"]["hook_patterns"] == patterns  # the stored shape: lists, same order
+    assert d["hook"] == d["hooks"][0]
+    props = g.calls[0]["schema"]["properties"]
+    assert props["hooks"]["minItems"] == props["hooks"]["maxItems"] == 3
+    assert "ONE hook for each of these patterns: false-premise" in g.calls[0]["prompt"]
+
+
+def test_a_check_with_four_arms_stores_four_hooks_and_the_adjust_sheet_gets_all_of_them(world, portrait, experiments_on):
+    store, storage = world
+    store.add_character(Character(slug="franz", name="Franz", bodies=[Body.biped, Body.quadruped]))
+    pid = drop_file(store, storage, portrait, slug="franz")
+    hooks = ["I invented this walk.", "When the hallway is your runway.", "They said a dog cannot do this.", "The shoulder shimmy, as ordered."]
+    patterns = ["ego-claim", "when-relatable", "myth-bust", "trend-label"]
+    star = {"kind": "dog", "body": "quadruped", "description": "the dachshund by the door", "x_center": 0.5, "full_body": True, "child": False}
+    g = FakeGemini(deconstruct(star=star, hooks=hooks, hook_patterns=patterns, recommended={"slug": "franz", "reason": "dog star: Franz"}))
+    out = process_drop(store, storage, pid, gemini_client=g, now=B_DAY, job="t")
+    assert out.state == "ready", out.reason
+    assert g.calls[0]["schema"]["properties"]["hooks"]["maxItems"] == 4
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["hooks"] == hooks and d["deconstruct"]["hook_patterns"] == patterns and d["hook"] == hooks[0]
+
+
+def test_an_answer_that_misses_an_arm_breaks_the_rules_the_client_checks_it_by(world, portrait, experiments_on):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    wrong = deconstruct(hook_patterns=["understatement", "false-premise", "understatement"])  # no trend-label although the clip has a moment
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(wrong), now=B_DAY, job="t")  # FakeGemini runs the check function
+    assert out.state == "failed" and "hook_patterns must include trend-label" in out.reason
+
+
+def test_a_bandit_draw_always_finds_a_candidate_when_the_check_wrote_one_hook_per_arm(world, portrait, experiments_on):
+    """The point of the change: with one hook per arm every arm has a candidate, so no clip falls back to the check's first hook."""
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    patterns = ["understatement", "trend-label", "false-premise"]
+    process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(hook_patterns=patterns)), now=B_DAY, job="t")
+    look = store.get_favorite(pid).proposal["drop"]["deconstruct"]
+    registry = drop.experiments.load_experiments()
+    state = drop.learn.BanditState(readings={"reginald": 20})  # past the warm-up: a draw by the shares, not the fixed rotation
+    chosen = {
+        drop.learn.choose_hook(
+            store, registry, "reginald", f"pick-{i}", look["hooks"], look["hook_patterns"], moment=True, now=B_DAY, state=state,
+        ).pattern
+        for i in range(60)
+    }
+    assert chosen == set(patterns)  # none is None, and every arm is drawn sometimes
 
 
 # ---- tests G and H at the master: the clip's coins become the spec's edits; the master says what it applied ----------------------------
