@@ -6,6 +6,7 @@ import { clipChip, clipFilterQuery, newestFirst, type ClipChip, type ClipFilter 
 import { nameOf } from './roster';
 import { familyOf, rankClips, scoreOf, suggestedClips } from './ranking';
 import type { TrackerRow } from './types';
+import type { RankOrder } from './weekly';
 
 export type ClipsView = 'character' | 'all';
 
@@ -73,6 +74,7 @@ export function isDeciding(row: Pick<TrackerRow, 'drop_card' | 'clip_state' | 'c
 export function clipsByCharacter(
   rows: ReadonlyArray<TrackerRow>,
   characters: ReadonlyArray<{ slug: string; name: string }>,
+  order: RankOrder = 'score',
 ): { groups: CharacterClips[]; others: TrackerRow[]; deciding: TrackerRow[] } {
   const all = rows.filter((r) => r.drop_card);
   const deciding = newestFirst(all.filter(isDeciding));
@@ -84,7 +86,7 @@ export function clipsByCharacter(
       slug: c.slug,
       name: c.name,
       needsYou: newestFirst(by('pick')),
-      ready: rankClips(by('ready')),
+      ready: rankClips(by('ready'), order),
       onTheWay: newestFirst(by('adding', 'checking', 'making')),
       done: newestFirst(by('done')),
       problems: newestFirst(by('blocked', 'failed')),
@@ -142,10 +144,15 @@ export function readyWithChoice(ready: number, needs: number): string {
 
 /**
  * Today's Make these: the clips it shows, each live character's top 3 Ready clips and his Explore clip, if he has one
- * (suggestedClips). Only these can be ticked there, so a ticked clip never drops out of view while it stays in the bar.
+ * (suggestedClips). Only these can be ticked there, so a ticked clip never drops out of view while it stays in the bar. `order` is
+ * the order Today ranks them in (the freshness order after a failed score test), so the ids are the very clips it shows.
  */
-export function makeTheseIds(rows: ReadonlyArray<TrackerRow>, characters: ReadonlyArray<{ slug: string; name: string }>): Set<string> {
-  return new Set(clipsByCharacter(rows, characters).groups.flatMap((g) => suggestedClips(g.ready, 3).map((s) => s.row.pick_id)));
+export function makeTheseIds(
+  rows: ReadonlyArray<TrackerRow>,
+  characters: ReadonlyArray<{ slug: string; name: string }>,
+  order: RankOrder = 'score',
+): Set<string> {
+  return new Set(clipsByCharacter(rows, characters, order).groups.flatMap((g) => suggestedClips(g.ready, 3, order).map((s) => s.row.pick_id)));
 }
 
 /** His section's one line of counts: "4 ready +2 need your choice · 1 on its way"; "nothing yet" for a character with no clip. */

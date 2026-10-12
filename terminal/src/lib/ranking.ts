@@ -6,6 +6,7 @@ import { clipChip, droppedAt } from './clipstatus';
 import { dropCredits } from './drop';
 import { isPaused, orderRoster, type RosterEntry } from './roster';
 import type { Backend, Character, DropAdjust, DropState, TrackerRow } from './types';
+import type { RankOrder } from './weekly';
 
 /** A clip goes to at most this many characters: the root and two versions (studio.drop.MAX_FAMILY). */
 export const MAX_FAMILY = 3;
@@ -24,13 +25,32 @@ export function scoreOf(r: Pick<TrackerRow, 'drop_card'>): number | null {
 type Ranked = Pick<TrackerRow, 'pick_id' | 'drop_card' | 'approved_at'>;
 
 /**
+ * How fresh the clip's trend is, lower is fresher (learning plan 3.2, used when the score test failed): 0 rising, 1 peak, 2 classic,
+ * 3 fading; null when the card says nothing about a trend. The check's `trend_stage` wins, then the pick's tier (rising, viral_now,
+ * iconic) and the check's `classic` flag. A gallery clip, `none` and an unknown word carry no freshness.
+ */
+export function freshnessOf(r: Pick<TrackerRow, 'drop_card' | 'tier'>): number | null {
+  const stages: Record<string, number> = { rising: 0, peak: 1, classic: 2, fading: 3 };
+  const tiers: Record<string, number> = { rising: 0, viral_now: 1, iconic: 2 };
+  const stage = r.drop_card?.trend_stage;
+  if (typeof stage === 'string' && stage in stages) return stages[stage];
+  if (typeof r.tier === 'string' && r.tier in tiers) return tiers[r.tier];
+  return r.drop_card?.classic === true ? 2 : null;
+}
+
+/**
  * The ranking (spec sections 5.2 and 6): the scored clips first, highest score first; then the unscored ones (checked before the
  * score existed), newest first. A tie on the score goes to the newest clip; equal times to the pick id, so the order never jumps
- * between renders. A clip with no valid time is the oldest. Sorts only: the caller chooses which rows. Returns a new list.
+ * between renders. A clip with no valid time is the oldest. With `order` 'freshness' (the score test failed) the fresher trend comes
+ * first and that order is the second key; a clip with no freshness comes after every clip that has one. Sorts only: the caller
+ * chooses which rows. Returns a new list.
  */
-export function rankClips<R extends Ranked>(rows: ReadonlyArray<R>): R[] {
+export function rankClips<R extends Ranked & Partial<Pick<TrackerRow, 'tier'>>>(rows: ReadonlyArray<R>, order: RankOrder = 'score'): R[] {
   const at = (r: R) => droppedAt(r) ?? Number.NEGATIVE_INFINITY;
+  const fresh = (r: R) => (order === 'freshness' ? freshnessOf({ drop_card: r.drop_card, tier: r.tier ?? null }) ?? Number.POSITIVE_INFINITY : 0);
   return [...rows].sort((a, b) => {
+    const [fa, fb] = [fresh(a), fresh(b)];
+    if (fa !== fb) return fa < fb ? -1 : 1;
     const [sa, sb] = [scoreOf(a), scoreOf(b)];
     if ((sa == null) !== (sb == null)) return sa == null ? 1 : -1;
     if (sa != null && sb != null && sa !== sb) return sb - sa;
@@ -44,8 +64,8 @@ export function rankClips<R extends Ranked>(rows: ReadonlyArray<R>): R[] {
  * Ready chip: checked, the owner's own character, nothing on its way yet. A clip whose character the studio chose is "Needs you"
  * (one tap confirms it), never a top pick: Make it would be paid for a character he never chose. Give it one character's rows.
  */
-export function topPicks(rows: ReadonlyArray<TrackerRow>, n = 3): TrackerRow[] {
-  return rankClips(rows.filter((r) => clipChip(r) === 'ready')).slice(0, Math.max(0, n));
+export function topPicks(rows: ReadonlyArray<TrackerRow>, n = 3, order: RankOrder = 'score'): TrackerRow[] {
+  return rankClips(rows.filter((r) => clipChip(r) === 'ready'), order).slice(0, Math.max(0, n));
 }
 
 // ---- Explore: one suggested clip in four comes from below the median score (learning plan test A) ---------------------------------
@@ -79,8 +99,8 @@ export interface Suggestion {
  * median nor the worst, so the lower half is sampled). No Explore clip when fewer than two Ready clips are scored, none is below the
  * median, or `n` is under 3. Ready clips only: the owner is free to tick anything (nothing here stops that). Give it one character's rows.
  */
-export function suggestedClips(rows: ReadonlyArray<TrackerRow>, n = 3): Suggestion[] {
-  const ready = rankClips(rows.filter((r) => clipChip(r) === 'ready'));
+export function suggestedClips(rows: ReadonlyArray<TrackerRow>, n = 3, order: RankOrder = 'score'): Suggestion[] {
+  const ready = rankClips(rows.filter((r) => clipChip(r) === 'ready'), order);
   const top = ready.slice(0, Math.max(0, n));
   const out: Suggestion[] = top.map((row) => ({ row, explore: false }));
   const slots = Math.floor(top.length / (EXPLORE_EVERY - 1));

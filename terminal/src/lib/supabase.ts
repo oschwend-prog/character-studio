@@ -7,6 +7,8 @@
 // The cloud hits job (migration 0016): v_hits feeds "Hot right now" and each character's "Worth saving", asked per lane (the
 // general lane's top 10, then each live character's top 5; the same tolerance: no hits without the view), set_hit_status marks a
 // hit used or not for us, set_drop_keep is the clip card's Keep.
+// The weekly review (Task 16): the newest `weekly` row of studio.runs (one more read, limit 1) feeds Today's "This week" card and the
+// score test's label on a clip's score.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { isOwnerMediaPath } from './clipcard';
@@ -121,7 +123,7 @@ export class LiveBackend implements Backend {
 
   private async loadOnce(): Promise<Snapshot> {
     const sb = this.sb;
-    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings, hits] = await Promise.all([
+    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings, hits, weekly] = await Promise.all([
       sb.from('v_channels').select('*'),
       sb.from('v_queue').select('*').order('created_at'),
       sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(300),
@@ -140,8 +142,10 @@ export class LiveBackend implements Backend {
       sb.from('settings').select('cadence').eq('id', 1).maybeSingle(),
       // "Hot right now": the general lane's top 10 (each live character's top 5 is asked below, once the roster is known)
       this.hitLane(null, HOT_LIMIT),
+      // "This week": the latest weekly review (the Monday cloud job's run; its details hold the digest and the score test)
+      sb.from('runs').select('id,kind,started_at,finished_at,status,summary,details').eq('kind', 'weekly').order('started_at', { ascending: false }).limit(1),
     ]);
-    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings]) fail(r.error);
+    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings, weekly]) fail(r.error);
     if (!isMissingRelation(tracker.error)) fail(tracker.error);
     if (!isMissingRelation(viewsDaily.error)) fail(viewsDaily.error);
     if (!isMissingRelation(hits.error)) fail(hits.error);
@@ -169,6 +173,7 @@ export class LiveBackend implements Backend {
       // the owner's order (Franz, Reginald, Lenny, then any other, a paused one last), not the view's alphabetical one
       characters: orderRoster((characters.data ?? []).map((r) => ({ ...r, setup: r.setup ?? {}, accounts: r.accounts ?? [] }))),
       runs: runs.data ?? [],
+      weekly: weekly.data?.[0] ?? null,
       tracker: (tracker.error ? [] : tracker.data ?? []).map((r) =>
         normalise(r, ['views', 'outlier_x', 'velocity', 'credits_spent', 'latest_views']),
       ),

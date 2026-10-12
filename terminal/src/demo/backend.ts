@@ -11,6 +11,7 @@ import { decisionTime, inTracker } from '../lib/tracker';
 import { addDays, londonDayKey, londonWallToIso } from '../lib/format';
 import { orderRoster } from '../lib/roster';
 import { hitLaneSlugs, hitsByLane, offeredHits } from '../lib/hits';
+import { weekLabel } from '../lib/weekly';
 import type {
   Backend, Budget, CadenceEntry, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, DropScore, Engagement, HealthRow, Hit, HitStatus, LibraryClip, OwnerMusic,
   Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow, ViewsDay,
@@ -754,6 +755,53 @@ export class DemoBackend implements Backend {
   }
 
   /**
+   * The latest weekly review (studio.runs, kind weekly; the cloud job `studio review weekly` writes it on Monday), SYNTHETIC like every
+   * number here: the digest of the week that just ended, in the shape of plan 6.1, with a score test at 14 of 20 and no proposal.
+   */
+  private weeklyRun(now: number): RunRow {
+    const today = londonDayKey(now);
+    const sinceMonday = (new Date(`${today}T12:00:00Z`).getUTCDay() + 6) % 7;
+    const monday = addDays(today, -(sinceMonday + 7));
+    const label = weekLabel(monday);
+    const block = (slug: string, bar: string, lines: string[]) => ({
+      slug, name: NAMES[slug], bar, bar_status: 'not_yet', title: `${NAMES[slug]} · ${label} · bar: ${bar}`, lines,
+    });
+    const bar = (posts: number, day: number) => `not yet (${posts} of 20 posts, day ${day} of 28)`;
+    return {
+      id: 'demo-weekly', kind: 'weekly', started_at: londonWallToIso(`${addDays(monday, 7)}T07:15`), finished_at: londonWallToIso(`${addDays(monday, 7)}T07:16`),
+      status: 'ok', summary: 'SYNTHETIC weekly review',
+      details: {
+        week: monday,
+        digest: {
+          header: [
+            'SYNTHETIC · Credits 1,240 of 6,000 this month (21 %, 160 still reserved; last month 3,100) · cost per 1K views 4.2 credits (n 12,300 views from 11 posts; last month none yet)',
+            'Warnings: none · Proposals waiting: none',
+          ],
+          characters: [
+            block('franz', bar(9, 14), [
+              '1 Result    5 posts (last week 4) · median outlier_x 1.1 (n 4; last week none yet) · 1 hit of 4 measured · best “Dog tax.” 2,300 views (4.2x)',
+              '2 Audience  followers: none yet (no follower count in the cloud yet) · follows per 1K: none yet (no follows data in the cloud yet) · non-follower reach: none yet (no reach data in the cloud yet) · guard: no change (it needs a reach reading in both weeks)',
+              '3 Hook      skip rate: none yet (no skip-rate data in the cloud yet) · leading: ego-claim, 3 wins of 4 (too few to call)',
+              '4 Tests     score test 14 of 20, his 5 (not a verdict) · hook test 6 tallied, fewest arm 1 of 6 (not a verdict)',
+              '5 Next      too few to call (4 of 10 measured posts) · needs you: nothing',
+            ]),
+            block('reginald', bar(6, 6), [
+              '1 Result    3 posts (last week 3) · median outlier_x: none yet (the 7-day figure comes 7 days after a post) · hits: none yet (nothing measured) · best “First day as head butler.” 900 views',
+              '2 Audience  followers: none yet (no follower count in the cloud yet) · follows per 1K: none yet (no follows data in the cloud yet) · non-follower reach: none yet (no reach data in the cloud yet) · guard: no change (it needs a reach reading in both weeks)',
+              '3 Hook      skip rate: none yet (no skip-rate data in the cloud yet) · leading: none yet (rotating, 1 of 3 readings before it can learn)',
+              '4 Tests     score test 14 of 20, his 4 (not a verdict) · hook test rotating, 1 of 3 readings so far (not a verdict)',
+              '5 Next      too few to call (0 of 10 measured posts) · needs you: nothing',
+            ]),
+            block('lenny', bar(0, 0), ['no posts yet']),
+          ],
+        },
+        score_test: { label: 'unproven', n: 14, needed: 20, look: null, rho: null, rho_potential: null, rho_swap: null, buckets: [], note: 'SYNTHETIC' },
+        floors: { computed: false, reason: 'SYNTHETIC' }, proposals: [], proposal_url: null,
+      },
+    };
+  }
+
+  /**
    * studio.hits (migration 0016), SYNTHETIC like every number here: what the daily cloud pull keeps. Several new hits for each live
    * character (his keywords) and a general lane of 11 (trending feeds and broad searches: "Hot right now" shows the top 10); one
    * TikTok hit with no thumbnail (the card's placeholder), Instagram search hits with likes but no play count, one general hit
@@ -1129,7 +1177,7 @@ export class DemoBackend implements Backend {
 
     return {
       channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), tracker,
-      viewsDaily: this.viewsDaily(now), cadence, loadedAt: now,
+      viewsDaily: this.viewsDaily(now), cadence, loadedAt: now, weekly: this.weeklyRun(now),
       // v_hits as the live loader asks it: the general lane's top 10 and each live character's top 5, best first, no status column
       hits: hitsByLane(offeredHits(this.hits, now), hitLaneSlugs(characters)).map(({ status: _s, ...h }) => {
         void _s;

@@ -127,6 +127,26 @@ describe('one meaning of Ready, and what Make these shows', () => {
   });
 });
 
+describe('Make these after a failed score test (learning plan 3.2)', () => {
+  const stage = (trend: DropCard['trend_stage'], total: number) => row('franz', card('ready', { trend_stage: trend, score: score(total) }));
+
+  it('shows his freshest trends, not his highest scores, and its ids match the clips it ranks', () => {
+    const classics = [stage('classic', 95), stage('classic', 94), stage('classic', 93)];
+    const rising = [stage('rising', 40), stage('rising', 35)];
+    const rows = [...classics, ...rising];
+    const byScore = makeTheseIds(rows, LIVE);
+    const byFreshness = makeTheseIds(rows, LIVE, 'freshness');
+    expect(classics.every((r) => byScore.has(r.pick_id))).toBe(true); // the score order: the three classics, and an Explore clip from below the median
+    expect(byScore.size).toBe(4);
+    expect(byFreshness.has(rising[0].pick_id) && byFreshness.has(rising[1].pick_id)).toBe(true);
+    expect([...byFreshness].filter((id) => classics.some((c) => c.pick_id === id))).toHaveLength(1); // one classic fills the third place
+    expect(byFreshness.size).toBe(3); // the two below-median clips are already among the best, so no Explore is needed
+    const groups = clipsByCharacter(rows, LIVE, 'freshness').groups;
+    expect(groups[0].ready.slice(0, 2).map((r) => r.drop_card?.trend_stage)).toEqual(['rising', 'rising']);
+    expect(clipsByCharacter(rows, LIVE).groups[0].ready[0].drop_card?.trend_stage).toBe('classic');
+  });
+});
+
 describe('versionsLine and the folded line', () => {
   it('names the other members of the clip family with their status, from the root or a version', () => {
     const root = row('reginald', card('ready', { score: score(80) }));

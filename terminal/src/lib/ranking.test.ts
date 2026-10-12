@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { dropCredits } from './drop';
 import {
-  EXPLORE_EVERY, EXPLORE_HELP, EXPLORE_LABEL, MAX_FAMILY, familyOf, familyRootId, makeMany, makeSummary, medianScore, rankClips,
+  EXPLORE_EVERY, EXPLORE_HELP, EXPLORE_LABEL, MAX_FAMILY, familyOf, familyRootId, freshnessOf, makeMany, makeSummary, medianScore, rankClips,
   reuseTargets, scoreOf, selectionTotal, suggestedClips, topPicks,
 } from './ranking';
 import type { Character, DropAdjust, DropCard, DropScore, DropState, TrackerRow } from './types';
@@ -409,5 +409,59 @@ describe('the demo', () => {
     expect(after.tracker.filter((r) => r.drop_card?.copy_of === root.pick_id)).toHaveLength(MAX_FAMILY - 1);
     expect(reuseTargets(root, after.characters, after.tracker)).toEqual([]);
     await expect(demo.copyDrop(root.pick_id, 'biscuit')).rejects.toThrow('a clip goes to at most 3 characters'); // counted before paused, as the SQL does
+  });
+});
+
+// Task 16 (learning plan 3.2, "if failed"): when the score test failed, Make these sorts by the freshness of the trend first
+// (rising, peak, classic) and the score second. A card carries a trend through the check's `trend_stage`, the pick's tier or `classic`.
+describe('the freshness order (score test failed)', () => {
+  const fresh = (stage: DropCard['trend_stage'], total: number | null, over: Partial<DropCard> = {}) =>
+    row(card('ready', { trend_stage: stage, ...(total != null ? { score: score(total) } : {}), ...over }));
+
+  it('freshnessOf reads trend_stage, then the tier, then classic; a clip with none of them has no freshness', () => {
+    expect(freshnessOf(fresh('rising', 50))).toBe(0);
+    expect(freshnessOf(fresh('peak', 50))).toBe(1);
+    expect(freshnessOf(fresh('classic', 50))).toBe(2);
+    expect(freshnessOf(fresh('fading', 50))).toBe(3);
+    expect(freshnessOf(fresh('none', 50))).toBeNull();
+    expect(freshnessOf(fresh(null, 50))).toBeNull();
+    expect(freshnessOf(row(card('ready'), { tier: 'rising' }))).toBe(0);
+    expect(freshnessOf(row(card('ready'), { tier: 'viral_now' }))).toBe(1);
+    expect(freshnessOf(row(card('ready'), { tier: 'iconic' }))).toBe(2);
+    expect(freshnessOf(row(card('ready'), { tier: 'gallery' }))).toBeNull(); // a gallery clip is no trend
+    expect(freshnessOf(row(card('ready', { classic: true })))).toBe(2);
+    expect(freshnessOf(fresh('rising', 50, { classic: true }))).toBe(0); // the check's stage wins over its classic flag
+    expect(freshnessOf(row(null))).toBeNull();
+    expect(freshnessOf(row(card('ready', { trend_stage: 'viral' as never })))).toBeNull(); // an unknown stage is no freshness
+  });
+
+  it('puts the fresher trend first whatever the score, then the score inside a stage', () => {
+    const risingLow = fresh('rising', 40);
+    const risingHigh = fresh('rising', 85);
+    const peak = fresh('peak', 99);
+    const classic = fresh('classic', 98);
+    expect(ids(rankClips([classic, peak, risingLow, risingHigh], 'freshness'))).toEqual(ids([risingHigh, risingLow, peak, classic]));
+    expect(ids(rankClips([classic, peak, risingLow, risingHigh], 'score'))).toEqual(ids([peak, classic, risingHigh, risingLow]));
+  });
+
+  it('a clip with no freshness comes after every clip that has one, in score order', () => {
+    const none = fresh(null, 99);
+    const noneLow = fresh(null, 20);
+    const classic = fresh('classic', 10);
+    expect(ids(rankClips([noneLow, none, classic], 'freshness'))).toEqual(ids([classic, none, noneLow]));
+  });
+
+  it('is the score order when no clip has a freshness, and the default order is still the score', () => {
+    const rows = [fresh(null, 60), fresh(null, 90), fresh(null, 75)];
+    expect(ids(rankClips(rows, 'freshness'))).toEqual(ids(rankClips(rows, 'score')));
+    expect(ids(rankClips(rows))).toEqual(ids(rankClips(rows, 'score')));
+  });
+
+  it('feeds the top picks and the suggestions', () => {
+    const rows = [fresh('classic', 95), fresh('peak', 90), fresh('rising', 30), fresh('rising', 35), fresh(null, 99)];
+    expect(topPicks(rows, 3, 'freshness').map((r) => r.drop_card?.trend_stage)).toEqual(['rising', 'rising', 'peak']);
+    expect(topPicks(rows, 3).map((r) => scoreOf(r))).toEqual([99, 95, 90]);
+    const s = suggestedClips(rows, 3, 'freshness');
+    expect(s.filter((x) => !x.explore).map((x) => x.row.drop_card?.trend_stage)).toEqual(['rising', 'rising', 'peak']);
   });
 });

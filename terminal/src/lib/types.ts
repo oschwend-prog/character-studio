@@ -417,6 +417,9 @@ export interface DropCard {
   crop_x?: number | null;
   star?: { kind: 'person' | 'dog' | 'animal' | 'none'; body: 'biped' | 'quadruped'; description: string; x_center: number; full_body?: boolean };
   classic?: boolean;
+  /** Where the clip's trend is (rising, peak, fading, classic, none): written by the hits job when it files a drop; absent on every
+   * other drop. Only the freshness order of Make these reads it (after a failed score test). */
+  trend_stage?: 'rising' | 'peak' | 'fading' | 'classic' | 'none' | null;
   part?: OwnerPresence;
   gadgets?: string[];
   hooks?: string[];
@@ -635,6 +638,8 @@ export interface Snapshot {
   history: PickHistory[];
   characters: Character[];
   runs: RunRow[];
+  /** The latest weekly review (studio.runs, kind weekly: `studio review weekly`, read with lib/weekly.ts); null (or absent) before the first. */
+  weekly?: RunRow | null;
   /** "In the works": approved picks until they are posted (v_tracker, migration 0010). */
   tracker: TrackerRow[];
   /** Views and follows per character and London day (v_views_daily, migration 0015); empty before it or before any measurement. */
