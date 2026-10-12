@@ -1474,8 +1474,7 @@ def confirm_proposal(store: Store, run_id: str) -> dict[str, Any]:
         wanted = str(uuid.UUID(run_id))
     except ValueError:
         raise ValueError(f"{run_id!r:.40} is not a run id") from None
-    runs = store.list_runs()
-    run = next((r for r in runs if r.id == wanted), None)
+    run = next(iter(store.list_runs(id=wanted)), None)  # the one row, whatever other kinds of run the table holds
     if run is None:
         raise ValueError(f"no such run: {wanted}")
     if run.kind != RunKind.weekly:

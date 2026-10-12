@@ -1617,6 +1617,21 @@ def test_the_run_keeps_the_proposal_link_pending_and_confirm_proposal_publishes_
     assert weekly.confirm_proposal(w.store, out["run_id"])["confirmed"] is False  # a rerun of the job changes nothing
 
 
+def test_confirm_proposal_looks_up_the_one_run_by_id_and_never_lists_every_run(tmp_path):
+    w = measured_world()
+    run_id = run(w, tmp_path)["run_id"]
+    asked: list[dict] = []
+    real = w.store.list_runs
+
+    def spy(**filters):
+        asked.append(filters)
+        return real(**filters)
+
+    w.store.list_runs = spy
+    assert weekly.confirm_proposal(w.store, run_id)["confirmed"] is True
+    assert asked == [{"id": run_id}]
+
+
 def test_confirm_proposal_refuses_what_is_not_a_run_with_a_pending_link():
     from studio.models import Run, RunKind, RunStatus
 
