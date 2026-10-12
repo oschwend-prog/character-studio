@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import re
 import shutil
 import subprocess
 import wave
@@ -1799,3 +1800,223 @@ def test_a_bad_kit_is_refused_before_anything_renders(tmp_path):
     spec = spec_for(tmp_path, tmp_path / "missing.mp4", tmp_path / "missing.wav", style={"tone": "sepia"})
     with pytest.raises(ValueError, match="tone"):
         build_master(spec)
+
+
+# ---- the edits of tests G and H: zoom pulses on the beat, the hook popping in word by word -----------------------------------------------
+
+
+def grid(step: float, n: int, first: float = 0.0) -> list[float]:
+    return [round(first + step * i, 3) for i in range(n)]
+
+
+def test_zoom_pulses_sit_on_every_fourth_beat_from_the_first_beat_after_the_first_second():
+    beats = grid(0.5, 24)  # 120 bpm: 0.0 ... 11.5
+    assert master.zoom_pulse_times(beats, start_s=1.0, end_s=12.0) == [1.0, 3.0, 5.0, 7.0, 9.0, 11.0]
+    # the first beat AT OR AFTER the start; the ones before it are not counted
+    assert master.zoom_pulse_times([0.4, 0.9, 1.3, 1.8, 2.3, 2.8, 3.3, 3.8, 4.3, 4.8], start_s=1.0, end_s=9.0) == [1.3, 3.3]  # 1.3, then the 4th beat after it
+    assert master.zoom_pulse_times(beats, start_s=1.01, end_s=12.0) == [1.5, 3.5, 5.5, 7.5, 9.5, 11.5]  # just past 1.0: the next beat
+
+
+def test_zoom_pulse_times_stop_where_a_pulse_would_run_past_the_end():
+    beats = grid(0.5, 24)
+    assert master.zoom_pulse_times(beats, start_s=1.0, end_s=9.25) == [1.0, 3.0, 5.0, 7.0, 9.0]  # 9.0 + 0.25 just fits
+    assert master.zoom_pulse_times(beats, start_s=1.0, end_s=9.2) == [1.0, 3.0, 5.0, 7.0]  # 9.25 would run past the picture
+
+
+def test_a_pulse_never_sits_within_a_second_of_another_hit_or_of_the_drop_pulses():
+    beats = grid(0.5, 24)
+    # 3.4 is a zoom_hit of the spec (or a drop pulse): 3.0 is 0.4 s from it and goes; nothing else moves (no shifting)
+    assert master.zoom_pulse_times(beats, start_s=1.0, end_s=12.0, avoid=[3.4]) == [1.0, 5.0, 7.0, 9.0, 11.0]
+    assert master.zoom_pulse_times(beats, start_s=1.0, end_s=12.0, avoid=[4.0]) == [1.0, 3.0, 5.0, 7.0, 9.0, 11.0]  # exactly 1.0 s: allowed
+    assert master.zoom_pulse_times(beats, start_s=1.0, end_s=12.0, avoid=[1.0, 1.5]) == [3.0, 5.0, 7.0, 9.0, 11.0]  # the DJ's drop
+    # a fast grid (every 4th beat 0.8 s apart): the next pulse is at least a second after the last one placed
+    fast = master.zoom_pulse_times(grid(0.2, 40), start_s=1.0, end_s=9.0)
+    assert fast[0] == 1.0 and all(b - a >= master.ZOOM_PULSE_GAP_S - 1e-9 for a, b in zip(fast, fast[1:])) and len(fast) >= 5
+
+
+def test_zoom_pulse_times_with_no_beat_or_nothing_in_range():
+    assert master.zoom_pulse_times([], start_s=1.0, end_s=9.0) == []
+    assert master.zoom_pulse_times([0.2, 0.7], start_s=1.0, end_s=9.0) == []
+    assert master.zoom_pulse_times(grid(0.5, 24), start_s=1.0, end_s=1.1) == []
+    assert master.zoom_pulse_times([3.0, 1.0, 2.0, 1.0], start_s=0.0, end_s=9.0) == [1.0]  # sorted, duplicates once
+
+
+def test_one_filter_carries_every_pulse_and_a_single_pulse_is_the_zoom_hit_of_the_drop_flash():
+    one = master.zoom_pulses_filter("a", "b", [2.0])
+    assert one == master.zoom_hit_filter("a", "b", master.ZoomHit(2.0, master.ZOOM_PULSE_SCALE), legacy=False)
+    many = master.zoom_pulses_filter("a", "b", [1.0, 3.0, 5.0])
+    assert many.count("scale=") == 1 and many.startswith("[a]") and many.endswith("[b]"), "one scale and crop for all the pulses"
+    bump = lambda at: f"0.06*sin(PI*clip((t-{at})/0.25,0,1))"  # noqa: E731
+    z = f"1+{bump(1)}+{bump(3)}+{bump(5)}"
+    assert many == master._zoom_filter("a", "b", z), "the sum of the three bumps, one per pulse"
+    assert master.ZOOM_PULSE_SCALE == 1.06 and master.ZOOM_PULSE_EVERY == 4
+
+
+def test_edits_are_checked_and_default_to_off():
+    assert master.parse_edits(None) is None
+    assert master.parse_edits({}) == {"zoom_pulses": False, "word_pop": False}
+    assert master.parse_edits({"zoom_pulses": True}) == {"zoom_pulses": True, "word_pop": False}
+    for bad in ({"zoom": True}, {"zoom_pulses": 1}, {"word_pop": "yes"}, [("zoom_pulses", True)], "zoom_pulses"):
+        with pytest.raises(ValueError, match="edits"):
+            master.parse_edits(bad)
+
+
+def test_a_clips_test_arms_become_the_masters_edits():
+    assert master.edits_from_arms({"zoom": True, "word_pop": False}) == {"zoom_pulses": True, "word_pop": False}
+    assert master.edits_from_arms({"zoom": False}) == {"zoom_pulses": False, "word_pop": False}  # one test only: the other is off
+    assert master.edits_from_arms({"word_pop": True, "hook": "ego-claim"}) == {"zoom_pulses": False, "word_pop": True}
+    for none in ({}, {"hook": "ego-claim", "trial": True}, None, "zoom"):  # no key of the two tests: no edits, as before
+        assert master.edits_from_arms(none) is None
+
+
+def test_spec_from_json_takes_edits_and_refuses_the_applied_record():
+    base = {"dance": "d.mp4", "audio": "a.wav", "out": "o.mp4", "closeup": None}
+    assert master.spec_from_json(base).edits is None
+    spec = master.spec_from_json({**base, "edits": {"zoom_pulses": True}})
+    assert spec.edits == {"zoom_pulses": True, "word_pop": False} and spec.applied == {}
+    with pytest.raises(ValueError, match="edits"):
+        master.spec_from_json({**base, "edits": {"zoom_pulses": "yes"}})
+    with pytest.raises(ValueError, match="unknown key.*applied"):  # applied is what the build reports, not an input
+        master.spec_from_json({**base, "applied": {"zoom_pulses": 3}})
+    assert "applied" not in dataclasses.asdict(spec) and dataclasses.asdict(spec)["edits"] == spec.edits  # the spec's JSON round-trips
+
+
+def test_cli_master_build_reports_what_the_edits_applied(tmp_path, monkeypatch, synth_video):
+    """``master build`` prints ``edits_applied`` for a spec with edits (and nothing new for a spec without)."""
+    ready = synth_video(w=1080, h=1920, dur=7)
+
+    def fake_build(spec, **kw):
+        spec.applied = {"zoom_pulses": 2, "hook_entrance": "word_pop"}
+        return ready
+
+    monkeypatch.setattr(master, "build_master", fake_build)
+    path = spec_json(tmp_path, ready, tone(tmp_path / "beat.wav", 3), closeup=None, edits={"zoom_pulses": True, "word_pop": True})
+    data = json.loads(CliRunner().invoke(app, ["master", "build", "--spec", str(path)]).stdout)
+    assert data["edits_applied"] == {"zoom_pulses": 2, "hook_entrance": "word_pop"}
+    path = spec_json(tmp_path, ready, tone(tmp_path / "beat.wav", 3), closeup=None)
+    assert "edits_applied" not in json.loads(CliRunner().invoke(app, ["master", "build", "--spec", str(path)]).stdout)
+
+
+@pytest.mark.parametrize("edits", [None, {}, {"zoom_pulses": False, "word_pop": False}], ids=["none", "empty", "both off"])
+def test_a_master_without_edits_or_with_both_off_keeps_its_graphs_byte_for_byte(tmp_path, monkeypatch, edits):
+    """Review focus: a spec without the ``edits`` key renders exactly as it did; both arms off changes nothing either (no beat
+    is even measured)."""
+    pin_text_metrics(monkeypatch)
+    monkeypatch.setattr(master, "_beat_grid", lambda *a, **k: pytest.fail("no edit asked for a beat"))
+    dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 6)
+    spec = spec_for(tmp_path, dance, beat, edits=edits)
+    assert graphs_of(spec, monkeypatch) == NO_STYLE_GRAPHS["closeup"]
+    enhanced = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2_until_s=1.5, enhancements=ENHANCED, edits=edits)
+    assert graphs_of(enhanced, monkeypatch) == NO_STYLE_GRAPHS["enhanced"]
+    assert spec.applied == ({} if edits is None else {"zoom_pulses": 0, "hook_entrance": "none"})
+    assert enhanced.applied == spec.applied
+
+
+def beats_of(monkeypatch, beats: list[float], drop_s: float = 1.0) -> None:
+    """Hand the master a beat grid instead of analysing the audio (a plain tone has no beat)."""
+    monkeypatch.setattr(master, "_beat_grid", lambda spec, content_s, work: (list(beats), drop_s))
+
+
+def test_zoom_pulses_go_after_the_zoom_hits_and_the_slowmo_and_before_the_hook_edit(tmp_path, monkeypatch):
+    pin_text_metrics(monkeypatch)
+    beats_of(monkeypatch, grid(0.5, 12))
+    dance, beat = flat_video(tmp_path / "dance.mp4", 6), tone(tmp_path / "beat.wav", 7)
+    items = [{"type": "zoom_hit", "at_s": 3.2}, {"type": "slowmo", "at_s": 4.0, "dur_s": 0.4, "factor": 0.5}]
+    spec = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2_until_s=1.5, enhancements=items,
+                    character="franz", edits={"zoom_pulses": True, "word_pop": False})  # fmt: skip
+    picture = graphs_of(spec, monkeypatch)[0]
+    # the beats are 1.0, 3.0, 5.0 (every 4th from the first at or after 1.0); 3.0 is 0.2 s from the zoom_hit at 3.2 and goes
+    assert master.zoom_pulses_filter("vs", "zp", [1.0, 5.0]) in picture
+    assert picture.index("[z0]") < picture.index("[vs]") < picture.index("[zp]") < picture.index("[he]")
+    assert picture.index("[he]") < picture.index("[tn]") < picture.index("[o0]"), "then the kit's edit and tone, the captions last"
+    assert spec.applied == {"zoom_pulses": 2, "hook_entrance": "slam"}  # franz's own entrance: only G is on
+
+
+def test_the_pulses_zoom_the_picture_on_their_beats_and_nothing_else(tmp_path, monkeypatch, synth_video):
+    """A real build: against the same master without pulses the picture differs while a pulse runs (0.25 s) and only then; the
+    length is the same (the sound is not touched)."""
+    beats_of(monkeypatch, grid(0.5, 12))
+    src, audio = synth_video(dur=4), tone(tmp_path / "beat.wav", 5)
+    plain = build_master(spec_for(tmp_path, src, audio, closeup=None, hook1=[], hook2=[], out=tmp_path / "plain.mp4"))
+    spec = spec_for(tmp_path, src, audio, closeup=None, hook1=[], hook2=[], edits={"zoom_pulses": True}, out=tmp_path / "pulsed.mp4")
+    pulsed = build_master(spec)
+    assert spec.applied == {"zoom_pulses": 2, "hook_entrance": "none"}  # at 1.0 and 3.0
+
+    def diff(t: float) -> float:
+        a, b = frame_at(pulsed, t, tmp_path), frame_at(plain, t, tmp_path)
+        return sum(ImageStat.Stat(ImageChops.difference(a, b)).mean) / 3
+
+    assert diff(1.12) > 2 and diff(3.12) > 2, "zoomed 1.06x in the middle of each pulse"
+    assert diff(0.5) < 1 and diff(2.0) < 1 and diff(3.6) < 1, "the plain picture between them"
+    assert probe(pulsed, loudness=False).duration_s == pytest.approx(probe(plain, loudness=False).duration_s, abs=0.02)
+    assert probe(pulsed).lufs == pytest.approx(probe(plain).lufs, abs=0.3)
+
+
+def test_the_pulses_start_a_second_into_the_finished_master_even_with_reginalds_pause(tmp_path, monkeypatch):
+    """Reginald holds the first frame 0.4 s: the picture's 0.6 s is the finished master's 1.0 s, the end of the hook's first second."""
+    beats_of(monkeypatch, grid(0.1, 30))
+    dance, beat = flat_video(tmp_path / "dance.mp4", 3), tone(tmp_path / "beat.wav", 4)
+    reginald = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=["Kindly do not inform the Duchess."],
+                        hook2_until_s=3.0, character="reginald", edits={"zoom_pulses": True})  # fmt: skip
+    plain = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=[], edits={"zoom_pulses": True})
+    first = lambda spec: re.search(r"\(t-([0-9.]+)\)/0\.25", graphs_of(spec, monkeypatch)[0]).group(1)  # noqa: E731
+    assert first(reginald) == "0.6" and first(plain) == "1"
+
+
+def test_a_pulse_keeps_clear_of_the_djs_drop_pulses(tmp_path, monkeypatch):
+    beats_of(monkeypatch, grid(0.5, 12), drop_s=1.0)  # the drop's flash and pulses sit at 1.0 and 1.5
+    dance, beat = flat_video(tmp_path / "dance.mp4", 6), tone(tmp_path / "beat.wav", 7)
+    spec = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=["Wait for the drop."], hook2_until_s=3.0,
+                    character="dj", edits={"zoom_pulses": True})  # fmt: skip
+    picture = graphs_of(spec, monkeypatch)[0]
+    assert master.zoom_pulses_filter("v0", "zp", [3.0, 5.0]) in picture, "1.0 is the drop itself: not a pulse of ours"
+    assert "t-1)/0.25" in picture and "t-1.5)/0.25" in picture, "the drop's own two pulses are still there"
+    assert spec.applied["zoom_pulses"] == 2
+
+
+def test_pulses_need_a_beat_and_a_master_without_one_renders_without_them(tmp_path, monkeypatch):
+    """The sound has no beat after all (or the master is silent): no pulse, the picture graph is the unedited one, and the master
+    says so (zoom_pulses 0, the kit's own entrance) so the analysis leaves the clip out."""
+    pin_text_metrics(monkeypatch)
+    real_beat_grid = master._beat_grid
+    dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 6)
+    beats_of(monkeypatch, [])
+    for who, entrance in (({}, "none"), ({"character": "franz"}, "slam")):
+        plain = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=["Absolutely not."], hook2_until_s=1.5, **who)
+        edited = dataclasses.replace(plain, edits={"zoom_pulses": True, "word_pop": True})
+        assert graphs_of(edited, monkeypatch)[0] == graphs_of(plain, monkeypatch)[0]
+        assert edited.applied == {"zoom_pulses": 0, "hook_entrance": entrance}
+    monkeypatch.setattr(master, "_beat_grid", real_beat_grid)
+    silent = spec_for(tmp_path, dance, None, closeup=None, hook1=[], hook2=["Absolutely not."], hook2_until_s=1.5, music="in_app",
+                      edits={"zoom_pulses": True, "word_pop": True})  # fmt: skip
+    assert build_master(silent).is_file()  # a silent master has no beat: the real _beat_grid says so
+    assert silent.applied == {"zoom_pulses": 0, "hook_entrance": "none"}
+
+
+def test_word_pop_brings_the_first_hook_in_word_by_word_on_the_beat_whatever_the_kit(tmp_path, monkeypatch):
+    beats_of(monkeypatch, [0.3, 0.8, 1.3, 1.8, 2.3, 2.8])
+    dance, beat = flat_video(tmp_path / "dance.mp4", 3), tone(tmp_path / "beat.wav", 4)
+    hook = ["Wait for the drop."]  # four words
+    popped = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=hook, hook2_until_s=2.8, character="franz",
+                      edits={"word_pop": True}, out=tmp_path / "popped.mp4")  # fmt: skip
+    kit_own = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=hook, hook2_until_s=2.8, character="franz",
+                       edits={"word_pop": False}, out=tmp_path / "kit.mp4")  # fmt: skip
+    pop_out, kit_out = build_master(popped), build_master(kit_own)
+    assert popped.applied == {"zoom_pulses": 0, "hook_entrance": "word_pop"}
+    assert kit_own.applied == {"zoom_pulses": 0, "hook_entrance": "slam"}
+    cream = lambda out, t: count_near(frame_at(out, t, tmp_path), PILL_BOX, CREAM)  # noqa: E731
+    words = [cream(pop_out, t) for t in (0.15, 0.5, 1.0, 1.5, 2.0)]
+    assert words[0] < 100, "nothing before the first beat"
+    assert 0 < words[1] < words[2] < words[3] < words[4], words  # one more word on each beat, the whole hook last
+    assert cream(kit_out, 0.15) > 5000, "the kit's own slam: the whole pill from the first frames"
+    assert cream(pop_out, 2.0) == pytest.approx(cream(kit_out, 2.0), rel=0.02), "the same pill once the last word is in"
+
+
+def test_word_pop_off_leaves_the_kits_entrance_exactly_as_it_was(tmp_path, monkeypatch):
+    pin_text_metrics(monkeypatch)
+    dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 6)
+    for slug in ("franz", "dj"):  # a kit with its own entrance and the one that already pops word by word
+        plain = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=["Absolutely not."], hook2_until_s=1.5, character=slug)
+        off = dataclasses.replace(plain, edits={"zoom_pulses": False, "word_pop": False})
+        assert graphs_of(off, monkeypatch) == graphs_of(plain, monkeypatch), slug
+        assert off.applied["hook_entrance"] == kit(slug)["entrance"] and off.applied["zoom_pulses"] == 0, slug

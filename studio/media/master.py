@@ -54,9 +54,28 @@ master. The hook windows and the bug are already on the finished timeline.
 ``tone``
     A subtle colour grade of the picture (``tone_filter``): ``warm``, ``cool``, ``golden``, ``punchy``.
 
-The picture's steps run concat -> zoom hits -> slowmo -> hook edit -> tone -> pause -> overlays, so the captions are never
-zoomed or graded. Without a kit (no character, a character without one, or an empty one) the graph is the one from before
-the kits, byte for byte.
+The picture's steps run concat -> zoom hits -> slowmo -> zoom pulses -> hook edit -> tone -> pause -> overlays, so the captions
+are never zoomed or graded. Without a kit (no character, a character without one, or an empty one) the graph is the one from
+before the kits, byte for byte.
+
+**Edits of the learning tests G and H** (``MasterSpec.edits``, ``{"zoom_pulses": bool, "word_pop": bool}``; plan sections 3.9 and
+3.10; ``edits_from_arms`` reads them from a clip's ``test_arms`` keys ``zoom`` and ``word_pop``). Both follow the beat of the
+master's sound (``_beat_grid``), whatever the kit:
+
+``zoom_pulses``
+    One punch-in (``zoom_hit``, scale ``ZOOM_PULSE_SCALE`` 1.06) on every 4th beat, counted from the first beat at or after the
+    hook's first second (``zoom_pulse_times``); never closer than ``ZOOM_PULSE_GAP_S`` (1.0 s) to another pulse, to a ``zoom_hit``
+    of the spec or to the DJ kit's drop pulses, and never so late that it runs past the picture. The picture only: the sound and
+    the captions are not touched, so the dance stays in sync. One filter carries all the pulses (``zoom_pulses_filter``).
+``word_pop``
+    The first hook pill comes in one word more on each beat (``entrance_frames`` with ``word_pop``, the DJ kit's own code), in place
+    of the kit's entrance.
+
+A spec without ``edits`` (or with both off) builds exactly as before: no beat is even measured. When an edit is asked for and the
+sound has no beat (a silent ``in_app`` master, or nothing the analysis hears), the master renders without it and says so:
+``MasterSpec.applied`` is filled by ``build_master`` with what really happened, ``{"zoom_pulses": <count>, "hook_entrance": <name>}``
+(0 and the kit's own entrance when nothing was applied), so the analysis leaves such a clip out. ``applied`` stays ``{}`` for a
+spec without ``edits``.
 
 CLI: ``studio master build --spec <json> [--clip <id>]`` builds, runs the master QA and prints JSON; it
 exits 1 when the master has QA problems (the JSON says which) and 2 for anything the caller must fix.
@@ -161,6 +180,11 @@ PUSH_IN_ZOOM, PUSH_IN_S = 1.06, 1.5  # 1.00 -> 1.06 over the first 1.5 s, then h
 PUNCH_IN_ZOOM, PUNCH_IN_S = 1.15, 0.5  # 1.15 -> 1.00 in the first 0.5 s
 FLASH_S, FLASH_GAIN = 0.12, 0.6  # the drop's white flash: +0.6 brightness, gone in 0.12 s
 DROP_PULSE_GAP_S = 0.5  # the second zoom pulse, after the one on the drop
+ZOOM_PULSE_SCALE = 1.06  # test G: each pulse is a zoom_hit of this scale ...
+ZOOM_PULSE_EVERY = 4  # ... on every 4th beat ...
+ZOOM_PULSE_START_S = 1.0  # ... counted from the first beat at or after the end of the hook's first second ...
+ZOOM_PULSE_GAP_S = 1.0  # ... and never closer than this to another hit
+EDIT_KEYS = ("zoom_pulses", "word_pop")  # the edits of tests G and H
 TONES = {
     "warm": "colorbalance=rs=0.04:gs=0.01:bs=-0.04",
     "cool": "colorbalance=rs=-0.03:bs=0.04,eq=saturation=0.9",
@@ -212,6 +236,13 @@ class MasterSpec:
     music: str = "ai_beat"  # ai_beat | in_app | original (see the module docstring)
     character: str | None = None  # the character's slug: his style kit (refs.json ``style``) unless ``style`` is given
     style: dict[str, Any] | None = None  # a style kit given outright (the refs.json ``style`` object)
+    edits: dict[str, bool] | None = None  # the edits of tests G and H (see the module docstring); None: the master as before
+
+    def __post_init__(self) -> None:
+        # What ``build_master`` really did with ``edits`` ({"zoom_pulses": count, "hook_entrance": name}); filled by the build, {}
+        # for a spec without edits. An attribute, not a field: it is an output, so it is no part of ``dataclasses.asdict(spec)``
+        # (the spec's JSON) and ``spec_from_json`` refuses it as an input.
+        self.applied: dict[str, Any] = {}
 
 
 # ---- enhancements: parsing ---------------------------------------------------------------------
@@ -380,6 +411,57 @@ def zoom_hit_filter(src: str, dst: str, hit: ZoomHit, *, legacy: bool = True) ->
     enhancement) keeps the graph of before the kits; the drop flash's pulses pass ``legacy=False`` (see ``_zoom_filter``)."""
     z = f"1+{hit.scale - 1:g}*sin(PI*clip((t-{hit.at_s:g})/{ZOOM_HIT_SECONDS:g},0,1))"
     return _zoom_filter(src, dst, z, legacy=legacy)
+
+
+def parse_edits(raw: Any) -> dict[str, bool] | None:
+    """The spec's ``edits`` checked and complete: ``None`` stays ``None`` (no edits), an object may name ``zoom_pulses`` and
+    ``word_pop`` (true / false; a missing one is off). ``ValueError`` for anything else."""
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"edits must be an object of {' / '.join(EDIT_KEYS)} -> true / false, got {raw!r:.60}")
+    if extra := sorted(set(raw) - set(EDIT_KEYS)):
+        raise ValueError(f"edits: unknown key(s) {', '.join(map(str, extra))} (one of {', '.join(EDIT_KEYS)})")
+    for key, value in raw.items():
+        if not isinstance(value, bool):
+            raise ValueError(f"edits: {key} must be true or false, got {value!r:.30}")
+    return {key: raw.get(key, False) for key in EDIT_KEYS}
+
+
+def edits_from_arms(arms: Any) -> dict[str, bool] | None:
+    """The master's ``edits`` for a clip's ``features['test_arms']`` (tests G and H: ``zoom`` and ``word_pop``, true / false), or
+    ``None`` when the clip carries neither key (a clip made before the tests, or a silent master that took no position): it is
+    built exactly as before. A clip in only one of the tests has the other edit off."""
+    if not isinstance(arms, Mapping) or not {"zoom", "word_pop"} & arms.keys():
+        return None
+    return {"zoom_pulses": arms.get("zoom") is True, "word_pop": arms.get("word_pop") is True}
+
+
+def zoom_pulse_times(
+    beats: Sequence[float], *, start_s: float, end_s: float, avoid: Sequence[float] = (),
+) -> list[float]:
+    """Where test G's zoom pulses go: every ``ZOOM_PULSE_EVERY``-th beat of ``beats`` (seconds of the picture), counted from the
+    first beat at or after ``start_s``. A pulse is left out (the others do not move up) when it would run past ``end_s`` (it lasts
+    ``ZOOM_HIT_SECONDS``) or sits closer than ``ZOOM_PULSE_GAP_S`` to a pulse already placed or to a time in ``avoid`` (a
+    ``zoom_hit`` of the spec, the DJ kit's drop pulses). Pure."""
+    grid = sorted(set(b for b in beats if b >= start_s - _EPS))
+    placed: list[float] = []
+    for t in grid[::ZOOM_PULSE_EVERY]:
+        if t + ZOOM_HIT_SECONDS > end_s + _EPS:
+            break
+        if any(abs(t - other) < ZOOM_PULSE_GAP_S - _EPS for other in (*avoid, *placed)):
+            continue
+        placed.append(round(t, 3))
+    return placed
+
+
+def zoom_pulses_filter(src: str, dst: str, times: Sequence[float], scale: float = ZOOM_PULSE_SCALE) -> str:
+    """All of test G's pulses in ONE zoom (``[src]`` -> ``[dst]``): the sum of one half-sine bump (``zoom_hit_filter``'s) per time.
+    The bumps are 0.25 s wide and at least ``ZOOM_PULSE_GAP_S`` apart, so they never overlap; outside a bump the term is 0 and the
+    picture is not scaled. One scale and crop instead of one per pulse (a 15 s clip has 7). Centred and floored like the drop
+    flash's pulses (``_zoom_filter``, not the legacy graph)."""
+    bumps = "+".join(f"{scale - 1:g}*sin(PI*clip((t-{at:g})/{ZOOM_HIT_SECONDS:g},0,1))" for at in times)
+    return _zoom_filter(src, dst, f"1+{bumps}")
 
 
 def hook_edit_filter(src: str, dst: str, kind: str, *, drop_s: float | None) -> str | None:
@@ -818,6 +900,9 @@ def _check_inputs(spec: MasterSpec) -> tuple[Path, Path | None]:
 def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
     """Render ``spec`` to ``spec.out`` (see the module docstring); returns that path.
 
+    With ``spec.edits`` (tests G and H) the picture gets zoom pulses and / or the hook comes in word by word on the beat; what was
+    really applied is left in ``spec.applied`` (the module docstring).
+
     Raises ``ValueError`` for a bad spec (checked before anything renders) and ``MasterError`` when
     ffmpeg fails. The finished file replaces ``out`` only when the whole build succeeded. Its labelled Story video
     (``render_story``, at ``story_file(out)``) is rendered only when ``story`` is true (``None``: ``stories_enabled()``, the
@@ -825,6 +910,9 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
     fails the master. Whatever Story video an earlier build left next to ``out`` is removed.
     """
     items = parse_enhancements(spec.enhancements)
+    edits = parse_edits(spec.edits)
+    spec.applied = {}
+    zoom_on, pop_on = bool(edits and edits["zoom_pulses"]), bool(edits and edits["word_pop"])
     kit = _kit(spec)
     dance, closeup = _check_inputs(spec)
     out = Path(spec.out)
@@ -854,8 +942,16 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
         base_s = intro_len + _duration(dance_n) + outro_len
         beats: list[float] = []
         drop_s: float | None = None
-        if entrance == "word_pop" or hook_edit == "drop_flash":  # only the DJ's kit needs the beat
+        if entrance == "word_pop" or hook_edit == "drop_flash" or zoom_on or pop_on:  # the DJ's kit and tests G, H need the beat
             beats, drop_s = _beat_grid(spec, out_time(base_s, slow), work)
+        pulses: list[float] = []  # test G: the zoom pulses, in seconds of the picture (the finished timeline before any pause)
+        if zoom_on and beats:
+            taken = [out_time(e.at_s, slow) for e in items if isinstance(e, ZoomHit)]
+            if hook_edit == "drop_flash" and drop_s is not None:
+                taken += [drop_s, drop_s + DROP_PULSE_GAP_S]
+            pulses = zoom_pulse_times(
+                beats, start_s=max(0.0, ZOOM_PULSE_START_S - lead), end_s=out_time(base_s, slow), avoid=taken,
+            )
 
         # Overlays: every window is on the finished timeline, ``lead`` (the pause) included; the first hook pill still shows
         # from 0 and the bug is always on.
@@ -868,10 +964,12 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
             pills.append((spec.hook1, "hook1.png", 0.0, intro_len + lead))
         if any(line.strip() for line in spec.hook2):
             pills.append((spec.hook2, "hook2.png", intro_len + lead if intro_len else intro_len, spec.hook2_until_s + lead))
+        popped = pop_on and bool(beats) and bool(pills) and bool(" ".join(pills[0][0]).split())  # test H: word by word on the beat
+        first_entrance = "word_pop" if popped else entrance
         for j, (lines, name, start, end) in enumerate(pills):
             png = overlays.pill_png(lines, work / name, style=pill)
-            if j == 0:  # the kit's entrance is how the first caption comes in
-                shown += entrance_frames(png, entrance, start, end, work, beats=[b + lead for b in beats], lines=lines, style=pill)
+            if j == 0:  # the kit's entrance (test H: the word pop) is how the first caption comes in
+                shown += entrance_frames(png, first_entrance, start, end, work, beats=[b + lead for b in beats], lines=lines, style=pill)
             else:
                 shown.append(_boxed(png, start, end))
         for i, pop in enumerate(e for e in items if isinstance(e, TextPop)):
@@ -879,7 +977,7 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
             shown.append(_boxed(png, out_time(pop.at_s, slow) + lead, out_time(pop.at_s + pop.dur_s, slow) + lead))
         shown.append(_boxed(overlays.bug_png(work / "bug.png")))
 
-        # One graph: concat -> zoom hits -> slowmo -> hook edit -> tone -> pause -> overlays -> yuv420p.
+        # One graph: concat -> zoom hits -> slowmo -> zoom pulses -> hook edit -> tone -> pause -> overlays -> yuv420p.
         graph = [
             "".join(f"[{i}:v]" for i in range(len(clips))) + f"concat=n={len(clips)}:v=1:a=0[v0]"
             if len(clips) > 1
@@ -896,6 +994,8 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
             step(zoom_hit_filter(label, f"z{i}", hit))
         if slow:
             step(slowmo_filter(label, "vs", slow, base_s))
+        if pulses:
+            step(zoom_pulses_filter(label, "zp", pulses))
         if (edit := hook_edit_filter(label, "he", hook_edit, drop_s=drop_s)) is not None:
             step(edit)
         if (graded := tone_filter(label, "tn", tone)) is not None:
@@ -957,6 +1057,8 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
         if story_video is not None:
             shutil.move(story_video, story_file(out))
         shutil.move(finished, out)
+    if edits is not None:  # what the tests asked for and what the master really shows (module docstring)
+        spec.applied = {"zoom_pulses": len(pulses), "hook_entrance": first_entrance}
     return out
 
 
@@ -1012,6 +1114,7 @@ def spec_from_json(data: Any) -> MasterSpec:
         raise ValueError(f"character must be a character's slug such as reginald, or null, got {character!r:.40}")
     if merged["style"] is not None:
         merged["style"] = seed.validate_style(merged["style"], Path("the spec"))
+    merged["edits"] = parse_edits(merged.get("edits"))
     for key in ("dance", "out"):
         merged[key] = Path(merged[key])
     merged["audio"] = Path(merged["audio"]) if merged.get("audio") else None
@@ -1194,7 +1297,10 @@ def build_command(
         fail(str(e))
     problems = check_master(report, loop=loop, silent=built.music == "in_app")
     report = dataclasses.replace(report, problems=problems)
-    emit({"out": str(out), **dataclasses.asdict(report), "ok": report.ok})
+    result = {"out": str(out), **dataclasses.asdict(report), "ok": report.ok}
+    if built.edits is not None:  # tests G and H: what the master really shows
+        result["edits_applied"] = built.applied
+    emit(result)
     if problems:
         raise typer.Exit(1)
 
