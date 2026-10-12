@@ -24,11 +24,18 @@
 5. **Trial Reels** (Instagram only): ``config/scan.json`` ``reach.trial_reels``, a map of Instagram handle -> true / false (off
    for every account; proposed to the owner for new accounts with few followers, never switched on by the build). On: the Reel
    goes out with ``is_trial_reel`` + ``graduation_strategy: SS_PERFORMANCE``. A Reel with collaborators is never a Trial Reel
-   (Instagram takes no collaborators on one): the clip's own collab wins over the account's switch.
+   (Instagram takes no collaborators on one): the clip's own collab wins over the account's switch. **While test C is ``on``**
+   (``config/experiments.json``, learning plan 3.4; ``ReachConfig.trial_test``) the clip's own coin decides instead: a clip made
+   under the test carries ``features['test_arms']['trial']`` (true / false, a block coin of 2 and 2 in every 4 per character,
+   ``studio.experiments``) and its Reel goes out as a Trial Reel exactly when that is true, whatever the account's switch says. A
+   clip with no such arm (made before the test, or a Recreate), or one whose arm is not true / false, falls back to the account's
+   switch (all off): the test never turns a Trial Reel on by a guess. The collaborator rule still wins.
 
-``load_reach()`` reads ``config/scan.json`` ``reach`` (``stories`` and ``trial_reels``) and refuses, naming the key, a switch that
-is not true or false and a ``trial_reels`` key that is no Instagram handle of ``characters/*/refs.json`` (a typo would silently
-leave the switch off: the run stops, nothing is posted). A character's ``style.series_tag`` is not read here.
+``load_reach()`` reads ``config/scan.json`` ``reach`` (``stories`` and ``trial_reels``) and the test registry
+(``config/experiments.json``, whether test C is on) and refuses, naming the key, a switch that is not true or false, a
+``trial_reels`` key that is no Instagram handle of ``characters/*/refs.json`` (a typo would silently leave the switch off) and a
+registry that cannot be read or breaks a rule: the run stops, nothing is posted. A character's ``style.series_tag`` is not read
+here.
 """
 
 from __future__ import annotations
@@ -41,6 +48,7 @@ from pathlib import Path
 from typing import Any
 
 from studio.clips import validate_first_comment
+from studio.experiments import load_experiments
 from studio.models import Account, Clip, Platform
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -76,17 +84,27 @@ def handle_key(handle: str) -> str:
 
 @dataclass(frozen=True)
 class ReachConfig:
-    """The reach pack's settings: ``trial_reels`` (Instagram handle -> on) and ``stories`` (a Reel is followed by its Story; off
-    by default)."""
+    """The reach pack's settings: ``trial_reels`` (Instagram handle -> on), ``stories`` (a Reel is followed by its Story; off
+    by default) and ``trial_test`` (test C is on)."""
 
     trial_reels: Mapping[str, bool] = field(default_factory=dict)
     stories: bool = False
+    trial_test: bool = False  # test C is on: a clip's own coin (features['test_arms']['trial']) decides its Trial Reel
 
     def trial_reel_on(self, handle: str | None) -> bool:
         if not handle:
             return False
         key = handle_key(handle)
         return any(on is True and handle_key(name) == key for name, on in self.trial_reels.items())
+
+    def trial_for(self, features: Mapping[str, Any], handle: str | None) -> bool:
+        """Does this clip's Reel go out as a Trial Reel? Test C on and the clip carries its coin (``test_arms.trial`` true or
+        false): the coin. Otherwise the account's switch."""
+        arms = features.get("test_arms")
+        arm = arms.get("trial") if isinstance(arms, Mapping) else None
+        if self.trial_test and isinstance(arm, bool):
+            return arm
+        return self.trial_reel_on(handle)
 
 
 @dataclass(frozen=True)
@@ -158,7 +176,7 @@ def plan_post(
     if account.platform is not Platform.instagram:
         return PostPlan(hashtags=hashtags)
     collaborators, dropped = _collaborators(features, account, accounts, live)
-    trial = config.trial_reel_on(account.handle) and not collaborators
+    trial = config.trial_for(features, account.handle) and not collaborators
     reach = Reach(first_comment=_first_comment(features), collaborators=collaborators, trial_reel=trial)
     video = features.get("story_path")
     video = video if isinstance(video, str) and video.strip() else None
@@ -232,10 +250,13 @@ def instagram_handles(characters_dir: Path | str = CHARACTERS_DIR) -> set[str]:
     return found
 
 
-def load_reach(scan_path: Path | str = SCAN_PATH, characters_dir: Path | str = CHARACTERS_DIR) -> ReachConfig:
+def load_reach(
+    scan_path: Path | str = SCAN_PATH, characters_dir: Path | str = CHARACTERS_DIR, experiments_path: Path | str | None = None,
+) -> ReachConfig:
     """The reach pack's settings from the repo's files (see the module docstring). ``ValueError`` (the CLI exits 2, nothing is
-    posted) for a switch that is not true or false and for a ``trial_reels`` key that is no Instagram handle of the roster: a
-    typo there would silently leave a Trial Reel switch off."""
+    posted) for a switch that is not true or false, for a ``trial_reels`` key that is no Instagram handle of the roster (a typo
+    there would silently leave a Trial Reel switch off) and for a test registry (``experiments_path``, default
+    ``studio.experiments.EXPERIMENTS_PATH``) that cannot be read or breaks a rule."""
     try:
         scan = json.loads(Path(scan_path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
@@ -251,4 +272,5 @@ def load_reach(scan_path: Path | str = SCAN_PATH, characters_dir: Path | str = C
                 f"(known: {', '.join(sorted(known)) or 'none'}); fix the key, a typo would leave the switch off"
                 + (f" ({len(unknown) - 1} more unknown)" if len(unknown) > 1 else "")
             )
-    return ReachConfig(trial_reels=switches, stories=stories(scan))
+    registry = load_experiments(experiments_path)
+    return ReachConfig(trial_reels=switches, stories=stories(scan), trial_test=registry.test("C").on)

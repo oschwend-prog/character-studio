@@ -6,7 +6,7 @@
 // MakeBar below adds up, and it asks before anything is spent) and, under More, "Use for another character" (a version for a
 // like-for-like character, free: studio.copy_drop). Under his Ready clips, "Worth saving": his top 5 new hits of the daily cloud
 // pull (spec 10, Hits.tsx). A clip not made yet has the Keep toggle under More (retention never deletes a kept clip). `compact` is
-// Today's "Make these": his top 3 Ready clips only.
+// Today's "Make these": his top 3 Ready clips and, when he has one, an Explore clip (one suggestion in four, learning test A).
 import { ArrowRight, CircleAlert } from 'lucide-react';
 import { useState } from 'react';
 import { cardPrice, originalLink, playableFor } from '../lib/clipcard';
@@ -15,7 +15,7 @@ import { cantUseLine, clipsByCharacter, isTopPick, readyWithChoice, sectionSumma
 import { characterChoice, characterMenu, dropCredits, dropLine, dropTitle, sectionLabel, effectiveDrop } from '../lib/drop';
 import { keepable } from '../lib/hits';
 import { href } from '../lib/hooks';
-import { reuseTargets, scoreOf, topPicks } from '../lib/ranking';
+import { reuseTargets, scoreOf, suggestedClips } from '../lib/ranking';
 import { activeRoster, nameOf, type RosterEntry } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import type { TrackerRow } from '../lib/types';
@@ -71,7 +71,7 @@ export function RankedClips({
           </p>
         )}
         {groups.map((g) => {
-          const top = topPicks(g.ready, 3);
+          const top = suggestedClips(g.ready, 3);
           return (
             <section key={g.slug} className={`pick-sec ${g.slug}`} aria-labelledby={`make-${g.slug}`}>
               <header className="pick-sec-head">
@@ -81,9 +81,9 @@ export function RankedClips({
               </header>
               {top.length ? (
                 <ClipGrid label={`${g.name}’s best ready clips, best first`}>
-                  {top.map((r, i) => (
-                    <ReadyCard key={r.pick_id} row={r} rank={i + 1} top={isTopPick(r, i)} ticked={ticked.has(r.pick_id)} onTick={onTick} compact
-                      versions={versionsLine(r, data?.tracker ?? rows, names)} />
+                  {top.map(({ row: r, explore }, i) => (
+                    <ReadyCard key={r.pick_id} row={r} rank={i + 1} top={!explore && isTopPick(r, i)} explore={explore}
+                      ticked={ticked.has(r.pick_id)} onTick={onTick} compact versions={versionsLine(r, data?.tracker ?? rows, names)} />
                   ))}
                 </ClipGrid>
               ) : (
@@ -236,11 +236,12 @@ function CharacterSection({
 /** A Ready clip: its card with the rank, Top pick, score and reason, price and section, and the Make toggle (the tick the Make bar
  * adds up); the versions line; under More, "Use for another character", Keep and the original post (not in compact). */
 function ReadyCard({
-  row, rank, top, ticked, onTick, versions, compact = false,
+  row, rank, top, explore = false, ticked, onTick, versions, compact = false,
 }: {
   row: TrackerRow;
   rank: number;
   top: boolean;
+  explore?: boolean;
   ticked: boolean;
   onTick(id: string, on: boolean): void;
   versions: string | null;
@@ -257,7 +258,7 @@ function ReadyCard({
   return (
     <ClipCard
       id={`${compact ? 'c' : 'f'}-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
-      rank={rank} top={top} score={scoreOf(row)} scoreTitle={SCORE_TITLE} reason={scoreReason(row)}
+      rank={rank} top={top} explore={explore} score={scoreOf(row)} scoreTitle={SCORE_TITLE} reason={scoreReason(row)}
       price={cardPrice(credits, d.window ? e.length_s : null)}
       sheetPrice={credits != null ? `about ${credits} credits${d.window ? ` · ${sectionLabel(e.start_s, e.length_s)}` : ''}` : 'priced by the check'}
       extra={versions && <span className="small muted">{versions}</span>}

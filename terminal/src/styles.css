@@ -1211,6 +1211,7 @@ button.cc-pic, a.cc-pic { cursor: pointer; }
 .cc-score.faint { align-items: center; padding-top: 0; font-size: 11px; color: var(--ink-2); }
 .cc-of { color: var(--ink-2); }
 .cc-badges .tag.action { background: var(--amber); color: var(--amber-ink); }
+.cc-explore { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .cc-body { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 10px 8px; }
 .cc-title {
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;

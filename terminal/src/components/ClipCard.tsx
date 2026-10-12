@@ -13,6 +13,7 @@ import {
   MAKE_TOGGLE, afterPictureError, originalLink, pictureSources, removeStep, shouldLoopBack, withFragment, type PicturePos, type Playable,
   type PlayableSource, type RemoveStep,
 } from '../lib/clipcard';
+import { EXPLORE_HELP, EXPLORE_LABEL } from '../lib/ranking';
 import { thumbFor } from '../lib/rules';
 import { useStudio } from '../lib/store';
 import type { DropCard } from '../lib/types';
@@ -65,6 +66,8 @@ export interface ClipCardProps {
   /** #1, #2 ... (ranked lists only). */
   rank?: number | null;
   top?: boolean;
+  /** An Explore clip (learning test A): one suggested clip in four comes from below his median score. Shown as a label with its help. */
+  explore?: boolean;
   /** 0-100; null = "not scored yet"; undefined = no score on this card. */
   score?: number | null;
   /** What the score is (said to a screen reader before it, and as its hover title). */
@@ -111,6 +114,13 @@ export function ClipCard(p: ClipCardProps) {
         </CardMedia>
       </div>
       <div className="cc-body">
+        {p.explore && (
+          <span className="small cc-explore">
+            <span className="tag" title={EXPLORE_HELP}>{EXPLORE_LABEL}</span>
+            <span className="muted">below his median score</span>
+            <span className="sr-only">. {EXPLORE_HELP}</span>
+          </span>
+        )}
         <span className="cc-title" id={titleId}>{p.title}</span>
         {p.reason && <span className="small muted cc-reason">{p.reason}</span>}
         {p.price && <span className="small num cc-price" id={priceId}>{p.price}</span>}

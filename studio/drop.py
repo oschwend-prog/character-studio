@@ -96,6 +96,12 @@ source...; ``clips.new_clip`` refuses a drop's clip that misses one) and the mas
 the owner's latest Adjust). A drop checked before this build is made with ``none`` where the check gave nothing (``drop recheck
 --all-ready`` gives the ready ones their labels first).
 
+**The learning tests at Make it** (``docs/launch/measurement-and-learning-plan.md`` section 3, ``config/experiments.json``,
+``studio.experiments``). When a clip is created, under the settings row lock: every active block-coin test writes its arm into
+``features['test_arms']`` (test C: ``trial``, true / false, the clip's Trial Reel coin, read by the publisher) and test A tags
+``explore_pick`` (the clip's score is below the median of the character's ready scores, ``ready_scores``). A test that is ``off``,
+or not started, assigns nothing; a broken registry stops the make before anything is reserved.
+
 **Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
 record (``{"at", "by": "owner"}``, written only by ``request_job``; nothing in this CLI writes it). The owner's Adjust
 (``drop['adjust']``: who is replaced, his part, gadgets, hook, section start and length, crop) overrides the defaults. A clip is
@@ -166,7 +172,7 @@ from typing import Annotated, Any, NoReturn
 
 import typer
 
-from studio import budget, clips, fetch, gemini, seed, sources
+from studio import budget, clips, experiments, fetch, gemini, seed, sources
 from studio.budget import BudgetRefused
 from studio.captions import compose_content, with_series_tag
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
@@ -1451,7 +1457,10 @@ def _whole(value: Any, low: int) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= low else None
 
 
-def learn_tags(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], *, version_index: int) -> dict[str, Any]:
+def learn_tags(
+    pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], *, version_index: int,
+    test_arms: Mapping[str, Any] | None = None, explore_pick: bool = False,
+) -> dict[str, Any]:
     """The learning tags of the clip a drop makes (docs/launch/measurement-and-learning-plan.md section 2; pure; every value
     from ``clips.LEARN_VALUES``), from the check (``drop``: its deconstruct, ``classic``, ``has_audio``, ``score``,
     ``hit_rules_version``, ``own_footage``), what is made (``eff``: the hook and his part) and the pick:
@@ -1470,7 +1479,8 @@ def learn_tags(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], 
       as given (``version_index``); ``series`` / ``episode`` from the pick's proposal when it names a series of the list.
     - ``caption_line1`` ``label-first`` (``caption_text``: the title, then the joke); ``first_comment_kind`` ``vote`` (the check
       writes a vote; its question variant is not used yet) or ``none``; ``hit_rules_version`` (``none`` for a check made before
-      the version); ``test_arms`` ``{}`` and ``explore_pick`` false until a test runs."""
+      the version); ``test_arms`` and ``explore_pick`` as given (what the running tests assigned, ``experiments``; ``{}`` and
+      false when none runs)."""
     look = drop.get("deconstruct") or {}
     classic = bool(drop.get("classic", look.get("classic")))
     moment = (look.get("moment_name") or "").strip()
@@ -1500,7 +1510,7 @@ def learn_tags(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], 
         "part": eff["part"], "family_id": family_root_id(pick), "version_index": version_index,
         "series": series, "episode": _whole(pick.proposal.get("episode"), 1) if series != "none" else None,
         "hit_rules_version": drop.get("hit_rules_version") or "none", "source_kind": source_kind,
-        "test_arms": {}, "explore_pick": False,
+        "test_arms": dict(test_arms or {}), "explore_pick": explore_pick is True,
     }
 
 
@@ -1516,7 +1526,10 @@ def version_index(store: Store, pick: Favorite) -> int:
     return versions.index(pick.id) + 2
 
 
-def _features(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], kind: str, version_index: int) -> dict[str, Any]:
+def _features(
+    pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], kind: str, version_index: int,
+    test_arms: Mapping[str, Any] | None = None, explore_pick: bool = False,
+) -> dict[str, Any]:
     """The clip's feature tags: the required ones, the learning tags (``learn_tags``) and the drop's own (``presence`` is the
     old name of ``part``, kept)."""
     look = drop.get("deconstruct") or {}
@@ -1526,7 +1539,7 @@ def _features(pick: Favorite, drop: Mapping[str, Any], eff: Mapping[str, Any], k
         "motion_type": "object_swap", "audio_arm": "original_audio", "bodies_in_frame": int(look.get("people_count") or 1),
         "seamless_loop": False, "eye_closeup_end": False, "trend_name": look.get("moment_name") or "evergreen",
         "music": MUSIC, "fav_id": pick.id, "drop": True, "presence": eff["part"], "engagement_kind": kind,
-        **learn_tags(pick, drop, eff, version_index=version_index),
+        **learn_tags(pick, drop, eff, version_index=version_index, test_arms=test_arms, explore_pick=explore_pick),
     }
 
 
@@ -1633,6 +1646,37 @@ def _stopped(store: Store, pick_id: str, now: datetime, error: Exception) -> Out
     return Outcome(pick_id, "making", reason, ok=False)
 
 
+def _score_of(pick: Favorite) -> int | None:
+    score = drop_of(pick).get("score")
+    return _whole(score.get("total"), 0) if isinstance(score, Mapping) else None
+
+
+def ready_scores(store: Store, pick: Favorite) -> list[int]:
+    """The scores the owner chose from when he sent ``pick`` to be made (test A's pool): the scored clips of its character that are
+    ``ready``, those he has just sent that no make has started on yet (``making`` and no clip: tapping Make on several at once
+    puts them all in ``making`` before the first make runs), and the clip itself; a skipped one is out. Each pick once."""
+    pool: dict[str, int] = {}
+    for f in store.list_favorites(character_slug=pick.character_slug):
+        if f.status == "skipped" or not is_drop(f.proposal):
+            continue
+        d = f.proposal["drop"]
+        waiting = d.get("state") == "ready" or (d.get("state") == "making" and not (d.get("make") or {}).get("clip_id"))
+        if (waiting or f.id == pick.id) and (total := _score_of(f)) is not None:
+            pool[f.id] = total
+    if (own := _score_of(pick)) is not None:
+        pool[pick.id] = own
+    return list(pool.values())
+
+
+def _tests_at_make(
+    store: Store, pick: Favorite, now: datetime, registry: experiments.Registry,
+) -> tuple[dict[str, Any], bool]:
+    """(the block-coin arms for the pick's next clip, whether test A tags it ``explore_pick``): see ``studio.experiments``."""
+    arms = experiments.assign_blocks(store, registry, pick.character_slug, now, pick_id=pick.id)
+    explore = registry.is_active("A", now) and experiments.is_explore(_score_of(pick), ready_scores(store, pick))
+    return arms, explore
+
+
 def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part: str | None = None) -> Clip:
     drop = drop_of(pick)
     clip_id = (drop.get("make") or {}).get("clip_id")
@@ -1640,11 +1684,15 @@ def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part:
         clip = store.get_clip(clip_id)
         if clip is not None:
             return clip
-    eff = effective(drop, swap_part=swap_part)
-    kind = next_engagement(store, pick.character_slug)
-    features = _features(pick, drop, eff, kind, version_index(store, pick))
-    clip = clips.new_clip(store, pick.character_slug, None, Mode.dropin, features)
-    pick = _record_make(store, pick, now, clip_id=clip.id, attempt=0)
+    registry = experiments.load_experiments()  # a broken registry stops the make here, before anything is reserved or paid
+    with store.transaction():
+        store.get_settings()  # the settings row lock: two makes of one character never read the same place in a test's block
+        arms, explore = _tests_at_make(store, pick, now, registry)
+        eff = effective(drop, swap_part=swap_part)
+        kind = next_engagement(store, pick.character_slug)
+        features = _features(pick, drop, eff, kind, version_index(store, pick), test_arms=arms, explore_pick=explore)
+        clip = clips.new_clip(store, pick.character_slug, None, Mode.dropin, features)
+        pick = _record_make(store, pick, now, clip_id=clip.id, attempt=0)
     mark_favorite(store, pick.id, "queued", clip_id=clip.id)
     return clip
 

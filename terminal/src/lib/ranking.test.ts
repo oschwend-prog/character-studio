@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import { dropCredits } from './drop';
 import {
-  MAX_FAMILY, familyOf, familyRootId, makeMany, makeSummary, rankClips, reuseTargets, scoreOf, selectionTotal, topPicks,
+  EXPLORE_EVERY, EXPLORE_HELP, EXPLORE_LABEL, MAX_FAMILY, familyOf, familyRootId, makeMany, makeSummary, medianScore, rankClips,
+  reuseTargets, scoreOf, selectionTotal, suggestedClips, topPicks,
 } from './ranking';
 import type { Character, DropAdjust, DropCard, DropScore, DropState, TrackerRow } from './types';
 
@@ -100,6 +101,83 @@ describe('topPicks', () => {
     expect(ids(topPicks(r, 1))).toEqual(ids([r[1]]));
     expect(ids(topPicks(r, 10))).toEqual(ids([r[1], r[3], r[0], r[2]])); // fewer than n: all of them
     expect(topPicks([])).toEqual([]);
+  });
+});
+
+// ---- Explore: one suggested clip in four from below the median score (learning plan test A) ---------------------------------------
+
+describe('medianScore', () => {
+  it('is the median of the scored rows, null with fewer than two (nothing can be below it)', () => {
+    const scored = (...totals: number[]) => totals.map((t) => row(card('ready', { score: score(t) })));
+    expect(medianScore(scored(80, 60, 70))).toBe(70);
+    expect(medianScore(scored(80, 60, 70, 90))).toBe(75); // an even count: the middle two
+    expect(medianScore([...scored(80, 60), row(card('ready'))])).toBe(70); // an unscored clip is left out, never a 0
+    expect(medianScore(scored(80))).toBeNull();
+    expect(medianScore([])).toBeNull();
+  });
+});
+
+describe('suggestedClips', () => {
+  const ready = (...totals: Array<number | null>) =>
+    totals.map((t) => row(card('ready', t == null ? { at: ago(1) } : { score: score(t) })));
+
+  it('offers the best 3 and then one Explore clip from below the median: one slot in every 4', () => {
+    const r = ready(90, 80, 70, 60, 50);
+    const got = suggestedClips(r);
+    expect(EXPLORE_EVERY).toBe(4);
+    expect(got.map((s) => s.explore)).toEqual([false, false, false, true]);
+    expect(ids(got.map((s) => s.row)).slice(0, 3)).toEqual(ids([r[0], r[1], r[2]]));
+    // the median is 70: 60 and 50 are below it and not among the best; the middle one of them is offered (the lower half is sampled)
+    expect(got[3].row.pick_id).toBe(r[4].pick_id);
+  });
+
+  it('takes the middle one of the below-median clips, never the nearest to the median or only the worst', () => {
+    const r = ready(95, 90, 85, 80, 40, 30, 20, 10);
+    const got = suggestedClips(r);
+    expect(got).toHaveLength(4);
+    expect(scoreOf(got[3].row)).toBe(20); // the below-median clips are 40, 30, 20, 10 (median 60): the third of the four, by rank
+  });
+
+  it('never repeats a best clip as Explore, and offers none when nothing is below the median', () => {
+    expect(suggestedClips(ready(90, 80, 70, 60)).filter((s) => s.explore)).toHaveLength(1); // 60 is below the median 75
+    expect(suggestedClips(ready(80, 80, 80, 80)).some((s) => s.explore)).toBe(false); // all equal: none is below
+    expect(suggestedClips(ready(90, 80, 70)).some((s) => s.explore)).toBe(false); // only the best 3: the others are none
+    const unique = suggestedClips(ready(90, 80, 70, 60, 50, 40));
+    expect(new Set(unique.map((s) => s.row.pick_id)).size).toBe(unique.length);
+  });
+
+  it('needs scores: an unscored clip is never Explore, and fewer than two scored clips give none', () => {
+    expect(suggestedClips(ready(90, 80, 70, null, null)).some((s) => s.explore)).toBe(false);
+    expect(suggestedClips(ready(90, null, null, null, null)).some((s) => s.explore)).toBe(false);
+    expect(suggestedClips(ready(90, 80, 70, 60, null)).filter((s) => s.explore).map((s) => scoreOf(s.row))).toEqual([60]);
+  });
+
+  it('only ever offers Ready clips, and nothing from nothing', () => {
+    const r = [
+      ...ready(90, 80, 70, 60, 50),
+      row(card('ready', { score: score(1), character_by: 'studio' })), // Needs you, not Ready
+      row(card('making', { score: score(2) })),
+      row(card('blocked', { score: undefined })),
+    ];
+    const got = suggestedClips(r);
+    expect(got.every((s) => [90, 80, 70, 60, 50].includes(scoreOf(s.row) as number))).toBe(true);
+    expect(suggestedClips([])).toEqual([]);
+  });
+
+  it('keeps the best n as they are (topPicks) and adds Explore only from 3 up', () => {
+    const r = ready(90, 80, 70, 60, 50);
+    expect(ids(suggestedClips(r, 2).map((s) => s.row))).toEqual(ids(topPicks(r, 2)));
+    expect(suggestedClips(r, 2).some((s) => s.explore)).toBe(false);
+    expect(suggestedClips(r, 0)).toEqual([]);
+    const six = suggestedClips(ready(95, 90, 85, 80, 75, 70, 40, 35, 30, 25), 6);
+    expect(six.map((s) => s.explore)).toEqual([false, false, false, false, false, false, true, true]); // 6 best + 2 Explore: 1 in 4
+    expect(new Set(six.map((s) => s.row.pick_id)).size).toBe(8);
+  });
+
+  it('says what Explore is in one short label and one line of help', () => {
+    expect(EXPLORE_LABEL).toBe('Explore');
+    expect(EXPLORE_HELP).toMatch(/below the median score/);
+    expect(EXPLORE_HELP.length).toBeLessThan(260);
   });
 });
 

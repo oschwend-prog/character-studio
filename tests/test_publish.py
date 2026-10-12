@@ -20,7 +20,7 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from studio import publish
+from studio import experiments, publish
 from studio.cli import app
 from studio.config import LONDON
 from studio.models import Account, Character, Clip, ClipState, Favorite, Platform, Post, PostStatus, Snapshot
@@ -2180,6 +2180,101 @@ def test_a_trial_reel_only_when_the_accounts_switch_is_on(tmp_path, switches, tr
     assert pub.calls[0]["reach"].trial_reel is trial
     assert rig.store.get_clip(clip.id).features["trial_reel"] is trial
     assert summary["posted"][0]["reach"]["trial_reel"] is trial
+
+
+# -- 5b. test C: the clip's own coin decides its Trial Reel (config/experiments.json, learning plan 3.4) ---------------------------
+
+
+TEST_C = ReachConfig(trial_test=True)
+
+
+@pytest.mark.parametrize(
+    ("switches", "arm", "trial"),
+    [({}, True, True),  # the coin says Trial although the account's switch is off
+     ({"biscuit.ig": True}, False, False),  # the coin says normal although the account's switch is on: the clip's coin decides
+     ({"biscuit.ig": True}, True, True), ({}, False, False)],
+)
+def test_while_test_c_is_on_the_clips_coin_decides_its_trial_reel(tmp_path, switches, arm, trial):
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig, test_arms={"trial": arm})
+    pub = FakePublisher()
+    summary = rig.run(pub, reach=ReachConfig(trial_reels=switches, trial_test=True))
+    assert pub.calls[0]["reach"].trial_reel is trial
+    assert rig.store.get_clip(clip.id).features["trial_reel"] is trial  # the publisher records what went out
+    assert summary["posted"][0]["reach"]["trial_reel"] is trial
+
+
+@pytest.mark.parametrize("arms", [None, {}, {"hook": "ego-claim"}, {"trial": "yes"}, {"trial": 1}, {"trial": None}, "trial", ["trial"]])
+@pytest.mark.parametrize(("switch", "trial"), [(False, False), (True, True)])
+def test_a_clip_without_a_usable_coin_falls_back_to_the_accounts_switch(tmp_path, arms, switch, trial):
+    """Made before the test, a Recreate, or an arm that is not true / false: the account's switch (all off) decides; a coin
+    that cannot be read never turns a Trial Reel on."""
+    rig = reach_rig(tmp_path)
+    features = {} if arms is None else {"test_arms": arms}
+    ig_reel(rig, **features)
+    pub = FakePublisher()
+    rig.run(pub, reach=ReachConfig(trial_reels={"biscuit.ig": switch}, trial_test=True))
+    assert pub.calls[0]["reach"].trial_reel is trial
+
+
+@pytest.mark.parametrize("arm", [True, False])
+@pytest.mark.parametrize("switch", [True, False])
+def test_when_test_c_is_off_the_coin_is_ignored_and_the_switch_decides(tmp_path, arm, switch):
+    rig = reach_rig(tmp_path)
+    ig_reel(rig, test_arms={"trial": arm})
+    pub = FakePublisher()
+    rig.run(pub, reach=ReachConfig(trial_reels={"biscuit.ig": switch}))  # trial_test is off by default
+    assert pub.calls[0]["reach"].trial_reel is switch
+
+
+def test_a_trial_coin_never_reaches_a_tiktok_post_and_a_collab_reel_stays_a_normal_one(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig, test_arms={"trial": True}, collab=["reginald.thebutler"])
+    rig.post("@biscuit.tt", clip=clip, when=SLOT)
+    pub = FakePublisher()
+    rig.run(pub, reach=TEST_C)
+    by = {c["platform"]: c["reach"] for c in pub.calls}
+    assert by[Platform.instagram] == Reach(collaborators=("reginald.thebutler",), trial_reel=False)  # Instagram takes no collaborators on one
+    assert by[Platform.tiktok] == NO_REACH
+
+
+def test_the_dry_run_shows_the_coins_trial_reel(tmp_path):
+    rig = reach_rig(tmp_path)
+    ig_reel(rig, test_arms={"trial": True})
+    [row] = preview_due(rig.store, NOW, reach=TEST_C)["would_post"]
+    assert row["reach"]["trial_reel"] is True
+    [row] = preview_due(rig.store, NOW, reach=ReachConfig())["would_post"]
+    assert row["reach"]["trial_reel"] is False
+
+
+def test_load_reach_reads_whether_test_c_is_on(experiments_on):
+    assert load_reach().trial_test is True  # the repo's registry: A, B and C on (owner 12 Oct 2026)
+
+
+def test_load_reach_with_every_test_off_has_no_trial_test():
+    assert load_reach().trial_test is False  # conftest points the registry at an all-off copy
+
+
+def test_a_broken_registry_stops_the_publish_run_with_nothing_claimed(cli, tmp_path, monkeypatch):
+    """Fails closed, like the reach pack's own switches: a registry that cannot be read or breaks a rule stops the run (exit 2)."""
+    p = cli.post()
+    bad = tmp_path / "experiments.json"
+    bad.write_text("{not json")
+    monkeypatch.setattr(experiments, "EXPERIMENTS_PATH", bad)
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: pytest.fail("a publisher was made"))
+    r = invoke("due")
+    assert r.exit_code == 2 and "experiments" in r.stderr
+    assert cli.get(p).status is PostStatus.scheduled
+    assert invoke("due", "--dry-run").exit_code == 2
+    data = json.loads(Path(experiments_on_path()).read_text())
+    data["tests"]["C"]["status"] = "maybe"
+    bad.write_text(json.dumps(data))
+    r = invoke("due")
+    assert r.exit_code == 2 and "tests.C.status" in r.stderr
+
+
+def experiments_on_path() -> Path:
+    return Path(base.__file__).resolve().parents[2] / "config" / "experiments.json"
 
 
 def test_a_collab_reel_is_never_a_trial_reel(tmp_path):

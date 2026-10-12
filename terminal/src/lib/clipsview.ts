@@ -4,7 +4,7 @@
 // line. The switch By character | All clips lives in the address (`#/clips?v=all`). Pure functions over v_tracker rows; no browser.
 import { clipChip, clipFilterQuery, newestFirst, type ClipChip, type ClipFilter } from './clipstatus';
 import { nameOf } from './roster';
-import { familyOf, rankClips, scoreOf, topPicks } from './ranking';
+import { familyOf, rankClips, scoreOf, suggestedClips } from './ranking';
 import type { TrackerRow } from './types';
 
 export type ClipsView = 'character' | 'all';
@@ -141,11 +141,11 @@ export function readyWithChoice(ready: number, needs: number): string {
 }
 
 /**
- * Today's Make these: the clips it shows, each live character's top 3 Ready clips (topPicks). Only these can be ticked there, so a
- * ticked clip never drops out of view while it stays in the bar.
+ * Today's Make these: the clips it shows, each live character's top 3 Ready clips and his Explore clip, if he has one
+ * (suggestedClips). Only these can be ticked there, so a ticked clip never drops out of view while it stays in the bar.
  */
 export function makeTheseIds(rows: ReadonlyArray<TrackerRow>, characters: ReadonlyArray<{ slug: string; name: string }>): Set<string> {
-  return new Set(clipsByCharacter(rows, characters).groups.flatMap((g) => topPicks(g.ready, 3).map((r) => r.pick_id)));
+  return new Set(clipsByCharacter(rows, characters).groups.flatMap((g) => suggestedClips(g.ready, 3).map((s) => s.row.pick_id)));
 }
 
 /** His section's one line of counts: "4 ready +2 need your choice · 1 on its way"; "nothing yet" for a character with no clip. */

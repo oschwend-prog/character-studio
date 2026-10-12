@@ -116,12 +116,14 @@ describe('one meaning of Ready, and what Make these shows', () => {
     expect(readyWithChoice(4, 2)).toBe('4 ready +2 need your choice');
     expect(readyWithChoice(3, 0)).toBe('3 ready');
   });
-  it('can tick only the top 3 Ready clips of each live character on Today', () => {
+  it('can tick only the top 3 Ready clips of each live character on Today, and his Explore clip (one in four)', () => {
     const ready = Array.from({ length: 5 }, (_, i) => row('franz', card('ready', { score: score(90 - i) })));
     const lenny = row('reginald', card('ready'));
     const studio = row('franz', card('ready', { character_by: 'studio', score: score(99) }));
     const ids = makeTheseIds([...ready, lenny, studio], LIVE);
-    expect([...ids].sort()).toEqual([ready[0], ready[1], ready[2], lenny].map((r) => r.pick_id).sort());
+    // 90..86: the median is 88; 87 and 86 are below it, and the middle (the second) of them is the Explore clip
+    expect([...ids].sort()).toEqual([ready[0], ready[1], ready[2], ready[4], lenny].map((r) => r.pick_id).sort());
+    expect(ids.has(ready[3].pick_id)).toBe(false);
   });
 });
 

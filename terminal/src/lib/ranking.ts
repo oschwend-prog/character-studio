@@ -1,5 +1,5 @@
-// Terminal v3 (spec sections 4-6, owner 2026-10-07): the saved clips ranked by their score so the top choices are easy to make,
-// one clip used for up to three characters, and the "Make N selected" bar. Pure functions over v_tracker rows (drop_card.score and
+// Terminal v3 (spec sections 4-6, owner 2026-10-07): the saved clips ranked by their score so the top choices are easy to make
+// (and, for the learning plan's test A, one Explore clip in every four suggestions), one clip used for up to three characters, and the "Make N selected" bar. Pure functions over v_tracker rows (drop_card.score and
 // drop_card.copy_of, migration 0015) and the characters (v_characters); makeMany only calls the backend's request_job. No browser.
 // The reuse rules mirror studio.copy_drop (migration 0015) and studio.drop.copy_drop: the database refuses anything else anyway.
 import { clipChip, droppedAt } from './clipstatus';
@@ -46,6 +46,57 @@ export function rankClips<R extends Ranked>(rows: ReadonlyArray<R>): R[] {
  */
 export function topPicks(rows: ReadonlyArray<TrackerRow>, n = 3): TrackerRow[] {
   return rankClips(rows.filter((r) => clipChip(r) === 'ready')).slice(0, Math.max(0, n));
+}
+
+// ---- Explore: one suggested clip in four comes from below the median score (learning plan test A) ---------------------------------
+
+/** One suggested slot in every `EXPLORE_EVERY` is an Explore clip: with the best 3, the 4th (docs/launch/measurement-and-learning-plan.md 3.2). */
+export const EXPLORE_EVERY = 4;
+/** The label on an Explore clip. */
+export const EXPLORE_LABEL = 'Explore';
+/** Its one-line help (the label's title and a screen reader's description). */
+export const EXPLORE_HELP =
+  'Explore: a clip from below the median score of his ready clips, offered one in every four so we can learn whether the score predicts views. Tick anything you like; skip it if you prefer.';
+
+/** The median of the scores of these rows (rows with a score only); null when fewer than two have one (nothing can be "below"). */
+export function medianScore(rows: ReadonlyArray<Pick<TrackerRow, 'drop_card'>>): number | null {
+  const scores = rows.map(scoreOf).filter((x): x is number => x != null).sort((a, b) => a - b);
+  if (scores.length < 2) return null;
+  const mid = scores.length >> 1;
+  return scores.length % 2 ? scores[mid] : (scores[mid - 1] + scores[mid]) / 2;
+}
+
+/** One suggested clip, and whether it is an Explore clip (the studio's own test A, not a recommendation by score). */
+export interface Suggestion {
+  row: TrackerRow;
+  explore: boolean;
+}
+
+/**
+ * The suggestions of "Make these" (spec 5.2 plus learning test A): the best `n` Ready clips (`topPicks`), then one Explore clip for
+ * every 3 of them, so one slot in every 4. An Explore clip is scored, scores strictly below the median score of his Ready clips, and
+ * is not already among the best; when there are several the middle one of them, best first, is offered (neither the nearest to the
+ * median nor the worst, so the lower half is sampled). No Explore clip when fewer than two Ready clips are scored, none is below the
+ * median, or `n` is under 3. Ready clips only: the owner is free to tick anything (nothing here stops that). Give it one character's rows.
+ */
+export function suggestedClips(rows: ReadonlyArray<TrackerRow>, n = 3): Suggestion[] {
+  const ready = rankClips(rows.filter((r) => clipChip(r) === 'ready'));
+  const top = ready.slice(0, Math.max(0, n));
+  const out: Suggestion[] = top.map((row) => ({ row, explore: false }));
+  const slots = Math.floor(top.length / (EXPLORE_EVERY - 1));
+  const median = medianScore(ready);
+  if (slots < 1 || median == null) return out;
+  const taken = new Set(top.map((r) => r.pick_id));
+  const below = ready.filter((r) => !taken.has(r.pick_id) && (scoreOf(r) ?? Number.POSITIVE_INFINITY) < median);
+  const chosen = new Set<string>();
+  for (let i = 0; i < slots && below.length; i += 1) {
+    const row = below[Math.min(below.length - 1, Math.floor(((2 * i + 1) * below.length) / (2 * slots)))];
+    if (!chosen.has(row.pick_id)) {
+      chosen.add(row.pick_id);
+      out.push({ row, explore: true });
+    }
+  }
+  return out;
 }
 
 // ---- reuse: one clip, up to three characters (spec section 4) --------------------------------------------------------------------

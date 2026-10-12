@@ -24,6 +24,41 @@ def _no_scrapecreators_key(monkeypatch):
     monkeypatch.delenv("SCRAPECREATORS_API_KEY", raising=False)
 
 
+@pytest.fixture(scope="session")
+def _experiments_off_file(tmp_path_factory) -> Path:
+    """The test registry (config/experiments.json) with every test switched off, in a temp file."""
+    import json
+
+    from studio import experiments
+
+    data = json.loads(Path(experiments.EXPERIMENTS_PATH).read_text(encoding="utf-8"))
+    for test in data["tests"].values():
+        test["status"] = "off"
+    path = tmp_path_factory.mktemp("experiments") / "experiments.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _no_experiments(monkeypatch, _experiments_off_file):
+    """No test runs the live tests (A, B, C of the learning plan) unless it says so: the registry every code path reads
+    (``studio.experiments.EXPERIMENTS_PATH``) has every test off, so a clip is made and a Reel posted exactly as before. A test
+    that needs them points the path at ``experiments_on`` (the repo's registry) or at its own file."""
+    from studio import experiments
+
+    monkeypatch.setattr(experiments, "EXPERIMENTS_PATH", _experiments_off_file)
+
+
+@pytest.fixture
+def experiments_on(monkeypatch):
+    """The repo's own test registry (config/experiments.json: A, B and C on from 12 Oct 2026) for the test that asks."""
+    from studio import experiments
+
+    path = Path(__file__).resolve().parents[1] / "config" / "experiments.json"
+    monkeypatch.setattr(experiments, "EXPERIMENTS_PATH", path)
+    return path
+
+
 # lavfi ``sine`` peaks at 1/8 (-18 dBFS) before any gain.
 _SINE_PEAK = 0.125
 

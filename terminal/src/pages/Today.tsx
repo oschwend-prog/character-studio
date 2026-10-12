@@ -135,7 +135,7 @@ export function Today() {
 }
 
 /**
- * Make these (spec 5.2): per live character his top 3 ready clips by score, with rank, score, reason and price; tick the ones to
+ * Make these (spec 5.2): per live character his top 3 ready clips by score and an Explore clip (test A), with rank, score, reason and price; tick the ones to
  * make and the bar adds them up, then asks once more with the total, the month's budget left and the cap. Nothing is ticked first.
  */
 function MakeThese({ now }: { now: number }) {
@@ -153,8 +153,10 @@ function MakeThese({ now }: { now: number }) {
       aside={<a href={href('clips')}>See all their clips <ArrowRight size={14} aria-hidden="true" /></a>}
     >
       <p className="small muted" style={{ margin: 0 }}>
-        Each character’s best ready clips, ranked by the free check’s score (how likely the clip gets views with him in it). Tap a
-        picture to watch it, ＋ Make this on the ones to make: the price shows first, and nothing is spent before you confirm.
+        Each character’s best ready clips, ranked by the free check’s score (how likely the clip gets views with him in it). One clip
+        in four is marked Explore: it comes from below his median score, so we can learn whether the score predicts views; tick it or
+        not, as you like. Tap a picture to watch it, ＋ Make this on the ones to make: the price shows first, and nothing is spent
+        before you confirm.
       </p>
       <div className="make-scope">
         <RankedClips compact rows={rows} characters={live} ticked={ticked} onTick={toggle} now={now} />

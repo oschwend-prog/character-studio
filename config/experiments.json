@@ -1,0 +1,83 @@
+{
+  "_doc": "The test registry (docs/launch/measurement-and-learning-plan.md sections 3.0-3.8, learning build item 7). One entry per pre-registered test; studio/experiments.py loads and validates it (a broken file stops the make and the publish run, nothing is guessed). `status`: on / off. The owner decided on Mon 12 Oct 2026, before any 7-day figure: tests A, B and C on; D and E off; F not decided (off). A test only assigns from `start` on. What each assignment does at make (studio/drop.py): `tag` (test A) writes `explore_pick` (the clip's score is below the median score of the character's ready clips at that moment); `block_coin` writes `test_arms[key]` (balanced in blocks of `block`: every arm appears block / len(arms) times, in an order shuffled by a coin seeded from `seed`, the test id, the character and the block number, so each test has its own coin and the coins never line up; the next position of a character is the number of his clips that already carry the key); `bandit` (test B) picks the hook among the check's candidates (studio/learn.py). An `off` test assigns nothing. `min_n` and the decisions are the plan's, restated for the weekly digest; they are pre-registered: change them only as a new dated version of the plan, never after the data. Arms of the hook bandit change only by pull request (section 3.3).",
+  "version": 1,
+  "start": "2026-10-12",
+  "seed": "oddeyes-learning-2026-10-12",
+  "tests": {
+    "A": {
+      "name": "score and exploration picks",
+      "status": "on",
+      "assignment": "tag",
+      "key": null,
+      "question": "does a higher score_total go with a higher outlier_x (Spearman rho above 0)?",
+      "explore": {"every": 4, "below": "median_ready_score"},
+      "min_n": {"interim": 20, "final": 40},
+      "decision": {"interim": {"validated_rho_at_least": 0.45, "failed_rho_at_most": 0.0}, "final": {"validated_rho_at_least": 0.31}, "uninformative_if_middle_80_percent_spans_under": 15}
+    },
+    "B": {
+      "name": "hook bandit",
+      "status": "on",
+      "assignment": "bandit",
+      "key": "hook",
+      "question": "which hook pattern gets more views at 72 h (x72 above 1), per character?",
+      "arms": {
+        "franz": ["ego-claim", "when-relatable", "myth-bust", "trend-label"],
+        "reginald": ["false-premise", "understatement", "trend-label"],
+        "lenny": ["mid-deal", "when-relatable", "ego-claim", "trend-label"]
+      },
+      "needs_moment_name": ["trend-label"],
+      "win": "x72 above 1 on the Instagram post",
+      "warmup_priors": 3,
+      "floor": {"3": 0.15, "4": 0.12},
+      "ceiling": 0.6,
+      "ceiling_until_tallied": 30,
+      "pool_min_uses": 3,
+      "min_n": {"tallied_per_arm": 6}
+    },
+    "C": {
+      "name": "Trial Reels on half the Instagram posts",
+      "status": "on",
+      "assignment": "block_coin",
+      "key": "trial",
+      "question": "does a Trial Reel get more views in 72 h than a normal Reel on an account under 1,000 followers, without cutting follows?",
+      "platform": "instagram",
+      "arms": [true, false],
+      "block": 4,
+      "min_n": {"trial": 10, "normal": 10, "per_account_each": 3},
+      "decision": {"trial_for_all_if_ratio_at_least": 1.5, "on_accounts_at_least": 2, "trial_follows_per_1k_at_least_half_of_normal": true, "off_if_pooled_ratio_at_most": 1.0}
+    },
+    "D": {
+      "name": "own series against swaps",
+      "status": "off",
+      "assignment": "block_coin",
+      "key": "own_series",
+      "question": "do the character's own episodes reach at least 0.8x the swaps' median outlier_x and bring more follows per 1K?",
+      "arms": {"own": 1, "swap": 2},
+      "block": 3,
+      "min_n": {"own_per_character": 8, "own_pooled": 15},
+      "note": "off (owner 12 Oct 2026): it costs credits (a Recreate is 160)"
+    },
+    "E": {
+      "name": "8-10 s against 12-15 s",
+      "status": "off",
+      "assignment": "block_coin",
+      "key": "length",
+      "question": "does a 12-15 s clip reach 1.3x the median outlier_x of an 8-10 s clip at a cost per 1K views no more than 20 % worse?",
+      "arms": ["long", "standard"],
+      "block": 4,
+      "min_n": {"per_arm": 10, "per_character": 3},
+      "note": "off (owner 12 Oct 2026): about +500 credits, and it goes against 8-10 s for non-classics"
+    },
+    "F": {
+      "name": "first comment: vote or question",
+      "status": "off",
+      "assignment": "block_coin",
+      "key": "comment",
+      "question": "does a vote get more viewer comments per 1K views than an open question?",
+      "arms": ["vote", "question"],
+      "block": 4,
+      "min_n": {"per_arm": 10},
+      "note": "off: the first comment is not posted within 5 minutes and pinned yet (plan Task 8), so the precondition is not met"
+    }
+  }
+}
