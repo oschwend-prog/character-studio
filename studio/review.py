@@ -91,8 +91,11 @@ LIFT_MIN_N = 5  # a feature value needs >= 5 clips to be reported
 
 # The tags the lifts group by: the required ones and the learning tags (clips.LEARN_FEATURES, learning plan section 2), but not
 # an id (family_id: a family is at most 3 clips), the test arms (each test reads its own) or an exact number that has its bucket
-# (length_s -> length_bucket, score_total -> score_bucket).
-LIFT_FEATURES = (REQUIRED_FEATURES | LEARN_FEATURES) - {"family_id", "test_arms", "length_s", "score_total"}
+# (length_s -> length_bucket, score_total -> score_bucket). The master's edit record of tests G and H (zoom_pulses, hook_entrance)
+# is read by those tests next to their arms, not as a lift: hook_entrance is a character's kit, so it would only repeat the character.
+LIFT_FEATURES = (REQUIRED_FEATURES | LEARN_FEATURES) - {
+    "family_id", "test_arms", "length_s", "score_total", "zoom_pulses", "hook_entrance",
+}
 
 CHARACTER_MIN_POSTS = 20  # the bar opens after 20 posts ...
 CHARACTER_MIN_AGE = timedelta(weeks=4)  # ... or 4 weeks since the first post, whichever comes first

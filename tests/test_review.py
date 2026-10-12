@@ -137,10 +137,12 @@ def test_lifts_read_the_learning_tags_but_not_the_ids_and_exact_numbers():
     seen = {lf.feature for lf in lifts}
     assert {"length_bucket", "score_bucket", "sound_type", "source_kind", "hit_rules_version", "hook_by", "part",
             "score_potential"} <= seen
-    assert not seen & {"family_id", "test_arms", "length_s", "score_total"}
+    assert not seen & {"family_id", "test_arms", "length_s", "score_total", "zoom_pulses", "hook_entrance"}
     lengths = {lf.value: lf.median_outlier_x for lf in lifts if lf.feature == "length_bucket"}
     assert lengths == {"8_10": 2.0, "11_16": 1.0}
-    assert review.LIFT_FEATURES == (REQUIRED_FEATURES | LEARN_FEATURES) - {"family_id", "test_arms", "length_s", "score_total"}
+    assert review.LIFT_FEATURES == (REQUIRED_FEATURES | LEARN_FEATURES) - {
+        "family_id", "test_arms", "length_s", "score_total", "zoom_pulses", "hook_entrance",
+    }
 
 
 def test_lifts_skip_clips_that_lack_the_feature_or_the_outlier():

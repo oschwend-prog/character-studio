@@ -45,6 +45,12 @@ Two more are the publisher's (``PUBLISH_FEATURES``, terminal v3 spec section 11,
 (the clip's first comment went out with its Instagram Reel) and ``trial_reel`` (the Reel went out as a Trial Reel), both true or
 false, written by ``set_publish_tags`` after a successful post (``studio.publish.base``); like the master's two they are not needed at
 creation and are checked when present.
+Two are the master's edit record for tests G and H (``EDIT_FEATURES``, learning plan 3.9 and 3.10): ``zoom_pulses`` (how many zoom
+pulses the master really has, 0 when none) and ``hook_entrance`` (the entrance of the first hook it really shows: a kit's name or
+``word_pop``), written by ``set_edit_tags`` after the master is built (``drop._master``, from ``MasterSpec.applied``). They are
+OPTIONAL: a clip made before the tests, or one that took no position in them, does not have them (``new_clip`` does not ask for
+them), and when they are there they are checked. The analysis reads them next to ``test_arms``: an arm whose edit was not applied
+(``zoom_pulses`` 0 under ``zoom: true``, the kit's entrance under ``word_pop: true``) is left out.
 
 ``transition`` and ``set_fields`` write only ``SETTABLE_FIELDS``. The state never changes through
 ``set_fields`` (or ``store.update_clip`` anywhere else): that is the whole point of the table.
@@ -170,10 +176,15 @@ LEARN_FEATURES = frozenset(
         "explore_pick",  # true / false (test A)
         "first_comment_posted",  # true / false: the first comment went out with the Instagram Reel (the publisher)
         "trial_reel",  # true / false: the Reel went out as an Instagram Trial Reel (the publisher)
+        "zoom_pulses",  # whole number: the zoom pulses the master really has (test G; the master, optional)
+        "hook_entrance",  # the entrance of the first hook the master really shows (test H; the master, optional)
     }
 )
 MASTER_FEATURES = frozenset({"length_s", "length_bucket"})  # written by the master (set_length), not at creation
 PUBLISH_FEATURES = frozenset({"first_comment_posted", "trial_reel"})  # written by the publisher after a post (set_publish_tags)
+EDIT_KEYS = ("zoom_pulses", "hook_entrance")
+EDIT_FEATURES = frozenset(EDIT_KEYS)  # written by the master for tests G, H (set_edit_tags); optional
+OPTIONAL_LEARN = MASTER_FEATURES | PUBLISH_FEATURES | EDIT_FEATURES  # not asked for at creation; checked when present
 LEARN_VALUES: dict[str, tuple[Any, ...]] = {
     "format_id": ("swap_trend", "swap_classic", "swap_other", "recreate", "own_footage"),
     # the 7 patterns; "owner" = the owner's own line (none of the check's hooks), "none" = a hook nobody labelled
@@ -188,6 +199,7 @@ LEARN_VALUES: dict[str, tuple[Any, ...]] = {
     "part": ("cameo", "featured", "star"),
     "series": ("sausage_vs_trend", "household_unaware", "on_hold", "classics", "halloween_countdown", "none"),
     "source_kind": ("owner_saved", "auto_filed", "own_footage", "recreate"),
+    "hook_entrance": ("none", "fade_rise", "slam", "word_pop"),  # a kit's entrance (seed.STYLE_ENTRANCES) as the master shows it
 }
 LEARN_BOOLS = frozenset({"sound_rising", "explore_pick", "first_comment_posted", "trial_reel"})
 LEARN_NULLABLE = frozenset({"days_since_trend_peak", "episode", "score_total", "score_potential", "score_swap"})
@@ -195,7 +207,7 @@ HOOK_TAGS = ("hook_text", "hook_pattern", "hook_index", "hook_by")  # what set_h
 _RULES_VERSION = re.compile(r"v\d+")  # gemini.hit_rules_version: v<N>, or "none"
 _WHOLE_RANGES: dict[str, tuple[int, int | None]] = {  # whole numbers (never a bool) from low to high (None: no top)
     "hook_index": (0, 3), "version_index": (1, 3), "days_since_trend_peak": (0, None), "episode": (1, None),
-    "score_total": (0, 100), "score_potential": (0, 10), "score_swap": (0, 10),
+    "score_total": (0, 100), "score_potential": (0, 10), "score_swap": (0, 10), "zoom_pulses": (0, None),
 }
 
 MAX_REROLLS = 1
@@ -242,10 +254,10 @@ def _whole(value: Any) -> bool:
 
 def learn_problems(features: Mapping[str, Any]) -> list[str]:
     """What is wrong with the learning tags of ``features`` (empty = fine): every key of ``LEARN_FEATURES`` but the master's and
-    the publisher's must be there (those are checked when present), each value from its vocabulary or of its type; ``score_bucket``
+    the publisher's (and the master's edit record, ``EDIT_FEATURES``) must be there (those are checked when present), each value from its vocabulary or of its type; ``score_bucket``
     must be the bucket of ``score_total``. ``format_id`` and ``hook_pattern`` are checked against their vocabularies too."""
     p: list[str] = []
-    missing = sorted(k for k in LEARN_FEATURES - MASTER_FEATURES - PUBLISH_FEATURES if k not in features)
+    missing = sorted(k for k in LEARN_FEATURES - OPTIONAL_LEARN if k not in features)
     if missing:
         p.append(f"missing feature tags: {', '.join(missing)}")
     for key in sorted((LEARN_FEATURES | LEARN_VALUES.keys()) & features.keys()):
@@ -406,6 +418,23 @@ def set_length(store: Store, clip_id: str, seconds: float) -> Clip:
     return store.update_clip(clip_id, features={**clip.features, "length_s": length, "length_bucket": length_bucket(length)})
 
 
+def set_edit_tags(store: Store, clip_id: str, tags: Mapping[str, Any]) -> Clip:
+    """Write the master's edit record on the clip (``EDIT_FEATURES``, tests G and H): ``zoom_pulses`` (a whole number, 0 for none)
+    and ``hook_entrance`` (``LEARN_VALUES``), keeping every other feature. A remake overwrites what an earlier build recorded.
+    ``KeyError`` for an unknown clip, ``ValueError`` (nothing written) for another key or a value outside its vocabulary."""
+    unknown = sorted(set(tags) - EDIT_FEATURES)
+    if unknown:
+        raise ValueError(f"set_edit_tags writes only {', '.join(EDIT_KEYS)}, got {', '.join(unknown)}")
+    bad = [problem for key, value in tags.items() if (problem := _value_problem(key, value)) is not None]
+    if bad:
+        raise ValueError("bad edit tag(s): " + "; ".join(bad))
+    with store.transaction():
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(clip_id)
+        return store.update_clip(clip_id, features={**clip.features, **tags})
+
+
 def set_story_path(store: Store, clip_id: str, key: str | None) -> Clip:
     """Record the clip's labelled Story video (``features['story_path']``, its key in bucket ``clips``, written by
     ``master.upload_master`` next to the master), or remove it (``None``: the master has none). The other features are kept.
@@ -509,7 +538,7 @@ def new_clip(
         raise ValueError("features['rerolls'] is managed by the state machine; leave it out")
     missing = sorted(k for k in REQUIRED_FEATURES if features.get(k) is None)
     if needs_learn_tags(features):
-        missing = sorted({*missing, *(k for k in LEARN_FEATURES - MASTER_FEATURES - PUBLISH_FEATURES if k not in features)})
+        missing = sorted({*missing, *(k for k in LEARN_FEATURES - OPTIONAL_LEARN if k not in features)})
     if missing:
         raise ValueError(f"missing feature tags: {', '.join(missing)}")
     if needs_learn_tags(features) and (bad := learn_problems(features)):
