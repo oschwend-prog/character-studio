@@ -1666,7 +1666,9 @@ def make_drop(
         # listed, and a stale listing must never pay Higgsfield twice
         fresh = _load(store, pick_id)
         if drop_of(fresh).get("state") != "making" or not owner_requested_make(fresh):
-            return Outcome(pick_id, drop_of(fresh).get("state"), "another run already made this video", detail={"busy": True})
+            made = drop_of(fresh).get("state") != "making"  # else the owner took Make it back: nobody made anything
+            text = "another run already made this video" if made else "this video is no longer waiting to be made"
+            return Outcome(pick_id, drop_of(fresh).get("state"), text, detail={"busy": True})
         return _make(
             store, storage, pick_id, hf, gemini_client, prepare, generated_file, generated_credits, qa_answer, now,
             poll_timeout_s, preset, characters_dir,

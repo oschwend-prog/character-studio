@@ -2867,6 +2867,8 @@ def test_a_make_that_is_no_longer_waiting_under_the_lease_is_busy_and_pays_nothi
     g = FakeGemini()
     out = make(store, storage, pid, NeverHF(), g)
     assert out.ok and out.detail["busy"] and g.calls == []
+    # final review M7: a withdrawn make is not "made by another run"; an already-made video keeps its text
+    assert out.reason == ("another run already made this video" if change == "made by another worker" else "this video is no longer waiting to be made")
     assert store.list_clips() == [] and store.ledger_month(NOW.strftime("%Y-%m")) == []  # nothing reserved, nothing generated
     assert "job" not in store.get_favorite(pid).proposal["drop"]  # the lease is given back
 
