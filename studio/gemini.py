@@ -63,7 +63,8 @@ key header reads the model's card and generates nothing (``studio drop check-key
 body, past the ``_BODY_CHARS`` an error keeps. ``quota_window`` reads the whole body when the error is raised: ``GeminiQuota``
 (a ``GeminiError``) carries ``window`` ``"day"`` or ``"minute"`` and its message starts with the tag (``QUOTA_TAGS``), so
 ``studio.drop`` tells a per-minute limit (the next sweep asks again) from the day's quota (after the 08:00 London reset). A 429 that
-names neither stays a plain ``GeminiError``; what is asked, and how often, does not change.
+names neither stays a plain ``GeminiError``. A day-window 429 is raised before the waits (it does not clear in 65 s; the
+fallback models, with their own daily quotas, are still asked); every other busy answer is asked again after each wait.
 
 Tests drive the client with an ``httpx.MockTransport``.
 """
@@ -247,7 +248,9 @@ class GeminiClient:
         return GeminiError(message, response.status_code)
 
     def _call(self, method: str, url: str, **kw: Any) -> httpx.Response:
-        """One request; a busy answer (``BUSY_STATUSES``) is asked again after each wait of ``BUSY_WAITS_S``."""
+        """One request; a busy answer (``BUSY_STATUSES``) is asked again after each wait of ``BUSY_WAITS_S``, except a 429 that names
+        the day's quota (``quota_window``): that one does not clear in a minute, so it is raised at once, before the waits (the
+        next model, with its own daily quota, is still asked by ``_generate``)."""
         for wait in (*BUSY_WAITS_S, None):
             try:
                 response = self._client.request(method, url, **kw)
@@ -258,6 +261,8 @@ class GeminiClient:
             if response.is_success:
                 return response
             if response.status_code not in BUSY_STATUSES or wait is None:
+                raise self._error(response)
+            if response.status_code == 429 and quota_window(response.text) == "day":
                 raise self._error(response)
             self._sleep(wait)
         raise AssertionError("unreachable")
