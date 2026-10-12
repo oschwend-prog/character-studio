@@ -178,12 +178,36 @@ def test_wins_and_losses_are_counted_from_x72_on_the_instagram_post():
     w.hooked("reginald", "understatement", 300)  # x72 3.0: a win
     w.hooked("reginald", "understatement", 150)  # a win
     w.hooked("reginald", "understatement", 40)  # a loss
-    w.hooked("reginald", "false-premise", 100, by="studio")  # exactly 1.0 beat nothing: a loss; the studio's own default counts
+    w.hooked("reginald", "false-premise", 100)  # exactly 1.0 beat nothing: a loss
+    w.hooked("reginald", "false-premise", 900, by="studio")  # the check's first hook, nobody drew it: no use of the arm, win or not
     s = state_of(w)
     assert s.by_character[("reginald", "understatement")] == Counts(2, 1)
     assert s.by_character[("reginald", "false-premise")] == Counts(0, 1)
     assert s.studio["understatement"] == Counts(2, 1) and s.tallied("reginald") == 4
-    assert s.readings["reginald"] == 7 and s.pending == {}
+    assert s.readings["reginald"] == 8 and s.pending == {}  # (the studio-hook post still has its reading: a baseline for the next)
+
+
+def test_only_a_hook_the_bandit_chose_is_tallied_not_the_checks_default_nor_the_owners():
+    """Controller, 12 Oct (before data: 1 reading): the arm tally counts the clips whose hook the bandit really drew (``hook_by``
+    ``bandit``, the warm-up rotation's draws included: the make records them the same way). A ``studio`` clip kept the check's first
+    hook because no arm had a candidate: its pattern is Gemini's habit, not a draw, and counting it would bias the arms (and the
+    studio-wide pool the other characters' arms lean on) towards what Gemini writes first."""
+    assert learn.TALLIED_BY == ("bandit",)
+    w = World()
+    w.readings("franz")
+    w.hooked("franz", "ego-claim", 300, by="studio")  # would be a win
+    w.hooked("franz", "ego-claim", 20, by="studio")  # would be a loss
+    w.hooked("franz", "ego-claim", None, by="studio")  # would wait for its reading
+    w.hooked("franz", "ego-claim", 300, by="owner")
+    s = state_of(w)
+    assert s.by_character == {} and s.studio == {} and s.pending == {} and s.tallied("franz") == 0
+    w.hooked("franz", "ego-claim", 300)
+    w.hooked("franz", "ego-claim", None)
+    s = state_of(w)
+    assert s.by_character == {("franz", "ego-claim"): Counts(1, 0)} and s.studio == {"ego-claim": Counts(1, 0)}
+    assert s.pending == {"franz": 1}  # only the bandit's unread clip waits
+    # the draw reads the same tally: the studio-hook clips moved no arm
+    assert arm_counts(s, "franz", "ego-claim", 3) == (Counts(1, 0), "studio")
 
 
 def test_the_owners_hook_a_missing_label_a_missing_reading_and_the_time_before_the_start_are_not_tallied():
@@ -501,6 +525,25 @@ def test_the_next_clips_follow_the_rotation_through_the_warm_up(experiments_on):
     # arms false-premise, understatement, trend-label; the candidates carry the first two only: trend-label's place falls through
     assert patterns[:2] == ["false-premise", "understatement"]
     assert patterns[2] in ("false-premise", "understatement") and patterns[3] in ("false-premise", "understatement")
+
+
+FOUR_LOOK = {
+    **LOOK,
+    "hooks": ["I invented this walk.", "When the hallway is your runway.", "They said a dog cannot do this.", "The shoulder shimmy, as ordered."],
+    "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "trend-label"],
+}
+
+
+def test_with_one_hook_per_arm_every_arm_has_a_candidate_and_the_fourth_hook_is_tagged_four(experiments_on):
+    """Franz has four arms; the check now writes four hooks. The warm-up rotation puts each on screen in turn, no clip falls back to
+    the check's first hook, and the fourth hook is ``hook_index`` 4 (a range of 0-3 would have refused the clip)."""
+    store = World().store
+    seen = []
+    for _ in range(4):
+        f = store.get_clip(made(store, add_pick(store, slug="franz", look=FOUR_LOOK)).id).features
+        assert f["hook_by"] == "bandit" and clips.learn_problems(f) == []
+        seen.append((f["test_arms"]["hook"], f["hook_index"], f["hook_text"]))
+    assert seen == [(p, i + 1, h) for i, (p, h) in enumerate(zip(FOUR_LOOK["hook_patterns"], FOUR_LOOK["hooks"], strict=True))]
 
 
 def test_the_owners_own_hook_always_wins_and_is_not_drawn(experiments_on):

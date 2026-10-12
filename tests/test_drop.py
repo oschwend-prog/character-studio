@@ -13,7 +13,7 @@ import dataclasses
 import json
 import shutil
 import subprocess
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -43,7 +43,7 @@ def deconstruct(**over) -> dict:
         "setting": "an office corridor", "what_happens": "a man in a suit does the shoulder shimmy down the corridor",
         "classic": False, "moment_name": "shoulder shimmy", "suggested_part": "featured", "gadgets": ["black umbrella"],
         "hooks": ["The household is unaware.", "Breakfast is at eight.", "Kindly do not tell the Duchess."],
-        "hook_patterns": ["understatement", "false-premise", "understatement"],
+        "hook_patterns": ["understatement", "false-premise", "trend-label"],  # Reginald's three arms, once each (a test with B on checks it)
         "caption": {"title": "Shoulder shimmy · butler edition", "joke": "The corridor has been informed.",
                     "send": "Send this to your butler.", "question": "Which eye did you notice first?", "tease": "Next week: the stairs."},
         "first_comment": "Requests for next week may be left below. Within reason.",
@@ -521,6 +521,60 @@ def test_the_job_id_carries_the_sweep_worker_so_two_workers_of_one_run_differ(mo
     assert "-w2" not in drop.job_id()  # off GitHub the machine and the process already tell runs apart
 
 
+def test_a_drop_that_still_needs_its_clip_downloaded_is_told_from_one_that_does_not(world, portrait):
+    """Final review M6: which rows a sweep worker other than the first leaves alone."""
+    store, storage = world
+    link, _ = add_drop(store, "reginald", TIKTOK, NOW)  # a pasted link: its clip is still to be downloaded
+    assert drop.needs_fetch(store, link) is True
+    auto, _ = add_drop(store, None, TIKTOK.replace("7688386199270001953", "7688386199270009999"), NOW, auto_filed=True, hit={"id": "h", "lane": "reginald"})
+    assert drop.needs_fetch(store, auto) is True
+    pid = drop_file(store, storage, portrait)  # an owner's upload: nothing to download
+    assert drop.needs_fetch(store, store.get_favorite(pid)) is False
+    unfinished, _ = add_drop(store, "reginald", None, NOW)  # a file drop whose upload is still to come
+    assert drop.needs_fetch(store, unfinished) is False
+    src = sources.add_source(store, "owner_inbox", None, "biped", 1, 20.0, storage_path="fetched/x.mp4")
+    store.update_favorite(link.id, source_id=src.id)  # a link whose clip is already in storage is checked from there
+    assert drop.needs_fetch(store, store.get_favorite(link.id)) is False
+
+
+def test_pending_leaves_out_the_rows_that_need_a_download_when_asked(world, portrait):
+    store, storage = world
+    link, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    upload = drop_file(store, storage, portrait)
+    ready = ready_drop(store, storage, portrait)
+    tap_make(store, ready)
+    both = {p["pick_id"]: p["job"] for p in pending(store, now=NOW)}
+    assert both == {link.id: "process", upload: "process", ready: "make"}
+    assert pending(store, now=NOW, fetches=False) == [p for p in pending(store, now=NOW) if p["pick_id"] != link.id]  # same order
+
+
+@pytest.mark.parametrize(("worker", "takes"), [("1", True), ("2", False), ("3", False), (None, True), ("  ", True)])
+def test_only_the_first_sweep_worker_takes_a_drop_that_needs_a_download(monkeypatch, tmp_path, portrait, worker, takes):
+    """CLAUDE.md: an auto-filed clip is fetched ONE at a time. Three workers list the same rows; workers 2 and 3 go on to the rest."""
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    link, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    upload = drop_file(store, storage, portrait)
+    if worker is None:
+        monkeypatch.delenv("STUDIO_WORKER", raising=False)
+    else:
+        monkeypatch.setenv("STUDIO_WORKER", worker)
+    ran = []
+    monkeypatch.setattr(drop, "process_drop", lambda s, st, pick_id, **kw: ran.append(pick_id) or drop.Outcome(pick_id, "ready"))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    assert sorted(ran) == sorted([link.id, upload] if takes else [upload])
+    assert drop.takes_downloads() is takes
+
+
+def test_a_failed_check_with_its_clip_already_in_storage_is_retaken_by_any_worker(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)  # an uploaded clip: nothing to download
+    monkeypatch.setenv("STUDIO_WORKER", "3")
+    ran = []
+    monkeypatch.setattr(drop, "process_drop", lambda s, st, pick_id, **kw: ran.append(pick_id) or drop.Outcome(pick_id, "ready"))
+    assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 0 and ran == [pid]
+
+
 def test_two_workers_of_the_same_run_never_take_the_same_drop(world, portrait):
     store, storage = world
     pid = drop_file(store, storage, portrait)
@@ -633,6 +687,42 @@ def test_add_drop_files_a_file_and_dedupes_a_link_per_character(world):
         add_drop(store, "nobody", None, NOW)
     with pytest.raises(ValueError, match="short links"):
         add_drop(store, "reginald", "https://vm.tiktok.com/abc/", NOW)
+
+
+def test_a_link_dropped_again_keeps_the_earlier_drops_keys_and_the_new_keys_win_like_migration_0017(world):
+    """Final review M2: the CLI's duplicate path files the same drop as the terminal's studio.add_drop (0017), not a replacement."""
+    store, _ = world
+    first, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    earlier = {
+        "state": "ready", "hooks": ["a", "b"], "window": {"start_s": 1, "length_s": 8}, "adjust": {"hook": "x"}, "own_footage": True,
+        "score": 81, "hit_rules_version": 3, "auto_filed": True, "hit": {"id": "h", "lane": "general"}, "fetch_days": ["2026-10-10"],
+        "job": {"holder": "run-7", "at": NOW.isoformat()}, "reason": "old", "character_by": "studio",
+    }
+    store.update_favorite(first.id, proposal={**first.proposal, "hold_reason": "x", "drop": {**first.proposal["drop"], **earlier}})
+    later = NOW + timedelta(hours=1)
+    again, dup = add_drop(store, "reginald", TIKTOK, later)
+    d = again.proposal["drop"]
+    assert dup and again.id == first.id and again.status == "approved" and "hold_reason" not in again.proposal
+    assert d["hooks"] == ["a", "b"] and d["window"] == {"start_s": 1, "length_s": 8} and d["adjust"] == {"hook": "x"}  # kept
+    assert d["job"] == earlier["job"]  # a live worker's lease stays
+    for gone in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days"):  # describes the earlier drop, not this one
+        assert gone not in d, gone
+    assert d["state"] == "checking" and d["kind"] == "link" and d["reason"] is None and d["own_footage"] is False  # the new keys win
+    assert d["character_by"] == "owner" and d["at"] == later.isoformat() and again.proposal["decision"]["at"] == later.isoformat()
+
+
+def test_a_new_drops_own_tags_win_over_the_strip_and_a_drop_that_is_no_object_counts_as_empty(world):
+    store, _ = world
+    first, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    store.update_favorite(first.id, proposal={**first.proposal, "drop": {**first.proposal["drop"], "auto_filed": True, "score": 5}})
+    again, _ = add_drop(store, "reginald", TIKTOK, NOW, auto_filed=True, hit={"id": "h2", "lane": "reginald"})
+    assert again.proposal["drop"]["auto_filed"] is True and again.proposal["drop"]["hit"] == {"id": "h2", "lane": "reginald"}
+    assert "score" not in again.proposal["drop"]
+    for junk in (None, [], "text", 7):  # a drop the studio never wrote: replaced, not merged
+        store.update_favorite(first.id, proposal={**again.proposal, "drop": junk})
+        out, dup = add_drop(store, "reginald", TIKTOK, NOW)
+        assert dup and isinstance(out.proposal["drop"], dict) and out.proposal["drop"]["state"] == "checking", junk
+        assert set(out.proposal["drop"]) == {"state", "kind", "at", "reason", "own_footage", "character_by"}, junk
 
 
 def test_a_saved_file_is_dropped_from_the_mac_exactly_as_the_terminal_does(world, tmp_path):
@@ -2446,6 +2536,10 @@ _TRANSIENT_REASONS = [  # the strings process_drop really records, and what the 
     # the daily wording, but the reason names a per-minute limit: still not the day's quota
     ("the look at the clip failed (Gemini answered HTTP 429: You exceeded your current quota ... GenerateRequestsPerMinutePerProject"
      "PerModel-FreeTier): tap Try again", "busy"),
+    # a 429 the client told apart at raise time (final review M5): plain words, the tag the retry logic reads
+    ("the look at the clip failed (Gemini's daily free quota is used up [quota:day]): it tries again after 08:00 London by itself", "quota"),
+    ("the look at the clip failed (Gemini's per-minute limit [quota:minute]): it tries again on the next sweep by itself", "busy"),
+    ("the look at the clip failed (Gemini's daily free quota is used up [quota:day]): its automatic retries are used up: tap Try again", "quota"),
     # the network dropped (httpx.NetworkError / ProtocolError): the sweep asks again
     ("the look at the clip failed (the Gemini call failed (ConnectError)): tap Try again", "busy"),
     ("the look at the clip failed (the Gemini call failed (RemoteProtocolError)): tap Try again", "busy"),
@@ -2831,6 +2925,8 @@ def test_a_make_that_is_no_longer_waiting_under_the_lease_is_busy_and_pays_nothi
     g = FakeGemini()
     out = make(store, storage, pid, NeverHF(), g)
     assert out.ok and out.detail["busy"] and g.calls == []
+    # final review M7: a withdrawn make is not "made by another run"; an already-made video keeps its text
+    assert out.reason == ("another run already made this video" if change == "made by another worker" else "this video is no longer waiting to be made")
     assert store.list_clips() == [] and store.ledger_month(NOW.strftime("%Y-%m")) == []  # nothing reserved, nothing generated
     assert "job" not in store.get_favorite(pid).proposal["drop"]  # the lease is given back
 
@@ -2878,6 +2974,221 @@ def test_the_reasons_the_real_client_writes_are_classified(world, portrait, erro
     assert out.state == "failed" and out.reason.startswith(drop.CHECK_FAILED), out.reason
     assert drop.transient_kind(out.reason) == kind, out.reason
     assert (drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(days=1)) == kind)
+
+
+def google_429(quota_id: str) -> dict:
+    """What Google sends with an HTTP 429 RESOURCE_EXHAUSTED: the quota text, then the violation with its quota id."""
+    metric = "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+    return {"error": {
+        "code": 429,
+        "message": (
+            "You exceeded your current quota, please check your plan and billing details. For more information on this error, head "
+            "to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. "
+            f"\n* Quota exceeded for metric: {metric}, limit: 20, model: gemini-3.8-flash\nPlease retry in 27.7s."
+        ),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+                {"quotaMetric": metric, "quotaId": quota_id, "quotaDimensions": {"location": "global", "model": "gemini-3.8-flash"}}
+            ]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "27s"},
+        ],
+    }}
+
+
+QUOTA_BODIES = {
+    "day": google_429("GenerateRequestsPerDayPerProjectPerModel-FreeTier"),
+    "minute": google_429("GenerateRequestsPerMinutePerProjectPerModel-FreeTier"),
+}
+
+
+def quota_client(window: str) -> gemini.GeminiClient:
+    import httpx
+
+    body = QUOTA_BODIES[window]
+    return gemini.GeminiClient("k", transport=httpx.MockTransport(lambda request: httpx.Response(429, json=body)), sleep=lambda s: None)
+
+
+@pytest.mark.parametrize(("window", "kind", "words"), [("day", "quota", "08:00 London"), ("minute", "busy", "next sweep")])
+def test_a_429_reason_is_plain_short_and_still_read_by_the_retry_logic(world, portrait, window, kind, words):
+    """Final review M5 and the controller's 4b: the failed check of 12 Oct read 'Gemini answered HTTP 429: {\\n "error": ...' cut in the
+    middle and 'tap Try again'. The window is told at raise time (the quota id sits beyond the 140 characters the reason keeps)."""
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    out = process_drop(store, storage, pid, gemini_client=quota_client(window), now=NOW, job="t")
+    assert out.state == "failed" and not out.ok and out.reason.startswith(drop.CHECK_FAILED)
+    assert f"[quota:{window}]" in out.reason and words in out.reason and "by itself" in out.reason
+    assert "{" not in out.reason and "HTTP" not in out.reason and "tap Try again" not in out.reason and len(out.reason) <= 140
+    assert drop.transient_kind(out.reason) == kind
+    assert store.get_favorite(pid).proposal["drop"]["reason"] == out.reason
+    again = drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(days=1))
+    assert again == kind  # a per-minute 429 is retaken on the next sweep (it is not held for the 08:00 reset)
+    right_away = drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(minutes=5))
+    assert right_away == ("busy" if window == "minute" else None)  # the day's quota waits for the reset
+    assert [p["pick_id"] for p in pending(store, now=NOW + timedelta(minutes=5))] == ([pid] if window == "minute" else [])
+
+
+@pytest.mark.parametrize(("window", "used"), [("day", 3), ("minute", 2)])
+def test_a_429_whose_retries_are_used_up_says_so_and_stays_red(world, portrait, window, used):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "auto_retries": used}})
+    out = process_drop(store, storage, pid, gemini_client=quota_client(window), now=NOW, job="t")
+    assert not out.ok and "by itself" not in out.reason and out.reason.endswith("tap Try again") and f"[quota:{window}]" in out.reason
+    assert out.red and not (out.detail or {}).get("will_retry")
+    assert drop.transient_kind(out.reason) == ("quota" if window == "day" else "busy")
+
+
+def test_other_check_failures_keep_their_text():
+    """The reasons of everything but a told-apart 429 are what they were: the cut error text and 'tap Try again'."""
+    for err in (gemini.GeminiError("Gemini answered HTTP 503: high demand", 503), gemini.GeminiError("Gemini answered HTTP 429: rate limited", 429)):
+        reason, again = drop.check_failed_reason(err, {})
+        assert reason == f"{drop.CHECK_FAILED} ({str(err)[:140]}): tap Try again" and again is False
+
+
+def test_a_sweep_whose_only_failures_are_quota_429s_that_retry_by_themselves_exits_0(monkeypatch, tmp_path, portrait):
+    """4c: red should mean a real problem. The drop is failed and says so (and its retry is booked), but the run is green."""
+    for window in ("day", "minute"):
+        store, storage = sweep_world(monkeypatch, tmp_path / window)
+        pid = drop_file(store, storage, portrait)
+        monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: quota_client(window)))
+        r = CliRunner().invoke(app, ["drop", "sweep"])
+        assert r.exit_code == 0, (window, r.output)
+        (row,) = json.loads(r.output)["results"]
+        assert row["pick_id"] == pid and row["state"] == "failed" and row["ok"] is False and row["will_retry"] is True
+        assert store.get_favorite(pid).proposal["drop"]["state"] == "failed"
+
+
+def test_a_sweep_keeps_exit_1_for_every_other_failure_even_next_to_a_quota_429(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    quota = drop_file(store, storage, portrait)
+    other = drop_file(store, storage, portrait)
+    errors = {quota: quota_client("day"), other: FakeGemini(gemini.GeminiError("Gemini answered HTTP 503: high demand", 503))}
+    seen = []
+
+    def run(store_, storage_, pick_id, **kw):
+        seen.append(pick_id)
+        return real(store_, storage_, pick_id, **{**kw, "gemini_client": errors[pick_id]})
+
+    real = drop.process_drop
+    monkeypatch.setattr(drop, "process_drop", run)
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 1 and sorted(seen) == sorted([quota, other])
+    rows = {x["pick_id"]: x for x in json.loads(r.output)["results"]}
+    assert rows[quota]["will_retry"] is True and rows[other]["ok"] is False and "will_retry" not in rows[other]
+
+
+def test_a_quota_429_whose_retries_are_used_up_keeps_exit_1(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = drop_file(store, storage, portrait)
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "auto_retries": drop.AUTO_RETRY_QUOTA_MAX}})
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: quota_client("day")))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 1 and "will_retry" not in json.loads(r.output)["results"][0]  # the owner's to look at: red
+
+
+def test_a_503_alone_keeps_exit_1(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    drop_file(store, storage, portrait)
+    busy = gemini.GeminiError("Gemini answered HTTP 503: high demand", 503)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: FakeGemini(busy)))
+    assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 1
+
+
+def test_a_single_process_run_that_hits_a_retrying_quota_429_exits_0_and_any_other_failure_1(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = drop_file(store, storage, portrait)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: quota_client("minute")))
+    r = CliRunner().invoke(app, ["drop", "process", pid])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["state"] == "failed" and out["ok"] is False and out["will_retry"] is True
+    pid2 = drop_file(store, storage, portrait)
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, env=None, **kw: FakeGemini(
+        gemini.GeminiError("Gemini answered HTTP 403: API key not valid", 403))))
+    r = CliRunner().invoke(app, ["drop", "process", pid2])
+    assert r.exit_code == 1 and "will_retry" not in json.loads(r.output)
+
+
+# ---- the check writes one hook per arm of the hook bandit (task 15 concern 1) ----------------------------------------------------------
+
+B_DAY = datetime(2026, 10, 13, 12, 0, tzinfo=drop.LONDON)  # a Tuesday: test B has started (12 Oct)
+
+
+def test_hook_arms_for_reads_the_bandits_arms_of_the_character(experiments_on):
+    franz = drop.hook_arms_for("franz", B_DAY)
+    assert franz == gemini.HookArms(("ego-claim", "when-relatable", "myth-bust", "trend-label"), needs_moment=("trend-label",))
+    assert drop.hook_arms_for("reginald", B_DAY).patterns == ("false-premise", "understatement", "trend-label")
+    assert drop.hook_arms_for("biscuit", B_DAY) is None  # no arms in the registry: three free hooks
+    assert drop.hook_arms_for("franz", datetime(2026, 10, 11, 12, 0, tzinfo=drop.LONDON)) is None  # test B has not started
+
+
+def test_no_arms_while_test_b_is_off_or_the_registry_is_broken(tmp_path, monkeypatch, caplog):
+    assert drop.hook_arms_for("franz", B_DAY) is None  # the suite's registry has every test off
+    bad = tmp_path / "experiments.json"
+    bad.write_text("nope")
+    monkeypatch.setattr(drop.experiments, "EXPERIMENTS_PATH", bad)
+    with caplog.at_level("WARNING", logger="studio.drop"):
+        assert drop.hook_arms_for("franz", B_DAY) is None  # a free look is never stopped by it: three free hooks (Make it stops itself)
+    assert "test registry" in caplog.text
+
+
+def test_the_check_asks_one_gemini_call_for_one_hook_per_arm_and_stores_them_in_the_same_shape(world, portrait, experiments_on):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)  # Reginald: false-premise, understatement, trend-label (the clip has a moment name)
+    patterns = ["understatement", "trend-label", "false-premise"]
+    g = FakeGemini(deconstruct(hook_patterns=patterns))  # FakeGemini runs the check function: the arms are in it, or this raises
+    out = process_drop(store, storage, pid, gemini_client=g, now=B_DAY, job="t")
+    assert out.state == "ready" and len(g.calls) == 1
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["hooks"] == deconstruct()["hooks"] and d["deconstruct"]["hook_patterns"] == patterns  # the stored shape: lists, same order
+    assert d["hook"] == d["hooks"][0]
+    props = g.calls[0]["schema"]["properties"]
+    assert props["hooks"]["minItems"] == props["hooks"]["maxItems"] == 3
+    assert "ONE hook for each of these patterns: false-premise" in g.calls[0]["prompt"]
+
+
+def test_a_check_with_four_arms_stores_four_hooks_and_the_adjust_sheet_gets_all_of_them(world, portrait, experiments_on):
+    store, storage = world
+    store.add_character(Character(slug="franz", name="Franz", bodies=[Body.biped, Body.quadruped]))
+    pid = drop_file(store, storage, portrait, slug="franz")
+    hooks = ["I invented this walk.", "When the hallway is your runway.", "They said a dog cannot do this.", "The shoulder shimmy, as ordered."]
+    patterns = ["ego-claim", "when-relatable", "myth-bust", "trend-label"]
+    star = {"kind": "dog", "body": "quadruped", "description": "the dachshund by the door", "x_center": 0.5, "full_body": True, "child": False}
+    g = FakeGemini(deconstruct(star=star, hooks=hooks, hook_patterns=patterns, recommended={"slug": "franz", "reason": "dog star: Franz"}))
+    out = process_drop(store, storage, pid, gemini_client=g, now=B_DAY, job="t")
+    assert out.state == "ready", out.reason
+    assert g.calls[0]["schema"]["properties"]["hooks"]["maxItems"] == 4
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["hooks"] == hooks and d["deconstruct"]["hook_patterns"] == patterns and d["hook"] == hooks[0]
+
+
+def test_an_answer_that_misses_an_arm_breaks_the_rules_the_client_checks_it_by(world, portrait, experiments_on):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    wrong = deconstruct(hook_patterns=["understatement", "false-premise", "understatement"])  # no trend-label although the clip has a moment
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(wrong), now=B_DAY, job="t")  # FakeGemini runs the check function
+    assert out.state == "failed" and "hook_patterns must include trend-label" in out.reason
+
+
+def test_a_bandit_draw_always_finds_a_candidate_when_the_check_wrote_one_hook_per_arm(world, portrait, experiments_on):
+    """The point of the change: with one hook per arm every arm has a candidate, so no clip falls back to the check's first hook."""
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    patterns = ["understatement", "trend-label", "false-premise"]
+    process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(hook_patterns=patterns)), now=B_DAY, job="t")
+    look = store.get_favorite(pid).proposal["drop"]["deconstruct"]
+    registry = drop.experiments.load_experiments()
+    state = drop.learn.BanditState(readings={"reginald": 20})  # past the warm-up: a draw by the shares, not the fixed rotation
+    chosen = {
+        drop.learn.choose_hook(
+            store, registry, "reginald", f"pick-{i}", look["hooks"], look["hook_patterns"], moment=True, now=B_DAY, state=state,
+        ).pattern
+        for i in range(60)
+    }
+    assert chosen == set(patterns)  # none is None, and every arm is drawn sometimes
 
 
 # ---- tests G and H at the master: the clip's coins become the spec's edits; the master says what it applied ----------------------------

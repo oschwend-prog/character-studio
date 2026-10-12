@@ -11,7 +11,8 @@ video goes to Storage ``sources/owner/<pick id>/<file>`` (``attach_clip``); a pa
 YouTube URL. ``studio.request_job(pick, kind)`` (security definer, pg_net + the Vault secret ``github_dispatch_token``) records
 the request and fires the ``studio-drop`` GitHub workflow, which runs ``studio drop process`` or ``studio drop make``; a
 2-hourly ``studio drop sweep`` picks up anything left pending, in three parallel workers (``STUDIO_WORKER`` makes each worker's
-``job_id`` its own, so the lease keeps them off each other's drop; a drop another worker holds or has finished is no failure).
+``job_id`` its own, so the lease keeps them off each other's drop; a drop another worker holds or has finished is no failure;
+a check that still has to download its clip is worker 1's alone, ``takes_downloads``: one download at a time).
 ``drop.state`` moves::
 
     uploading -> checking -> ready -----------(Make it: request_job make)----------> making -> made
@@ -25,7 +26,11 @@ in its CHECK (reason "the look at the clip failed ...") again when ``transient_k
 (Gemini timed out, answered 5xx, was busy or the network dropped: at most ``AUTO_RETRY_MAX`` automatic retries) or ``quota`` (HTTP
 429 "exceeded your current quota": only once the quota has reset, i.e. after the latest 08:00 London, and at most
 ``AUTO_RETRY_QUOTA_MAX`` times, one a London day). ``drop.auto_retries`` counts them (both kinds in one count) and
-``drop.auto_retry_at`` stamps the last; the owner's Try again (``requested.process`` after that stamp) starts the count over. Three
+``drop.auto_retry_at`` stamps the last; the owner's Try again (``requested.process`` after that stamp) starts the count over. A 429
+is told apart where ``studio.gemini`` raises it (``GeminiQuota``: the day's quota or a per-minute limit; the quota id sits beyond the
+140 characters a raw reason keeps) and ``check_failed_reason`` writes it in plain words with a tag (``[quota:day]``,
+``[quota:minute]``: a per-minute 429 is retaken on the next sweep, not held until 08:00); while the retake is booked the outcome
+carries ``will_retry`` and the run exits 0 (``Outcome.red``: red means a real problem). Three
 sweep workers list the same failed drop: only the first retakes it, the others find it has moved on (``drop.at`` or
 ``drop.auto_retry_at`` differs from the listed row: ``failure_stamp``), so one sweep spends one retry per drop. A failed MAKE is
 never retried by itself (it spends credits): the owner taps Make it again.
@@ -49,7 +54,8 @@ terminal's Adjust refuses a longer section before Make it, as ``validate_adjust`
 **Process** (``process_drop``, free): the clip (``source ingest-owner`` for a file, ``source fetch`` with no Recreate fallback
 for a link), a probe, the free local analysis (``source analyze``: cuts, beat, the best window), the Gemini **deconstruct**
 (``studio.gemini``: people, the star and where and whether the star is a child, children anywhere (recorded only), a watermark or
-handle, burned-in text, setting, what happens, his part, gadgets from the traits card, 3 hooks in the bible voice with their
+handle, burned-in text, setting, what happens, his part, gadgets from the traits card, 3 hooks (one per arm of the hook bandit when
+test B has arms for him: 3 or 4, ``hook_arms_for``) in the bible voice with their
 patterns, a playbook caption, a first comment and its question variant, hashtags) or, without the key, the one the daily run
 wrote by hand (``--deconstruct-file``), the checks, the window (``drop_window``: a classic 12-15 s, any other
 clip 8-10 s, inside one shot, on the beat), the crop of a landscape clip around the star, the price (``planning.estimate_credits``
@@ -226,6 +232,7 @@ CHECK_FAILED = "the look at the clip failed"  # how the reason of a failed CHECK
 AUTO_RETRY_MAX = 2  # a timeout / 5xx / busy failure of a check is taken again by the sweep this many times, then the owner's Try again
 AUTO_RETRY_QUOTA_MAX = 3  # a daily-quota failure: one retry a London day (after the reset), at most this many (same drop.auto_retries)
 QUOTA_RESET_HOUR = 8  # Google resets the daily quota at midnight Pacific = 08:00 London (07:00 in the weeks the clocks differ)
+QUOTA_DAY, QUOTA_MINUTE = (f"[{gemini.QUOTA_TAGS[w]}]" for w in ("day", "minute"))  # the tags a 429 reason carries (studio.gemini)
 PARTS = ("cameo", "featured", "star")
 ADJUST_KEYS = ("star", "part", "gadgets", "hook", "start_s", "length_s", "crop_x")
 WINDOW_CLASSIC = (12.0, 15.0)  # owner 2026-10-05: a classic keeps its whole recognisable section
@@ -468,6 +475,22 @@ def family_spans(store: Store, pick: Favorite) -> list[dict[str, Any]]:
         if _finite(start) and _finite(length) and length > 0:
             out.append({"start_s": round(float(start), 2), "end_s": round(float(start) + float(length), 2), "what": "version"})
     return sorted(out, key=lambda x: (x["start_s"], x["end_s"]))
+
+
+def hook_arms_for(slug: str, now: datetime) -> gemini.HookArms | None:
+    """The hook patterns the check writes ONE hook for, for this character: his arms of test B (``config/experiments.json``) while
+    the test is on and has started, else ``None`` (three free hooks, as before). A registry that cannot be read is no reason to stop
+    a free look: it gives ``None`` here (Make it stops on it by itself, ``_new_or_current_clip``) and says so in the log."""
+    try:
+        registry = experiments.load_experiments()
+    except ValueError as e:
+        log.warning("drop check: the test registry cannot be read (%s): three free hooks", str(e)[:140])
+        return None
+    if not registry.is_active("B", now):
+        return None
+    test = registry.test("B")
+    arms = learn.arms_of(test, slug)  # all of them: trend-label is asked for when the clip turns out to have a moment name
+    return gemini.HookArms(arms, needs_moment=tuple(a for a in arms if a in (test.params.get("needs_moment_name") or ()))) if arms else None
 
 
 def used_hooks(store: Store, slug: str, exclude_pick_id: str | None = None) -> list[str]:
@@ -799,6 +822,10 @@ def next_engagement(store: Store, slug: str, clip_id: str | None = None) -> str:
 
 # ---- adding a drop (the terminal's RPC does the same: studio.add_drop, migration 0012) ----------------------------------------
 
+# What a link dropped again does not inherit from the drop it files over (migration 0017's strip list, final review M1): the check's
+# score and rules version, and the hits job's tags. `job` stays: it holds a live worker's lease.
+MERGE_STRIP = ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days")
+
 
 def add_drop(
     store: Store, character_slug: str | None, link: str | None, now: datetime | None = None, *, own_footage: bool = False,
@@ -807,7 +834,8 @@ def add_drop(
 ) -> tuple[Favorite, bool]:
     """File a drop: ``(pick, duplicate)``. A file (``link`` None) is a new pick keyed ``owner-drop:<id>`` at ``uploading``; a link
     is its canonical URL at ``checking``, and a link already a pick of this character becomes that pick's drop (a pick already
-    queued or made is returned as it is, ``duplicate`` True). ``own_footage`` (owner 2026-10-06, for reporting later): the owner's
+    queued or made is returned as it is, ``duplicate`` True); the earlier drop's keys stay under the new drop's (``MERGE_STRIP`` aside),
+    exactly as 0017's ``studio.add_drop`` merges them. ``own_footage`` (owner 2026-10-06, for reporting later): the owner's
     own recording or footage used with permission; the default is a downloaded clip (False). It does not change the generation.
 
     ``character_slug`` None (owner 2026-10-06, the Drop box's "Recommend"): the studio chooses after the check
@@ -858,7 +886,9 @@ def add_drop(
         if by == "studio" and f.character_slug in {c.slug for c in store.characters() if c.status != "paused"}:
             character_slug = f.character_slug  # the pick's own character is the provisional one while he is not paused
         proposal = {k: v for k, v in f.proposal.items() if k != "hold_reason"}
-        proposal.update(decision=record, drop=drop)
+        earlier = f.proposal.get("drop")  # the earlier drop's keys stay, the new ones win (migration 0017); no object counts as empty
+        kept = {k: v for k, v in earlier.items() if k not in MERGE_STRIP} if isinstance(earlier, Mapping) else {}
+        proposal.update(decision=record, drop={**kept, **drop})
         return store.update_favorite(f.id, status="approved", character_slug=character_slug, proposal=proposal), True
     return store.add_favorite(Favorite(
         url=canonical, platform=platform, origin="owner", character_slug=character_slug,
@@ -1042,6 +1072,12 @@ class Outcome:
     reason: str | None = None
     ok: bool = True
     detail: dict[str, Any] | None = None
+
+    @property
+    def red(self) -> bool:
+        """A real problem, which a run answers with a non-zero exit: not ok, and not a Gemini quota 429 the sweep takes again by
+        itself (``detail.will_retry``, set by ``check_failed_reason``'s caller): that one is failed and says so, but is no alarm."""
+        return not self.ok and not (self.detail or {}).get("will_retry")
 
     def json(self) -> dict[str, Any]:
         return {"pick_id": self.pick_id, "state": self.state, "reason": self.reason, "ok": self.ok, **(self.detail or {})}
@@ -1297,21 +1333,24 @@ def _process(
         else:
             proxy = clipwork.proxy_clip(local, work / "proxy.mp4")
             try:
-                look = gemini.deconstruct(client, proxy, who, crew, used_hooks(store, slug, pick.id))
+                look = gemini.deconstruct(client, proxy, who, crew, used_hooks(store, slug, pick.id), hook_arms_for(slug, now))
                 recommended = look["recommended"]  # the one the card shows (the second look is asked in his voice only)
                 if by_studio and recommended["slug"] != slug and recommended["slug"] not in in_family:
                     _switch(store, pick.id, slug, recommended["slug"])
                     slug = recommended["slug"]
                     ref, who = character(slug, characters_dir)
-                    look = gemini.deconstruct(client, proxy, who, crew, used_hooks(store, slug, pick.id))  # once more, his voice
+                    look = gemini.deconstruct(  # once more, his voice (and his arms)
+                        client, proxy, who, crew, used_hooks(store, slug, pick.id), hook_arms_for(slug, now),
+                    )
             except gemini.GeminiBlocked as e:
                 reason = f"Gemini would not look at this clip ({e}): we cannot use it"
                 _unready(store, _still(store, pick.id, slug), now, state="blocked", reason=reason, **basics)
                 return Outcome(pick.id, "blocked", reason)
             except gemini.GeminiError as e:
-                reason = f"{CHECK_FAILED} ({str(e)[:140]}): tap Try again"
-                _unready(store, _still(store, pick.id, slug), now, state="failed", reason=reason, **basics)
-                return Outcome(pick.id, "failed", reason, ok=False)
+                pick = _still(store, pick.id, slug)
+                reason, retries = check_failed_reason(e, drop_of(pick))
+                _unready(store, pick, now, state="failed", reason=reason, **basics)
+                return Outcome(pick.id, "failed", reason, ok=False, detail={"will_retry": True} if retries else None)
         pick = _still(store, pick.id, slug)
         sources.record_checks(  # anywhere in the clip: the section's own flags are set when it is cut (_child)
             store, src.id, has_watermark=look["watermark"] or bool(look["watermark_spans"]),
@@ -1481,7 +1520,7 @@ def owner_chose_hook(drop: Mapping[str, Any]) -> bool:
 
 
 def _hook_tags(drop: Mapping[str, Any], look: Mapping[str, Any], hook: Any) -> dict[str, Any]:
-    """Which hook went on screen (learning plan tag 3). ``hook_index`` 1-3 = the check's hook of that place (case and spaces
+    """Which hook went on screen (learning plan tag 3). ``hook_index`` 1-N = the check's hook of that place (3, or one per bandit arm) (case and spaces
     aside), with the pattern the check gave it (``"none"`` for a check made before the labels); 0 = none of them (the owner's own
     line): its pattern is ``"owner"``, never guessed from the nearest one. ``hook_by`` is ``owner`` when his Adjust saved a
     hook (any explicit choice, the check's first included: ``owner_chose_hook``), ``bandit`` when it is the hook the bandit drew at Make it
@@ -1659,7 +1698,9 @@ def make_drop(
         # listed, and a stale listing must never pay Higgsfield twice
         fresh = _load(store, pick_id)
         if drop_of(fresh).get("state") != "making" or not owner_requested_make(fresh):
-            return Outcome(pick_id, drop_of(fresh).get("state"), "another run already made this video", detail={"busy": True})
+            made = drop_of(fresh).get("state") != "making"  # else the owner took Make it back: nobody made anything
+            text = "another run already made this video" if made else "this video is no longer waiting to be made"
+            return Outcome(pick_id, drop_of(fresh).get("state"), text, detail={"busy": True})
         return _make(
             store, storage, pick_id, hf, gemini_client, prepare, generated_file, generated_credits, qa_answer, now,
             poll_timeout_s, preset, characters_dir,
@@ -2164,11 +2205,17 @@ def transient_kind(reason: str) -> str | None:
     ``WriteError``, ``RemoteProtocolError``, "connection", "network"); ``None`` for anything else (a refused key, a clip Gemini would not look at, an error of ours). The
     reason is the one the drop recorded ("the look at the clip failed (...): tap Try again"). Pure: it reads the text only.
     A 429 that names a per-minute limit is busy even with the quota wording (the day's quota is not gone: a retry in two hours
-    works); the 140 characters the reason keeps usually cut that name off, so the plain wording stays the daily quota."""
+    works). ``studio.gemini`` tells the two apart when it raises (``GeminiQuota``) and ``check_failed_reason`` writes the tag
+    (``[quota:day]``, ``[quota:minute]``) into the reason, which this reads first; a reason from before that (the raw text, cut
+    at 140 characters before the quota id) falls back to its wording, where the plain quota wording stays the daily quota."""
     if not isinstance(reason, str):
         return None
+    if QUOTA_DAY in reason:  # a 429 the client told apart at raise time (studio.gemini.GeminiQuota): its tag is the answer
+        return "quota"
+    if QUOTA_MINUTE in reason:
+        return "busy"
     low = reason.lower()
-    if "exceeded your current quota" in low and not re.search(r"per[ _-]?minute", low):
+    if "exceeded your current quota" in low and not re.search(r"per[ _-]?minute", low):  # an older reason, cut before the quota id
         return "quota"
     if re.search(r"http (429|5\d\d)\b", low):  # an answer with a status comes first: a 504 "gateway timeout" is Gemini's, busy
         return "busy"
@@ -2177,6 +2224,22 @@ def transient_kind(reason: str) -> str | None:
     if any(w in low for w in ("busy", "high demand", "overloaded", "connecterror", "readerror", "writeerror", "remoteprotocolerror", "connection", "network")):
         return "busy"
     return None
+
+
+def check_failed_reason(error: gemini.GeminiError, d: Mapping[str, Any]) -> tuple[str, bool]:
+    """``(the reason, whether the sweep takes this failed check again by itself)`` for a check that Gemini failed. Every error
+    reads ``the look at the clip failed (<its text>): tap Try again``, except an HTTP 429 that ``studio.gemini`` told apart: that
+    one is said in plain words with its tag (``transient_kind`` reads the tag) and, while the automatic retries are not used up
+    (``auto_retries_used`` of the drop ``d``: ``AUTO_RETRY_QUOTA_MAX`` for the day's quota, ``AUTO_RETRY_MAX`` for a per-minute
+    limit), that the sweep tries again by itself; after them, that it is the owner's Try again."""
+    if not isinstance(error, gemini.GeminiQuota):
+        return f"{CHECK_FAILED} ({str(error)[:140]}): tap Try again", False
+    day = error.window == "day"
+    what = f"Gemini's daily free quota is used up {QUOTA_DAY}" if day else f"Gemini's per-minute limit {QUOTA_MINUTE}"
+    if auto_retries_used(d) >= (AUTO_RETRY_QUOTA_MAX if day else AUTO_RETRY_MAX):
+        return f"{CHECK_FAILED} ({what}): its automatic retries are used up: tap Try again", False
+    when = f"after {QUOTA_RESET_HOUR:02d}:00 London" if day else "on the next sweep"
+    return f"{CHECK_FAILED} ({what}): it tries again {when} by itself", True
 
 
 def last_quota_reset(now: datetime) -> datetime:
@@ -2230,8 +2293,29 @@ def auto_retry_kind(pick: Favorite, now: datetime) -> str | None:
     return kind if kind is not None and auto_retries_used(d) < AUTO_RETRY_MAX else None
 
 
+def needs_fetch(store: Store, pick: Favorite) -> bool:
+    """Does checking this drop still download its clip? Yes for a pasted or auto-filed link whose clip is not in storage yet (what
+    ``_get_source`` would fetch with yt-dlp, else ScrapeCreators' copy of that one post); no for the owner's upload (a file drop, or
+    a clip attached to the pick) and for a drop whose source is already stored. It over-reads a link another pick already fetched
+    (``fetch.fetch_pick_clip`` would share that copy): harmless, only the first worker then takes it."""
+    if pick.proposal.get("owner_clip_path") or pick.platform == DROP_PLATFORM:
+        return False
+    if pick.source_id:
+        found = next(iter(store.list_sources(id=pick.source_id)), None)
+        if found is not None and found.storage_path:
+            return False
+    return True
+
+
+def takes_downloads() -> bool:
+    """May this run take a drop that needs a download? Of the sweep's three parallel workers (``STUDIO_WORKER``, the matrix value of
+    ``studio-drop.yml``) only the first: CLAUDE.md has the cloud fetch a clip ONE at a time, and three workers listing the same rows
+    would start up to three downloads at once. A run with no worker number (the Mac, a hand run) is alone, so it may."""
+    return (os.environ.get("STUDIO_WORKER") or "").strip() in ("", "1")
+
+
 def pending(
-    store: Store, *, include_waiting: bool = False, now: datetime | None = None, auto_retry: bool = False,
+    store: Store, *, include_waiting: bool = False, now: datetime | None = None, auto_retry: bool = False, fetches: bool = True,
 ) -> list[dict[str, str]]:
     """The drops a run should take, oldest first: ``checking`` (and an ``uploading`` one whose file is attached) -> process,
     ``making`` with the owner's Make it -> make; ``waiting`` links only with ``include_waiting`` (the Mac: the cloud could not
@@ -2245,7 +2329,9 @@ def pending(
     For the cloud (no ``include_waiting``) a drop ``failed`` in its CHECK for a temporary cause is ``process`` again
     (``auto_retry_kind``: a Gemini timeout, 5xx or busy answer up to ``AUTO_RETRY_MAX`` times; the daily quota once it has reset);
     ``process_drop(auto_retry=True)`` moves it back to ``checking`` when the run claims it. A failed make is never listed. Its row
-    also carries ``failed_at`` and ``retried_at`` (``failure_stamp``), so a worker can tell the failure it listed from a later one."""
+    also carries ``failed_at`` and ``retried_at`` (``failure_stamp``), so a worker can tell the failure it listed from a later one.
+    ``fetches=False`` (a sweep worker other than the first, ``takes_downloads``) leaves out the checks that still need their clip
+    downloaded (``needs_fetch``); expiring and making never download."""
     now = now or now_london()
     today = now.astimezone(LONDON).date().isoformat()
     out: list[tuple[datetime | None, dict[str, str]]] = []
@@ -2280,6 +2366,8 @@ def pending(
             out.append((f.created_at, {"pick_id": f.id, "job": "process", "state": state}))
         elif state == "making" and owner_requested_make(f):
             out.append((f.created_at, {"pick_id": f.id, "job": "make", "state": state}))
+    if not fetches:
+        out = [(at, row) for at, row in out if row["job"] != "process" or not needs_fetch(store, store.get_favorite(row["pick_id"]))]
     out.sort(key=lambda p: p[0].timestamp() if p[0] else 0.0)
     return [p for _, p in out]
 
@@ -2338,7 +2426,7 @@ def _finish(outcome: Outcome) -> None:
     emit(outcome.json())
     if (outcome.detail or {}).get("refused"):
         raise typer.Exit(EXIT_REFUSED)
-    if not outcome.ok:
+    if outcome.red:
         raise typer.Exit(EXIT_FAILED)
 
 
@@ -2609,12 +2697,17 @@ def sweep_command(
 ) -> None:
     """Run every pending drop job, one after another (the 2-hourly safety net; the cloud runs three of these workers side by
     side, ``STUDIO_WORKER``, and the lease keeps them off each other's drop). Exit 1 when one of them stopped on a failure: a
-    drop another worker holds (busy) or has already moved on is none."""
+    drop another worker holds (busy) or has already moved on is none, and neither is a check that Gemini's quota (HTTP 429) failed
+    and the sweep takes again by itself (``Outcome.red``). A check that still has to download its clip is worker 1's alone
+    (``takes_downloads``): the others go on to the rest."""
     store, storage = open_store(), open_storage()
     hf, client, media = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env(), _media(store)
     results: list[dict[str, Any]] = []
     failed = False
-    for row in pending(store, include_waiting=include_waiting, auto_retry=not include_waiting and _auto_retry(media)):
+    rows = pending(
+        store, include_waiting=include_waiting, auto_retry=not include_waiting and _auto_retry(media), fetches=takes_downloads(),
+    )  # workers 2 and 3 leave the checks that still download a clip to worker 1: one download at a time
+    for row in rows:
         try:
             if _moved_on(store, row):
                 results.append({"job": row["job"], "pick_id": row["pick_id"], "ok": True, "moved_on": True})
@@ -2630,7 +2723,7 @@ def sweep_command(
             else:
                 outcome = make_drop(store, storage, row["pick_id"], hf=hf, gemini_client=client)
             results.append({"job": row["job"], **outcome.json()})
-            failed = failed or not outcome.ok
+            failed = failed or outcome.red
         except (KeyError, DropError, StorageError, ValueError) as e:
             results.append({"job": row["job"], "pick_id": row["pick_id"], "ok": False, "error": str(e)[:300]})
             failed = True

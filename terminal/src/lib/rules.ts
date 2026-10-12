@@ -774,7 +774,7 @@ export const TIER_HINTS: Record<Tier, string> = {
   iconic: 'Everyone knows it: a famous meme, dance or scene, 6 months to years old (or 50M+ views), evergreen',
   viral_now: 'Peaking now: a big outlier, or climbing at 100K+ views a day',
   rising: 'Early and climbing fast: catch it before the peak',
-  gallery: 'A clip from Higgsfield’s Genjutsu gallery: already clean and trimmed, a backup when nothing real fits',
+  gallery: 'A clip from Higgsfield’s Genjutsu gallery: already clean and trimmed (no longer filed since 7 Oct)',
 };
 const isTier = (v: unknown): v is Tier => typeof v === 'string' && (TIERS as ReadonlyArray<string>).includes(v);
 

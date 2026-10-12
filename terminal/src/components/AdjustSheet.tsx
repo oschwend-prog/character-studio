@@ -118,7 +118,7 @@ export function AdjustSheet({
           ))}
           <label className="sr-only" htmlFor={`${ids}-hook-own`}>Your own hook</label>
           <input id={`${ids}-hook-own`} className="input" value={hook} maxLength={80} onChange={(e) => chooseHook(e.target.value)} />
-          <span className="hint">Pick one to keep it. Left as it is, the studio may use another of these three.</span>
+          <span className="hint">Pick one to keep it. Left as it is, the studio may use another of these hooks.</span>
         </fieldset>
 
         <div className="field" role="group" aria-labelledby={`${ids}-section`}>

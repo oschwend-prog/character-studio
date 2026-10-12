@@ -1811,8 +1811,13 @@ def test_0016_hits_spend_is_one_row_per_london_day_that_no_api_role_can_touch():
 MERGE_PATH = MIGRATIONS / "0017_add_drop_merge.sql"
 MERGE_SQL = MERGE_PATH.read_text() if MERGE_PATH.is_file() else ""  # read lazily: a missing file fails these tests, not the module
 MERGE_CODE = re.sub(r"--[^\n]*", "", MERGE_SQL)
+# the keys a fresh drop must not inherit: the check's score and rules version, the hits job's tags, the fetch-days counter (`job`
+# stays: it holds a live worker's lease)
+MERGE_STRIP = "- 'score' - 'hit_rules_version' - 'auto_filed' - 'hit' - 'fetch_days'"
 MERGE_EXPR = (
-    "(case when jsonb_typeof(fa.proposal -> 'drop') = 'object' then fa.proposal -> 'drop' else '{}'::jsonb end) || drop_)"
+    "(case when jsonb_typeof(fa.proposal -> 'drop') = 'object'\n"
+    f"                         then (fa.proposal -> 'drop') {MERGE_STRIP}\n"
+    "                         else '{}'::jsonb end) || drop_)"
 )
 
 
@@ -1839,13 +1844,17 @@ def test_0017_add_drop_is_0015s_word_for_word_but_the_duplicate_branch_merges_th
         f"                        {MERGE_EXPR}\n"
     )
     assert old.count(old_update) == 1 and new.count(new_update) == 1
-    note = re.search(r"           -- the earlier drop's keys stay.*?\n           -- \(never written.*?\n", new, re.S).group(0)
+    note = re.search(r"           -- the earlier drop's keys stay.*?\n           -- \(never written.*?\n           -- .*?\n", new, re.S).group(0)
     assert new.replace(note, "").replace(new_update, old_update) == old  # signature, security, links, character choice: all 0015's
     assert "add_drop(character_slug text default null, link text default null)" in new  # (text, text): replaced in place
     assert "security invoker" in new and "set search_path = ''" in new and "security definer" not in new
     # the new keys win (`old || drop_`), and a drop that is missing or no object counts as empty (jsonb 'null' || object is an array)
     assert "|| drop_)" in new and new.index("fa.proposal -> 'drop'") < new.index("|| drop_)")
     assert "else '{}'::jsonb end" in new
+    # what the earlier drop worked out for itself does not outlive a fresh drop (final review M1); `job` is kept (a live lease)
+    for key in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days"):
+        assert f"- '{key}'" in new, key
+    assert "- 'job'" not in new and "- 'hooks'" not in new and "- 'adjust'" not in new and "- 'make'" not in new
     # only the duplicate branch merges: the two inserts still write the new drop as it is
     assert new.count("jsonb_build_object('decision', rec, 'drop', drop_)") == 2
     for line in ("revoke all on function studio.add_drop(text, text) from public;", "grant execute on function studio.add_drop(text, text) to authenticated;"):

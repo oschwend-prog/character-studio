@@ -771,3 +771,164 @@ def test_the_deconstruct_sends_the_used_hooks(clip):
     deconstruct(client(fake), clip, REGINALD, used_hooks=["Breakfast is at eight."])
     sent = json.loads(fake.requests[0].content)["contents"][0]["parts"][1]["text"]
     assert "Angles already used" in sent and "- Breakfast is at eight." in sent
+
+
+# ---- a 429 is classified when it is raised, from the whole body (final review M5) -----------------------------------------------
+
+_METRIC = "generativelanguage.googleapis.com/generate_content_free_tier_requests"
+_LIMITS_URL = "https://ai.google.dev/gemini-api/docs/rate-limits"
+
+
+def google_429(*quota_ids: str, model: str = "gemini-3.8-flash", metric: str = _METRIC) -> dict:
+    """The body Google sends with an HTTP 429 RESOURCE_EXHAUSTED: the quota text first (about 400 characters before the quota id
+    shows up), the machine-readable violations after it."""
+    return {"error": {
+        "code": 429,
+        "message": (
+            "You exceeded your current quota, please check your plan and billing details. For more information on this error, "
+            f"head to: {_LIMITS_URL}. To monitor your current usage, head to: https://ai.dev/rate-limit. \n"
+            f"* Quota exceeded for metric: {metric}, limit: 20, model: {model}\nPlease retry in 27.7s."
+        ),
+        "status": "RESOURCE_EXHAUSTED",
+        "details": [
+            {"@type": "type.googleapis.com/google.rpc.Help", "links": [{"description": "Learn more about Gemini API quotas", "url": _LIMITS_URL}]},
+            {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
+                {"quotaMetric": metric, "quotaId": q, "quotaDimensions": {"location": "global", "model": model}, "quotaValue": "20"}
+                for q in quota_ids
+            ]},
+            {"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "27s"},
+        ],
+    }}
+
+
+def _raises_after_429(clip, body) -> GeminiError:
+    models = 1 + len(FALLBACK_MODELS)
+    fake = Fake(*[(429, body)] * ((len(BUSY_WAITS_S) + 1) * models))  # a 429 is "busy": asked again after each wait, model by model
+    with pytest.raises(GeminiError) as info:
+        deconstruct(client(fake), clip, REGINALD)
+    return info.value
+
+
+@pytest.mark.parametrize(
+    ("quota_ids", "window"),
+    [
+        (("GenerateRequestsPerMinutePerProjectPerModel-FreeTier",), "minute"),  # requests per minute (RPM)
+        (("GenerateContentInputTokensPerModelPerMinute-FreeTier",), "minute"),  # tokens per minute
+        (("GenerateRequestsPerDayPerProjectPerModel-FreeTier",), "day"),  # requests per day (RPD), the free tier's daily cap
+        (("GenerateRequestsPerMinutePerProjectPerModel-FreeTier", "GenerateRequestsPerDayPerProjectPerModel-FreeTier"), "day"),  # both: the day wins
+    ],
+)
+def test_a_429_is_classified_from_the_whole_body_and_the_error_starts_with_the_tag(clip, quota_ids, window):
+    err = _raises_after_429(clip, google_429(*quota_ids))
+    assert isinstance(err, gemini.GeminiQuota) and err.window == window and err.status == 429
+    assert str(err).startswith(f"[{gemini.QUOTA_TAGS[window]}] Gemini answered HTTP 429: ")  # drop.py keeps the first 140 characters
+    assert gemini.QUOTA_TAGS == {"day": "quota:day", "minute": "quota:minute"}
+    assert quota_ids[0] not in str(err) and KEY not in str(err)  # the 300-character body cut the quota id off: the tag is what is left
+
+
+def test_a_429_that_names_no_window_stays_a_plain_error(clip):
+    for body in (
+        {"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota).", "status": "RESOURCE_EXHAUSTED"}},
+        "rate limited",
+        google_429("GenerateRequestsForSomethingElse"),  # a quota id that says neither minute nor day
+    ):
+        err = _raises_after_429(clip, body)
+        assert type(err) is GeminiError and err.status == 429 and str(err).startswith("Gemini answered HTTP 429: "), body
+
+
+@pytest.mark.parametrize(
+    ("text", "window"),
+    [
+        ("Quota exceeded for metric generate_content_free_tier_requests, limit: 15 per minute", "minute"),
+        ("free tier: 10 RPM exceeded", "minute"),
+        ("free-tier daily limit reached (RPD)", "day"),
+        ("Quota exceeded: requests per day", "day"),
+        ('{"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier"}', "day"),
+        ("You exceeded your current quota, please check your plan and billing details.", None),
+        ("Resource has been exhausted (e.g. check quota).", None),
+        ("", None),
+    ],
+)
+def test_quota_window_reads_the_naming_of_the_limit(text, window):
+    assert gemini.quota_window(text) == window
+
+
+def test_a_429_that_is_not_the_last_answer_is_still_asked_again(clip):
+    # the tag changes what is raised, never how often Gemini is asked: a 429 is busy, asked again after each wait
+    waits: list[float] = []
+    fake = Fake((429, google_429("GenerateRequestsPerMinutePerProjectPerModel-FreeTier")), (200, answer(GOOD)))
+    c = GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append)
+    assert deconstruct(c, clip, REGINALD)["hooks"] and waits == [BUSY_WAITS_S[0]]
+
+
+# ---- one hook per arm of the hook bandit (test B), instead of three free hooks (task 15 concern 1) -------------------------------
+
+FRANZ_ARMS = gemini.HookArms(("ego-claim", "when-relatable", "myth-bust", "trend-label"), needs_moment=("trend-label",))
+REGINALD_ARMS = gemini.HookArms(("false-premise", "understatement", "trend-label"), needs_moment=("trend-label",))
+FOUR = {
+    "hooks": ["I invented this walk.", "When the hallway is your runway.", "They said a dog cannot do this.", "The shoulder shimmy, as ordered."],
+    "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "trend-label"],
+}
+
+
+def test_the_prompt_asks_for_one_hook_per_arm_and_without_arms_for_three_free_ones():
+    free = gemini.deconstruct_prompt(REGINALD)
+    assert "- hooks: 3 different on-screen hooks" in free and "one of the three names it" in free  # unchanged without arms
+    prompt = gemini.deconstruct_prompt(REGINALD, hook_arms=FRANZ_ARMS)
+    hooks = prompt.split("- hooks:", 1)[1].split("\n- hook_patterns:", 1)[0]
+    assert hooks.lstrip().startswith("4 different on-screen hooks") and "ONE hook for each of these patterns" in hooks
+    for name in FRANZ_ARMS.patterns:
+        assert f"{name} ({gemini.HOOK_PATTERN_WORDS[name]})" in hooks  # each arm, with what the pattern is
+    assert "of the three" not in hooks and "the strongest first" in hooks
+    assert "trend-label names the clip's trend or moment" in hooks and "another pattern" in hooks  # no moment name: that slot is free
+    labels = prompt.split("- hook_patterns:", 1)[1].split("\n- ", 1)[0]
+    assert "(4 names)" in labels and all(name in labels for name in gemini.HOOK_PATTERNS)  # the label may be any of the seven
+    ungated = gemini.deconstruct_prompt(REGINALD, hook_arms=gemini.HookArms(("ego-claim", "myth-bust", "false-premise")))
+    assert "3 different on-screen hooks" in ungated and "trend-label names" not in ungated  # no arm needs a moment name: no such rule
+
+
+def test_the_schema_asks_for_as_many_hooks_as_arms():
+    free = gemini.deconstruct_schema((REGINALD,))
+    assert free == gemini.deconstruct_schema((REGINALD,), hook_arms=None) and free["properties"]["hooks"]["minItems"] == 3
+    four = gemini.deconstruct_schema((REGINALD,), hook_arms=FRANZ_ARMS)
+    for key in ("hooks", "hook_patterns"):
+        assert (four["properties"][key]["minItems"], four["properties"][key]["maxItems"]) == (4, 4)
+    assert gemini.DECONSTRUCT_SCHEMA["properties"]["hooks"]["maxItems"] == 3  # the module's own schema is not changed
+
+
+def test_the_check_wants_every_arm_pattern_once_and_trend_label_only_with_a_moment_name():
+    ok = {**GOOD, **FOUR}
+    assert gemini.deconstruct_problems(ok, REGINALD, hook_arms=FRANZ_ARMS) == []
+    short = gemini.deconstruct_problems(GOOD, REGINALD, hook_arms=FRANZ_ARMS)  # three hooks where four are asked
+    assert any(p.startswith("hooks must be 4 lines") for p in short) and any(p.startswith("hook_patterns must be 4 of") for p in short)
+    gap = {**ok, "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "myth-bust"]}  # trend-label missing although the clip has a moment name
+    (problem,) = gemini.deconstruct_problems(gap, REGINALD, hook_arms=FRANZ_ARMS)
+    assert "must include trend-label" in problem and "one hook for each of ego-claim, when-relatable, myth-bust, trend-label" in problem
+    no_moment = {**gap, "moment_name": ""}  # no moment name: trend-label is no arm, its slot may carry another pattern
+    assert gemini.deconstruct_problems(no_moment, REGINALD, hook_arms=FRANZ_ARMS) == []
+    missing = {**no_moment, "hook_patterns": ["ego-claim", "when-relatable", "when-relatable", "myth-bust"][:3] + ["ego-claim"]}
+    assert any("must include myth-bust" in p for p in gemini.deconstruct_problems(missing, REGINALD, hook_arms=FRANZ_ARMS))
+    # without arms the rules are the old ones: three hooks, any patterns
+    assert gemini.deconstruct_problems(GOOD, REGINALD) == [] and gemini.deconstruct_problems(ok, REGINALD) != []
+
+
+def test_a_deconstruct_with_arms_is_one_call_and_keeps_the_stored_shape(clip):
+    fake = Fake((200, answer({**GOOD, **FOUR})))
+    out = deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)
+    (req,) = fake.requests  # still ONE Gemini call
+    cfg = json.loads(req.content)["generationConfig"]
+    assert cfg["responseJsonSchema"] == gemini.deconstruct_schema((REGINALD,), hook_arms=FRANZ_ARMS)
+    assert out["hooks"] == FOUR["hooks"] and out["hook_patterns"] == FOUR["hook_patterns"]  # lists in the same order, as before
+    assert out["caption"]["title"] and out["hashtags"] and out["first_comment_question"]  # the caption and hashtag rules are untouched
+
+
+def test_an_answer_missing_an_arm_gets_the_one_second_chance_with_the_gap_named(clip):
+    gap = {**GOOD, **FOUR, "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "myth-bust"]}
+    fake = Fake((200, answer(gap)), (200, answer({**GOOD, **FOUR})))
+    out = deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)
+    assert out["hook_patterns"] == FOUR["hook_patterns"] and len(fake.requests) == 2
+    retry = json.loads(fake.requests[1].content)["contents"][0]["parts"][1]["text"]
+    assert "hook_patterns must include trend-label" in retry
+    fake = Fake((200, answer(gap)), (200, answer(gap)))
+    with pytest.raises(gemini.GeminiUnexpected, match="broke the rules twice"):
+        deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)
