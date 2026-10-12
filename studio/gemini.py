@@ -52,6 +52,12 @@ tags passes and ``tidy_deconstruct`` keeps its first 4 (no retry is spent on it)
 **Is the key good?** ``check_key`` asks for free: ``GET /v1beta/models/<model>`` (models.get, ai.google.dev/api/models) with the
 key header reads the model's card and generates nothing (``studio drop check-keys``).
 
+**Which limit a 429 hit.** The answer to a 429 names its quota (``GenerateRequestsPerMinute...``, ``...PerDay...``) far into a long
+body, past the ``_BODY_CHARS`` an error keeps. ``quota_window`` reads the whole body when the error is raised: ``GeminiQuota``
+(a ``GeminiError``) carries ``window`` ``"day"`` or ``"minute"`` and its message starts with the tag (``QUOTA_TAGS``), so
+``studio.drop`` tells a per-minute limit (the next sweep asks again) from the day's quota (after the 08:00 London reset). A 429 that
+names neither stays a plain ``GeminiError``; what is asked, and how often, does not change.
+
 Tests drive the client with an ``httpx.MockTransport``.
 """
 
@@ -84,6 +90,11 @@ BUSY_STATUSES = frozenset({429, 500, 502, 503, 504})  # "busy, try later": asked
 BUSY_WAITS_S = (5.0, 15.0, 45.0)  # the first live drop (2026-10-06) stopped on one 503 "high demand"
 FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.5-flash")  # asked in turn when the model stays busy or times out (stable Flash ids, 2026-10-06)
 FALLBACK_SKIP_STATUSES = frozenset({400, 404})  # a fallback that does not take this request: the next one is asked
+# An HTTP 429 names its limit in the quota id after about 400 characters of text ("GenerateRequestsPerMinute...", "...PerDay..."), past
+# the 300 characters the error keeps; so it is told apart where it is raised, from the whole body, and the tag leads the message.
+QUOTA_TAGS = {"day": "quota:day", "minute": "quota:minute"}
+_QUOTA_DAY = re.compile(r"per[ _-]?day|\brpd\b|\bdaily\b", re.IGNORECASE)
+_QUOTA_MINUTE = re.compile(r"per[ _-]?minute|\brpm\b|\btpm\b", re.IGNORECASE)
 
 STAR_KINDS = ("person", "dog", "animal", "none")
 BODIES = ("biped", "quadruped")
@@ -140,6 +151,16 @@ class GeminiError(RuntimeError):
         self.status = status
 
 
+class GeminiQuota(GeminiError):
+    """An HTTP 429 whose body names the limit: ``window`` is ``"day"`` (the day's quota, RPD: it comes back after the reset) or
+    ``"minute"`` (a rate limit, RPM / tokens per minute: a retry a little later works). The message starts with the tag
+    (``QUOTA_TAGS``), so a reason cut to its first characters still carries it. A 429 that names neither stays a ``GeminiError``."""
+
+    def __init__(self, message: str, window: str) -> None:
+        super().__init__(f"[{QUOTA_TAGS[window]}] {message}", 429)
+        self.window = window
+
+
 class GeminiTimeout(GeminiError):
     """A call timed out (``httpx.TimeoutException``): no HTTP status. ``generate_json`` asks the next model of
     ``FALLBACK_MODELS`` as it does for a busy one; ``kind`` is the httpx exception's name ("ReadTimeout")."""
@@ -151,6 +172,17 @@ class GeminiTimeout(GeminiError):
 
 class GeminiUnexpected(GeminiError):
     """Gemini answered, but not with what was asked: fail loudly."""
+
+
+def quota_window(text: str) -> str | None:
+    """Which limit a 429 body names: ``"day"`` (``PerDay``, ``RPD``, daily), ``"minute"`` (``PerMinute``, ``RPM``, ``TPM``) or None.
+    Google's quota ids read ``GenerateRequestsPerDayPerProjectPerModel-FreeTier`` / ``...PerMinute...``; when a body names both, the
+    day wins (a retry in a minute would not help)."""
+    if _QUOTA_DAY.search(text or ""):
+        return "day"
+    if _QUOTA_MINUTE.search(text or ""):
+        return "minute"
+    return None
 
 
 class GeminiBlocked(GeminiError):
@@ -200,6 +232,13 @@ class GeminiClient:
     def _body(self, response: httpx.Response) -> str:
         return response.text.strip()[:_BODY_CHARS].replace(self._key, "***")
 
+    def _error(self, response: httpx.Response) -> GeminiError:
+        """The error for a failed answer: a 429 that names its limit in the whole body is a ``GeminiQuota`` (tagged)."""
+        message = f"Gemini answered HTTP {response.status_code}: {self._body(response)}"
+        if response.status_code == 429 and (window := quota_window(response.text)) is not None:
+            return GeminiQuota(message, window)
+        return GeminiError(message, response.status_code)
+
     def _call(self, method: str, url: str, **kw: Any) -> httpx.Response:
         """One request; a busy answer (``BUSY_STATUSES``) is asked again after each wait of ``BUSY_WAITS_S``."""
         for wait in (*BUSY_WAITS_S, None):
@@ -212,7 +251,7 @@ class GeminiClient:
             if response.is_success:
                 return response
             if response.status_code not in BUSY_STATUSES or wait is None:
-                raise GeminiError(f"Gemini answered HTTP {response.status_code}: {self._body(response)}", response.status_code)
+                raise self._error(response)
             self._sleep(wait)
         raise AssertionError("unreachable")
 
