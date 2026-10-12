@@ -172,11 +172,23 @@ def test_health_flags_a_story_that_needs_a_check():
     assert clip.id in problem and "needs_check" in problem and "timed out" in problem and "never sent again" in problem
 
 
-@pytest.mark.parametrize("status", ["posted", "failed", "skipped"])
+@pytest.mark.parametrize("status", ["posted", "skipped"])
 def test_settled_stories_are_not_problems(status):
     store = fresh()
     story(store, status, timedelta(hours=2))
     assert check(store, NOW) == []
+
+
+def test_health_flags_a_story_that_failed_while_it_could_still_have_gone_out():
+    """Final review M4: a Story Postiz refused is recorded `failed`; if it refused every one, nobody would notice."""
+    store = fresh()
+    clip = story(store, "failed", timedelta(hours=2), error="PostizError: posts:create refused the Story (400)")
+    (problem,) = check(store, NOW)
+    assert clip.id in problem and "@biscuit" in problem and "failed" in problem and "refused the Story" in problem
+    assert "never sent again" in problem and "live" not in problem  # nothing was posted: it is not asked whether it is live
+    story(store, "failed", timedelta(hours=24, minutes=1))  # like the others, it goes away once a Story's life is over
+    story(store, "failed", timedelta(minutes=1))  # a failed Story is not "in flight": flagged at once, no 30-minute grace
+    assert len(check(store, NOW)) == 2
 
 
 def test_a_story_older_than_its_24_hours_is_no_longer_flagged():

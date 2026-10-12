@@ -17,10 +17,11 @@ with the problems printed. The four checks, in this order:
    (is the post live?) and ``failed`` ran out of attempts.
 2b. **Stories** (the reach pack: a Story is not a post row, it is ``features['story']`` on its clip, ``studio.publish.base``).
    A Story still ``posting`` more than ``STORY_STALE_AFTER`` (30 minutes) after its claim (``at``; an unreadable one counts as
-   old), or in ``needs_check`` (it may be live), is a problem of its own, named with the Reel's account. A Story is never sent
-   again, so there is nothing to settle in the studio: the line asks the owner to look in the app. It is shown while the Story
-   could still be live, ``STORY_CHECK_WINDOW`` (24 hours, a Story's life) after its claim; after that there is nothing left to
-   check and the line goes away by itself.
+   old), or in ``needs_check`` (it may be live), or ``failed`` (Postiz refused it: it is not live, and had Postiz refused every
+   one nobody would notice), is a problem of its own, named with the Reel's account. A Story is never sent again, so there is
+   nothing to settle in the studio: the line asks the owner to look in the app (a failed one: to post it by hand if he wants
+   it). It is shown while the Story could still be live, ``STORY_CHECK_WINDOW`` (24 hours, a Story's life) after its claim;
+   after that there is nothing left to check and the line goes away by itself.
 3. **The budget.** Credits committed this London month (settled + still reserved, ``budget.committed``)
    at or past ``CAP_WARN_PCT`` (80 %) of ``Settings.monthly_cap_credits``. Exact integer arithmetic, no
    rounding: 4,800 of 6,000 is a problem, 4,799 is not. A cap of 0 has no percentage and is not flagged.
@@ -105,12 +106,13 @@ def _post_problems(store: Store) -> list[str]:
 
 
 def _story_problems(store: Store, now: datetime) -> list[str]:
-    """Stories stuck in ``posting`` past ``STORY_STALE_AFTER`` or in ``needs_check``, while they could still be live."""
+    """Stories stuck in ``posting`` past ``STORY_STALE_AFTER``, in ``needs_check`` or ``failed``, while they could still be live
+    (a failed one: while a Story's 24 hours are not over)."""
     handles = {a.id: a.handle for a in store.accounts()}
     problems: list[str] = []
     for clip in store.list_clips():
         marker = clip.features.get("story")
-        if not isinstance(marker, dict) or marker.get("status") not in ("posting", "needs_check"):
+        if not isinstance(marker, dict) or marker.get("status") not in ("posting", "needs_check", "failed"):
             continue
         try:
             at = datetime.fromisoformat(str(marker.get("at")))
@@ -126,10 +128,12 @@ def _story_problems(store: Store, now: datetime) -> list[str]:
         handle = handles.get(reel.account_id, "an unknown account") if reel is not None else "an unknown account"
         error = " ".join(str(marker.get("error") or "").split())[:_ERROR_CHARS]
         when = f"since {_local(at)}" if at is not None else "since an unknown time"
-        problems.append(
-            f"the Story of clip {clip.id} on {handle} is {status} {when}" + (f": {error}" if error else "")
-            + ". Look in the Instagram app whether it is live; it is never sent again"
+        advice = (
+            "It was not posted and is never sent again; post it by hand in the Instagram app if you want it"
+            if status == "failed"
+            else "Look in the Instagram app whether it is live; it is never sent again"
         )
+        problems.append(f"the Story of clip {clip.id} on {handle} is {status} {when}" + (f": {error}" if error else "") + f". {advice}")
     return problems
 
 
