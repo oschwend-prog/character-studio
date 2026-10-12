@@ -396,6 +396,15 @@ Deciding these before any 7-day data keeps them from being renegotiations.
 6. **The floor procedure** in section 3.8.
 7. **Approve this pre-registration** (it freezes sections 3 and 4.3).
 
+**Decided by the owner, Mon 12 Oct 2026 (before any 7-day figure; binding, not to be renegotiated after the data):**
+- Pre-registration approved: sections 3 and 4.3 are frozen.
+- Tests on: **A** (the score test, with exploration picks: 1 made clip in 4 from below the median score), **B** (the hook
+  bandit), **C** (Trial Reels on half the Instagram posts).
+- Tests off: **D** (own series, credits) and **E** (the length test, credits; 8-10 s stays the rule for non-classics).
+- Kill bar: **an Instagram-only rule** until TikTok is connected, same thresholds; the rule as written applies from the day
+  TikTok is connected.
+- Floors: the procedure in section 3.8 as written (set Sun 18 Oct).
+
 ---
 
 ## Sources read
