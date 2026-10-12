@@ -8,7 +8,8 @@ boundary, never a parameter or a config value.
     The week is Monday to Sunday, London; the default is the last finished week (the Monday run reviews the week that just ended).
     Everything is read from the store; ``--dry-run`` prints the same JSON and writes nothing (not even the Instagram guard's cut).
     Otherwise it (1) applies the binding Instagram guard (``review.review_payload``), (2) saves one ``reviews`` row per LIVE
-    character (``review.save_review``: the character's title line and his five lines, ``bar_status`` the code's bar), (3) writes the
+    character (``review.save_review``: the studio header, then his title line and his five lines, ``bar_status`` the code's bar; a
+    character whose block could not be built gets no row), (3) writes the
     proposal files under ``--out-dir`` (below) and (4) logs ONE ``weekly`` run (the path ``studio run log`` uses) whose ``summary`` is
     the full digest text. Rerunning a week rewrites its reviews and logs another run. Exit 0 unless the database fails (2 for a
     caller error: no ``DATABASE_URL``, a bad ``--week``, a broken test registry). A part with no data yet is a note (the run stays
@@ -1208,12 +1209,14 @@ def run_weekly(
     notes: list[str] = []
     failures: list[str] = []
 
-    def part(name: str, fn: Any, default: Any) -> Any:
+    def part(name: str, fn: Any, default: Any, *, fallback: Any = None) -> Any:
+        """``fn()``; when it raises, the failure is a note (the run is logged as ``error``) and the result is ``default``, or
+        ``fallback(error)`` when the default depends on what went wrong."""
         try:
             return fn()
         except Exception as e:  # noqa: BLE001  one broken part must not cost the owner the whole digest
             failures.append(f"{name} failed: {type(e).__name__}: {e}")
-            return default
+            return fallback(e) if fallback is not None else default
 
     payload = review.review_payload(store, now, apply_guard=not dry_run)
     characters = {c.slug: c for c in store.characters()}
@@ -1280,18 +1283,18 @@ def run_weekly(
 
         part(f"playbook of {slug}", make_playbook, None)
 
-    # the digest
+    # the digest: every character's block runs inside ``part``, so one that raises is his one line, never a missing digest
     rows = {r["character"]: r for r in standings}
-    blocks: list[dict[str, Any]] = []
-    for slug in live:
+    first_with_posts = next((slug for slug in live if facts.get(slug)), None)  # the studio-wide "merge the hit-rule PR" goes on his line 5
+
+    def build_block(slug: str) -> dict[str, Any]:
         name = characters[slug].name
         ev = review.character_evidence(store, slug, now)
         title = f"{name} · {window.label()} · bar: {bar_text(ev)}"
         his_facts = facts.get(slug, [])
         base = {"slug": slug, "name": name, "bar": bar_text(ev), "bar_status": ev.bar, "title": title}
         if not his_facts:
-            blocks.append({**base, "lines": ["no posts yet"]})
-            continue
+            return {**base, "lines": ["no posts yet"]}
         his_clips = [c for c in clips if c.character_slug == slug]
         account = next((a for a in store.accounts(slug) if a.platform.value == INSTAGRAM), None)
         snaps = _snapshots_of(store, account.id) if account else []
@@ -1314,6 +1317,8 @@ def run_weekly(
             needs.append(f"the guard {'cut' if guard.get('applied') else 'fired on'} {guard['handle']}: look at why reach fell")
         if playbooks.get(slug, {}).get("changed"):
             needs.append("merge the playbook PR")
+        if slug == first_with_posts and any(p["kind"] == "hit_rule" for p in proposals):
+            needs.append("merge the hit-rule PR")
         needs += [f"retire hook arm {a['arm']}? (merge or leave it)" for a in retire if a["character"] == slug]
         lines = [
             result_line(window, his_facts),
@@ -1329,15 +1334,30 @@ def run_weekly(
             tests_line(slug, registry, score, sum(1 for o in observations if scored_by.get(o.clip_id) == slug), rows.get(slug), his_clips),
             next_line(measured=sum(1 for c in his_clips if review.clip_outlier_x(c) is not None), lifts=side_lifts(his_clips), needs=needs),
         ]
-        blocks.append({**base, "lines": with_labels(lines)})
+        return {**base, "lines": with_labels(lines)}
+
+    def unbuilt_block(slug: str, error: Exception) -> dict[str, Any]:
+        """His block when it raised: his name and the week, one line with the error's class, and ``failed`` (no review row is saved)."""
+        name = characters[slug].name
+        return {
+            "slug": slug, "name": name, "bar": "", "bar_status": None, "title": f"{name} · {window.label()}",
+            "lines": [f"could not be built ({type(error).__name__})"], "failed": True,
+        }
+
+    blocks: list[dict[str, Any]] = [
+        part(f"digest of {slug}", lambda slug=slug: build_block(slug), None, fallback=lambda e, slug=slug: unbuilt_block(slug, e)) for slug in live
+    ]
 
     waiting = {
         "hit rule": sum(1 for p in proposals if p["kind"] == "hit_rule"),
         "arm": sum(1 for p in proposals if p["kind"] == "arm_retire"),
         "playbook": sum(1 for p in proposals if p["kind"] == "playbook"),
     }
-    warnings = health.check(store, now)
-    header = studio_header(store, now, facts, warnings, waiting)
+    warnings = part("studio warnings", lambda: health.check(store, now), [])
+    header = part(
+        "studio header", lambda: studio_header(store, now, facts, warnings, waiting), None,
+        fallback=lambda e: [f"The studio header could not be built ({type(e).__name__}).", "See the run's notes."],
+    )
     summary = "\n".join(header) + "\n\n" + "\n\n".join("\n".join([b["title"], *b["lines"]]) for b in blocks)
 
     # the files for the proposal job
@@ -1345,7 +1365,11 @@ def run_weekly(
     files: dict[str, str] = {}
     if new_work:
         files = {f"characters/{slug}/playbook.md": text for slug, text in texts.items()}
-        files[f"docs/weekly/{monday.isoformat()}.md"] = render_week_doc(window, header, blocks, proposals, score, floors, standings)
+        doc = part("weekly document", lambda: render_week_doc(window, header, blocks, proposals, score, floors, standings), None)
+        if doc is None:  # no document, no pull request: the digest and the reviews still stand
+            files = {}
+        else:
+            files[f"docs/weekly/{monday.isoformat()}.md"] = doc
     url = proposal_url(monday) if files and (out_dir is not None or dry_run) else None
 
     if score["n"] < SCORE_INTERIM_N:
@@ -1366,7 +1390,9 @@ def run_weekly(
         return result
 
     for block in blocks:
-        report = "\n".join([block["title"], *block["lines"]])
+        if block.get("failed"):  # a line of excuses must not overwrite a good review of the same week
+            continue
+        report = "\n".join([*header, "", block["title"], *block["lines"]])  # the studio header, then his title and his lines
         review.save_review(store, monday, block["slug"], report, block["bar_status"])
         result["reviews_saved"].append(block["slug"])
     if out_dir is not None:

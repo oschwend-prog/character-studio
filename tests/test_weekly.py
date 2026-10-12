@@ -1093,7 +1093,9 @@ def test_the_first_monday_run_builds_the_digest_saves_the_reviews_and_logs_one_r
     # reviews: one per live character for the Monday of the week, with the code's bar
     reviews = {r.character_slug: r for r in w.store.list_reviews()}
     assert set(reviews) == {"franz", "reginald", "lenny"} and all(r.week == MONDAY and r.bar_status == "not_yet" for r in reviews.values())
-    assert reviews["franz"].report_md.startswith(franz["title"] + "\n1 Result") and reviews["lenny"].report_md == lenny["title"] + "\nno posts yet"
+    head = "\n".join(header) + "\n\n"  # the studio header, a blank line, then his title and his lines
+    assert reviews["franz"].report_md == head + "\n".join([franz["title"], *franz["lines"]])
+    assert reviews["lenny"].report_md == head + lenny["title"] + "\nno posts yet"
     # one run, kind weekly, status ok, the digest as its summary and the structured details the terminal reads
     (run_row,) = w.store.list_runs(kind="weekly")
     assert run_row.status.value == "ok" and run_row.summary == out["summary"] and run_row.id == out["run_id"]
@@ -1271,6 +1273,58 @@ def test_the_command_shows_a_look_the_weekly_review_already_took(monkeypatch, tm
     assert (out["label"], out["rho"], out["n"]) == ("validated", first["score_test"]["rho"], 21)
 
 
+def test_a_character_block_that_crashes_is_one_line_the_rest_of_the_digest_still_comes_and_the_run_is_logged_as_an_error(tmp_path, monkeypatch):
+    w = first_weeks()
+    real = weekly.tests_line
+
+    def tests_line(slug, *args, **kw):
+        if slug == "reginald":
+            raise RuntimeError("no way")
+        return real(slug, *args, **kw)
+
+    monkeypatch.setattr(weekly, "tests_line", tests_line)
+    out = run(w, tmp_path)
+    assert out["status"] == "error" and any(n.startswith("digest of reginald failed: RuntimeError: no way") for n in out["notes"])
+    franz, reginald, lenny = out["digest"]["characters"]
+    assert reginald["slug"] == "reginald" and reginald["lines"] == ["could not be built (RuntimeError)"]
+    assert reginald["title"] == "Reginald · week of 12 Oct" and "failed" not in reginald and reginald["bar"] == ""  # the title only, nothing half-built
+    assert franz["lines"][0].startswith("1 Result") and lenny["lines"] == ["no posts yet"]
+    assert "could not be built (RuntimeError)" in out["summary"] and out["summary"].startswith(out["digest"]["header"][0])
+    # the run is logged; the failed character gets no review row (it would overwrite a good one with a line of excuses)
+    (logged,) = w.store.list_runs(kind="weekly")
+    assert logged.status.value == "error" and logged.details["digest"]["characters"][1]["lines"] == reginald["lines"]
+    assert {r.character_slug for r in w.store.list_reviews()} == {"franz", "lenny"} and out["reviews_saved"] == ["franz", "lenny"]
+    json.dumps(logged.details)
+
+
+def test_the_guard_is_applied_before_a_block_can_crash(tmp_path, monkeypatch):
+    w = first_weeks()
+    acct = w.account("franz")
+    p = w.store.list_posts(account_id=acct.id)[0]
+    w.store.add_snapshot(Snapshot(post_id=p.id, captured_at=NOW - 10 * D, views=10, non_follower_pct=90.0))
+    w.store.add_snapshot(Snapshot(post_id=p.id, captured_at=NOW - 2 * D, views=10, non_follower_pct=40.0))
+    def boom(*_a, **_k):
+        raise RuntimeError("all of them")
+
+    monkeypatch.setattr(weekly, "result_line", boom)  # every character with posts fails (Lenny has none: his block is built)
+    out = run(w, tmp_path)
+    assert out["status"] == "error" and w.store.accounts("franz")[0].dropin_share == 0.20  # the binding cut happened
+    assert [c["lines"] for c in out["digest"]["characters"]] == [["could not be built (RuntimeError)"]] * 2 + [["no posts yet"]]
+    assert len(w.store.list_runs(kind="weekly")) == 1
+
+
+def test_a_header_that_crashes_does_not_cost_the_owner_the_characters(tmp_path, monkeypatch):
+    w = first_weeks()
+
+    def boom(*_a, **_k):
+        raise RuntimeError("no header")
+
+    monkeypatch.setattr(weekly, "studio_header", boom)
+    out = run(w, tmp_path)
+    assert out["status"] == "error" and any(n.startswith("studio header failed: RuntimeError") for n in out["notes"])
+    assert out["digest"]["header"][0] == "The studio header could not be built (RuntimeError)." and out["digest"]["characters"][0]["lines"][0].startswith("1 Result")
+
+
 def test_only_live_characters_are_reviewed(tmp_path):
     w = first_weeks()
     w.store.upsert_character(Character(slug="biscuit", name="Biscuit", status="paused"))
@@ -1312,6 +1366,22 @@ def test_a_rule_candidate_waits_a_week_and_becomes_a_proposal_when_the_next_week
     assert second["digest"]["header"][1].endswith("Proposals waiting: 1 hit rule, 1 playbook")
     assert "docs/weekly/2026-10-19.md" in second["files"]
     assert second["proposal_url"] == "https://github.com/oschwend-prog/character-studio/compare/build/slice1...weekly/2026-10-19?expand=1"
+
+
+def test_a_ready_hit_rule_is_named_once_on_the_first_live_characters_needs_you(tmp_path):
+    w = measured_world()
+    run(w, tmp_path)
+    for i, (setting, x) in enumerate([("kitchen", 3.0), ("kitchen", 3.0), ("garden", 1.0)]):
+        w.post("franz", datetime(2026, 10, 13 + i, 19, 0, tzinfo=LONDON), features={"setting": setting, "outlier_x": x, "hook_pattern": "none", "format_id": "swap_trend"})
+    w.post("reginald", datetime(2026, 10, 14, 19, 30, tzinfo=LONDON), hook="Reg hook")  # a second character with posts: the line is not repeated
+    second = run(w, tmp_path, monday=date(2026, 10, 19), now=WEEK2_NOW)
+    assert [p["kind"] for p in second["proposals"]].count("hit_rule") == 1
+    franz, reginald, lenny = (c["lines"] for c in second["digest"]["characters"])
+    assert "merge the hit-rule PR" in franz[4] and "needs you: merge the playbook PR; merge the hit-rule PR" in franz[4]
+    assert "hit-rule" not in reginald[4] and lenny == ["no posts yet"]
+    # with no ready rule nothing is named
+    quiet = run(w, tmp_path, monday=date(2026, 10, 12), now=NOW)
+    assert "hit-rule" not in quiet["digest"]["characters"][0]["lines"][4]
 
 
 def test_rerunning_the_same_week_is_not_a_second_look(tmp_path):
