@@ -235,13 +235,14 @@ def test_gadgets_are_worn_or_held_in_the_still_and_the_genjutsu_prompt_with_no_l
     assert "Say in the run log how they were used" in body
 
 
-def test_the_character_sheet_goes_to_genjutsu_with_the_master_and_the_gallery_is_the_backup():
+def test_the_character_sheet_goes_to_genjutsu_with_the_master_and_the_gallery_is_never_filed():
     body = text("daily-run")
     assert "the character sheet `sheets[body]` of the character" in body and "as a second `image_references` entry" in body
-    part_b = body.split("Part B, the Genjutsu gallery, ONLY as a backup", 1)[1].split("## 3. Plan", 1)[0]
-    assert "`genjutsu-trending` and `genjutsu-new`" in part_b and "the best 2-4 for that character" in part_b
-    assert '"tier": "gallery"' in part_b and '"preset_id"' in part_b and '"thumbnail_url"' in part_b and '"preview_url"' in part_b
-    assert "--platform higgsfield" in part_b and "stored, never downloaded here" in part_b
+    # owner 2026-10-07: no gallery backup picks, the focus is his own shared clips
+    part_b = body.split("Part B, the Genjutsu gallery: none.", 1)[1].split("## 3. Plan", 1)[0]
+    assert "stopped gallery backups on 2026-10-07" in part_b and "never browse `get_presets`" in part_b
+    assert "never file a gallery pick" in part_b and "--platform higgsfield" not in part_b and "genjutsu-trending" not in part_b
+    assert "Prefer Genjutsu gallery clips" not in body and "file the gallery backup" not in body
     scan = body.split("## 2. Scan", 1)[1].split("Part B", 1)[0]
     assert '"theme"' in scan and '"posted_at"' in scan and '"thumbnail_url"' in scan
     assert '"tier": "viral_now"' not in scan and "leave `tier` OUT of the file" in scan  # a tier set on every pick would hide the rule
@@ -297,7 +298,7 @@ def test_the_scan_analyses_the_survivors_before_filing_and_inside_the_vidiq_budg
 
 
 def test_the_scan_is_one_instagram_and_tiktok_search_each_weekday_inside_the_150_credit_plan():
-    """Owner 2026-10-05: Instagram + TikTok viral clips only, one outlier search a weekday, the gallery only as a backup."""
+    """Owner 2026-10-05: Instagram + TikTok viral clips only, one outlier search a weekday; no gallery backup (owner 2026-10-07)."""
     cfg = json.loads((ROOT / "config" / "scan.json").read_text())
     budget = cfg["budget"]
     assert budget["scan_days"] == ["Mon", "Tue", "Wed", "Thu", "Fri"] and budget["scans_per_week"] == 5
@@ -315,7 +316,7 @@ def test_the_scan_is_one_instagram_and_tiktok_search_each_weekday_inside_the_150
     ):  # fmt: skip
         assert part in scan, part
     part_b = body.split("Part B, the Genjutsu gallery", 1)[1].split("## 3. Plan", 1)[0]
-    assert part_b.startswith(", ONLY as a backup") and "fewer than 2 usable picks" in part_b and "could not run" in part_b
+    assert part_b.startswith(": none.") and "fewer than 2 usable picks" in part_b and "could not run" in part_b
     concept = body.split("## 4. Concept", 1)[1].split("## 5. Create", 1)[0]
     assert "**Launch rule**" in concept and "`iconic`" in concept
     assert "Only while `config/scan.json` `budget.breakdowns_per_week` is above 0" in concept  # no breakdown is bought now
@@ -336,7 +337,7 @@ def test_background_people_are_fine_and_only_a_second_dancing_star_waits_for_the
 def test_the_card_json_the_skill_shows_is_accepted_by_the_door():
     from studio.favorites import validate_analysis, validate_card, validate_needs
 
-    for marker in ('"url": "<video URL>"', '"preset_id": "<preset id>"'):
+    for marker in ('"url": "<video URL>"',):  # the gallery card went with the gallery backup (owner 2026-10-07)
         proposal = json_span("daily-run", marker)
         proposal.pop("url", None)
         proposal.pop("creator", None)

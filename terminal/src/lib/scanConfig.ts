@@ -77,7 +77,7 @@ export const SCAN_ACCESS: ReadonlyArray<{ id: string; name: string; what: string
   {
     "id": "genjutsu",
     "name": "Higgsfield Genjutsu galleries",
-    "what": "Trending and New: ready-to-drop-in clips, already clean and trimmed, with previews. Filed only as a backup, on a day the scan could not run or found fewer than 2 usable clips for a character"
+    "what": "Trending and New: ready-to-drop-in clips, already clean and trimmed, with previews. No longer filed: the owner stopped gallery backups on 7 Oct (the focus is his own shared clips)"
   },
   {
     "id": "youtube_stats",
