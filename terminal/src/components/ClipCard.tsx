@@ -253,7 +253,8 @@ export function OriginalLink({ url, label = 'Open original' }: { url: string | n
 }
 
 /** The ready card's action: the same tick the Make bar adds up ("＋ Make this" / "✓ In your list"); nothing is spent before its
- * confirm. A toggle button: its name stays "In your make list" and `aria-pressed` says whether it is; only the visible text changes. */
+ * confirm. A plain button whose accessible name is its visible text ("Make this" / "In your list"; the mark is `aria-hidden`), so
+ * what a screen reader says is what the eye reads (Task 11 ruling: no stable `aria-label`, no `aria-pressed`). */
 export function MakeToggle({ ticked, disabled, onToggle, describedBy }: {
   ticked: boolean;
   disabled?: boolean;
@@ -263,7 +264,7 @@ export function MakeToggle({ ticked, disabled, onToggle, describedBy }: {
   const t = ticked ? MAKE_TOGGLE.on : MAKE_TOGGLE.off;
   return (
     <button
-      type="button" className={`btn block cc-toggle ${ticked ? 'primary' : 'line'}`} aria-pressed={ticked} aria-label="In your make list"
+      type="button" className={`btn block cc-toggle ${ticked ? 'primary' : 'line'}`}
       disabled={disabled} aria-describedby={describedBy} onClick={() => onToggle(!ticked)}
     >
       <span className="cc-mark" aria-hidden="true">{t.mark}</span> {t.text}

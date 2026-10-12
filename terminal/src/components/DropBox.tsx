@@ -110,7 +110,7 @@ export function DropBox() {
         <h2 className="h2" id={`${ids}-title`}>Drop a video</h2>
         <div className="seg" role="group" aria-label="For which character">
           <button type="button" aria-pressed={chosen === RECOMMEND} onClick={() => setCharacter(RECOMMEND)} title="The studio picks the character after the free check">
-            ★ Recommend
+            <span aria-hidden="true">★</span> Recommend
           </button>
           {roster.map((c) => (
             <button key={c.slug} type="button" className={c.slug} aria-pressed={chosen === c.slug} onClick={() => setCharacter(c.slug)}>

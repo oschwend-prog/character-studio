@@ -223,7 +223,7 @@ function HitCard({
               </span>
               <span className="hit-choice-buttons">
                 <button type="button" className="btn line" disabled={working} aria-busy={working} onClick={() => void use(null, null)}>
-                  ★ Let the check choose
+                  <span aria-hidden="true">★</span> Let the check choose
                 </button>
                 {takers.map((t) => (
                   <button key={t.slug} type="button" className="btn line" disabled={working} aria-busy={working} onClick={() => void use(t.slug, t.name)}>

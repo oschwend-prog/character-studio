@@ -221,6 +221,17 @@ function DropItem({ row, roster, now }: { row: TrackerRow; roster: ReadonlyArray
   );
 }
 
+/** A line that opens with the studio's ★: the star is decoration (`aria-hidden`), so a screen reader does not read "black star". */
+function WithStar({ text }: { text: string }) {
+  return text.startsWith('★ ') ? (
+    <>
+      <span aria-hidden="true">★</span> {text.slice(2)}
+    </>
+  ) : (
+    <>{text}</>
+  );
+}
+
 /** The character menu of a clip (★ on the recommended one, "Use <him>" for a Pick a character clip): also Clips by character's
  * Needs you. */
 export function CharacterCell({
@@ -257,7 +268,7 @@ export function CharacterCell({
       )}
       {line && (
         <span className="hint" id={`${id}-why`}>
-          {line}
+          <WithStar text={line} />
         </span>
       )}
     </span>

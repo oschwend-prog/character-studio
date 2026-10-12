@@ -1044,9 +1044,6 @@ a.ll-title:hover { text-decoration: underline; }
 
 .ranked .pick-sec-head .sec-count { margin-left: auto; text-align: right; }
 .tick { display: grid; place-items: center; width: 44px; height: 44px; margin-top: -2px; border-radius: var(--r); cursor: pointer; }
-.tick input { width: 22px; height: 22px; margin: 0; accent-color: var(--amber); cursor: pointer; }
-.tick:has(input:disabled) { cursor: not-allowed; opacity: 0.45; }
-.tick:has(input:focus-visible) { outline: 2px solid var(--ice); outline-offset: -2px; }
 .reuse { display: flex; flex-direction: column; gap: 4px; max-width: 320px; margin-top: 4px; }
 .reuse-select { min-height: 40px; padding: 6px 10px; font-size: 13.5px; color: var(--ink-2); }
 .needs-choice { max-width: 340px; }
