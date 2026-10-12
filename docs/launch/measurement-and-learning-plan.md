@@ -376,8 +376,8 @@ Per character:
 | 7 | A test registry, `config/experiments.json` (arms, block coins, seeds, minimum n, status), and the assignment at make | S | — | Tests B-F |
 | 8 | **Reach pack:** the first comment posted, the Trial switch, the Story | M | **v3 plan Task 8** | Tests C and F |
 | 9 | The bandit: table `studio.arms`, the draw with floor and ceiling, the win at 72 h | M | system-review §B3.3 (sequence 12-25 Oct #4) | Test B |
-| 10 | The weekly review in the cloud: numbers, the digest, PRs for hit rules, playbooks and arms | M | system-review §A3 (`studio-weekly.yml`) | Lessons reach the check |
-| 11 | The score test and its label in the terminal | S | system-review §B3.2 | Test A's outcome is visible |
+| 10 | The weekly review in the cloud: numbers, the digest, PRs for hit rules, playbooks and arms **(built 12 Oct, Task 16: `studio review weekly`, `studio-weekly.yml`)** | M | system-review §A3 (`studio-weekly.yml`) | Lessons reach the check |
+| 11 | The score test and its label in the terminal **(built 12 Oct, Task 16: `studio learn score-test`, the label on a clip's score)** | S | system-review §B3.2 | Test A's outcome is visible |
 | 12 | Owner ticks: "unoriginal notice seen", "Trial Reels available" | S | audit #1c | Warning 3; test C's precondition |
 | 13 | The Results tab | M-L | v3 spec §2 ("later") | The owner's view |
 | 14 | TikTok: connect it; the 5-minute weekly numbers form | S (owner) + M | audit #2c; system-review sequence 12-25 Oct #6 | The kill bar as written; twice the data |
