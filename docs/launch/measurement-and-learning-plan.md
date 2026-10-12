@@ -404,6 +404,8 @@ Deciding these before any 7-day data keeps them from being renegotiations.
 - Kill bar: **an Instagram-only rule** until TikTok is connected, same thresholds; the rule as written applies from the day
   TikTok is connected.
 - Floors: the procedure in section 3.8 as written (set Sun 18 Oct).
+- Later the same day, still before any data: **test C off**. Every video goes out as a normal Reel (shared to the grid);
+  `config/experiments.json` C is `off` and every account's `reach.trial_reels` stays false.
 
 ---
 
