@@ -24,30 +24,41 @@ export function scoreOf(r: Pick<TrackerRow, 'drop_card'>): number | null {
 
 type Ranked = Pick<TrackerRow, 'pick_id' | 'drop_card' | 'approved_at'>;
 
+const STAGES: Record<string, number> = { rising: 0, peak: 1, classic: 2, fading: 3 };
+const TIERS: Record<string, number> = { rising: 0, viral_now: 1, iconic: 2 };
+
+/**
+ * The clip's trend, lower is fresher: 0 rising, 1 peak, 2 classic, 3 fading; null when the card carries no trend. Read from the
+ * check's `trend_stage`, then the pick's tier (rising, viral_now, iconic). A gallery clip, `none` and an unknown word carry none.
+ */
+function trendOf(r: Pick<TrackerRow, 'drop_card' | 'tier'>): number | null {
+  const stage = r.drop_card?.trend_stage;
+  if (typeof stage === 'string' && stage in STAGES) return STAGES[stage];
+  if (typeof r.tier === 'string' && r.tier in TIERS) return TIERS[r.tier];
+  return null;
+}
+
 /**
  * How fresh the clip's trend is, lower is fresher (learning plan 3.2, used when the score test failed): 0 rising, 1 peak, 2 classic,
- * 3 fading; null when the card says nothing about a trend. The check's `trend_stage` wins, then the pick's tier (rising, viral_now,
- * iconic) and the check's `classic` flag. A gallery clip, `none` and an unknown word carry no freshness.
+ * 3 fading; null when the card says nothing about a trend. The trend (`trendOf`) wins, then the check's `classic` flag (a classic).
  */
 export function freshnessOf(r: Pick<TrackerRow, 'drop_card' | 'tier'>): number | null {
-  const stages: Record<string, number> = { rising: 0, peak: 1, classic: 2, fading: 3 };
-  const tiers: Record<string, number> = { rising: 0, viral_now: 1, iconic: 2 };
-  const stage = r.drop_card?.trend_stage;
-  if (typeof stage === 'string' && stage in stages) return stages[stage];
-  if (typeof r.tier === 'string' && r.tier in tiers) return tiers[r.tier];
-  return r.drop_card?.classic === true ? 2 : null;
+  return trendOf(r) ?? (r.drop_card?.classic === true ? 2 : null);
 }
 
 /**
  * The ranking (spec sections 5.2 and 6): the scored clips first, highest score first; then the unscored ones (checked before the
  * score existed), newest first. A tie on the score goes to the newest clip; equal times to the pick id, so the order never jumps
  * between renders. A clip with no valid time is the oldest. With `order` 'freshness' (the score test failed) the fresher trend comes
- * first and that order is the second key; a clip with no freshness comes after every clip that has one. Sorts only: the caller
- * chooses which rows. Returns a new list.
+ * first (rising, peak, classic, then a clip with no trend last) and the score is the second key. That order applies only while at
+ * least one of these rows carries a real trend (a `trend_stage` or a tier): the check's `classic` flag alone is no signal, and
+ * without one a classic would jump ahead of every other clip, the opposite of fresh (the owner's drops carry only that flag today).
+ * Sorts only: the caller chooses which rows. Returns a new list.
  */
 export function rankClips<R extends Ranked & Partial<Pick<TrackerRow, 'tier'>>>(rows: ReadonlyArray<R>, order: RankOrder = 'score'): R[] {
   const at = (r: R) => droppedAt(r) ?? Number.NEGATIVE_INFINITY;
-  const fresh = (r: R) => (order === 'freshness' ? freshnessOf({ drop_card: r.drop_card, tier: r.tier ?? null }) ?? Number.POSITIVE_INFINITY : 0);
+  const byFreshness = order === 'freshness' && rows.some((r) => trendOf({ drop_card: r.drop_card, tier: r.tier ?? null }) != null);
+  const fresh = (r: R) => (byFreshness ? freshnessOf({ drop_card: r.drop_card, tier: r.tier ?? null }) ?? Number.POSITIVE_INFINITY : 0);
   return [...rows].sort((a, b) => {
     const [fa, fb] = [fresh(a), fresh(b)];
     if (fa !== fb) return fa < fb ? -1 : 1;

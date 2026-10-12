@@ -115,7 +115,7 @@ export function scoreNote(info: ScoreTestInfo): ScoreNote | null {
     case 'failed':
       return {
         text: 'unproven: does not predict views yet',
-        title: `Score test: the score does not predict views yet${info.look != null ? ` (look at ${info.look} posts)` : ''}. Make these puts the freshest trends first and the score second.`,
+        title: `Score test: the score does not predict views yet${info.look != null ? ` (look at ${info.look} posts)` : ''}. Where a clip carries a trend, Make these puts the freshest first and the score second.`,
       };
     case 'uninformative':
       return { text: 'unproven', title: 'Score test: the scores were too close together to judge. Not a verdict.' };
@@ -128,7 +128,7 @@ export function scoreNote(info: ScoreTestInfo): ScoreNote | null {
 }
 
 /** How Make these orders a character's ready clips: by the score (the default), or, when the score test failed, by the freshness
- * of the trend first and the score second (plan 3.2, "if failed"). */
+ * of the trend first and the score second (plan 3.2, "if failed"); `rankClips` applies it only while a visible clip carries a trend. */
 export type RankOrder = 'score' | 'freshness';
 
 export const rankOrderFor = (info: ScoreTestInfo): RankOrder => (info.label === 'failed' ? 'freshness' : 'score');

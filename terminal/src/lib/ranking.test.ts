@@ -451,6 +451,29 @@ describe('the freshness order (score test failed)', () => {
     expect(ids(rankClips([noneLow, none, classic], 'freshness'))).toEqual(ids([classic, none, noneLow]));
   });
 
+  it('is rising, peak, classic, then a clip with no trend last, the score second', () => {
+    const rows = [fresh(null, 99), fresh('classic', 60), fresh('peak', 50), fresh('rising', 40), fresh(null, 70), fresh('rising', 90)];
+    expect(rankClips(rows, 'freshness').map((r) => [r.drop_card?.trend_stage ?? null, scoreOf(r)])).toEqual([
+      ['rising', 90], ['rising', 40], ['peak', 50], ['classic', 60], [null, 99], [null, 70],
+    ]);
+  });
+
+  it('the check\u2019s classic flag alone (no trend stage, no tier on any clip) is no freshness signal: the score order stands', () => {
+    // today a dropped video carries neither; after a failed test every classic would otherwise jump ahead of all the others
+    const classic = row(card('ready', { classic: true, score: score(40) }));
+    const normal = row(card('ready', { score: score(80) }));
+    const other = row(card('ready', { score: score(60) }));
+    expect(ids(rankClips([classic, other, normal], 'freshness'))).toEqual(ids([normal, other, classic]));
+    expect(topPicks([classic, other, normal], 2, 'freshness').map((r) => scoreOf(r))).toEqual([80, 60]);
+  });
+
+  it('as soon as one visible clip carries a trend stage or a tier the freshness order applies, the classic flag included', () => {
+    const classic = row(card('ready', { classic: true, score: score(40) }));
+    const normal = row(card('ready', { score: score(80) }));
+    const tiered = row(card('ready', { score: score(30) }), { tier: 'rising' });
+    expect(ids(rankClips([normal, classic, tiered], 'freshness'))).toEqual(ids([tiered, classic, normal]));
+  });
+
   it('is the score order when no clip has a freshness, and the default order is still the score', () => {
     const rows = [fresh(null, 60), fresh(null, 90), fresh(null, 75)];
     expect(ids(rankClips(rows, 'freshness'))).toEqual(ids(rankClips(rows, 'score')));
