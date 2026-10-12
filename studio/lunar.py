@@ -22,8 +22,8 @@ cannot read.
 call still counts. So: requests are ``CALL_SPACING_S`` (16 s) apart, measured from the END of the previous request (a slow answer
 cannot bunch the next ones into a minute); the handshake is paced like a call (the first call waits 16 s after it) but not counted
 (it is not a metered tool call as far as the capture of 8 Oct showed). A refused call is never retried in the same minute (the
-next request waits 60 s from the refusal, or the 429's ``Retry-After`` when longer, up to 5 minutes) and two refusals in a row stop
-the client for the run; a refused handshake counts as a refusal too. A refusal is an HTTP 429, a JSON-RPC error or an ``isError``
+next request waits 60 s from the refusal, or the 429's ``Retry-After`` when longer; one over 5 minutes stops the client for the run)
+and two refusals in a row stop it too; a refused handshake counts as a refusal too. A refusal is an HTTP 429, a JSON-RPC error or an ``isError``
 result that says rate limit, or an ordinary answer with no table that says so (the exact form is not known). The client's ``cap``
 is the calls it may make: ``hits.lunar_daily_cap`` (40 by default) less what earlier runs of the London day made (the pull logs each
 run's calls as a ``hits`` run), leaving 60 of the 100 for the owner's MCP use.
@@ -75,7 +75,7 @@ INTERVAL = "1m"  # daily rows for the last month
 NETWORK = "tiktok"  # the free answers carried every network anyway (research 3.1); the TikTok column is the one read
 CALL_SPACING_S = 16.0  # 4 calls a minute
 REFUSAL_COOLDOWN_S = 60.0  # a refused call is not retried in the same minute
-RETRY_AFTER_MAX_S = 300.0  # a 429's Retry-After is honoured up to this (the job has 30 minutes)
+RETRY_AFTER_MAX_S = 300.0  # a 429's Retry-After is waited out up to this (the job has 30 minutes); a longer one stops the client
 REFUSALS_STOP = 2  # refused this often in a row: no more calls this run
 DEFAULT_CAP = 40  # hits.lunar_daily_cap
 KEY_MAX = 80  # the longest trend key asked for
@@ -528,10 +528,14 @@ class LunarCrush:
             self._sleep(due - now)
 
     def _refused(self, retry_after: float | None = None) -> None:
-        """A call was refused: no more calls this minute (longer when the refusal said so, up to ``RETRY_AFTER_MAX_S``)."""
+        """A call was refused: no more calls this minute, or as long as the refusal's ``Retry-After`` says. A wait over
+        ``RETRY_AFTER_MAX_S`` is kept in full and stops the client for the run: the job would not outlast it, and a call made
+        before it is up is certain to be refused (and counted)."""
         self._refusals += 1
-        wait = min(max(retry_after or 0.0, REFUSAL_COOLDOWN_S), RETRY_AFTER_MAX_S)
+        wait = max(retry_after or 0.0, REFUSAL_COOLDOWN_S)
         self._cool_until = self._clock() + wait
+        if wait > RETRY_AFTER_MAX_S:
+            self._stopped = f"asked to wait {wait:.0f} s before the next call"
         if self._refusals >= REFUSALS_STOP:
             self._stopped = f"refused {self._refusals} times in a row"
 

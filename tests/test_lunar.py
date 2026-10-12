@@ -414,8 +414,8 @@ def test_an_answer_with_a_table_that_mentions_the_rate_limit_is_not_a_refusal():
     assert "Rate Limit Day" in client.keyword_time_series("a") and client._refusals == 0
 
 
-@pytest.mark.parametrize("header, waited", [("120", 120.0), ("5", 60.0), ("99999", 300.0), ("soon", 60.0), (None, 60.0)])
-def test_a_429_with_retry_after_waits_that_long_never_less_than_a_minute_and_never_more_than_five(header, waited):
+@pytest.mark.parametrize("header, waited", [("120", 120.0), ("5", 60.0), ("300", 300.0), ("soon", 60.0), (None, 60.0)])
+def test_a_429_with_retry_after_waits_that_long_and_never_less_than_a_minute(header, waited):
     clock = Clock()
     server = McpServer(clock)
     server.answers.append(httpx.Response(429, json={"error": "slow"}, headers={"Retry-After": header} if header else {}))
@@ -424,6 +424,20 @@ def test_a_429_with_retry_after_waits_that_long_never_less_than_a_minute_and_nev
         client.keyword_time_series("a")
     client.keyword_time_series("b")
     assert server.call_times[1] - server.call_times[0] == waited
+
+
+def test_a_retry_after_over_five_minutes_sets_the_full_cool_down_and_the_call_is_not_repeated_in_this_run():
+    clock = Clock()
+    server = McpServer(clock)
+    server.answers.append(httpx.Response(429, json={"error": "slow"}, headers={"Retry-After": "3600"}))
+    client = server.client(clock)
+    with pytest.raises(LunarError) as first:
+        client.keyword_time_series("a")
+    assert first.value.refused is True and client._cool_until == clock.now + 3600.0  # the full hour, not the clamp
+    slept = list(clock.slept)
+    with pytest.raises(LunarError) as again:
+        client.keyword_time_series("b")
+    assert "stopped" in str(again.value) and len(server.tool_calls()) == 1 and clock.slept == slept  # no call, no wait
 
 
 def test_two_refusals_in_a_row_stop_the_client_for_the_run():
