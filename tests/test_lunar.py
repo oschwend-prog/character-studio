@@ -139,6 +139,7 @@ def test_a_series_that_stops_long_before_yesterday_is_read_as_of_yesterday_so_a_
     curve = trend_curve(rows, as_of=date(2026, 10, 6))  # read on 7 Oct: yesterday is 6 Oct
     assert curve.stage == "dead" and curve.days_since_peak == 24 and curve.peak_day == date(2026, 9, 12) and curve.ratio < 0.01
     assert curve.smoothed[-1][0] == date(2026, 10, 6)  # padded with days of nothing up to yesterday
+    assert curve.padded == 23 and trend_curve(rows).padded == 0  # the 23 days from 13 Sep to 6 Oct are not real rows
 
 
 def test_a_part_day_dated_after_as_of_is_left_out_so_it_cannot_turn_rising_into_fading():
@@ -582,6 +583,20 @@ def test_whatever_goes_wrong_while_reading_an_answer_is_unknown(monkeypatch):
     server = McpServer()
     monkeypatch.setattr(lunar, "trend_curve", lambda rows, as_of=None: (_ for _ in ()).throw(RuntimeError("boom")))
     assert gate_for(server).read("a").stage == "unknown"
+
+
+def test_a_series_that_stopped_is_unknown_never_dead_because_missing_rows_may_be_a_data_lag():
+    server = McpServer()
+    stopped = "| time | tiktok_interactions |\n|---|---|\n" + "".join(
+        f"| 2026-09-{8 + i:02d} | {v} |\n" for i, v in enumerate([100, 200, 5000, 30_000, 12_000, 6000])
+    )  # 8 to 13 Sep: padded to 6 Oct it would read dead
+    server.answers += [rpc_text(stopped), rpc_text(fixture("keyword_time_series_patient_zero"))]
+    gate = gate_for(server)
+    stale = gate.read("small dance", as_of=date(2026, 10, 6))
+    assert stale.stage == "unknown" and stale.ratio is None and "stopped" in stale.reason and "23 days" in stale.reason
+    real = gate.read("patient zero", as_of=date(2026, 10, 7))  # the series ends on 7 Oct: nothing padded, a real dead trend
+    assert (real.stage, real.days_since_peak) == ("dead", 9) and real.ratio < 0.2
+    assert gate.summary()["stages"] == {"unknown": 1, "dead": 1}
 
 
 def test_the_summary_counts_stages_and_calls():

@@ -1009,7 +1009,7 @@ def test_a_key_is_checked_once_for_the_run_however_many_hits_ride_it():
     assert {drop_of(store, f)["days_since_trend_peak"] for f in run["filed"]} == {4}
 
 
-def test_a_trend_whose_series_stopped_weeks_ago_is_read_as_of_yesterday_and_so_is_dead_not_a_peak():
+def test_a_trend_whose_series_stopped_weeks_ago_is_unknown_so_it_is_filed_not_skipped_dismissed_or_called_a_peak():
     class Client:
         calls = 1
 
@@ -1021,10 +1021,28 @@ def test_a_trend_whose_series_stopped_weeks_ago_is_read_as_of_yesterday_and_so_i
             return text
 
     store = roster_store()
-    stored(store, 1, "reginald", 90, sound="Small Dance")
-    gate = lunar.TrendGate(Client())
-    run = hits.file_hits(store, CONFIG, NOW, gate=gate)  # NOW is 8 Oct: the latest full day is 7 Oct
-    assert run["skipped_dead"] == 1 and run["filed"] == [] and run["trend"]["stages"] == {"dead": 1}
+    small = stored(store, 1, "reginald", 90, sound="Small Dance")
+    run = hits.file_hits(store, CONFIG, NOW, gate=lunar.TrendGate(Client()))  # NOW is 8 Oct: the latest full day is 7 Oct
+    assert run["skipped_dead"] == 0 and run["dismissed"] == [] and run["trend"]["stages"] == {"unknown": 1}
+    assert [f["hit_id"] for f in run["filed"]] == [small.id] and drop_of(store, run["filed"][0])["trend_stage"] == "unknown"
+    assert store.get_hit(small.id).status == "dropped"
+
+
+def test_a_real_dead_trend_under_a_fifth_of_its_peak_is_dismissed_through_the_whole_gate():
+    class Client:
+        calls = 1
+
+        def keyword_time_series(self, keyword):  # patient zero ends on 7 Oct: the day before NOW, nothing padded
+            return lunar_fixture("keyword_time_series_patient_zero")
+
+        def scrub(self, text):
+            return text
+
+    store = roster_store()
+    gone = stored(store, 1, "reginald", 90, sound="Patient Zero")
+    run = hits.file_hits(store, CONFIG, NOW, gate=lunar.TrendGate(Client()))
+    assert run["skipped_dead"] == 1 and run["filed"] == [] and store.get_hit(gone.id).status == "dismissed"
+    assert run["dismissed"][0]["reason"].startswith("dead trend: 9 days past its peak, now at ")
 
 
 def test_the_gate_is_asked_as_of_yesterday_in_london():

@@ -32,14 +32,16 @@ run's calls as a ``hits`` run), leaving 60 of the 100 for the owner's MCP use.
 column when the table has no TikTok column), the mean centred on the day (a day at an end of the series has one neighbour, so the
 peak is the day it happened on, not a day later). Days missing between two rows count as nothing posted. LunarCrush tracks a
 sample of posts (4-11 TikTok posts a day for "single ladies"), which is why the mean is taken. The latest day is the last full
-day (``as_of``, yesterday in London: today's part day is not in it). A series whose last row is more than ``STALE_DAYS`` (2)
-before it has stopped (a dead small trend gets no row on the days nobody posted about it), so the days up to ``as_of`` count as
-nothing posted; a last row 2 days behind is only LunarCrush's usual lag. Stages, in this order:
+day (``as_of``, yesterday in London: rows dated after it, today's part day, are left out). A series whose last row is more than
+``STALE_DAYS`` (2) before it has stopped (a dead small trend gets no row on the days nobody posted about it): the days up to
+``as_of`` are padded as nothing posted so the curve is not read as of its last row (``Curve.padded``), but the gate reads such a
+series as *unknown*, never ``dead``, because missing rows can also be a data lag or a day with no sampled post; a last row 2 days
+behind is only LunarCrush's usual lag. Stages, in this order:
 
 - ``rising``: the latest day is at 90% of the peak or more (``NEAR_PEAK``) and the last 3 days climb;
 - ``peak``: otherwise, the peak is on the latest day or the day before;
 - ``fading``: otherwise, the peak was 7 or fewer days ago, or the latest day is at 50% or more of the peak (P5 (a) and (b));
-- ``dead``: neither. P5: a dead trend is not filed.
+- ``dead``: neither. P5: a dead trend is not filed (only from a series that reaches ``as_of``).
 
 ``days_since_peak`` counts from the peak day to the latest day. A series with no signal (every day nothing) is no curve at all,
 not a dead trend: a sound LunarCrush does not track is *unknown*, never blocked.
@@ -263,7 +265,8 @@ def parse_keyword_series(text: str) -> list[Row]:
 class Curve:
     """What ``trend_curve`` read: ``stage`` (one of ``STAGES``), ``days_since_peak`` (from the peak day to the latest day),
     the 3-day-smoothed ``peak_value`` and ``latest_value``, ``ratio`` = latest / peak, ``source`` (``tiktok`` or ``total``: the
-    column read) and the whole ``smoothed`` series ``((day, value), ...)``."""
+    column read), the whole ``smoothed`` series ``((day, value), ...)`` and ``padded``, the days at its end that are not rows of the
+    answer but days of nothing posted added because the series had stopped (0 for a series that reaches ``as_of``, or its usual lag)."""
 
     stage: str
     days_since_peak: int
@@ -273,6 +276,7 @@ class Curve:
     ratio: float
     source: str
     smoothed: tuple[tuple[date, float], ...]
+    padded: int = 0
 
 
 def source_of(rows: Iterable[Row]) -> str:
@@ -286,7 +290,8 @@ def trend_curve(rows: Iterable[Row], as_of: date | None = None) -> Curve | None:
 
     ``as_of`` is the latest full day (yesterday, London). A trend nobody posts about any more has no rows after its last post, so
     reading the series "as of its last row" would call a dead small trend a peak. When the last row is more than ``STALE_DAYS``
-    before ``as_of`` the series has stopped: the days up to ``as_of`` are days of nothing posted. A last row at most that many
+    before ``as_of`` the series has stopped: the days up to ``as_of`` are days of nothing posted (``Curve.padded``; the gate calls
+    that reading unknown, not dead). A last row at most that many
     days behind is LunarCrush's usual lag and changes nothing; without ``as_of`` the series is read as of its last row. Rows dated
     after ``as_of`` (today's part day) are left out: a part day would drag the last smoothed value down."""
     rows = list(rows)
@@ -301,8 +306,9 @@ def trend_curve(rows: Iterable[Row], as_of: date | None = None) -> Curve | None:
     if len(by_day) < MIN_DAYS:
         return None
     first, last = min(by_day), max(by_day)
+    padded = 0
     if as_of is not None and (as_of - last).days > STALE_DAYS:
-        last = as_of
+        padded, last = (as_of - last).days, as_of
     days = [first + timedelta(days=i) for i in range((last - first).days + 1)]
     values = [float(by_day.get(d, 0)) for d in days]
     smoothed = []
@@ -325,7 +331,7 @@ def trend_curve(rows: Iterable[Row], as_of: date | None = None) -> Curve | None:
         stage = "fading"
     else:
         stage = "dead"
-    return Curve(stage, since, days[peak_i], peak_value, latest, ratio, source, tuple(zip(days, smoothed)))
+    return Curve(stage, since, days[peak_i], peak_value, latest, ratio, source, tuple(zip(days, smoothed)), padded)
 
 
 # ---- the trend key of a hit -------------------------------------------------------------------------------------------------------------
@@ -639,6 +645,8 @@ class TrendGate:
             return Reading(UNKNOWN, reason="the answer could not be read")
         if curve is None:
             return Reading(UNKNOWN, reason="the curve has no signal to judge")
+        if curve.padded:  # missing rows may be a data lag or a day with no sampled post: not evidence that the trend is dead
+            return Reading(UNKNOWN, reason=f"the series stopped {curve.padded} days before the latest full day: a data lag is not a dead trend")
         return Reading(curve.stage, curve.days_since_peak, ratio=curve.ratio)
 
     def summary(self) -> dict[str, Any]:

@@ -77,7 +77,8 @@ looked up on LunarCrush: its sound's title (not a generic "original sound - <han
 is not checked. One check a key per run. A ``dead`` trend is not filed (``skipped_dead`` in the JSON; the hit stays ``new``, its
 room goes to the next one), unless its latest day is under a fifth of its peak (``DEAD_DISMISS_RATIO``): that hit is marked
 ``dismissed`` (as "Not for us", so it is not asked about again every day while it stays fresh) and its reason is in the JSON's
-``dismissed``; anything else is filed with ``trend_stage`` (``rising``, ``peak``, ``fading``, ``classic`` or
+``dismissed``. Only a series that reaches yesterday can be ``dead``: one that stopped earlier is ``unknown`` (a data lag is not a
+dead trend), so it is filed and never dismissed; anything else is filed with ``trend_stage`` (``rising``, ``peak``, ``fading``, ``classic`` or
 ``unknown``), ``days_since_trend_peak`` (when measured) and ``sound_rising`` (the key was the sound and it is ``rising``) written
 onto the drop, the keys ``drop.learn_tags`` reads. Without ``LUNARCRUSH_API_KEY``, a refused call, the London day's
 ``hits.lunar_daily_cap`` (40 calls; a second run the same day gets what the earlier ones left, counted from the ``hits`` runs that
