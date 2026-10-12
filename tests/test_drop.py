@@ -696,6 +696,7 @@ def test_a_link_dropped_again_keeps_the_earlier_drops_keys_and_the_new_keys_win_
     earlier = {
         "state": "ready", "hooks": ["a", "b"], "window": {"start_s": 1, "length_s": 8}, "adjust": {"hook": "x"}, "own_footage": True,
         "score": 81, "hit_rules_version": 3, "auto_filed": True, "hit": {"id": "h", "lane": "general"}, "fetch_days": ["2026-10-10"],
+        "trend_stage": "rising", "days_since_trend_peak": 4, "sound_rising": True,  # the hits job's LunarCrush reading at filing (task 18)
         "job": {"holder": "run-7", "at": NOW.isoformat()}, "reason": "old", "character_by": "studio",
     }
     store.update_favorite(first.id, proposal={**first.proposal, "hold_reason": "x", "drop": {**first.proposal["drop"], **earlier}})
@@ -705,8 +706,9 @@ def test_a_link_dropped_again_keeps_the_earlier_drops_keys_and_the_new_keys_win_
     assert dup and again.id == first.id and again.status == "approved" and "hold_reason" not in again.proposal
     assert d["hooks"] == ["a", "b"] and d["window"] == {"start_s": 1, "length_s": 8} and d["adjust"] == {"hook": "x"}  # kept
     assert d["job"] == earlier["job"]  # a live worker's lease stays
-    for gone in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days"):  # describes the earlier drop, not this one
+    for gone in drop.MERGE_STRIP:  # describes the earlier drop, not this one
         assert gone not in d, gone
+    assert set(drop.MERGE_STRIP) == {"score", "hit_rules_version", "auto_filed", "hit", "fetch_days", *drop.TREND_TAGS}
     assert d["state"] == "checking" and d["kind"] == "link" and d["reason"] is None and d["own_footage"] is False  # the new keys win
     assert d["character_by"] == "owner" and d["at"] == later.isoformat() and again.proposal["decision"]["at"] == later.isoformat()
 
@@ -715,8 +717,11 @@ def test_a_new_drops_own_tags_win_over_the_strip_and_a_drop_that_is_no_object_co
     store, _ = world
     first, _ = add_drop(store, "reginald", TIKTOK, NOW)
     store.update_favorite(first.id, proposal={**first.proposal, "drop": {**first.proposal["drop"], "auto_filed": True, "score": 5}})
-    again, _ = add_drop(store, "reginald", TIKTOK, NOW, auto_filed=True, hit={"id": "h2", "lane": "reginald"})
+    again, _ = add_drop(
+        store, "reginald", TIKTOK, NOW, auto_filed=True, hit={"id": "h2", "lane": "reginald"}, trend={"trend_stage": "peak", "sound_rising": False},
+    )
     assert again.proposal["drop"]["auto_filed"] is True and again.proposal["drop"]["hit"] == {"id": "h2", "lane": "reginald"}
+    assert again.proposal["drop"]["trend_stage"] == "peak" and again.proposal["drop"]["sound_rising"] is False  # the new reading wins
     assert "score" not in again.proposal["drop"]
     for junk in (None, [], "text", 7):  # a drop the studio never wrote: replaced, not merged
         store.update_favorite(first.id, proposal={**again.proposal, "drop": junk})
@@ -3165,12 +3170,55 @@ def test_a_check_with_four_arms_stores_four_hooks_and_the_adjust_sheet_gets_all_
     assert d["hooks"] == hooks and d["deconstruct"]["hook_patterns"] == patterns and d["hook"] == hooks[0]
 
 
-def test_an_answer_that_misses_an_arm_breaks_the_rules_the_client_checks_it_by(world, portrait, experiments_on):
+def answering_client(*answers) -> tuple[gemini.GeminiClient, list]:
+    """The real client over a mock transport answering with ``answers`` in turn (nothing leaves the machine); the list is the requests."""
+    import httpx
+
+    queue, seen = list(answers), []
+
+    def handler(request):
+        seen.append(request)
+        body = {"candidates": [{"content": {"role": "model", "parts": [{"text": json.dumps(queue.pop(0))}]}, "finishReason": "STOP"}]}
+        return httpx.Response(200, json=body)
+
+    return gemini.GeminiClient("k", transport=httpx.MockTransport(handler), sleep=lambda s: None), seen
+
+
+def test_a_first_answer_that_misses_an_arm_is_asked_again_and_a_second_miss_still_ends_ready(world, portrait, experiments_on):
+    """Final review I1: the arm coverage fails open. The retry names the gap; if the model still misses, that arm has no candidate,
+    the check ends ready (not failed, not red) and the draw falls through to an arm that has one."""
     store, storage = world
     pid = drop_file(store, storage, portrait)
-    wrong = deconstruct(hook_patterns=["understatement", "false-premise", "understatement"])  # no trend-label although the clip has a moment
-    out = process_drop(store, storage, pid, gemini_client=FakeGemini(wrong), now=B_DAY, job="t")  # FakeGemini runs the check function
-    assert out.state == "failed" and "hook_patterns must include trend-label" in out.reason
+    gap = deconstruct(hook_patterns=["understatement", "false-premise", "understatement"])  # no trend-label although the clip has a moment
+    client, seen = answering_client(gap, gap)
+    out = process_drop(store, storage, pid, gemini_client=client, now=B_DAY, job="t")
+    assert out.ok and out.state == "ready" and len(seen) == 2  # asked once more, then taken as it is
+    assert "hook_patterns must include trend-label" in json.loads(seen[1].content)["contents"][0]["parts"][1]["text"]
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["state"] == "ready" and d["reason"] is None and d["hooks"] == gap["hooks"]
+    look = d["deconstruct"]
+    state = drop.learn.BanditState(readings={"reginald": 20})
+    registry = drop.experiments.load_experiments()
+    chosen = {
+        drop.learn.choose_hook(
+            store, registry, "reginald", f"pick-{i}", look["hooks"], look["hook_patterns"], moment=True, now=B_DAY, state=state,
+        ).pattern
+        for i in range(60)
+    }
+    assert chosen == {"understatement", "false-premise"}  # trend-label has no candidate: the others are drawn, never "no choice"
+
+
+def test_an_answer_with_every_arm_is_taken_at_once_and_a_broken_shape_still_fails_the_check(world, portrait, experiments_on):
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    good = deconstruct(hook_patterns=["understatement", "false-premise", "trend-label"])
+    client, seen = answering_client(good)
+    assert process_drop(store, storage, pid, gemini_client=client, now=B_DAY, job="t").state == "ready" and len(seen) == 1
+    other = drop_file(store, storage, portrait)
+    short = deconstruct(hooks=["One.", "Two."], hook_patterns=["understatement", "false-premise"])  # 2 hooks where 3 are asked
+    client, seen = answering_client(short, short)
+    out = process_drop(store, storage, other, gemini_client=client, now=B_DAY, job="t")
+    assert out.state == "failed" and "hooks must be 3 lines" in out.reason and len(seen) == 2
 
 
 def test_a_bandit_draw_always_finds_a_candidate_when_the_check_wrote_one_hook_per_arm(world, portrait, experiments_on):

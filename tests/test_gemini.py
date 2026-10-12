@@ -801,12 +801,14 @@ def google_429(*quota_ids: str, model: str = "gemini-3.8-flash", metric: str = _
     }}
 
 
-def _raises_after_429(clip, body) -> GeminiError:
+def _raises_after_429(clip, body) -> tuple[GeminiError, Fake, list[float]]:
+    """The error a deconstruct ends with when every model answers ``body`` with a 429, the requests made and the waits slept."""
     models = 1 + len(FALLBACK_MODELS)
-    fake = Fake(*[(429, body)] * ((len(BUSY_WAITS_S) + 1) * models))  # a 429 is "busy": asked again after each wait, model by model
+    waits: list[float] = []
+    fake = Fake(*[(429, body)] * ((len(BUSY_WAITS_S) + 1) * models))  # enough for a 429 asked again after each wait, model by model
     with pytest.raises(GeminiError) as info:
-        deconstruct(client(fake), clip, REGINALD)
-    return info.value
+        deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
+    return info.value, fake, waits
 
 
 @pytest.mark.parametrize(
@@ -819,8 +821,13 @@ def _raises_after_429(clip, body) -> GeminiError:
     ],
 )
 def test_a_429_is_classified_from_the_whole_body_and_the_error_starts_with_the_tag(clip, quota_ids, window):
-    err = _raises_after_429(clip, google_429(*quota_ids))
+    err, fake, waits = _raises_after_429(clip, google_429(*quota_ids))
     assert isinstance(err, gemini.GeminiQuota) and err.window == window and err.status == 429
+    models = 1 + len(FALLBACK_MODELS)
+    if window == "day":  # a day's quota does not clear in a minute: raised before the waits, the other models still asked
+        assert waits == [] and _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS]
+    else:  # a rate limit does: each model is asked again after each wait
+        assert waits == list(BUSY_WAITS_S) * models and len(fake.requests) == (len(BUSY_WAITS_S) + 1) * models
     assert str(err).startswith(f"[{gemini.QUOTA_TAGS[window]}] Gemini answered HTTP 429: ")  # drop.py keeps the first 140 characters
     assert gemini.QUOTA_TAGS == {"day": "quota:day", "minute": "quota:minute"}
     assert quota_ids[0] not in str(err) and KEY not in str(err)  # the 300-character body cut the quota id off: the tag is what is left
@@ -832,8 +839,9 @@ def test_a_429_that_names_no_window_stays_a_plain_error(clip):
         "rate limited",
         google_429("GenerateRequestsForSomethingElse"),  # a quota id that says neither minute nor day
     ):
-        err = _raises_after_429(clip, body)
+        err, fake, waits = _raises_after_429(clip, body)
         assert type(err) is GeminiError and err.status == 429 and str(err).startswith("Gemini answered HTTP 429: "), body
+        assert waits == list(BUSY_WAITS_S) * (1 + len(FALLBACK_MODELS))  # no window named: asked again after every wait, as before
 
 
 @pytest.mark.parametrize(
@@ -929,6 +937,45 @@ def test_an_answer_missing_an_arm_gets_the_one_second_chance_with_the_gap_named(
     assert out["hook_patterns"] == FOUR["hook_patterns"] and len(fake.requests) == 2
     retry = json.loads(fake.requests[1].content)["contents"][0]["parts"][1]["text"]
     assert "hook_patterns must include trend-label" in retry
+    # the retry is held to the shape alone: an arm the model still misses has no candidate, and the check ends usable (fail open)
     fake = Fake((200, answer(gap)), (200, answer(gap)))
-    with pytest.raises(gemini.GeminiUnexpected, match="broke the rules twice"):
+    out = deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)
+    assert out["hook_patterns"] == gap["hook_patterns"] and out["hooks"] == FOUR["hooks"] and len(fake.requests) == 2  # no third call
+    # a broken shape still fails twice: the retry is not a free pass
+    short = {**gap, "hooks": gap["hooks"][:3], "hook_patterns": gap["hook_patterns"][:3]}
+    fake = Fake((200, answer(gap)), (200, answer(short)))
+    with pytest.raises(gemini.GeminiUnexpected, match="broke the rules twice.*hooks must be 4 lines"):
         deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)
+    # a first answer with a gap AND another break: the second fixes the break, the gap may stay
+    long_title = {**gap, "caption": {**GOOD["caption"], "title": "A title that is far too long for the forty character rule"}}
+    fake = Fake((200, answer(long_title)), (200, answer(gap)))
+    assert deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)["hook_patterns"] == gap["hook_patterns"]
+    # without the gap on the first answer there is no second call at all
+    fake = Fake((200, answer({**GOOD, **FOUR})))
+    deconstruct(client(fake), clip, REGINALD, hook_arms=FRANZ_ARMS)
+    assert len(fake.requests) == 1
+
+
+def test_the_arm_coverage_can_be_left_out_of_the_check_and_the_shape_stays():
+    ok = {**GOOD, **FOUR}
+    gap = {**ok, "hook_patterns": ["ego-claim", "when-relatable", "myth-bust", "myth-bust"]}
+    assert gemini.deconstruct_problems(gap, REGINALD, hook_arms=FRANZ_ARMS, strict_arms=False) == []
+    assert gemini.deconstruct_problems(gap, REGINALD, hook_arms=FRANZ_ARMS) != []  # strict is the default
+    broken = gemini.deconstruct_problems(GOOD, REGINALD, hook_arms=FRANZ_ARMS, strict_arms=False)  # 3 hooks where 4 are asked
+    assert any(p.startswith("hooks must be 4 lines") for p in broken)
+
+
+def test_a_day_window_429_skips_the_waits_but_the_fallback_models_are_still_asked(clip):
+    """Final review M1: each model has its own daily quota, so the next model may answer; sleeping 65 s first only wasted the worker."""
+    waits: list[float] = []
+    day = google_429("GenerateRequestsPerDayPerProjectPerModel-FreeTier")
+    fake = Fake((429, day), (200, answer(GOOD)))
+    out = deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
+    assert out["caption"]["title"] == GOOD["caption"]["title"] and waits == [] and _models(fake) == [DEFAULT_MODEL, FALLBACK_MODELS[0]]
+    # a day quota on the chosen model, a rate limit on the next one: only the rate limit is waited out; the first error is what fails
+    minute = google_429("GenerateRequestsPerMinutePerProjectPerModel-FreeTier")
+    waits.clear()
+    fake = Fake((429, day), *[(429, minute)] * (len(BUSY_WAITS_S) + 1), *[(429, day)] * len(FALLBACK_MODELS[1:]))
+    with pytest.raises(gemini.GeminiQuota) as info:
+        deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
+    assert info.value.window == "day" and waits == list(BUSY_WAITS_S)

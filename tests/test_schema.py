@@ -1811,9 +1811,9 @@ def test_0016_hits_spend_is_one_row_per_london_day_that_no_api_role_can_touch():
 MERGE_PATH = MIGRATIONS / "0017_add_drop_merge.sql"
 MERGE_SQL = MERGE_PATH.read_text() if MERGE_PATH.is_file() else ""  # read lazily: a missing file fails these tests, not the module
 MERGE_CODE = re.sub(r"--[^\n]*", "", MERGE_SQL)
-# the keys a fresh drop must not inherit: the check's score and rules version, the hits job's tags, the fetch-days counter (`job`
-# stays: it holds a live worker's lease)
-MERGE_STRIP = "- 'score' - 'hit_rules_version' - 'auto_filed' - 'hit' - 'fetch_days'"
+# the keys a fresh drop must not inherit: the check's score and rules version, the hits job's tags, the fetch-days counter and the
+# LunarCrush trend reading it took at filing (task 18: stale by the time the owner drops the link himself); `job` stays: a live lease
+MERGE_STRIP = "- 'score' - 'hit_rules_version' - 'auto_filed' - 'hit' - 'fetch_days' - 'trend_stage' - 'days_since_trend_peak' - 'sound_rising'"
 MERGE_EXPR = (
     "(case when jsonb_typeof(fa.proposal -> 'drop') = 'object'\n"
     f"                         then (fa.proposal -> 'drop') {MERGE_STRIP}\n"
@@ -1834,6 +1834,9 @@ def test_0017_is_add_drop_and_its_grants_only():
     assert not re.search(r"\b(?:public|auth|storage|extensions|vault|net)\.[a-z_]+", MERGE_CODE)  # nothing outside schema studio
     for said in ("WHY.", "studio_0017_add_drop_merge", "AFTER 0016", "TO UNDO", "Re-run safe", "hkcafvzjwkeibbmvskko"):
         assert said in MERGE_SQL, said
+    strip_list = MERGE_SQL.split("THE STRIP LIST", 1)[1].split("-- Additive", 1)[0]  # the header paragraph names every stripped key
+    for key in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days", "trend_stage", "days_since_trend_peak", "sound_rising"):
+        assert f"`{key}`" in strip_list, key
 
 
 def test_0017_add_drop_is_0015s_word_for_word_but_the_duplicate_branch_merges_the_earlier_drop():
@@ -1852,7 +1855,7 @@ def test_0017_add_drop_is_0015s_word_for_word_but_the_duplicate_branch_merges_th
     assert "|| drop_)" in new and new.index("fa.proposal -> 'drop'") < new.index("|| drop_)")
     assert "else '{}'::jsonb end" in new
     # what the earlier drop worked out for itself does not outlive a fresh drop (final review M1); `job` is kept (a live lease)
-    for key in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days"):
+    for key in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days", "trend_stage", "days_since_trend_peak", "sound_rising"):
         assert f"- '{key}'" in new, key
     assert "- 'job'" not in new and "- 'hooks'" not in new and "- 'adjust'" not in new and "- 'make'" not in new
     # only the duplicate branch merges: the two inserts still write the new drop as it is

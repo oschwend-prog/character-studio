@@ -822,9 +822,10 @@ def next_engagement(store: Store, slug: str, clip_id: str | None = None) -> str:
 
 # ---- adding a drop (the terminal's RPC does the same: studio.add_drop, migration 0012) ----------------------------------------
 
-# What a link dropped again does not inherit from the drop it files over (migration 0017's strip list, final review M1): the check's
-# score and rules version, and the hits job's tags. `job` stays: it holds a live worker's lease.
-MERGE_STRIP = ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days")
+# What a link dropped again does not inherit from the drop it files over (migration 0017's strip list, final review M1 and task 19
+# review M2): the check's score and rules version, the hits job's tags and the trend reading it took at filing (TREND_TAGS).
+# `job` stays: it holds a live worker's lease.
+MERGE_STRIP = ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days", "trend_stage", "days_since_trend_peak", "sound_rising")
 
 
 def add_drop(

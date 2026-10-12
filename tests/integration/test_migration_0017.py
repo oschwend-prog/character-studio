@@ -70,6 +70,7 @@ def test_the_earlier_drops_score_and_the_hits_jobs_tags_do_not_outlive_a_fresh_d
     first = add_drop(db, "reginald", TIKTOK)
     earlier = {
         "state": "ready", "hooks": ["a"], "score": 81, "hit_rules_version": 3, "auto_filed": True, "hit": {"views": 9}, "fetch_days": ["2026-10-10"],
+        "trend_stage": "rising", "days_since_trend_peak": 4, "sound_rising": True,
         "job": {"holder": "run-7", "at": "2026-10-12T10:00:00+00:00"},
     }
     db.execute(
@@ -77,7 +78,7 @@ def test_the_earlier_drops_score_and_the_hits_jobs_tags_do_not_outlive_a_fresh_d
         [json.dumps(earlier), first["id"]],
     )
     d = add_drop(db, "reginald", TIKTOK)["proposal"]["drop"]
-    for gone in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days"):
+    for gone in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days", "trend_stage", "days_since_trend_peak", "sound_rising"):
         assert gone not in d, gone
     assert d["hooks"] == ["a"] and d["job"] == earlier["job"] and d["state"] == "checking"  # the rest stays, a live lease included
 
