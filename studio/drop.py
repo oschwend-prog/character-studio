@@ -22,10 +22,13 @@ the request and fires the ``studio-drop`` GitHub workflow, which runs ``studio d
 
 **A failed check retries itself when the cause is temporary** (task 12): the sweep (never the Mac's run) takes a drop ``failed``
 in its CHECK (reason "the look at the clip failed ...") again when ``transient_kind`` of the reason is ``timeout`` / ``busy``
-(Gemini timed out, answered 5xx or was busy: at most ``AUTO_RETRY_MAX`` automatic retries) or ``quota`` (HTTP 429 "exceeded your
-current quota": only once the quota has reset, i.e. after the latest 08:00 London). ``drop.auto_retries`` counts them and
-``drop.auto_retry_at`` stamps the last; the owner's Try again (``requested.process`` after that stamp) starts the count over. A
-failed MAKE is never retried by itself (it spends credits): the owner taps Make it again.
+(Gemini timed out, answered 5xx, was busy or the network dropped: at most ``AUTO_RETRY_MAX`` automatic retries) or ``quota`` (HTTP
+429 "exceeded your current quota": only once the quota has reset, i.e. after the latest 08:00 London, and at most
+``AUTO_RETRY_QUOTA_MAX`` times, one a London day). ``drop.auto_retries`` counts them (both kinds in one count) and
+``drop.auto_retry_at`` stamps the last; the owner's Try again (``requested.process`` after that stamp) starts the count over. Three
+sweep workers list the same failed drop: only the first retakes it, the others find it has moved on (``drop.at`` or
+``drop.auto_retry_at`` differs from the listed row: ``failure_stamp``), so one sweep spends one retry per drop. A failed MAKE is
+never retried by itself (it spends credits): the owner taps Make it again.
 
 **Whose clip it is** (owner 2026-10-06: "the core of the terminal is dropping our characters into my saved videos"). A drop is
 filed for a character the owner chose (``drop['character_by'] = 'owner'``) or for none: then the studio recommends one
@@ -201,6 +204,7 @@ PROCESS_FROM = frozenset({"uploading", "checking", "waiting"})
 CHECK_REQUEST_FROM = PROCESS_FROM | {"failed"}  # request_job(pick, 'process') (migration 0012) takes these states
 CHECK_FAILED = "the look at the clip failed"  # how the reason of a failed CHECK starts (a failed make never says it)
 AUTO_RETRY_MAX = 2  # a timeout / 5xx / busy failure of a check is taken again by the sweep this many times, then the owner's Try again
+AUTO_RETRY_QUOTA_MAX = 3  # a daily-quota failure: one retry a London day (after the reset), at most this many (same drop.auto_retries)
 QUOTA_RESET_HOUR = 8  # Google resets the daily quota at midnight Pacific = 08:00 London (07:00 in the weeks the clocks differ)
 PARTS = ("cameo", "featured", "star")
 ADJUST_KEYS = ("star", "part", "gadgets", "hook", "start_s", "length_s", "crop_x")
@@ -309,7 +313,10 @@ def _unready(store: Store, pick: Favorite, now: datetime, **drop_changes: Any) -
 def job_id() -> str:
     """Who is running: the GitHub run (and, in a sweep, which of its parallel workers: ``STUDIO_WORKER``, the matrix value of
     ``studio-drop.yml``), else this machine and process. The lease (``claim``) knows its holder by this id, so the workers of
-    one run, which share the run id, must differ in it: two of them never check the same drop."""
+    one run, which share the run id, must differ in it: two of them never check the same drop. The workflow exports
+    ``STUDIO_WORKER`` on every run, a dispatched run (one pick) and the key check included (matrix value ``1``), so on GitHub even
+    a dispatched run is ``gh-<run>-<attempt>-w1`` (harmless: the id stays unique per run); only a run without the variable
+    (a test, a hand run) gets the bare ``gh-<run>-<attempt>``."""
     run = os.environ.get("GITHUB_RUN_ID")
     if not run:
         return f"{socket.gethostname()}-{os.getpid()}"
@@ -1143,6 +1150,7 @@ def process_drop(
     characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
     media_fallback: Any = None,
     auto_retry: bool = False,
+    listed: Mapping[str, str] | None = None,
 ) -> Outcome:
     """Check a dropped video (free) and make it ``ready`` (see the module doc). ``KeyError`` for an unknown pick, ``DropError``
     for a pick that is not a drop or not at a step a check runs from; ``StorageError`` when our own Storage fails. When the
@@ -1150,7 +1158,9 @@ def process_drop(
     ``auto_retry`` (the sweep, for a drop ``pending`` listed as ``failed``): a failed check that ``auto_retry_kind`` still allows
     goes back to ``checking`` under the lease (``drop.auto_retries`` + 1, ``drop.auto_retry_at``; ``requested`` untouched, so the
     owner's own Try again stays recognisable) and is checked again; otherwise it is left as it is (busy). Without it a failed
-    drop is refused, as ever.
+    drop is refused, as ever. ``listed`` (the sweep passes the row ``pending`` gave it): the failure as it was listed
+    (``failure_stamp``); read again under the lease, a drop whose ``at`` or ``auto_retry_at`` differs has moved on (another
+    worker retook it, and it failed again) and is left alone (busy): one sweep spends one automatic retry per drop.
     ``media_fallback`` (``studio.hits.ScrapeCreators``, the cloud jobs pass it when the key is set): a link yt-dlp cannot fetch
     is taken from ScrapeCreators' copy of that one post (``studio.fetch.fetch_pick_clip``)."""
     now = now or now_london()
@@ -1167,6 +1177,8 @@ def process_drop(
         fresh = _load(store, pick_id)
         now_state = drop_of(fresh)["state"]
         if retaking and now_state == "failed":
+            if listed is not None and not same_failure(listed, drop_of(fresh)):
+                return Outcome(pick_id, now_state, "another run already took this failed check again", detail={"busy": True})
             if auto_retry_kind(fresh, now) is None:
                 return Outcome(pick_id, now_state, "this failed check is not taken again by itself", detail={"busy": True})
             _update(
@@ -1582,6 +1594,11 @@ def make_drop(
     if not claim(store, pick_id, "make", job, now):
         return Outcome(pick_id, "making", "another run is making this video", detail={"busy": True})
     try:
+        # read again under the lease: a parallel worker may have made this drop (or the owner taken Make it back) since it was
+        # listed, and a stale listing must never pay Higgsfield twice
+        fresh = _load(store, pick_id)
+        if drop_of(fresh).get("state") != "making" or not owner_requested_make(fresh):
+            return Outcome(pick_id, drop_of(fresh).get("state"), "another run already made this video", detail={"busy": True})
         return _make(
             store, storage, pick_id, hf, gemini_client, prepare, generated_file, generated_credits, qa_answer, now,
             poll_timeout_s, preset, characters_dir,
@@ -1995,19 +2012,24 @@ def _fetch_age(pick: Favorite, now: datetime) -> tuple[int, str | None]:
 
 def transient_kind(reason: str) -> str | None:
     """Why a failed check failed, when the cause is temporary: ``"quota"`` (Gemini's daily quota: HTTP 429 "You exceeded your
-    current quota"), ``"timeout"`` (a timed-out call, or every model timed out) or ``"busy"`` (HTTP 5xx, another 429, "busy", "high
-    demand", "overloaded"); ``None`` for anything else (a refused key, a clip Gemini would not look at, an error of ours). The
-    reason is the one the drop recorded ("the look at the clip failed (...): tap Try again"). Pure: it reads the text only."""
+    current quota"), ``"timeout"`` (a timed-out call, or every model timed out) or ``"busy"`` (HTTP 5xx, any other 429 such as a
+    per-minute rate limit, "busy", "high demand", "overloaded", or the network dropping: ``ConnectError``, ``ReadError``,
+    ``WriteError``, ``RemoteProtocolError``, "connection", "network"); ``None`` for anything else (a refused key, a clip Gemini would not look at, an error of ours). The
+    reason is the one the drop recorded ("the look at the clip failed (...): tap Try again"). Pure: it reads the text only.
+    A 429 that names a per-minute limit is busy even with the quota wording (the day's quota is not gone: a retry in two hours
+    works); the 140 characters the reason keeps usually cut that name off, so the plain wording stays the daily quota."""
     if not isinstance(reason, str):
         return None
     low = reason.lower()
-    if "exceeded your current quota" in low:
+    if "exceeded your current quota" in low and not re.search(r"per[ _-]?minute", low):
         return "quota"
     if re.search(r"http (429|5\d\d)\b", low):  # an answer with a status comes first: a 504 "gateway timeout" is Gemini's, busy
         return "busy"
     if "timeout" in low or "timed out" in low:
         return "timeout"
-    return "busy" if any(w in low for w in ("busy", "high demand", "overloaded")) else None
+    if any(w in low for w in ("busy", "high demand", "overloaded", "connecterror", "readerror", "writeerror", "remoteprotocolerror", "connection", "network")):
+        return "busy"
+    return None
 
 
 def last_quota_reset(now: datetime) -> datetime:
@@ -2015,6 +2037,17 @@ def last_quota_reset(now: datetime) -> datetime:
     local = now.astimezone(LONDON)
     day: date = local.date() if local.time() >= time(QUOTA_RESET_HOUR) else local.date() - timedelta(days=1)
     return datetime.combine(day, time(QUOTA_RESET_HOUR), tzinfo=LONDON)
+
+
+def failure_stamp(d: Mapping[str, Any]) -> tuple[str, str]:
+    """When this failed drop failed (``drop.at``) and when the sweep last retook it (``drop.auto_retry_at``), as text ("" for
+    none). A retake that fails again moves both, so a drop whose stamp differs from the one listed has been retaken since."""
+    return str(d.get("at") or ""), str(d.get("auto_retry_at") or "")
+
+
+def same_failure(listed: Mapping[str, str], d: Mapping[str, Any]) -> bool:
+    """Whether the drop ``d`` (read now) is still the failure the sweep listed (``pending``'s ``failed_at`` / ``retried_at``)."""
+    return (listed.get("failed_at", ""), listed.get("retried_at", "")) == failure_stamp(d)
 
 
 def auto_retries_used(d: Mapping[str, Any]) -> int:
@@ -2035,7 +2068,8 @@ def auto_retry_kind(pick: Favorite, now: datetime) -> str | None:
     * only a drop ``failed`` with a check's reason (``CHECK_FAILED``): a make is never retried by itself (it costs credits);
     * a timeout / 5xx / busy failure: at most ``AUTO_RETRY_MAX`` times (``auto_retries_used``);
     * a daily-quota failure: once the quota has reset, i.e. the failure (``drop.at``) is before the latest 08:00 London
-      (``last_quota_reset``); once a day at most, so it is not capped."""
+      (``last_quota_reset``), so once a London day at most, and at most ``AUTO_RETRY_QUOTA_MAX`` times in all (the same
+      ``auto_retries`` count: a quota that never comes back is the owner's to look at, not a daily storm of retries)."""
     d = drop_of(pick)
     reason = d.get("reason")
     if d.get("state") != "failed" or pick.status not in ("approved", "queued") or not isinstance(reason, str):
@@ -2045,7 +2079,7 @@ def auto_retry_kind(pick: Favorite, now: datetime) -> str | None:
     kind = transient_kind(reason)
     if kind == "quota":
         failed = _moment(d.get("at"))
-        return kind if failed is not None and failed < last_quota_reset(now) else None
+        return kind if failed is not None and failed < last_quota_reset(now) and auto_retries_used(d) < AUTO_RETRY_QUOTA_MAX else None
     return kind if kind is not None and auto_retries_used(d) < AUTO_RETRY_MAX else None
 
 
@@ -2063,7 +2097,8 @@ def pending(
 
     For the cloud (no ``include_waiting``) a drop ``failed`` in its CHECK for a temporary cause is ``process`` again
     (``auto_retry_kind``: a Gemini timeout, 5xx or busy answer up to ``AUTO_RETRY_MAX`` times; the daily quota once it has reset);
-    ``process_drop(auto_retry=True)`` moves it back to ``checking`` when the run claims it. A failed make is never listed."""
+    ``process_drop(auto_retry=True)`` moves it back to ``checking`` when the run claims it. A failed make is never listed. Its row
+    also carries ``failed_at`` and ``retried_at`` (``failure_stamp``), so a worker can tell the failure it listed from a later one."""
     now = now or now_london()
     today = now.astimezone(LONDON).date().isoformat()
     out: list[tuple[datetime | None, dict[str, str]]] = []
@@ -2087,7 +2122,10 @@ def pending(
             continue
         if state == "failed":
             if not include_waiting and auto_retry_kind(f, now) is not None:
-                out.append((f.created_at, {"pick_id": f.id, "job": "process", "state": state}))
+                failed_at, retried_at = failure_stamp(d)  # the failure as listed: a worker that retakes it later compares
+                out.append((f.created_at, {
+                    "pick_id": f.id, "job": "process", "state": state, "failed_at": failed_at, "retried_at": retried_at,
+                }))  # fmt: skip
             continue
         if auto and include_waiting and state != "making":
             continue  # the cloud checks it; the Mac never fetches an auto-filed link
@@ -2395,11 +2433,16 @@ def pending_command(
 
 def _moved_on(store: Store, row: Mapping[str, str]) -> bool:
     """Whether the drop is no longer where the sweep listed it (a parallel worker finished, expired or skipped it meanwhile):
-    still approved or queued, and still in the state ``pending`` saw. A pick that has vanished is left to the job to report."""
+    still approved or queued, and still in the state ``pending`` saw. A failed check also has moved on when another worker retook
+    it since (it failed again, so it is ``failed`` still, but ``at`` / ``auto_retry_at`` differ from the listed row's). A pick that
+    has vanished is left to the job to report."""
     fresh = store.get_favorite(row["pick_id"])
     if fresh is None or not is_drop(fresh.proposal):
         return False
-    return fresh.status not in ("approved", "queued") or drop_of(fresh).get("state") != row["state"]
+    d = drop_of(fresh)
+    if fresh.status not in ("approved", "queued") or d.get("state") != row["state"]:
+        return True
+    return row["state"] == "failed" and not same_failure(row, d)
 
 
 def _expire_once(store: Store, pick_id: str, now: datetime) -> dict[str, Any]:
@@ -2435,6 +2478,7 @@ def sweep_command(
             if row["job"] == "process":
                 outcome = process_drop(
                     store, storage, row["pick_id"], gemini_client=client, media_fallback=media, auto_retry=row["state"] == "failed",
+                    listed=row if row["state"] == "failed" else None,
                 )
             else:
                 outcome = make_drop(store, storage, row["pick_id"], hf=hf, gemini_client=client)

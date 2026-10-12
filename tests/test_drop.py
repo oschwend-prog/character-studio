@@ -505,12 +505,15 @@ def test_the_job_id_carries_the_sweep_worker_so_two_workers_of_one_run_differ(mo
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
     monkeypatch.delenv("STUDIO_WORKER", raising=False)
-    assert drop.job_id() == "gh-123-2"  # a dispatched run (one pick) is one worker: unchanged
+    assert drop.job_id() == "gh-123-2"  # no STUDIO_WORKER (a test, a hand run): the bare run id
     ids = []
     for worker in ("1", "2", "3"):
         monkeypatch.setenv("STUDIO_WORKER", worker)
         ids.append(drop.job_id())
     assert ids == ["gh-123-2-w1", "gh-123-2-w2", "gh-123-2-w3"]
+    # the workflow exports STUDIO_WORKER on every run, so a dispatched run (one pick, matrix value 1) is "-w1" on GitHub: harmless
+    monkeypatch.setenv("STUDIO_WORKER", "1")
+    assert drop.job_id() == "gh-123-2-w1"
     monkeypatch.setenv("STUDIO_WORKER", "  ")
     assert drop.job_id() == "gh-123-2"  # an empty value is no worker
     monkeypatch.delenv("GITHUB_RUN_ID")
@@ -2433,6 +2436,24 @@ _TRANSIENT_REASONS = [  # the strings process_drop really records, and what the 
     ("the look at the clip failed (Gemini answered HTTP 504: gateway timeout): tap Try again", "busy"),
     ("the look at the clip failed (Gemini answered HTTP 429: Resource has been exhausted): tap Try again", "busy"),  # a rate limit, not the day's
     ("the look at the clip failed (the model is busy right now): tap Try again", "busy"),
+    # a per-minute rate limit: no daily-quota wording ("exceeded your current quota"), so busy, not a day's wait
+    ('the look at the clip failed (Gemini answered HTTP 429: {"error": {"code": 429, "message": "Resource has been exhausted (e.g. '
+     'check quota).", "status": "RESOURCE_EXHAUSTED"}}): tap Try again', "busy"),
+    ("the look at the clip failed (Gemini answered HTTP 429: Quota exceeded for metric generate_content_free_tier_requests, limit: "
+     "15 per minute): tap Try again", "busy"),
+    # the daily wording, but the reason names a per-minute limit: still not the day's quota
+    ("the look at the clip failed (Gemini answered HTTP 429: You exceeded your current quota ... GenerateRequestsPerMinutePerProject"
+     "PerModel-FreeTier): tap Try again", "busy"),
+    # the network dropped (httpx.NetworkError / ProtocolError): the sweep asks again
+    ("the look at the clip failed (the Gemini call failed (ConnectError)): tap Try again", "busy"),
+    ("the look at the clip failed (the Gemini call failed (RemoteProtocolError)): tap Try again", "busy"),
+    ("the look at the clip failed (the Gemini call failed (ReadError)): tap Try again", "busy"),
+    ("the look at the clip failed (the Gemini call failed (WriteError)): tap Try again", "busy"),
+    ("the look at the clip failed (Connection reset by peer): tap Try again", "busy"),
+    ("the look at the clip failed (network is unreachable): tap Try again", "busy"),
+    # a failure that is ours or permanent stays the owner's
+    ("the look at the clip failed (the Gemini call failed (UnsupportedProtocol)): tap Try again", None),
+    ("the look at the clip failed (the Gemini call failed (DecodingError)): tap Try again", None),
     ("the look at the clip failed (Gemini answered HTTP 403: API key not valid): tap Try again", None),
     ("the look at the clip failed (Gemini answered HTTP 400: unsupported): tap Try again", None),
     ("the look at the clip failed (Gemini answered HTTP 404: no such model): tap Try again", None),
@@ -2486,7 +2507,8 @@ TIMEOUT_REASON = _TRANSIENT_REASONS[0][0]
 def test_pending_lists_a_check_that_timed_out_until_it_has_been_retried_twice(world, portrait):
     store, storage = world
     pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
-    assert pending(store, now=NOW) == [{"pick_id": pid, "job": "process", "state": "failed"}]
+    # the row carries the failure as listed (drop.at, drop.auto_retry_at) so a worker can tell it from a later one
+    assert pending(store, now=NOW) == [{"pick_id": pid, "job": "process", "state": "failed", "failed_at": NOW.isoformat(), "retried_at": ""}]
     d = store.get_favorite(pid).proposal["drop"]
     for used in (1, 2):
         store.update_favorite(pid, proposal={**store.get_favorite(pid).proposal, "drop": {**d, "auto_retries": used}})
@@ -2539,15 +2561,22 @@ def test_a_quota_failure_waits_for_the_quota_to_reset(world, portrait):
     before_reset = datetime(2026, 10, 12, 7, 59, tzinfo=london)
     after_reset = datetime(2026, 10, 12, 8, 0, tzinfo=london)
     assert pending(store, now=evening) == [] and pending(store, now=before_reset) == []  # the same Pacific day: the quota is still gone
-    assert pending(store, now=after_reset) == [{"pick_id": pid, "job": "process", "state": "failed"}]
+    assert pending(store, now=after_reset) == [
+        {"pick_id": pid, "job": "process", "state": "failed", "failed_at": datetime(2026, 10, 11, 21, 40, tzinfo=london).isoformat(),
+         "retried_at": ""}  # fmt: skip
+    ]
     # a failure after that morning's reset waits for the next one
     pid2 = failed_check(store, storage, portrait, _QUOTA_429, at=datetime(2026, 10, 12, 8, 30, tzinfo=london))
     noon = datetime(2026, 10, 12, 12, 0, tzinfo=london)
     assert [p["pick_id"] for p in pending(store, now=noon)] == [pid]
     assert pid2 in [p["pick_id"] for p in pending(store, now=datetime(2026, 10, 13, 8, 0, tzinfo=london))]
-    # the 2-retry cap is the timeout's: a quota retry is limited by the reset (once a day at most), and counted
-    store.update_favorite(pid, proposal={**store.get_favorite(pid).proposal, "drop": {**store.get_favorite(pid).proposal["drop"], "auto_retries": 5}})
-    assert pid in [p["pick_id"] for p in pending(store, now=after_reset)]
+    # a quota retry is limited by the reset (once a day at most) and counted with the others, up to AUTO_RETRY_QUOTA_MAX
+    for used, listed in ((0, True), (2, True), (drop.AUTO_RETRY_QUOTA_MAX, False), (5, False)):
+        store.update_favorite(pid, proposal={**store.get_favorite(pid).proposal,
+                                             "drop": {**store.get_favorite(pid).proposal["drop"], "auto_retries": used}})
+        assert (pid in [p["pick_id"] for p in pending(store, now=after_reset)]) is listed, used
+    store.update_favorite(pid, proposal={**store.get_favorite(pid).proposal,
+                                         "drop": {**store.get_favorite(pid).proposal["drop"], "auto_retries": 0}})
     # a quota failure with no usable time is not guessed at
     pid3 = failed_check(store, storage, portrait, _QUOTA_429, at=None)
     f3 = store.get_favorite(pid3)
@@ -2645,7 +2674,8 @@ def test_the_sweep_runs_a_failed_check_again_and_a_busy_one_is_no_failure(monkey
 def test_a_failed_check_moved_on_by_a_parallel_worker_is_skipped(monkeypatch, tmp_path, portrait):
     store, storage = sweep_world(monkeypatch, tmp_path)
     pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
-    stale = [{"pick_id": pid, "job": "process", "state": "failed"}]
+    (stale_row,) = pending(store, now=NOW)  # what this worker listed
+    stale = [stale_row]
     f = store.get_favorite(pid)  # worker 2 already took it back to checking
     store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": "checking"}})
     monkeypatch.setattr(drop, "pending", lambda *a, **kw: stale)
@@ -2653,3 +2683,196 @@ def test_a_failed_check_moved_on_by_a_parallel_worker_is_skipped(monkeypatch, tm
     assert r.exit_code == 0, r.output
     (row,) = json.loads(r.output)["results"]
     assert row["moved_on"] is True and row["ok"] is True
+
+
+# ---- fix round 1 (task 12 review): one retake per sweep, a capped quota retry, a make re-read under the lease -----------------------
+
+TIMEOUT = gemini.GeminiTimeout("Gemini timed out on every model (ReadTimeout)", "ReadTimeout")
+
+
+def test_a_retake_that_fails_again_is_not_retaken_by_another_worker_of_the_same_sweep(world, portrait):
+    """Three workers list the same failed drop. The first retakes it and Gemini times out again (drop.at moves, the drop is
+    `failed` still); the second reaches it after that: it must not spend the second automatic retry in the same sweep."""
+    store, storage = world
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
+    (row,) = pending(store, now=NOW)  # what every worker listed
+    assert (row["failed_at"], row["retried_at"]) == (NOW.isoformat(), "")
+    a, b = FakeGemini(TIMEOUT), FakeGemini(deconstruct())  # B would succeed if it were asked
+    first = process_drop(store, storage, pid, gemini_client=a, now=NOW + timedelta(minutes=2), job="gh-9-1-w1", auto_retry=True, listed=row)
+    assert first.state == "failed" and not first.ok and len(a.calls) == 1
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["auto_retries"] == 1 and d["state"] == "failed" and drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(minutes=8))
+    second = process_drop(store, storage, pid, gemini_client=b, now=NOW + timedelta(minutes=8), job="gh-9-1-w2", auto_retry=True, listed=row)
+    assert second.ok and second.detail["busy"] and second.state == "failed" and b.calls == []
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["auto_retries"] == 1 and "job" not in d  # one retry for the whole sweep; the lease is given back
+    # the next sweep (two hours on) lists the new failure and may use the second retry
+    (later,) = pending(store, now=NOW + timedelta(hours=2))
+    assert later["failed_at"] != row["failed_at"] and later["retried_at"] == (NOW + timedelta(minutes=2)).isoformat()
+    again = process_drop(store, storage, pid, gemini_client=FakeGemini(TIMEOUT), now=NOW + timedelta(hours=2), job="gh-10-1-w1",
+                         auto_retry=True, listed=later)
+    assert not again.ok and store.get_favorite(pid).proposal["drop"]["auto_retries"] == 2
+    assert pending(store, now=NOW + timedelta(hours=4)) == []  # the cap
+
+
+def test_the_sweep_skips_a_failed_check_another_worker_retook_and_failed_again(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
+    (stale_row,) = pending(store, now=NOW)
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(TIMEOUT), now=NOW + timedelta(minutes=2), job="gh-9-1-w1",
+                       auto_retry=True, listed=stale_row)  # worker 1 retakes it; it fails again, still `failed`
+    assert out.state == "failed" and store.get_favorite(pid).proposal["drop"]["state"] == "failed"
+    assert drop._moved_on(store, stale_row) is True  # worker 2's listing is stale although the state is the same
+    (fresh_row,) = pending(store, now=NOW + timedelta(hours=2))
+    assert drop._moved_on(store, fresh_row) is False
+    monkeypatch.setattr(drop, "pending", lambda *a, **kw: [stale_row])
+    ran = []
+    monkeypatch.setattr(drop, "process_drop", lambda *a, **kw: ran.append(a) or drop.Outcome(pid, "failed", ok=False))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    (row,) = json.loads(r.output)["results"]
+    assert row["moved_on"] is True and row["ok"] is True and ran == [] and store.get_favorite(pid).proposal["drop"]["auto_retries"] == 1
+
+
+def test_the_sweep_hands_the_listed_failure_to_the_retake(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)
+    (listed,) = pending(store, now=NOW)
+    seen = []
+    monkeypatch.setattr(drop, "process_drop", lambda *a, **kw: seen.append(kw) or drop.Outcome(pid, "ready"))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    assert seen[0]["auto_retry"] is True and seen[0]["listed"] == listed
+    ordinary = drop_file(store, storage, portrait)  # a plain checking drop: no failure to compare
+    seen.clear()
+    monkeypatch.setattr(drop, "pending", lambda *a, **kw: [{"pick_id": ordinary, "job": "process", "state": "checking"}])
+    assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 0
+    assert seen[0]["auto_retry"] is False and seen[0]["listed"] is None
+
+
+def test_a_quota_failure_is_retaken_once_a_day_three_times_then_left_for_the_owner(world, portrait):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    store, storage = world
+    london = ZoneInfo("Europe/London")
+    quota = GeminiError(
+        'Gemini answered HTTP 429: {\n  "error": {\n    "code": 429,\n    "message": "You exceeded your current quota, please check '
+        'your plan and billing details."\n  }\n}', 429,
+    )
+    pid = failed_check(store, storage, portrait, _QUOTA_429, at=datetime(2026, 10, 11, 21, 40, tzinfo=london))
+    retakes = 0
+    for day in range(8):  # eight London mornings of the sweep after the quota reset
+        morning = datetime(2026, 10, 12 + day, 9, 0, tzinfo=london)
+        rows = pending(store, now=morning)
+        if not rows:
+            continue
+        (row,) = rows
+        out = process_drop(store, storage, pid, gemini_client=FakeGemini(quota), now=morning, job="gh-1-1-w1", auto_retry=True, listed=row)
+        assert out.state == "failed" and not out.ok and drop.transient_kind(out.reason) == "quota"
+        retakes += 1
+        assert pending(store, now=morning + timedelta(hours=10)) == [], day  # failed again after the reset: waits for the next one
+    assert retakes == drop.AUTO_RETRY_QUOTA_MAX == 3
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["auto_retries"] == 3 and d["state"] == "failed"
+    after = datetime(2026, 10, 20, 9, 0, tzinfo=london)
+    assert pending(store, now=after) == [] and drop.auto_retry_kind(store.get_favorite(pid), after) is None
+    g = FakeGemini()  # a stale listing never runs a fourth time either
+    stale = {"pick_id": pid, "job": "process", "state": "failed", "failed_at": d["at"], "retried_at": d["auto_retry_at"]}
+    out = process_drop(store, storage, pid, gemini_client=g, now=after, job="gh-2-1-w1", auto_retry=True, listed=stale)
+    assert out.ok and out.detail["busy"] and out.state == "failed" and g.calls == []
+    # the owner's Try again starts the count over, quota included
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**d, "requested": {"process": datetime(2026, 10, 21, 8, 0, tzinfo=london).isoformat()}}})
+    assert drop.auto_retries_used(store.get_favorite(pid).proposal["drop"]) == 0
+
+
+def test_a_quota_failure_after_two_timeout_retakes_has_one_retake_left(world, portrait):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    store, storage = world
+    london = ZoneInfo("Europe/London")
+    pid = failed_check(store, storage, portrait, _QUOTA_429, at=datetime(2026, 10, 11, 21, 40, tzinfo=london), auto_retries=2,
+                       auto_retry_at=datetime(2026, 10, 11, 20, 0, tzinfo=london).isoformat())
+    assert drop.auto_retry_kind(store.get_favorite(pid), datetime(2026, 10, 12, 9, 0, tzinfo=london)) == "quota"  # 2 of 3 used
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "auto_retries": 3}})
+    assert drop.auto_retry_kind(store.get_favorite(pid), datetime(2026, 10, 12, 9, 0, tzinfo=london)) is None
+
+
+class NeverHF:
+    """A Higgsfield client that fails the test when anything calls it."""
+
+    def __getattr__(self, name):
+        pytest.fail(f"Higgsfield was called ({name}): a stale listing paid twice")
+
+
+@pytest.mark.parametrize("change", ["made by another worker", "Make it taken back"])
+def test_a_make_that_is_no_longer_waiting_under_the_lease_is_busy_and_pays_nothing(world, portrait, monkeypatch, change):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)
+    listed = store.get_favorite(pid)  # what the sweep listed and make_drop first reads: a make the owner asked for, waiting
+    f = listed
+    if change == "made by another worker":
+        store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": "made"}})
+    else:
+        store.update_favorite(pid, proposal={k: v for k, v in f.proposal.items() if k != "make_requested"})
+    real, reads = drop._load, []
+
+    def load(store_, pick_id):
+        reads.append(pick_id)
+        return listed if len(reads) == 1 else real(store_, pick_id)  # the read before the claim is the stale one
+
+    monkeypatch.setattr(drop, "_load", load)
+    g = FakeGemini()
+    out = make(store, storage, pid, NeverHF(), g)
+    assert out.ok and out.detail["busy"] and g.calls == []
+    assert store.list_clips() == [] and store.ledger_month(NOW.strftime("%Y-%m")) == []  # nothing reserved, nothing generated
+    assert "job" not in store.get_favorite(pid).proposal["drop"]  # the lease is given back
+
+
+def test_a_make_the_owner_asked_for_still_runs_after_the_reread(world, portrait, gen_out, fast_master):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)
+    out = make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS))
+    assert out.state == "made" and not (out.detail or {}).get("busy")
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        ("connect", "busy"), ("protocol", "busy"), ("read", "busy"),  # the network dropped (httpx.ConnectError / ...)
+        ("daily", "quota"), ("minute", "busy"), ("503", "busy"), ("timeout", "timeout"),
+    ],
+)
+def test_the_reasons_the_real_client_writes_are_classified(world, portrait, error, kind):
+    """The strings come out of ``GeminiClient`` over a mock transport and ``process_drop`` (nothing leaves the machine)."""
+    import httpx
+
+    def handler(request):
+        if error == "connect":
+            raise httpx.ConnectError("[Errno 8] nodename nor servname provided")
+        if error == "protocol":
+            raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+        if error == "read":
+            raise httpx.ReadError("connection reset")
+        if error == "timeout":
+            raise httpx.ReadTimeout("The read operation timed out")
+        body = {
+            "daily": {"error": {"code": 429, "message": "You exceeded your current quota, please check your plan and billing details.",
+                                "status": "RESOURCE_EXHAUSTED"}},
+            "minute": {"error": {"code": 429, "message": "Resource has been exhausted (e.g. check quota).", "status": "RESOURCE_EXHAUSTED"}},
+            "503": {"error": {"code": 503, "message": "The model is overloaded. Please try again later.", "status": "UNAVAILABLE"}},
+        }[error]
+        return httpx.Response(int(body["error"]["code"]), json=body)
+
+    client = gemini.GeminiClient("k", transport=httpx.MockTransport(handler), sleep=lambda s: None)
+    store, storage = world
+    pid = drop_file(store, storage, portrait)
+    out = process_drop(store, storage, pid, gemini_client=client, now=NOW, job="t")
+    assert out.state == "failed" and out.reason.startswith(drop.CHECK_FAILED), out.reason
+    assert drop.transient_kind(out.reason) == kind, out.reason
+    assert (drop.auto_retry_kind(store.get_favorite(pid), NOW + timedelta(days=1)) == kind)

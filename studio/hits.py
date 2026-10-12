@@ -59,7 +59,8 @@ day and never past ``hits.daily_credit_cap``; over either, the download is refus
 tried again in the cloud on a later London day and dropped after 3 days (it never goes to the Mac); only the owner's own links
 wait for the Mac's daily run (yt-dlp from the Mac). The budget is a read, then the call, then an increment of the day's record: one job at a time
 is what the drop job's concurrency gives (one run per pick, the sweeps in one group), so at worst two jobs at the same instant
-each take the last download.
+each take the last download. PARKED (task 12 review): with the sweep's three workers side by side, up to two downloads a day can pass
+``download_cap_per_day`` (about 10 credits each, they all read the same count first); accepted, no reservation step.
 
 An account out of credits (HTTP 402) stops the pull (``stopped: "out_of_credits"``).
 
