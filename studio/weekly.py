@@ -122,7 +122,7 @@ NOT_A_RULE = frozenset(
     {
         "hit_rules_version", "explore_pick", "hook_by", "version_index", "hook_text", "hook_index",
         "score_bucket", "score_total", "score_potential", "score_swap", "test_arms", "family_id", "trial_reel", "first_comment_posted",
-        "series", "episode", "zoom_pulses", "hook_entrance",
+        "series", "episode", "zoom_pulses", "hook_entrance", "beats",
     }
 )
 
