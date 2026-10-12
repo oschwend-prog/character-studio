@@ -239,6 +239,75 @@ def test_the_result_is_plain_json():
     json.dumps(score_test([]))
 
 
+# ---- test A: a look, once taken, is frozen (fix round 1, I1) ---------------------------------------------------------------------------
+
+
+def near_threshold() -> list[ScoreObservation]:
+    """20 observations whose interim rho is 0.4677: validated, but close enough to the line that one late arrival would flip it."""
+    xs = with_rho(20, 0.46, 0.50)
+    return [obs(i, s, x) for i, (s, x) in enumerate(zip(scores(20), xs, strict=True))]
+
+
+def early_arrival() -> ScoreObservation:
+    """A post whose 7-day figure arrives late (a failed pull) but sorts EARLIER than all of the first 20: it displaces the 20th."""
+    return obs(99, 95, 0.01, day=-1)
+
+
+def test_without_the_stored_look_a_late_arrival_that_sorts_earlier_would_flip_the_interim():
+    # the defect this round fixes, pinned so the next tests mean something: the sample is rebuilt from the data
+    rows = near_threshold()
+    assert score_test(rows)["label"] == "validated"
+    assert score_test(rows + [early_arrival()])["label"] != "validated"
+
+
+def test_a_decided_interim_look_is_stored_and_never_recomputed():
+    rows = near_threshold()
+    first = score_test(rows)
+    assert set(first["decided"]) == {"20"} and first["decided"]["20"]["clip_ids"] == [o.clip_id for o in rows]
+    again = score_test(rows + [early_arrival()], decided=first["decided"])
+    assert (again["label"], again["look"], again["rho"], again["buckets"], again["note"]) == (first["label"], 20, first["rho"], first["buckets"], first["note"])
+    assert again["n"] == 21 and again["decided"] == first["decided"]
+
+
+def test_a_failed_interim_stays_failed_when_a_late_arrival_sorts_earlier():
+    rows = falling(20)
+    first = score_test(rows)
+    assert first["label"] == "failed"
+    better = obs(99, 20, 9.0, day=-1)  # an early one that would pull the first 20 up
+    assert score_test(rows + [better], decided=first["decided"])["rho"] == first["rho"]
+
+
+def test_an_unproven_interim_is_frozen_too_and_the_final_look_is_taken_once_at_40():
+    xs20 = with_rho(20, 0.1, 0.4)
+    first20 = [obs(i, s, x) for i, (s, x) in enumerate(zip(scores(20), xs20, strict=True))]
+    interim = score_test(first20)
+    assert interim["label"] == "unproven" and set(interim["decided"]) == {"20"}
+    more = first20 + [obs(20 + i, 40 + 2 * i, 3.0 + i) for i in range(20)]
+    # an earlier arrival (sorts before everything) must not change the look at 20 that was taken
+    sample = more + [obs(98, 95, 0.01, day=-1)]
+    at40 = score_test(sample, decided=interim["decided"])
+    assert at40["decided"]["20"] == interim["decided"]["20"] and at40["look"] == 40 and at40["n"] == 41
+    assert at40["decided"]["40"]["clip_ids"] == [o.clip_id for o in sorted(sample, key=lambda o: (o.available_at, o.clip_id))[:40]]
+    # the final look, once taken, is frozen as well
+    later = score_test(sample + [obs(97, 99, 0.001, day=-2)], decided=at40["decided"])
+    assert (later["label"], later["look"], later["rho"], later["n"]) == (at40["label"], 40, at40["rho"], 42)
+
+
+def test_a_decided_interim_never_takes_a_final_look():
+    rows = near_threshold()
+    first = score_test(rows)
+    big = rows + [obs(20 + i, 50 + i, 0.001) for i in range(25)]
+    out = score_test(big, decided=first["decided"])
+    assert (out["label"], out["look"], out["needed"]) == ("validated", 20, 20) and set(out["decided"]) == {"20"}
+
+
+def test_a_stored_look_that_is_damaged_is_ignored_not_trusted():
+    rows = near_threshold()
+    for bad in ({"20": {"look": 20, "label": "maybe", "rho": 0.9, "span": 40.0}}, {"20": "validated"}, {"20": {"look": 40, "label": "validated", "rho": 0.9, "span": 40.0}}, {"20": {"look": 20, "label": "failed", "rho": "x", "span": 40.0}}):
+        out = score_test(rows, decided=bad)
+        assert out["rho"] == score_test(rows)["rho"] and out["decided"]["20"]["clip_ids"] == [o.clip_id for o in rows]
+
+
 # ---- a small studio to test against ---------------------------------------------------------------------------------------------------
 
 
@@ -1131,7 +1200,7 @@ def test_a_warning_that_fired_is_in_the_header(tmp_path):
 def test_a_part_that_crashes_is_a_note_the_digest_still_comes_and_the_run_is_logged_as_an_error(tmp_path, monkeypatch):
     w = first_weeks()
 
-    def boom(_):
+    def boom(*_args, **_kw):
         raise RuntimeError("no way")
 
     monkeypatch.setattr(weekly, "score_test", boom)
@@ -1139,6 +1208,49 @@ def test_a_part_that_crashes_is_a_note_the_digest_still_comes_and_the_run_is_log
     assert out["status"] == "error" and any(n.startswith("score test failed: RuntimeError: no way") for n in out["notes"])
     assert len(out["digest"]["characters"]) == 3 and w.store.list_runs(kind="weekly")[0].status.value == "error"
     assert w.store.list_runs(kind="weekly")[0].details["score_test"]["label"] == "unproven"  # the empty test, not a crash
+
+
+def test_the_score_test_takes_its_looks_once_across_the_weekly_runs(tmp_path, monkeypatch, experiments_on):
+    w = first_weeks()
+    rows = near_threshold()
+    monkeypatch.setattr(weekly, "score_observations", lambda _store: rows)
+    first = run(w, tmp_path)
+    assert first["score_test"]["label"] == "validated" and set(first["score_test"]["decided"]) == {"20"}
+    # next Monday a 7-day figure arrives late and sorts earlier: the look that was taken must not move
+    monkeypatch.setattr(weekly, "score_observations", lambda _store: rows + [early_arrival()])
+    second = run(w, tmp_path, monday=date(2026, 10, 19), now=datetime(2026, 10, 26, 6, 15, tzinfo=LONDON))
+    st = second["score_test"]
+    assert (st["label"], st["look"], st["rho"], st["n"]) == ("validated", 20, first["score_test"]["rho"], 21)
+    assert st["decided"] == first["score_test"]["decided"]
+    assert w.store.list_runs(kind="weekly")[-1].details["score_test"]["decided"] == first["score_test"]["decided"]  # stored, so the next run copies it
+    # the score test line of the digest is built from the frozen look
+    assert "score test validated at 20" in second["digest"]["characters"][0]["lines"][3]
+
+
+def test_a_run_whose_score_test_crashes_still_carries_the_looks_taken_forward(tmp_path, monkeypatch):
+    w = first_weeks()
+    monkeypatch.setattr(weekly, "score_observations", lambda _store: near_threshold())
+    first = run(w, tmp_path)
+
+    def boom(*_args, **_kw):
+        raise RuntimeError("no way")
+
+    monkeypatch.setattr(weekly, "score_test", boom)
+    broken = run(w, tmp_path, monday=date(2026, 10, 19), now=datetime(2026, 10, 26, 6, 15, tzinfo=LONDON))
+    assert broken["status"] == "error" and broken["score_test"]["decided"] == first["score_test"]["decided"]
+
+
+def test_the_command_shows_a_look_the_weekly_review_already_took(monkeypatch, tmp_path):
+    w = first_weeks()
+    rows = near_threshold()
+    monkeypatch.setattr(weekly, "score_observations", lambda _store: rows)
+    first = run(w, tmp_path)
+    monkeypatch.setattr(weekly, "score_observations", lambda _store: rows + [early_arrival()])
+    monkeypatch.setattr(weekly, "open_store", lambda: w.store)
+    r = CliRunner().invoke(app, ["learn", "score-test"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert (out["label"], out["rho"], out["n"]) == ("validated", first["score_test"]["rho"], 21)
 
 
 def test_only_live_characters_are_reviewed(tmp_path):

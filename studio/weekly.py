@@ -27,7 +27,8 @@ Instagram's own API (plan Task 9) or the Mac's vidIQ ingest, so until then they 
     {"week": "2026-10-12",                      # the Monday of the week reviewed
      "digest": {"header": [line1, line2],
                 "characters": [{"slug", "name", "bar", "bar_status", "title", "lines": [...5 strings, labelled "1 Result    ..."]}]},
-     "score_test": {"label", "n", "needed", "look", "rho", "rho_potential", "rho_swap", "buckets", "note"},   # test A
+     "score_test": {"label", "n", "needed", "look", "rho", "rho_potential", "rho_swap", "buckets", "note",
+                    "decided": {"20": {look, label, rho, span, ..., "clip_ids"}, "40": {...}}},   # test A; a look taken is frozen
      "floors": {"computed", "basis", "fixed_on": {metric: day|null}, "studio": {...}, "characters": {slug: {...}}},   # plan 3.8
      "proposals": [{"kind": "hit_rule" | "arm_retire" | "playbook", ...its numbers and clip ids...}],
      "proposal_url": "https://github.com/.../compare/build/slice1...weekly/<monday>?expand=1" | null,
@@ -219,7 +220,36 @@ def _rho_of(sample: Sequence[ScoreObservation], part: str) -> float | None:
     return round(spearman([p for p, _ in pairs], [x for _, x in pairs]), 4) if len(pairs) >= 2 else None
 
 
-def score_test(observations: Iterable[ScoreObservation]) -> dict[str, Any]:
+SCORE_LABELS = ("unproven", "validated", "failed", "uninformative")
+
+
+def _number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def stored_look(decided: Mapping[str, Any] | None, look: int) -> dict[str, Any] | None:
+    """The look ``look`` (20 or 40) as an earlier weekly run stored it in ``score_test.decided``, or None when there is none or what is
+    there is damaged (a wrong look, an unknown label, a rho that is no number): a damaged record is ignored, never trusted."""
+    entry = (decided or {}).get(str(look))
+    if (
+        not isinstance(entry, Mapping) or entry.get("look") != look or entry.get("label") not in SCORE_LABELS
+        or not _number(entry.get("rho")) or not _number(entry.get("span")) or not isinstance(entry.get("clip_ids"), list)
+    ):
+        return None
+    return dict(entry)
+
+
+def frozen_looks(runs: Sequence[Run]) -> dict[str, Any]:
+    """The looks already taken: ``score_test.decided`` of the most recent weekly run (oldest first in ``runs``) that carries any."""
+    for run in reversed(runs):
+        test = run.details.get("score_test") if isinstance(run.details, dict) else None
+        decided = test.get("decided") if isinstance(test, dict) else None
+        if isinstance(decided, dict) and decided:
+            return dict(decided)
+    return {}
+
+
+def score_test(observations: Iterable[ScoreObservation], decided: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """Test A (plan 3.2): does a higher ``score_total`` go with a higher ``outlier_x``?
 
     The observations are put in the order their ``outlier_x`` became available (then the clip id). **No peeking**: before 20 only the
@@ -227,34 +257,51 @@ def score_test(observations: Iterable[ScoreObservation]) -> dict[str, Any]:
     never moves again. A ``validated`` or ``failed`` interim ends the test (the label sticks, whatever comes later). ``uninformative``
     (the middle 80 % of the scores spans under 15 points) is not a decision: the test goes on to the next look.
 
-    Returns ``{"label", "n", "needed", "look", "rho", "rho_potential", "rho_swap", "buckets", "note"}``: ``label`` one of
+    **A look, once taken, is frozen.** The first run that has 20 (or 40) observations takes the look on the first 20 (40) as they are
+    at that run and keeps it in the result's ``decided`` (``{"20": {...}, "40": {...}}``: label, rho, span, the two parts' rho, the
+    buckets and the ``clip_ids`` of the sample). The caller passes the latest stored ``decided`` back (``frozen_looks``): a stored look is
+    copied as it is and never recomputed, so a 7-day figure that arrives late and sorts earlier (a failed pull) cannot move a look
+    that was taken, in either direction.
+
+    Returns ``{"label", "n", "needed", "look", "rho", "rho_potential", "rho_swap", "buckets", "note", "decided"}``: ``label`` one of
     ``unproven`` / ``validated`` / ``failed`` / ``uninformative``; ``needed`` the n of the next look (20, then 40); ``look`` the look the
     label comes from (None before the first); the rho of the total, of ``potential`` and of ``swap`` (each None before a look, or with
     fewer than 2 values) and the median ``outlier_x`` per score bucket are reported on the looked-at sample only: report, no decision.
     """
     ordered = sorted(observations, key=lambda o: (o.available_at, o.clip_id))
     n = len(ordered)
+    frozen: dict[str, Any] = {}
     result: dict[str, Any] = {
         "label": "unproven", "n": n, "needed": SCORE_INTERIM_N, "look": None,
-        "rho": None, "rho_potential": None, "rho_swap": None, "buckets": [], "note": "",
+        "rho": None, "rho_potential": None, "rho_swap": None, "buckets": [], "note": "", "decided": frozen,
     }
-    if n < SCORE_INTERIM_N:
+
+    def take(look: int) -> dict[str, Any] | None:
+        """The look: the stored one as it is, else taken now on the first ``look`` observations when there are that many."""
+        entry = stored_look(decided, look)
+        if entry is None:
+            if n < look:
+                return None
+            sample = ordered[:look]
+            rho = spearman([o.score for o in sample], [o.outlier_x for o in sample])
+            span = middle_span([o.score for o in sample])
+            entry = {
+                "look": look, "label": look_label(rho, span, look), "rho": round(rho, 4), "span": span,
+                "rho_potential": _rho_of(sample, "potential"), "rho_swap": _rho_of(sample, "swap"), "buckets": score_buckets(sample),
+                "clip_ids": [o.clip_id for o in sample],
+            }
+        frozen[str(look)] = entry
+        return entry
+
+    entry = take(SCORE_INTERIM_N)
+    if entry is None:
         result["note"] = f"{n} of {SCORE_INTERIM_N} posted drops with a score and a 7-day figure so far. Not a verdict."
         return result
-
-    def read(look: int) -> tuple[str, float, float, list[ScoreObservation]]:
-        sample = ordered[:look]
-        rho = spearman([o.score for o in sample], [o.outlier_x for o in sample])
-        span = middle_span([o.score for o in sample])
-        return look_label(rho, span, look), rho, span, sample
-
-    label, rho, span, sample = read(SCORE_INTERIM_N)
-    look, needed = SCORE_INTERIM_N, SCORE_INTERIM_N
-    if label not in ("validated", "failed"):  # the interim did not end the test: it goes on to 40
+    needed = SCORE_INTERIM_N
+    if entry["label"] not in ("validated", "failed"):  # the interim did not end the test: it goes on to 40
         needed = SCORE_FINAL_N
-        if n >= SCORE_FINAL_N:
-            label, rho, span, sample = read(SCORE_FINAL_N)
-            look = SCORE_FINAL_N
+        entry = take(SCORE_FINAL_N) or entry
+    label, look, rho, span = entry["label"], entry["look"], entry["rho"], entry["span"]
     name = "interim look at 20" if look == SCORE_INTERIM_N else "final look at 40"
     if label == "uninformative":
         note = (
@@ -273,8 +320,8 @@ def score_test(observations: Iterable[ScoreObservation]) -> dict[str, Any]:
             f"until {SCORE_FINAL_N} ({n} of {SCORE_FINAL_N} so far). Not a verdict."
         )
     result.update(
-        label=label, needed=needed, look=look, rho=round(rho, 4), rho_potential=_rho_of(sample, "potential"),
-        rho_swap=_rho_of(sample, "swap"), buckets=score_buckets(sample), note=note,
+        label=label, needed=needed, look=look, rho=rho, rho_potential=entry.get("rho_potential"), rho_swap=entry.get("rho_swap"),
+        buckets=list(entry.get("buckets") or []), note=note,
     )
     return result
 
@@ -307,8 +354,10 @@ def score_observations(store: Store) -> list[ScoreObservation]:
 
 
 def score_test_command() -> None:
-    """Test A, the score test (plan 3.2): the label, n against the looks, rho and the median outlier_x per score bucket. Read-only."""
-    emit(score_test(score_observations(open_store())))
+    """Test A, the score test (plan 3.2): the label, n against the looks, rho and the median outlier_x per score bucket. Read-only; a
+    look the weekly review already took is shown as it took it (``decided``), never recomputed."""
+    store = open_store()
+    emit(score_test(score_observations(store), decided=frozen_looks(_weekly_runs(store))))
 
 
 # ---- the mechanism floors (plan 3.8) ---------------------------------------------------------------------------------------------------
@@ -1169,10 +1218,11 @@ def run_weekly(
 
     # test A
     observations = part("score test: observations", lambda: score_observations(store), [])
+    taken = frozen_looks(runs)  # the looks the earlier runs took: copied forward, never recomputed
     score = part(
-        "score test", lambda: score_test(observations),
+        "score test", lambda: score_test(observations, decided=taken),
         {"label": "unproven", "n": 0, "needed": SCORE_INTERIM_N, "look": None, "rho": None, "rho_potential": None, "rho_swap": None, "buckets": [],
-         "note": "The score test could not be computed: see the notes."},
+         "note": "The score test could not be computed: see the notes.", "decided": taken},
     )
     scored_by = {c.id: c.character_slug for c in clips}
 
