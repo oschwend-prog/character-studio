@@ -15,7 +15,7 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from studio import drop, hits
+from studio import drop, hits, lunar
 from studio.cli import app
 from studio.config import LONDON
 from studio.hits import ScrapeCreators, ScrapeCreatorsError, hit_score, parse_instagram, parse_tiktok
@@ -393,13 +393,16 @@ def test_a_refused_key_stops_the_run_and_other_errors_are_listed():
 # ---- auto-filing ------------------------------------------------------------------------------------------------------------------
 
 
-def stored(store, n: int, character: str | None, score: int, *, platform="tiktok", status="new", posted_days=1.0, seen_days=0.0) -> Hit:
+def stored(
+    store, n: int, character: str | None, score: int, *, platform="tiktok", status="new", posted_days=1.0, seen_days=0.0,
+    sound=None, caption=None, views=None,
+) -> Hit:
     """A stored hit whose score today follows ``score`` (its views grow with it: auto_file ranks by the score of today)."""
     url = f"https://www.tiktok.com/@maker{n}/video/{900 + n}" if platform == "tiktok" else f"https://www.instagram.com/reel/DAuto{n:03d}/"
     return store.upsert_hit(Hit(
         platform=platform, url=url, creator_handle=f"@maker{n}", character_slug=character, score=score, status=status,
-        views=int(10 ** (4 + 3 * score / 100)), posted_at=NOW - timedelta(days=posted_days), created_at=NOW,
-        last_seen=NOW - timedelta(days=seen_days),
+        views=views if views is not None else int(10 ** (4 + 3 * score / 100)), posted_at=NOW - timedelta(days=posted_days),
+        created_at=NOW, last_seen=NOW - timedelta(days=seen_days), sound=sound, caption=caption,
     ))[0]  # fmt: skip
 
 
@@ -465,6 +468,7 @@ def cli_store(monkeypatch):
     monkeypatch.setattr(hits, "open_store", lambda: store)
     monkeypatch.setattr(hits, "load_scan", lambda path=None: CONFIG)
     monkeypatch.setattr(hits, "now_london", lambda: NOW)
+    monkeypatch.delenv("LUNARCRUSH_API_KEY", raising=False)  # the gate is off unless a test turns it on
     return store
 
 
@@ -503,6 +507,7 @@ def test_scan_json_carries_the_hits_block_the_brief_names():
     cfg = hits.hits_config(hits.load_scan())
     assert (cfg["daily_credit_cap"], cfg["download_cap_per_day"], cfg["auto_file_per_character"], cfg["auto_file_general"]) == (
         45, 2, 3, 3)
+    assert (cfg["auto_file_max_waiting"], cfg["lunar_daily_cap"]) == (20, 40)  # task 18: the brake and the LunarCrush cap
     assert cfg["keywords"] == {
         "franz": ["dog dance", "dachshund", "dog trend"], "reginald": ["dance trend", "deadpan dance", "butler"],
         "lenny": ["boss on the phone", "office dance", "dance challenge"],
@@ -731,3 +736,334 @@ def test_the_hosted_copys_download_has_a_total_deadline(tmp_path):
     with pytest.raises(ScrapeCreatorsError, match="took over 300 s"):
         client.download_post("https://www.instagram.com/reel/DLDXI0fylTC/", "instagram", tmp_path / "b.mp4")
     assert not any(r.url.host == "cdn-slow.example.com" for r in api.requests) and not (tmp_path / "b.mp4").exists()
+
+
+# ---- the brake: auto-filing stops while a backlog of drops waits (task 18) -----------------------------------------------------------------------
+
+
+def waiting_drop(store, n: int, state: str = "ready", status: str = "approved") -> Favorite:
+    """A drop in ``state`` (a link at ``status``): the owner's own or an auto-filed one, the brake counts both."""
+    return store.add_favorite(Favorite(
+        url=f"https://www.tiktok.com/@owner{n}/video/{5000 + n}", platform="tiktok", origin="owner", character_slug="franz",
+        status=status, proposal={"drop": {"state": state, "kind": "link", "at": NOW.isoformat(), "reason": None}},
+    ))  # fmt: skip
+
+
+def backlog(store, count: int) -> None:
+    for n in range(count):
+        waiting_drop(store, n, ("uploading", "checking", "waiting", "ready")[n % 4])
+
+
+def test_the_drops_that_wait_are_those_filed_and_not_yet_sent_to_be_made():
+    store = roster_store()
+    for n, state in enumerate(("uploading", "checking", "waiting", "ready")):
+        waiting_drop(store, n, state)  # waiting: counted
+    waiting_drop(store, 10, "blocked")  # can never be made
+    waiting_drop(store, 11, "failed")  # retried by the sweep or the owner's Try again
+    waiting_drop(store, 12, "making", status="queued")  # the owner said Make it
+    waiting_drop(store, 13, "made", status="made")
+    waiting_drop(store, 14, "ready", status="skipped")  # skipped by the owner, or dropped after 3 days unfetched
+    store.add_favorite(Favorite(url="https://www.tiktok.com/@plain/video/1", platform="tiktok", status="approved"))  # not a drop
+    assert hits.waiting_drops(store) == 4
+
+
+@pytest.mark.parametrize("waiting, braked", [(19, False), (20, True), (21, True)])
+def test_auto_file_files_nothing_while_20_or_more_drops_wait(waiting, braked):
+    store = roster_store()
+    backlog(store, waiting)
+    for n in range(1, 5):
+        stored(store, n, "reginald", 100 - n)
+    run = hits.file_hits(store, CONFIG, NOW)
+    assert (run["braked"], run["waiting"], run["max_waiting"]) == (braked, waiting, 20)
+    assert (run["filed"] == []) is braked and (braked or len(run["filed"]) == 3)
+    if braked:
+        assert all(h.status == "new" for h in store.list_hits())  # nothing was touched: tomorrow's run looks again
+        assert hits.waiting_drops(store) == waiting
+
+
+def test_the_brake_is_read_from_the_config_and_zero_stops_the_filing():
+    store = roster_store()
+    backlog(store, 3)
+    stored(store, 1, "reginald", 80)
+    assert hits.file_hits(store, {"hits": {**CONFIG["hits"], "auto_file_max_waiting": 3}}, NOW)["braked"] is True
+    assert hits.file_hits(store, {"hits": {**CONFIG["hits"], "auto_file_max_waiting": 4}}, NOW)["braked"] is False
+    assert hits.hits_config({})["auto_file_max_waiting"] == 20 and hits.hits_config({})["lunar_daily_cap"] == 40
+    for bad in ({"auto_file_max_waiting": -1}, {"lunar_daily_cap": "40"}):
+        with pytest.raises(ValueError):
+            hits.hits_config({"hits": bad})
+
+
+def test_a_braked_run_asks_lunarcrush_nothing():
+    store = roster_store()
+    backlog(store, 20)
+    stored(store, 1, "reginald", 80, sound="Patient Zero")
+    gate = StubGate()
+    assert hits.file_hits(store, CONFIG, NOW, gate=gate)["braked"] is True and gate.asked == []
+
+
+def test_the_waiting_drops_are_counted_again_after_a_filing_so_the_next_run_sees_them():
+    store = roster_store()
+    backlog(store, 19)
+    for n in range(1, 4):
+        stored(store, n, "reginald", 90 - n)
+    assert len(hits.auto_file(store, CONFIG, NOW)) == 3 and hits.waiting_drops(store) == 22
+    stored(store, 9, "reginald", 99)
+    assert hits.file_hits(store, CONFIG, NOW + timedelta(days=1))["braked"] is True
+
+
+# ---- the trend-freshness gate in the filing (task 18; research 3.2, rule P5) ---------------------------------------------------------------------
+
+
+class StubGate(lunar.TrendGate):
+    """A gate answering from a table of readings (by lower-case key) and noting every key it was asked about."""
+
+    def __init__(self, readings=None):
+        super().__init__(None)
+        self.readings = readings or {}
+        self.asked: list[str] = []
+
+    @property
+    def enabled(self) -> bool:
+        return True
+
+    def read(self, key: str) -> lunar.Reading:
+        self.asked.append(key)
+        return self.readings.get(key, lunar.Reading("unknown", reason="stub"))
+
+    def summary(self):
+        return {"enabled": True, "keys": len(set(self.asked)), "calls": len(self.asked), "stages": {}}
+
+
+def drop_of(store, entry) -> dict:
+    return store.get_favorite(entry["pick_id"]).proposal["drop"]
+
+
+def test_a_dead_trend_is_not_filed_it_is_counted_and_its_room_goes_to_the_next_hit():
+    store = roster_store()
+    old = stored(store, 1, "reginald", 90, sound="Hot Dog Dance")
+    new = [stored(store, n, "reginald", s, sound=name) for n, s, name in ((2, 80, "Gangnam Style"), (3, 70, "Patient Zero"), (4, 60, "Single Ladies"))]
+    gate = StubGate({
+        "hot dog dance": lunar.Reading("dead", 14), "gangnam style": lunar.Reading("rising", 0),
+        "patient zero": lunar.Reading("fading", 5), "single ladies": lunar.Reading("peak", 1),
+    })  # fmt: skip
+    run = hits.file_hits(store, CONFIG, NOW, gate=gate)
+    assert [f["hit_id"] for f in run["filed"]] == [h.id for h in new] and run["skipped_dead"] == 1 and run["braked"] is False
+    assert store.get_hit(old.id).status == "new" and not store.list_favorites(url=old.url)  # not filed, not dismissed
+    assert gate.asked == ["hot dog dance", "gangnam style", "patient zero", "single ladies"]  # the ranking is untouched by the readings
+    rising, fading, peak = (drop_of(store, f) for f in run["filed"])
+    assert (rising["trend_stage"], rising["days_since_trend_peak"], rising["sound_rising"]) == ("rising", 0, True)
+    assert (fading["trend_stage"], fading["days_since_trend_peak"], fading["sound_rising"]) == ("fading", 5, False)
+    assert (peak["trend_stage"], peak["days_since_trend_peak"], peak["sound_rising"]) == ("peak", 1, False)
+    assert run["trend"]["calls"] == 4
+
+
+def test_the_filed_drops_trend_keys_are_the_ones_the_tag_builder_reads():
+    store = roster_store()
+    stored(store, 1, "reginald", 90, sound="Gangnam Style")
+    stored(store, 2, "reginald", 80, sound="Patient Zero")
+    gate = StubGate({"gangnam style": lunar.Reading("rising", 0), "patient zero": lunar.Reading("fading", 6)})
+    first, second = hits.file_hits(store, CONFIG, NOW, gate=gate)["filed"]
+    for entry, stage, days, rising in ((first, "rising", 0, True), (second, "fading", 6, False)):
+        pick = store.get_favorite(entry["pick_id"])
+        tags = drop.learn_tags(pick, pick.proposal["drop"], {"hook": "x", "part": "featured"}, version_index=1)
+        assert (tags["trend_stage"], tags["days_since_trend_peak"], tags["sound_rising"]) == (stage, days, rising)
+
+
+def test_without_a_reading_the_hit_is_filed_as_before_with_the_stage_unknown():
+    store = roster_store()
+    stored(store, 1, "reginald", 90, sound="Patient Zero")  # a key, but the gate is off
+    stored(store, 2, "reginald", 80)  # no key to ask about at all
+    run = hits.file_hits(store, CONFIG, NOW, gate=lunar.TrendGate(None))
+    assert len(run["filed"]) == 2 and run["skipped_dead"] == 0
+    for entry in run["filed"]:
+        d = drop_of(store, entry)
+        assert d["trend_stage"] == "unknown" and "days_since_trend_peak" not in d and d["sound_rising"] is False
+        pick = store.get_favorite(entry["pick_id"])
+        tags = drop.learn_tags(pick, d, {"hook": "x", "part": "featured"}, version_index=1)
+        assert (tags["trend_stage"], tags["days_since_trend_peak"], tags["sound_rising"]) == ("none", None, False)  # as today
+
+
+def test_no_gate_at_all_leaves_the_drop_exactly_as_it_was():
+    store = roster_store()
+    stored(store, 1, "reginald", 90, sound="Patient Zero")
+    (f,) = hits.auto_file(store, CONFIG, NOW)
+    d = drop_of(store, f)
+    assert not ({"trend_stage", "days_since_trend_peak", "sound_rising"} & set(d))
+
+
+def test_a_reading_that_failed_files_the_hit_with_the_stage_unknown():
+    store = roster_store()
+    stored(store, 1, "reginald", 90, sound="Patient Zero")
+    gate = StubGate()  # every reading is unknown
+    run = hits.file_hits(store, CONFIG, NOW, gate=gate)
+    assert len(run["filed"]) == 1 and drop_of(store, run["filed"][0])["trend_stage"] == "unknown"
+
+
+def test_the_sound_is_the_key_else_a_keyword_of_the_character_in_the_caption_and_only_a_sound_can_be_rising():
+    store = roster_store()
+    stored(store, 1, "franz", 90, sound="original sound - maker1", caption="my dachshund doing the dance #dogdance")
+    stored(store, 2, "reginald", 80, sound="Original audio", caption="nothing to see")  # no key: not asked
+    stored(store, 3, None, 70, sound=None, caption="Viral Dance of the week", platform="instagram")  # a general keyword
+    gate = StubGate({"dog dance": lunar.Reading("rising", 0), "viral dance": lunar.Reading("rising", 0)})
+    run = hits.file_hits(store, CONFIG, NOW, gate=gate)
+    assert gate.asked == ["dog dance", "viral dance"]  # franz's list order: "dog dance" is before "dachshund"
+    assert [drop_of(store, f)["sound_rising"] for f in run["filed"]] == [False, False, False]  # a caption trend is not a rising sound
+    assert [drop_of(store, f)["trend_stage"] for f in run["filed"]] == ["rising", "unknown", "rising"]
+
+
+def test_events_are_trend_names_too():
+    store = roster_store()
+    stored(store, 1, "reginald", 90, sound=None, caption="paris fashion week energy")
+    gate = StubGate({"paris fashion week": lunar.Reading("fading", 3)})
+    run = hits.file_hits(store, CONFIG, NOW, gate=gate, events=["paris fashion week"])
+    assert gate.asked == ["paris fashion week"] and drop_of(store, run["filed"][0])["trend_stage"] == "fading"
+
+
+def test_a_classic_skips_the_check():
+    store = roster_store()
+    stored(store, 1, "reginald", 90, sound="Gangnam Style", views=80_000_000)  # tier iconic: 50M views or more
+    gate = StubGate({"gangnam style": lunar.Reading("dead", 30)})
+    run = hits.file_hits(store, CONFIG, NOW, gate=gate)
+    assert gate.asked == [] and len(run["filed"]) == 1 and run["skipped_dead"] == 0
+    assert drop_of(store, run["filed"][0])["trend_stage"] == "classic"
+
+
+def test_only_the_hits_about_to_be_filed_are_asked_about_and_a_known_pick_is_not():
+    store = roster_store()
+    known = stored(store, 1, "reginald", 95, sound="Already Picked")
+    store.add_favorite(Favorite(url=known.url, platform="tiktok", character_slug="franz", status="skipped"))
+    for n, s in ((2, 90), (3, 80), (4, 70), (5, 60), (6, 50)):
+        stored(store, n, "reginald", s, sound=f"Sound {n}")
+    gate = StubGate()
+    run = hits.file_hits(store, CONFIG, NOW, gate=gate)
+    assert len(run["filed"]) == 3 and gate.asked == ["sound 2", "sound 3", "sound 4"]  # no call for the pick or the 2 over the cap
+
+
+def test_a_key_is_checked_once_for_the_run_however_many_hits_ride_it():
+    class Client:
+        def __init__(self):
+            self.calls, self.asked = 0, []
+
+        def keyword_time_series(self, keyword):
+            self.calls += 1
+            self.asked.append(keyword)
+            return (lunar_fixture("keyword_time_series_single_ladies"))
+
+        def scrub(self, text):
+            return text
+
+    store = roster_store()
+    for n in (1, 2, 3):
+        stored(store, n, "reginald", 90 - n, sound="Single Ladies")
+    client = Client()
+    run = hits.file_hits(store, CONFIG, NOW, gate=lunar.TrendGate(client))
+    assert client.asked == ["single ladies"] and client.calls == 1
+    assert {drop_of(store, f)["trend_stage"] for f in run["filed"]} == {"fading"} and run["trend"]["keys"] == 1
+    assert {drop_of(store, f)["days_since_trend_peak"] for f in run["filed"]} == {4}
+
+
+def lunar_fixture(name: str) -> str:
+    return (Path(__file__).resolve().parent / "fixtures" / "lunarcrush" / f"{name}.md").read_text(encoding="utf-8")
+
+
+# ---- the CLI: the brake, the gate and the probe -----------------------------------------------------------------------------------------------------
+
+
+def test_cli_pull_says_what_the_brake_and_the_gate_did(cli_store, monkeypatch):
+    api = FakeAPI()
+    api.answer(TT_SEARCH, page(TT_SEARCH, [tt_item(1, views=2_000_000, followers=20_000)]))
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    out = json.loads(CliRunner().invoke(app, ["hits", "pull"]).stdout)
+    assert (out["braked"], out["waiting"], out["skipped_dead"]) == (False, 0, 0)
+    assert out["trend"] == {"enabled": False, "keys": 0, "calls": 0, "stages": {}}  # no LUNARCRUSH_API_KEY: the gate is off
+    (entry,) = out["filed"]
+    d = cli_store.get_favorite(entry["pick_id"]).proposal["drop"]
+    assert d["trend_stage"] == "unknown" and d["sound_rising"] is False
+
+
+def test_cli_pull_is_braked_by_a_backlog_and_says_so(cli_store, monkeypatch):
+    backlog(cli_store, 20)
+    api = FakeAPI()
+    api.answer(TT_SEARCH, page(TT_SEARCH, [tt_item(1, views=2_000_000, followers=20_000)]))
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    r = CliRunner().invoke(app, ["hits", "pull"])
+    out = json.loads(r.stdout)
+    assert r.exit_code == 0 and out["kept"] == 1 and out["filed"] == [] and out["braked"] is True and out["waiting"] == 20
+    assert "::notice::" in r.stderr and "20" in r.stderr
+
+
+def test_cli_pull_gives_the_gate_the_key_and_the_runs_cap(cli_store, monkeypatch):
+    seen = {}
+
+    def gate(cls, *, cap=40, env=None, **kw):
+        seen["cap"] = cap
+        return StubGate({"patient zero": lunar.Reading("dead", 12)})
+
+    monkeypatch.setattr(lunar.TrendGate, "from_env", classmethod(gate))
+    monkeypatch.setattr(hits, "load_scan", lambda path=None: {"hits": {**CONFIG["hits"], "lunar_daily_cap": 7}})
+    api = FakeAPI()
+    item = tt_item(1, views=2_000_000, followers=20_000)
+    item.setdefault("music", {})["title"] = "Patient Zero"
+    api.answer(TT_SEARCH, page(TT_SEARCH, [item]))
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    out = json.loads(CliRunner().invoke(app, ["hits", "pull"]).stdout)
+    assert seen["cap"] == 7 and out["skipped_dead"] == 1 and out["filed"] == []
+
+
+def test_cli_pull_without_the_scrapecreators_key_reports_the_new_fields_too(cli_store, monkeypatch):
+    monkeypatch.delenv("SCRAPECREATORS_API_KEY", raising=False)
+    out = json.loads(CliRunner().invoke(app, ["hits", "pull"]).stdout)
+    assert out["braked"] is False and out["skipped_dead"] == 0 and out["filed"] == []
+
+
+class ProbeClient:
+    def __init__(self, answer: str):
+        self.answer, self.asked = answer, []
+
+    def keyword_time_series(self, keyword):
+        self.asked.append(keyword)
+        return self.answer
+
+    def scrub(self, text):
+        return text
+
+
+def probe(monkeypatch, answer: str | None):
+    client = ProbeClient(answer) if answer is not None else None
+    monkeypatch.setattr(lunar.LunarCrush, "from_env", classmethod(lambda cls, env=None, **kw: client))
+    return CliRunner().invoke(app, ["hits", "lunar-probe", "Single Ladies"]), client
+
+
+def test_lunar_probe_prints_the_parsed_curve_and_the_stage(monkeypatch):
+    r, client = probe(monkeypatch, lunar_fixture("keyword_time_series_single_ladies"))
+    out = json.loads(r.stdout)
+    assert r.exit_code == 0 and client.asked == ["Single Ladies"] and out["keyword"] == "Single Ladies"
+    assert (out["stage"], out["days_since_trend_peak"], out["peak_day"], out["source"]) == ("fading", 4, "2026-10-03", "tiktok")
+    assert len(out["curve"]) == 30 and out["curve"][-1]["day"] == "2026-10-07" and out["curve"][-1]["interactions"] == 289_927
+    assert set(out["curve"][0]) == {"day", "interactions", "smoothed"}
+
+
+def test_lunar_probe_prints_the_raw_head_of_an_answer_it_cannot_read(monkeypatch):
+    r, _ = probe(monkeypatch, "Z" * 500)
+    out = json.loads(r.stdout)
+    assert r.exit_code == 1 and out["raw_head"] == "Z" * 300 and out["stage"] == "unreadable" and "no table" in out["error"]
+
+
+def test_lunar_probe_says_so_when_a_call_fails_and_never_without_a_key(monkeypatch):
+    class Refused(ProbeClient):
+        def keyword_time_series(self, keyword):
+            raise lunar.LunarError("LunarCrush answered HTTP 401: nope", status=401)
+
+    client = Refused("")
+    monkeypatch.setattr(lunar.LunarCrush, "from_env", classmethod(lambda cls, env=None, **kw: client))
+    r = CliRunner().invoke(app, ["hits", "lunar-probe", "x"])
+    assert r.exit_code == 1 and "HTTP 401" in json.loads(r.stdout)["error"]
+    r, _ = probe(monkeypatch, None)
+    assert r.exit_code == 2 and "LUNARCRUSH_API_KEY" in r.stderr
+
+
+def test_lunar_probe_says_when_the_curve_has_no_signal(monkeypatch):
+    flat = "| time | tiktok_interactions |\n|---|---|\n" + "".join(f"| 2026-10-0{d} | 0 |\n" for d in range(1, 8))
+    r, _ = probe(monkeypatch, flat)
+    out = json.loads(r.stdout)
+    assert r.exit_code == 0 and out["stage"] == "unknown" and "no signal" in out["reason"] and len(out["curve"]) == 7

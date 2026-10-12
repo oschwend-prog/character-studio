@@ -253,6 +253,7 @@ SCORE_CLEAR_S = 1.0  # the score's "clear" point: the section keeps this far fro
 MAX_FAMILY = 3  # terminal v3: one clip goes to at most 3 characters (the root drop and 2 versions; skipped picks do not count)
 CHECKED_STATES = ("ready", "making", "made")  # a drop whose check finished: its clip may be used for another character
 USED_HOOKS = gemini.USED_HOOKS_MAX  # "Angles already used": the character's latest hooks the check shows Gemini
+TREND_TAGS = ("trend_stage", "days_since_trend_peak", "sound_rising")  # what the hits job's trend gate writes onto a drop (task 18)
 AUTO_FETCH_DAYS = 3  # an auto-filed link the cloud cannot fetch is tried on its first 3 London days, then dropped
 UNFETCHED_REASON = "couldn't be fetched in the cloud: dropped after 3 days"
 
@@ -802,7 +803,7 @@ def next_engagement(store: Store, slug: str, clip_id: str | None = None) -> str:
 def add_drop(
     store: Store, character_slug: str | None, link: str | None, now: datetime | None = None, *, own_footage: bool = False,
     characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR, provisional_slug: str | None = None, auto_filed: bool = False,
-    hit: Mapping[str, Any] | None = None,
+    hit: Mapping[str, Any] | None = None, trend: Mapping[str, Any] | None = None,
 ) -> tuple[Favorite, bool]:
     """File a drop: ``(pick, duplicate)``. A file (``link`` None) is a new pick keyed ``owner-drop:<id>`` at ``uploading``; a link
     is its canonical URL at ``checking``, and a link already a pick of this character becomes that pick's drop (a pick already
@@ -816,7 +817,9 @@ def add_drop(
     The cloud hits job (``studio.hits.auto_file``, plan Task 6) files a hit's link with no character and ``provisional_slug`` = the
     character whose keywords found it (used while he is in the live roster, else the studio's ``provisional``), ``auto_filed``
     (``drop['auto_filed']``: the learning tag ``source_kind``, retention's 30 days) and ``hit`` (``drop['hit']``: the hit's id and
-    lane)."""
+    lane). It may also hand the LunarCrush reading of the hit's trend (``trend``, task 18: ``trend_stage``,
+    ``days_since_trend_peak``, ``sound_rising``; any other key is ignored), written onto the drop's top level, where ``learn_tags``
+    reads them: a stage it does not know (``unknown``, ``classic``) is the tag ``none`` there."""
     now = now or now_london()
     if character_slug is None:
         crew = {c.slug for c in roster(store, characters_dir)} if provisional_slug else set()
@@ -830,6 +833,8 @@ def add_drop(
     tags: dict[str, Any] = {"auto_filed": True} if auto_filed else {}
     if hit is not None:
         tags["hit"] = dict(hit)
+    if trend is not None:
+        tags.update({k: v for k, v in trend.items() if k in TREND_TAGS})
     if link is None:
         pick_id = str(uuid.uuid4())
         drop = {

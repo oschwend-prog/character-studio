@@ -253,11 +253,16 @@ class Curve:
     smoothed: tuple[tuple[date, float], ...]
 
 
+def source_of(rows: Iterable[Row]) -> str:
+    """The column a curve is read from: ``tiktok`` when any row has a TikTok number, else the summed ``total``."""
+    return "tiktok" if any(r.tiktok is not None for r in rows) else "total"
+
+
 def trend_curve(rows: Iterable[Row]) -> Curve | None:
     """The stage of a trend from its daily rows (see the module doc), or None when the rows give no curve: fewer than
     ``MIN_DAYS`` days with a number, or no signal at all (nothing is not a dead trend, it is unknown)."""
     rows = list(rows)
-    source = "tiktok" if any(r.tiktok is not None for r in rows) else "total"
+    source = source_of(rows)
     by_day: dict[date, int] = {}
     for r in rows:
         value = r.tiktok if source == "tiktok" else r.total
@@ -596,5 +601,5 @@ class TrendGate:
 
 __all__ = [
     "Curve", "LunarCrush", "LunarError", "LunarParseError", "Reading", "Row", "TrendGate", "event_names", "parse_keyword_series",
-    "trend_curve", "trend_key",
+    "source_of", "trend_curve", "trend_key",
 ]

@@ -62,12 +62,36 @@ is what the drop job's concurrency gives (one run per pick, the sweeps in one gr
 each take the last download. PARKED (task 12 review): with the sweep's three workers side by side, up to two downloads a day can pass
 ``download_cap_per_day`` (about 10 credits each, they all read the same count first); accepted, no reservation step.
 
+**The brake** (task 18, ``hits.auto_file_max_waiting``, 20): ``auto_file`` files nothing while that many drops or more are waiting
+(``waiting_drops``: the picks that carry ``proposal.drop``, are not skipped or made, and sit in the drop state ``uploading``,
+``checking``, ``waiting`` or ``ready``, that is filed and not yet sent to be made; the owner's own drops count as much as the
+job's; ``blocked`` and ``failed`` ones do not, nor ``making`` (the owner already said Make it) or ``made``). It is read once, at
+the start of the run: a run that starts under the limit files its usual allowance, so the count can pass the limit by at most one
+day's filing. Over the limit the JSON says ``braked: true`` with the ``waiting`` count, the hits stay ``new`` for tomorrow, and
+LunarCrush is not asked anything.
+
+**The trend gate** (task 18, ``studio/lunar.py``, research 2026-10-08 section 3, rule P5): before a hit is filed its trend is
+looked up on LunarCrush: its sound's title (not a generic "original sound - <handle>"), else a keyword of its lane or an event
+(``config/events.yaml`` when it exists) that its caption says (``lunar.trend_key``). A classic (tier ``iconic``: 50M views or more)
+is not checked. One check a key per run. A ``dead`` trend is not filed (``skipped_dead`` in the JSON; the hit stays ``new``, its
+room goes to the next one); anything else is filed with ``trend_stage`` (``rising``, ``peak``, ``fading``, ``classic`` or
+``unknown``), ``days_since_trend_peak`` (when measured) and ``sound_rising`` (the key was the sound and it is ``rising``) written
+onto the drop, the keys ``drop.learn_tags`` reads. Without ``LUNARCRUSH_API_KEY``, a refused call, the run's
+``hits.lunar_daily_cap`` (40) or an answer it cannot read, the reading is ``unknown`` and the hit is filed as before (fail open:
+filing costs only a free check). The checks are made lazily, in rank order, for the hits about to be filed only, so the ranking
+(``hit_score``) is not changed by them: ``rising`` gets no score bonus (the score has no place for it without a re-weighting or a
+check of every candidate; the learning tags carry ``trend_stage`` instead, and the weekly review judges it). The readings are not
+stored on the hit (no column, no migration): they live on the drop and in the run's JSON (``trend``).
+
 An account out of credits (HTTP 402) stops the pull (``stopped: "out_of_credits"``).
 
 CLI: ``studio hits pull [--dry-run] [--no-file]`` prints ``{"calls", "credits", "day_credits", "kept", "updated", "skipped":
-{reason: n}, "stopped": "cap" | null, "errors": [...], "filed": [{"hit_id", "pick_id", "character", "provisional"}]}``; without the key it
+{reason: n}, "stopped": "cap" | null, "errors": [...], "filed": [{"hit_id", "pick_id", "character", "provisional"}], "braked",
+"waiting", "max_waiting", "skipped_dead", "trend": {"enabled", "keys", "calls", "stages"} | null}``; without the key it
 prints a ``::notice::`` and exits 0; ``--dry-run`` prints the plan of calls and calls nothing. ``studio hits list`` prints the
-stored hits. Exit 1 only when not one call worked.
+stored hits. ``studio hits lunar-probe "<keyword>"`` asks LunarCrush about one keyword (read-only; needs
+``LUNARCRUSH_API_KEY`` in the environment) and prints the parsed curve and its stage, or the raw head of an answer it cannot
+read: the owner's one test that a free key works outside Claude. Exit 1 only when not one call worked.
 """
 
 from __future__ import annotations
@@ -78,7 +102,7 @@ import math
 import os
 import time
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -88,18 +112,21 @@ from urllib.parse import urljoin, urlsplit
 import httpx
 import typer
 
-from studio import drop, seed
+from studio import drop, lunar, seed
 from studio.fetch import filed_at
 from studio.cli_support import emit, fail, open_store
 from studio.config import LONDON, now_london
-from studio.favorites import is_drop, parse_video_url
+from studio.favorites import default_tier, is_drop, parse_video_url
 from studio.models import HIT_CAPTION_MAX, Hit, HitSpend
 from studio.store import HIT_REFRESHED, Store
 
 API_ROOT = "https://api.scrapecreators.com"
 KEY_ENV = "SCRAPECREATORS_API_KEY"
 SCAN_PATH = Path(__file__).resolve().parents[1] / "config" / "scan.json"
-DEFAULTS = {"daily_credit_cap": 45, "download_cap_per_day": 2, "auto_file_per_character": 3, "auto_file_general": 3}
+DEFAULTS = {
+    "daily_credit_cap": 45, "download_cap_per_day": 2, "auto_file_per_character": 3, "auto_file_general": 3,
+    "auto_file_max_waiting": 20, "lunar_daily_cap": 40,
+}  # fmt: skip
 DOWNLOAD_CREDITS = 10  # what a one-post download costs when the media is found (ScrapeCreators' own price list)
 KEYWORDS_PER_CHARACTER = 3
 TIKTOK_REGIONS = ("GB", "US")
@@ -502,7 +529,8 @@ def _words(raw: Any, limit: int | None = None) -> list[str]:
 
 
 def hits_config(scan: Mapping[str, Any]) -> dict[str, Any]:
-    """``config/scan.json`` ``hits``, with the defaults (a cap of 25 credits, 3 drops a character and 3 general ones a day)."""
+    """``config/scan.json`` ``hits``, with the defaults (``DEFAULTS``: 45 credits and 2 downloads a day, 3 drops a character and 3
+    general ones a day, the brake at 20 waiting drops, 40 LunarCrush calls a run)."""
     raw = scan.get("hits") if isinstance(scan.get("hits"), Mapping) else {}
     out: dict[str, Any] = {}
     for name, default in DEFAULTS.items():
@@ -761,20 +789,79 @@ def fileable(hit: Hit, now: datetime) -> bool:
     return hit.last_seen is None or now - hit.last_seen <= timedelta(days=STALE_SEEN_DAYS)
 
 
-def auto_file(
+WAITING_STATES = ("uploading", "checking", "waiting", "ready")  # drop states: filed, not yet sent to be made (see the module doc)
+NOT_WAITING = ("skipped", "made")  # pick statuses: skipped (also: an unfetched auto-filed link dropped after 3 days) or made
+
+
+def waiting_drops(store: Store) -> int:
+    """How many drops wait: the picks with ``proposal.drop`` that are not ``skipped`` or ``made`` and whose ``drop.state`` is one of
+    ``WAITING_STATES`` (``uploading``, ``checking``, ``waiting``, ``ready``: filed, not yet sent to be made). ``blocked`` (can never
+    be made), ``failed`` (the sweep retries a check, the owner's Try again a make), ``making`` (the owner said Make it) and ``made``
+    do not wait. The owner's own drops count too: they are in the same Make-it list."""
+    return sum(
+        1 for f in store.list_favorites()
+        if f.status not in NOT_WAITING and is_drop(f.proposal) and f.proposal["drop"].get("state") in WAITING_STATES
+    )  # fmt: skip
+
+
+def _is_classic(hit: Hit, now: datetime) -> bool:
+    """A classic (tier ``iconic``, ``favorites.default_tier``: 50M views or more) is not checked for freshness (P5 (c))."""
+    proposal = {"posted_at": hit.posted_at.isoformat()} if hit.posted_at is not None else {}
+    return default_tier(proposal, None, now, hit.views) == "iconic"
+
+
+def trend_names(cfg: Mapping[str, Any], character: str | None, events: Sequence[str]) -> list[str]:
+    """The trend names a caption is searched for, in this order: the lane's own keywords, the events, the general keywords."""
+    own = cfg["keywords"].get(character, []) if character else []
+    return list(dict.fromkeys([*own, *events, *cfg["general_keywords"]]))
+
+
+def read_trend(hit: Hit, now: datetime, names: Sequence[str], gate: lunar.TrendGate) -> dict[str, Any]:
+    """The drop's trend keys for a hit (see the module doc): ``trend_stage``, ``days_since_trend_peak`` (only when measured) and
+    ``sound_rising``. ``classic`` for a classic (no call), ``unknown`` without a trend key to ask about or when the gate has no
+    reading, else the gate's stage (one of ``lunar.STAGES``; ``dead`` means the caller must not file it)."""
+    if _is_classic(hit, now):
+        return {"trend_stage": "classic", "sound_rising": False}
+    found = lunar.trend_key(hit.sound, hit.caption, names)
+    if found is None:
+        return {"trend_stage": lunar.UNKNOWN, "sound_rising": False}
+    key, kind = found
+    reading = gate.read(key)
+    out: dict[str, Any] = {"trend_stage": reading.stage, "sound_rising": kind == "sound" and reading.stage == "rising"}
+    if reading.days_since_peak is not None:
+        out["days_since_trend_peak"] = reading.days_since_peak
+    return out
+
+
+def file_hits(
     store: Store, scan_config: Mapping[str, Any], now: datetime, *, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
-) -> list[dict[str, Any]]:
-    """File the best new hits as drops (see the module doc); ``[{"hit_id", "pick_id", "character", "provisional"}]`` in the
-    order they were filed (``character`` None for the general lane; ``provisional`` is who the drop waits under). Only the
-    ``fileable`` ones, ranked by their score today (``hit_score(h, now)``), never the score stored when they were found."""
+    gate: lunar.TrendGate | None = None, events: Sequence[str] = (),
+) -> dict[str, Any]:
+    """File the best new hits as drops (see the module doc): ``{"filed": [{"hit_id", "pick_id", "character", "provisional"}], "braked",
+    "waiting", "max_waiting", "skipped_dead", "trend"}``. ``filed`` is in the order they were filed (``character`` None for the
+    general lane; ``provisional`` is who the drop waits under). Only the ``fileable`` ones, ranked by their score today
+    (``hit_score(h, now)``), never the score stored when they were found.
+
+    The brake first: ``braked`` (and nothing filed, nothing asked) when ``waiting_drops`` has reached ``hits.auto_file_max_waiting``.
+    With a ``gate`` (the trend gate; None leaves the drops exactly as they were) each hit about to be filed is read first: a
+    ``dead`` trend is skipped (``skipped_dead``, the hit stays ``new``, its room goes on to the next), anything else is filed with
+    the reading on its drop. ``trend`` is the gate's ``summary()`` (None without a gate). ``events`` are extra trend names
+    (``lunar.event_names()``)."""
     cfg = hits_config(scan_config)
+    waiting = waiting_drops(store)
+    run: dict[str, Any] = {
+        "filed": [], "braked": waiting >= cfg["auto_file_max_waiting"], "waiting": waiting, "max_waiting": cfg["auto_file_max_waiting"],
+        "skipped_dead": 0, "trend": None,
+    }  # fmt: skip
+    if run["braked"]:
+        return run
     live = live_characters(store)
     takers = {c.slug for c in drop.roster(store, characters_dir)}
     used = filed_today(store, now)
     fresh = [h for h in store.list_hits(status="new") if fileable(h, now)]
     scores = {h.id: hit_score(h, now) for h in fresh}  # scored again today: a stored score ages with its post
     fresh.sort(key=lambda h: (-scores[h.id], -(h.views or 0), h.url))
-    filed: list[dict[str, Any]] = []
+    filed: list[dict[str, Any]] = run["filed"]
     for lane in [*live, "general"]:
         room = (cfg["auto_file_general"] if lane == "general" else cfg["auto_file_per_character"]) - used[lane]
         for hit in fresh:
@@ -782,20 +869,39 @@ def auto_file(
                 break
             if hit.character_slug != (None if lane == "general" else lane):
                 continue
+            if store.list_favorites(url=hit.url):  # already a pick (any status): never filed twice, and not worth a trend check
+                store.update_hit(hit.id, status="dropped")
+                continue
+            trend = None
+            if gate is not None:
+                trend = read_trend(hit, now, trend_names(cfg, hit.character_slug, events), gate)
+                if trend["trend_stage"] == "dead":
+                    run["skipped_dead"] += 1
+                    continue
             with store.transaction():
-                if store.list_favorites(url=hit.url):  # already a pick (any status): never filed twice
+                if store.list_favorites(url=hit.url):  # the same, now that the check (a slow network call) is behind us
                     store.update_hit(hit.id, status="dropped")
                     continue
                 pick, _ = drop.add_drop(
                     store, None, hit.url, now, characters_dir=characters_dir, auto_filed=True,
-                    provisional_slug=lane if lane in takers else None, hit={"id": hit.id, "lane": lane},
+                    provisional_slug=lane if lane in takers else None, hit={"id": hit.id, "lane": lane}, trend=trend,
                 )  # fmt: skip
                 store.update_hit(hit.id, status="dropped")
             filed.append({
                 "hit_id": hit.id, "pick_id": pick.id, "character": None if lane == "general" else lane, "provisional": pick.character_slug,
             })  # fmt: skip
             room -= 1
-    return filed
+    run["trend"] = gate.summary() if gate is not None else None
+    return run
+
+
+def auto_file(
+    store: Store, scan_config: Mapping[str, Any], now: datetime, *, characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
+    gate: lunar.TrendGate | None = None, events: Sequence[str] = (),
+) -> list[dict[str, Any]]:
+    """``file_hits(...)["filed"]``: the drops filed, ``[{"hit_id", "pick_id", "character", "provisional"}]`` in the order they were
+    filed (``[]`` when the brake holds). See ``file_hits`` for the brake and the trend gate."""
+    return file_hits(store, scan_config, now, characters_dir=characters_dir, gate=gate, events=events)["filed"]
 
 
 # ---- CLI ---------------------------------------------------------------------------------------------------------------------------
@@ -834,19 +940,64 @@ def pull_command(
     if client is None:
         typer.echo(f"::notice::{NO_KEY}", err=True)
         emit({"skipped_run": NO_KEY, "calls": 0, "credits": 0, "day_credits": None, "kept": 0, "updated": 0, "skipped": {},
-              "stopped": None, "errors": [], "filed": []})  # fmt: skip
+              "stopped": None, "errors": [], "filed": [], "braked": False, "skipped_dead": 0})  # fmt: skip
         return
     now = now_london()
     out = pull(store, client, scan, now)
-    filed: list[dict[str, Any]] = []
+    filing: dict[str, Any] = {"filed": [], "braked": False, "waiting": None, "max_waiting": cfg["auto_file_max_waiting"],
+                              "skipped_dead": 0, "trend": None}  # fmt: skip
     if file:
+        gate = lunar.TrendGate.from_env(cap=cfg["lunar_daily_cap"])  # off (every reading unknown) without LUNARCRUSH_API_KEY
         try:
-            filed = auto_file(store, scan, now)
+            filing = file_hits(store, scan, now, gate=gate, events=lunar.event_names())
         except ValueError as e:  # every character paused, say: the pull is kept, nothing is filed
             out["file_error"] = str(e)[:300]
-    emit({**out, "filed": filed})
+        if filing["braked"]:
+            typer.echo(
+                f"::notice::auto-filing is braked: {filing['waiting']} drops are waiting (hits.auto_file_max_waiting "
+                f"{filing['max_waiting']}); nothing is filed until the owner works through them", err=True,
+            )
+    emit({**out, **filing})
     if out["calls"] == 0 and out["errors"]:
         raise typer.Exit(1)
+
+
+@app.command("lunar-probe")
+def lunar_probe_command(
+    keyword: Annotated[str, typer.Argument(help="A trend name or sound title, e.g. \"single ladies\".")],
+) -> None:
+    """Read-only test of a LunarCrush key: ask about KEYWORD (one call) and print the parsed curve, its stage and the days since
+    its peak, or the raw head of an answer that could not be read. The key is read from LUNARCRUSH_API_KEY in the environment only
+    (a free key from lunarcrush.com: ``LUNARCRUSH_API_KEY=... bin/studio hits lunar-probe "single ladies"``). Exit 0 when the answer
+    was read, 1 when the call failed or the answer is not a table, 2 without a key."""
+    client = lunar.LunarCrush.from_env(cap=1)
+    if client is None:
+        fail(f"{lunar.KEY_ENV} is not set: make a free key at lunarcrush.com and run it as {lunar.KEY_ENV}=<key> bin/studio hits lunar-probe \"{keyword}\"")
+    try:
+        answer = client.keyword_time_series(keyword)
+    except lunar.LunarError as e:
+        emit({"keyword": keyword, "stage": "error", "error": client.scrub(str(e))})
+        raise typer.Exit(1) from None
+    try:
+        rows = lunar.parse_keyword_series(answer)
+    except lunar.LunarParseError as e:
+        emit({"keyword": keyword, "stage": "unreadable", "error": str(e), "raw_head": client.scrub(e.head)})
+        raise typer.Exit(1) from None
+    source = lunar.source_of(rows)
+    raw = {r.day: (r.tiktok if source == "tiktok" else r.total) or 0 for r in rows}
+    curve = lunar.trend_curve(rows)
+    if curve is None:
+        emit({
+            "keyword": keyword, "stage": lunar.UNKNOWN, "reason": "the curve has no signal to judge (too few days, or nothing posted)",
+            "source": source, "curve": [{"day": d.isoformat(), "interactions": v} for d, v in sorted(raw.items())],
+        })  # fmt: skip
+        return
+    emit({
+        "keyword": keyword, "stage": curve.stage, "days_since_trend_peak": curve.days_since_peak, "peak_day": curve.peak_day.isoformat(),
+        "peak_value": round(curve.peak_value, 1), "latest_value": round(curve.latest_value, 1), "ratio": round(curve.ratio, 3),
+        "source": curve.source,
+        "curve": [{"day": d.isoformat(), "interactions": raw.get(d, 0), "smoothed": round(v, 1)} for d, v in curve.smoothed],
+    })  # fmt: skip
 
 
 @app.command("list")
@@ -870,6 +1021,6 @@ def list_command(
 
 __all__ = [
     "Call", "DownloadBudget", "ScrapeCreators", "ScrapeCreatorsError", "auto_file", "credits_of", "download_budget",
-    "download_refusal", "hit_score", "hits_config", "media_url", "parse_instagram", "parse_tiktok", "plan_calls", "pull",
-    "search_limit", "skip_reason",
+    "download_refusal", "file_hits", "hit_score", "hits_config", "media_url", "parse_instagram", "parse_tiktok", "plan_calls", "pull",
+    "read_trend", "search_limit", "skip_reason", "trend_names", "waiting_drops",
 ]
