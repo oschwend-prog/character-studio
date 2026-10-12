@@ -1703,11 +1703,23 @@ def checked_scores(store: Store, pick: Favorite) -> list[int]:
     return list(pool.values())
 
 
+def has_beat_source(pick: Favorite, drop: Mapping[str, Any]) -> bool:
+    """Does the master of this drop have a beat to follow (tests G and H: zoom pulses and the word pop go on the beat)? Yes for the
+    clip's own sound (music ``original``, the default) or an ``ai_beat``; no for a silent ``in_app`` master (the drop's music, or
+    the owner's choice on the Make-it sheet, ``proposal.owner_music``) and for a clip the check found to have no sound
+    (``drop.has_audio`` false). A check that did not record ``has_audio`` is taken to have one: the master finds out for itself
+    (it renders without the edit when it hears no beat, ``master.build_master``)."""
+    if "in_app" in (drop.get("music"), pick.proposal.get("owner_music")):
+        return False
+    return drop.get("has_audio", True) is not False
+
+
 def _tests_at_make(
     store: Store, pick: Favorite, now: datetime, registry: experiments.Registry,
 ) -> tuple[dict[str, Any], bool]:
-    """(the block-coin arms for the pick's next clip, whether test A tags it ``explore_pick``): see ``studio.experiments``."""
-    arms = experiments.assign_blocks(store, registry, pick.character_slug, now)
+    """(the block-coin arms for the pick's next clip, whether test A tags it ``explore_pick``): see ``studio.experiments``. A
+    master with no beat to follow (``has_beat_source``) takes no position in tests G and H."""
+    arms = experiments.assign_blocks(store, registry, pick.character_slug, now, beats=has_beat_source(pick, drop_of(pick)))
     explore = registry.is_active("A", now) and experiments.is_explore(_score_of(pick), checked_scores(store, pick))
     return arms, explore
 

@@ -480,7 +480,8 @@ def test_the_made_clip_carries_the_drawn_pattern_its_hook_and_who_chose_it(exper
     pick = add_pick(store)
     clip = made(store, pick)
     f = store.get_clip(clip.id).features
-    assert f["test_arms"] == {"hook": "false-premise"}  # test C is off in the repo's registry: no trial arm
+    # test C is off in the repo's registry: no trial arm; tests G and H (the edit tests) are on and the clip has its own sound
+    assert set(f["test_arms"]) == {"hook", "zoom", "word_pop"} and f["test_arms"]["hook"] == "false-premise"
     assert (f["hook_pattern"], f["hook_index"], f["hook_by"], f["hook_text"]) == ("false-premise", 2, "bandit", "Breakfast is at eight.")
     assert clips.learn_problems(f) == []
     bandit = drop.drop_of(store.get_favorite(pick.id))["make"]["bandit"]

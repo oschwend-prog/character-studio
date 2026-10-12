@@ -2,15 +2,17 @@
 on a clip (learning plan sections 3.0-3.4, build item 7).
 
 The registry file itself is pinned: the owner's decisions of Mon 12 Oct 2026 (A and B on; C off since the owner chose normal Reels
-for every post; D, E and F off) are the file's, and a change to them is a new dated version of the plan. Everything else runs on
-``MemoryStore`` and tmp registries; ``conftest`` points every other test at an all-off copy. The tests of test C's mechanics (the
-block coin, its place in the block, the trial arm on a made clip) build their own registry with C on (``c_on_registry`` /
-``c_on``): they keep testing the coin although the repo's file has it off.
+for every post; D, E and F off; G and H, the two edit tests, on) are the file's, and a change to them is a new dated version of the
+plan. Everything else runs on ``MemoryStore`` and tmp registries; ``conftest`` points every other test at an all-off copy. The tests
+of test C's mechanics (the block coin, its place in the block, the trial arm on a made clip) build their own registry with C on
+(``c_on_registry`` / ``c_on``; G and H off there, they have their own section): they keep testing the coin although the repo's file
+has C off.
 """
 
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 from collections import Counter
 from datetime import datetime, timezone
@@ -60,8 +62,11 @@ def edit(path: str, value: Any) -> dict[str, Any]:
 
 
 def c_on_data() -> dict[str, Any]:
-    """The repo's registry data with test C switched on: the file has it off (owner 12 Oct), its mechanics are still tested."""
-    return edit("tests.C.status", "on")
+    """The repo's registry data with test C switched on (the file has it off, owner 12 Oct: its mechanics are still tested) and the
+    edit tests G and H switched off (their own tests below turn them on)."""
+    data = edit("tests.C.status", "on")
+    data["tests"]["G"]["status"] = data["tests"]["H"]["status"] = "off"
+    return data
 
 
 def c_on_registry() -> Registry:
@@ -82,13 +87,18 @@ def c_on(tmp_path, monkeypatch) -> Registry:
 
 def test_the_repos_registry_loads_and_holds_the_owners_decisions_of_12_oct():
     reg = load_experiments(REPO_REGISTRY)
-    assert reg.version == 1 and str(reg.start) == "2026-10-12" and reg.seed
-    assert {t: reg.test(t).status for t in "ABCDEF"} == {"A": "on", "B": "on", "C": "off", "D": "off", "E": "off", "F": "off"}
-    assert {t: reg.test(t).assignment for t in "ABCDEF"} == {
-        "A": "tag", "B": "bandit", "C": "block_coin", "D": "block_coin", "E": "block_coin", "F": "block_coin",
+    assert reg.version == 2 and str(reg.start) == "2026-10-12" and reg.seed
+    assert {t: reg.test(t).status for t in "ABCDEFGH"} == {
+        "A": "on", "B": "on", "C": "off", "D": "off", "E": "off", "F": "off", "G": "on", "H": "on",
     }
-    assert [t.id for t in reg.active(START)] == ["A", "B"]
-    assert {t: reg.test(t).key for t in "BCDEF"} == {"B": "hook", "C": "trial", "D": "own_series", "E": "length", "F": "comment"}
+    assert {t: reg.test(t).assignment for t in "ABCDEFGH"} == {
+        "A": "tag", "B": "bandit", "C": "block_coin", "D": "block_coin", "E": "block_coin", "F": "block_coin",
+        "G": "block_coin", "H": "block_coin",
+    }
+    assert [t.id for t in reg.active(START)] == ["A", "B", "G", "H"]
+    assert {t: reg.test(t).key for t in "BCDEFGH"} == {
+        "B": "hook", "C": "trial", "D": "own_series", "E": "length", "F": "comment", "G": "zoom", "H": "word_pop",
+    }
 
 
 def test_the_default_path_is_the_repos_file(experiments_on):
@@ -163,6 +173,13 @@ def test_the_conftest_registry_has_every_test_off():
         ("tests.B.pool_min_uses", ..., r"tests\.B\.pool_min_uses"),
         ("tests.B.needs_moment_name", ["nonsense"], r"tests\.B\.needs_moment_name"),
         ("tests.F.key", "trial", "two tests write the same key"),
+        ("tests.G.key", "word_pop", "two tests write the same key"),
+        ("tests.G.key", ..., r"tests\.G\.key"),
+        ("tests.G.needs_beats", "yes", r"tests\.G\.needs_beats"),
+        ("tests.H.needs_beats", 1, r"tests\.H\.needs_beats"),
+        ("tests.H.block", 3, r"tests\.H\.block"),
+        ("tests.H.arms", [True], r"tests\.H\.arms"),
+        ("tests.G.min_n", {}, r"tests\.G\.min_n"),
     ],
 )
 def test_a_registry_that_breaks_a_rule_is_refused_naming_the_key(path, value, message):
@@ -177,8 +194,12 @@ def test_a_missing_or_extra_test_is_refused():
     with pytest.raises(ValueError, match="no entry for test E"):
         parse_experiments(data)
     data = copy.deepcopy(DATA)
-    data["tests"]["G"] = data["tests"]["F"]
-    with pytest.raises(ValueError, match="unknown test 'G'"):
+    del data["tests"]["H"]
+    with pytest.raises(ValueError, match="no entry for test H"):
+        parse_experiments(data)
+    data = copy.deepcopy(DATA)
+    data["tests"]["Z"] = data["tests"]["F"]
+    with pytest.raises(ValueError, match="unknown test 'Z'"):
         parse_experiments(data)
     with pytest.raises(ValueError, match="must be a JSON object"):
         parse_experiments([])
@@ -198,9 +219,9 @@ def test_an_unreadable_or_non_json_file_is_refused(tmp_path):
 
 
 def test_a_test_off_is_valid_and_assigns_nothing():
-    reg = registry(tests={**DATA["tests"], "C": {**DATA["tests"]["C"], "status": "off"}})
-    assert not reg.test("C").on and [t.id for t in reg.active(START)] == ["A", "B"]
-    assert reg.is_active("A", START) and not reg.is_active("C", START)
+    reg = registry(tests={**DATA["tests"], "G": {**DATA["tests"]["G"], "status": "off"}})
+    assert not reg.test("G").on and [t.id for t in reg.active(START)] == ["A", "B", "H"]
+    assert reg.is_active("A", START) and not reg.is_active("G", START) and not reg.is_active("C", START)
 
 
 def test_a_test_starts_on_its_start_day_london_and_not_before():
@@ -208,7 +229,7 @@ def test_a_test_starts_on_its_start_day_london_and_not_before():
     before = datetime(2026, 10, 11, 22, 0, tzinfo=timezone.utc)  # 23:00 on the 11th in London (BST)
     after = datetime(2026, 10, 11, 23, 30, tzinfo=timezone.utc)  # 00:30 on the 12th in London
     assert reg.active(before) == [] and [t.id for t in reg.active(after)] == ["A", "B", "C"]
-    assert [t.id for t in load_experiments(REPO_REGISTRY).active(after)] == ["A", "B"]  # the file has C off
+    assert [t.id for t in load_experiments(REPO_REGISTRY).active(after)] == ["A", "B", "G", "H"]  # the file has C off
     assert reg.active(datetime(2026, 10, 5, 12, 0, tzinfo=LONDON)) == []
 
 
@@ -343,7 +364,7 @@ def test_assign_blocks_assigns_nothing_before_the_start_or_for_an_off_test():
     assert assign_blocks(store, reg, "franz", datetime(2026, 10, 11, 12, 0, tzinfo=LONDON)) == {}
     off = registry(tests={t: {**v, "status": "off"} for t, v in DATA["tests"].items()})
     assert assign_blocks(store, off, "franz", START) == {}
-    assert assign_blocks(store, load_experiments(REPO_REGISTRY), "franz", START) == {}  # the file has C off: no trial arm
+    assert set(assign_blocks(store, load_experiments(REPO_REGISTRY), "franz", START)) == {"zoom", "word_pop"}  # C off: no trial arm
     on = registry(tests={**c_on_data()["tests"], "F": {**DATA["tests"]["F"], "status": "on"}})
     assert set(assign_blocks(store, on, "franz", START)) == {"trial", "comment"}  # a test turned on assigns by its own coin
     assert assign_blocks(store, on, "franz", START)["comment"] in ("vote", "question")
@@ -499,7 +520,7 @@ def test_with_the_repos_registry_a_made_clip_gets_no_trial_arm_but_keeps_the_exp
     for s in (90, 80, 70, 60, 50):
         add_pick(store, "franz", s)
     f = store.get_clip(make_clip(store, add_pick(store, "franz", 40, state="making")).id).features
-    assert f["explore_pick"] is True and "trial" not in f["test_arms"] and f["test_arms"] == {}
+    assert f["explore_pick"] is True and "trial" not in f["test_arms"] and set(f["test_arms"]) == {"zoom", "word_pop"}  # G and H
     assert block_position(store, "franz", "trial") == 0
     assert clips.learn_problems(f) == []
 
@@ -557,3 +578,170 @@ def test_learn_tags_take_the_arms_and_the_flag_as_given():
     given = drop.learn_tags(pick, d, eff, version_index=1, test_arms={"trial": True}, explore_pick=True)
     assert (given["test_arms"], given["explore_pick"]) == ({"trial": True}, True)
     assert clips.learn_problems({**given, "length_s": 7.0}) == []
+
+
+# ---- tests G and H: zoom pulses on the beat, the hook popping in word by word (plan 3.9, 3.10) ------------------------------------------
+
+
+def g_h_registry(**status: str) -> Registry:
+    """The repo's registry with A and B as they are, C off, and G and H as the file has them (or as ``status`` says)."""
+    data = copy.deepcopy(DATA)
+    for test_id, value in status.items():
+        data["tests"][test_id]["status"] = value
+    return parse_experiments(data)
+
+
+def test_tests_g_and_h_are_the_owners_pre_registered_block_coins():
+    reg = load_experiments(REPO_REGISTRY)
+    for test_id, key, arm_name in (("G", "zoom", "zoom"), ("H", "word_pop", "word_pop")):
+        t = reg.test(test_id)
+        assert (t.status, t.assignment, t.key) == ("on", "block_coin", key)
+        assert (t.arms, t.block, dict(t.counts)) == ((True, False), 4, {True: 2, False: 2})  # two and two in every block of 4
+        assert t.needs_beats is True  # a silent in_app master takes no position
+        assert t.params["min_n"] == {arm_name: 10, "none" if test_id == "G" else "kit_entrance": 10}  # 10 and 10 pooled
+        assert t.params["platform"] == "instagram" and isinstance(t.params["question"], str) and t.params["eligible"]
+        # the rule is written in the file: 1.3x on the median outlier_x, otherwise the default stays (the default wins ties)
+        assert t.params["decision"] == {f"{key}_for_all_if_ratio_at_least": 1.3}
+    assert not any(reg.test(x).needs_beats for x in "ABCDEF")
+    assert reg.start.isoformat() == "2026-10-12"
+
+
+@pytest.mark.parametrize("test_id", ["G", "H"])
+def test_every_block_of_four_holds_each_arm_twice_for_g_and_h(test_id):
+    reg = load_experiments(REPO_REGISTRY)
+    t = reg.test(test_id)
+    for slug in ("franz", "reginald", "lenny"):
+        for block in range(40):
+            order = block_order(reg.seed, t, slug, block)
+            assert Counter(order) == {True: 2, False: 2}, (slug, block, order)
+        seq = [block_arm(reg, t, slug, i) for i in range(48)]
+        assert seq == [block_arm(load_experiments(REPO_REGISTRY), t, slug, i) for i in range(48)]  # same inputs, same arm
+        assert not all(seq[i] != seq[i + 1] for i in range(47))  # not a plain alternation
+
+
+def test_g_and_h_have_their_own_coins_that_line_up_neither_with_each_other_nor_with_c():
+    reg = load_experiments(REPO_REGISTRY)
+    for slug in ("franz", "reginald", "lenny"):
+        seqs = {x: [block_arm(reg, reg.test(x), slug, i) for i in range(64)] for x in "CGH"}
+        assert seqs["G"] != seqs["H"] and seqs["G"] != seqs["C"] and seqs["H"] != seqs["C"]
+        assert 0 < sum(a == b for a, b in zip(seqs["G"], seqs["H"])) < 64  # they agree somewhere and differ somewhere
+
+
+def test_assign_blocks_hands_g_and_h_their_arms_for_a_master_with_beats():
+    reg, store = g_h_registry(), world()
+    got = []
+    for _ in range(8):
+        arms = assign_blocks(store, reg, "franz", START)
+        assert set(arms) == {"zoom", "word_pop"}  # A is a tag, B the bandit, C-F are off
+        got.append(arms)
+        clip_with(store, "franz", arms)
+    assert [a["zoom"] for a in got] == [block_arm(reg, reg.test("G"), "franz", i) for i in range(8)]
+    assert [a["word_pop"] for a in got] == [block_arm(reg, reg.test("H"), "franz", i) for i in range(8)]
+    for key in ("zoom", "word_pop"):  # 2 and 2 in each block of 4, whatever the other coin does
+        assert Counter(a[key] for a in got[:4]) == {True: 2, False: 2} == Counter(a[key] for a in got[4:])
+
+
+def test_a_master_without_beats_takes_no_position_in_g_or_h():
+    reg, store = g_h_registry(), world()
+    full = assign_blocks(store, reg, "franz", START)
+    assert set(full) == {"zoom", "word_pop"}
+    silent = assign_blocks(store, reg, "franz", START, beats=False)
+    assert silent == {}  # no key at all: not an arm, not a place
+    clip_with(store, "franz", silent)  # an in_app master is made and carries no zoom / word_pop
+    assert block_position(store, "franz", "zoom") == 0 == block_position(store, "franz", "word_pop")
+    assert assign_blocks(store, reg, "franz", START) == full  # the next master with beats takes the place the silent one did not
+
+
+def test_silent_masters_in_between_leave_every_block_balanced():
+    """Eight masters with beats and three silent ones among them: the eight take positions 0..7 in order, 2 and 2 in each block."""
+    reg, store = g_h_registry(), world()
+    taken = []
+    for i in range(11):
+        beats = i not in (1, 4, 5)
+        arms = assign_blocks(store, reg, "franz", START, beats=beats)
+        assert (set(arms) == {"zoom", "word_pop"}) is beats
+        clip_with(store, "franz", arms)
+        if beats:
+            taken.append(arms)
+    assert len(taken) == 8
+    for test_id, key in (("G", "zoom"), ("H", "word_pop")):
+        assert [a[key] for a in taken] == [block_arm(reg, reg.test(test_id), "franz", i) for i in range(8)]
+        assert Counter(a[key] for a in taken[:4]) == {True: 2, False: 2} == Counter(a[key] for a in taken[4:])
+
+
+def test_silence_does_not_stop_the_other_tests_from_assigning():
+    """Test C does not need beats: a silent master still gets its Trial Reel coin."""
+    data = c_on_data()
+    data["tests"]["G"]["status"] = data["tests"]["H"]["status"] = "on"
+    reg, store = parse_experiments(data), world()
+    assert set(assign_blocks(store, reg, "franz", START)) == {"trial", "zoom", "word_pop"}
+    assert set(assign_blocks(store, reg, "franz", START, beats=False)) == {"trial"}
+
+
+def test_g_and_h_assign_nothing_when_off_or_before_the_start_day():
+    store = world()
+    off = g_h_registry(G="off", H="off")
+    assert assign_blocks(store, off, "franz", START) == {}
+    only_h = g_h_registry(G="off")
+    assert set(assign_blocks(store, only_h, "franz", START)) == {"word_pop"}
+    assert assign_blocks(store, g_h_registry(), "franz", datetime(2026, 10, 11, 12, 0, tzinfo=LONDON)) == {}
+
+
+def test_a_clip_made_in_a_test_before_g_and_h_existed_takes_no_place_in_them():
+    store, reg = world(), g_h_registry()
+    clip_with(store, "franz", {"hook": "ego-claim"})
+    clip_with(store, "franz", {"trial": True})
+    assert block_position(store, "franz", "zoom") == 0
+    assert assign_blocks(store, reg, "franz", START) == {
+        "zoom": block_arm(reg, reg.test("G"), "franz", 0), "word_pop": block_arm(reg, reg.test("H"), "franz", 0),
+    }
+
+
+# ---- tests G and H at Make it: who is eligible --------------------------------------------------------------------------------------------
+
+
+def add_pick_with(store: MemoryStore, slug: str, owner_music: str | None = None, **drop_over: Any) -> Favorite:
+    pick = add_pick(store, slug, 70, state="making", **drop_over)
+    if owner_music is not None:
+        store.update_favorite(pick.id, proposal={**pick.proposal, "owner_music": owner_music})
+    return store.get_favorite(pick.id)
+
+
+def test_a_made_clip_with_the_clips_own_sound_carries_the_g_and_h_arms(experiments_on):
+    store, reg = world(), load_experiments(REPO_REGISTRY)
+    made = [store.get_clip(make_clip(store, add_pick_with(store, "franz")).id).features for _ in range(4)]
+    assert [f["test_arms"]["zoom"] for f in made] == [block_arm(reg, reg.test("G"), "franz", i) for i in range(4)]
+    assert [f["test_arms"]["word_pop"] for f in made] == [block_arm(reg, reg.test("H"), "franz", i) for i in range(4)]
+    assert all(clips.learn_problems(f) == [] for f in made)
+    assert all("trial" not in f["test_arms"] for f in made)  # C is off in the file
+    for key in ("zoom", "word_pop"):
+        assert Counter(f["test_arms"][key] for f in made) == {True: 2, False: 2}
+
+
+@pytest.mark.parametrize(
+    ("owner_music", "drop_over"),
+    [("in_app", {}), (None, {"music": "in_app"}), (None, {"has_audio": False})],
+    ids=["owner chose in_app", "silent master", "the clip has no sound"],
+)
+def test_a_master_without_a_beat_source_takes_no_g_or_h_position_at_make(experiments_on, owner_music, drop_over):
+    store, reg = world(), load_experiments(REPO_REGISTRY)
+    silent = store.get_clip(make_clip(store, add_pick_with(store, "franz", owner_music, **drop_over)).id).features
+    assert "zoom" not in silent["test_arms"] and "word_pop" not in silent["test_arms"]
+    assert clips.learn_problems(silent) == []
+    assert block_position(store, "franz", "zoom") == 0
+    nxt = store.get_clip(make_clip(store, add_pick_with(store, "franz")).id).features["test_arms"]  # takes place 0, not 1
+    assert nxt == {"zoom": block_arm(reg, reg.test("G"), "franz", 0), "word_pop": block_arm(reg, reg.test("H"), "franz", 0)}
+
+
+def test_has_beat_source_is_the_clips_own_sound_or_an_ai_beat():
+    pick = add_pick_with(world(), "franz")
+    d = drop.drop_of(pick)
+    assert drop.has_beat_source(pick, d) is True
+    assert drop.has_beat_source(pick, {**d, "has_audio": False}) is False
+    assert drop.has_beat_source(pick, {**d, "music": "in_app"}) is False
+    assert drop.has_beat_source(pick, {**d, "music": "ai_beat"}) is True
+    assert drop.has_beat_source(pick, {k: v for k, v in d.items() if k != "has_audio"}) is True  # unknown: the master will tell
+    owner_silent = dataclasses.replace(pick, proposal={**pick.proposal, "owner_music": "in_app"})
+    assert drop.has_beat_source(owner_silent, d) is False
+    owner_beat = dataclasses.replace(pick, proposal={**pick.proposal, "owner_music": "ai_beat"})
+    assert drop.has_beat_source(owner_beat, d) is True

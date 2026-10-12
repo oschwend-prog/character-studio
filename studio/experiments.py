@@ -1,13 +1,13 @@
 """The test registry and the assignment of a made clip to its test arms (learning plan sections 3.0-3.4, build item 7).
 
 ``config/experiments.json`` holds one entry per pre-registered test (A score and exploration picks, B hook bandit, C Trial
-Reels, D own series, E length, F first comment): its ``status`` (``on`` / ``off``: an ``off`` test assigns nothing), how it
+Reels, D own series, E length, F first comment, G zoom pulses on the beat, H the hook popping in word by word): its ``status`` (``on`` / ``off``: an ``off`` test assigns nothing), how it
 assigns, its arms, the block of its coin, the minimum sample. ``load_experiments`` reads and validates it and refuses, naming the
 key, anything it does not understand (``ValueError``): the make and the publish run stop, nothing is guessed. The registry path is
 ``EXPERIMENTS_PATH`` (read at call time, so a test can point it elsewhere). A test assigns only from the registry's ``start`` day
 on (London).
 
-**The block coin** (section 3.0; tests C, D, E, F). Each test has its own coin, so two tests never line up and none lines up with
+**The block coin** (section 3.0; tests C, D, E, F, G, H). Each test has its own coin, so two tests never line up and none lines up with
 the caption rotation. A character's clips are numbered by the tests they carry: the next clip is at ``position`` = the number of his
 earlier clips that ever carried the test's ``key`` in ``features['test_arms']``: EVERY one, whatever became of it (a clip that was
 dropped, rejected or failed keeps its place, as does an earlier try of the same pick), so a position is never given out twice. A
@@ -17,6 +17,14 @@ holds every arm exactly ``block / len(arms)`` times (or ``arms[name]`` times whe
 number. So the same character, test, position and seed always give the same arm, whatever else happened, and no run of four posts
 is ever lopsided. ``assign_blocks`` returns ``{key: arm}`` for every active block-coin test; the make path calls it under the
 settings row lock (``drop._new_or_current_clip``), so two makes of one character never read the same position.
+
+**Eligibility** (tests G and H, ``needs_beats`` in their entry): a pulse on the beat and a word on the beat need a beat, so a master
+with no sound to follow (a silent ``in_app`` master, a clip with no sound; ``drop.has_beat_source``) is not part of the test.
+``assign_blocks(..., beats=False)`` leaves those tests out: the clip gets no ``zoom`` / ``word_pop`` key, so it takes no position
+(a position is counted from the clips that carry the key) and the next master with beats takes the place it did not use; every
+block of the eligible clips still holds each arm exactly its places. The master may still find no beat in the sound after all: it
+then renders without the edit and records so (``zoom_pulses`` 0, ``hook_entrance`` the kit's: ``master.build_master``), and the
+analysis leaves that clip out.
 
 **Test A** (section 3.2) is a tag, not a coin: ``explore_pick`` is true when the clip's score is below the median score of the
 character's checked drops (ready, being made or made, ``drop.checked_scores``: so the median does not move while a batch is made;
@@ -44,7 +52,7 @@ from studio.store import Store, require_aware
 ROOT = Path(__file__).resolve().parents[1]
 EXPERIMENTS_PATH = ROOT / "config" / "experiments.json"
 
-TEST_IDS = ("A", "B", "C", "D", "E", "F")
+TEST_IDS = ("A", "B", "C", "D", "E", "F", "G", "H")
 STATUSES = ("on", "off")
 ASSIGNMENTS = ("tag", "block_coin", "bandit")
 MIN_EXPLORE_POOL = 2  # a median needs at least two scored clips; with one, nothing is "below" it
@@ -68,6 +76,11 @@ class Experiment:
     @property
     def on(self) -> bool:
         return self.status == "on"
+
+    @property
+    def needs_beats(self) -> bool:
+        """True for a test of an edit that follows the beat (G, H): a master with no beat to follow takes no position in it."""
+        return self.params.get("needs_beats") is True
 
 
 @dataclass(frozen=True)
@@ -175,6 +188,8 @@ def _experiment(test_id: str, raw: Any) -> Experiment:
     min_n = raw.get("min_n")
     if not isinstance(min_n, Mapping) or not min_n or not all(_positive_int(v) for v in min_n.values()):
         raise _bad(f"{where}.min_n", "must be an object of whole numbers of 1 or more (the minimum sample)")
+    if "needs_beats" in raw and not isinstance(raw["needs_beats"], bool):
+        raise _bad(f"{where}.needs_beats", f"must be true or false, got {raw['needs_beats']!r:.30}")
     key = raw.get("key")
     if raw["assignment"] != "tag" and (not isinstance(key, str) or not key.strip()):
         raise _bad(f"{where}.key", "is required (the key of features['test_arms'])")
@@ -262,11 +277,14 @@ def block_position(store: Store, character: str, key: str) -> int:
     )
 
 
-def assign_blocks(store: Store, registry: Registry, character: str, now: datetime) -> dict[str, Any]:
+def assign_blocks(store: Store, registry: Registry, character: str, now: datetime, *, beats: bool = True) -> dict[str, Any]:
     """``{key: arm}`` for every active block-coin test, for the character's next clip (``{}`` when none is active). Call it under
-    the settings row lock so two makes of one character cannot read the same position."""
+    the settings row lock so two makes of one character cannot read the same position. ``beats`` is whether the clip's master has
+    a beat to follow; with ``beats=False`` the tests that ``needs_beats`` (G, H) are left out: no key, so no position taken."""
     out: dict[str, Any] = {}
     for test in registry.active(now):
+        if test.needs_beats and not beats:
+            continue
         if test.assignment == "block_coin" and test.key:
             position = block_position(store, character, test.key)
             out[test.key] = block_arm(registry, test, character, position)

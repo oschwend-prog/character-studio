@@ -1,6 +1,6 @@
 {
-  "_doc": "The test registry (docs/launch/measurement-and-learning-plan.md sections 3.0-3.8, learning build item 7). One entry per pre-registered test; studio/experiments.py loads and validates it (a broken file stops the make and the publish run, nothing is guessed). `status`: on / off. The owner decided on Mon 12 Oct 2026, before any 7-day figure: tests A, B and C on; D and E off; F not decided (off). A test only assigns from `start` on. What each assignment does at make (studio/drop.py): `tag` (test A) writes `explore_pick` (the clip's score is below the median score of the character's checked drops, ready, being made or made, so the median does not move while a batch is made); `block_coin` writes `test_arms[key]` (balanced in blocks of `block`: every arm appears block / len(arms) times, in an order shuffled by a coin seeded from `seed`, the test id, the character and the block number, so each test has its own coin and the coins never line up; the next position of a character is the number of his clips that ever carried the key, whatever became of them, so a position is never given twice); `bandit` (test B) picks the hook among the check's candidates (studio/learn.py). An `off` test assigns nothing. `min_n` and the decisions are the plan's, restated for the weekly digest; they are pre-registered: change them only as a new dated version of the plan, never after the data. Arms of the hook bandit change only by pull request (section 3.3).",
-  "version": 1,
+  "_doc": "The test registry (docs/launch/measurement-and-learning-plan.md sections 3.0-3.10, learning build item 7). One entry per pre-registered test; studio/experiments.py loads and validates it (a broken file stops the make and the publish run, nothing is guessed). `status`: on / off. The owner decided on Mon 12 Oct 2026, before any 7-day figure: tests A, B and C on; D and E off; F not decided (off); later the same day, before any data: C off, and G and H (the two edit tests, sections 3.9 and 3.10, version 2) on. A test only assigns from `start` on. What each assignment does at make (studio/drop.py): `tag` (test A) writes `explore_pick` (the clip's score is below the median score of the character's checked drops, ready, being made or made, so the median does not move while a batch is made); `block_coin` writes `test_arms[key]` (a test with `needs_beats`, G and H, skips a master with no beat to follow: no key, no place in its blocks; balanced in blocks of `block`: every arm appears block / len(arms) times, in an order shuffled by a coin seeded from `seed`, the test id, the character and the block number, so each test has its own coin and the coins never line up; the next position of a character is the number of his clips that ever carried the key, whatever became of them, so a position is never given twice); `bandit` (test B) picks the hook among the check's candidates (studio/learn.py). An `off` test assigns nothing. `min_n` and the decisions are the plan's, restated for the weekly digest; they are pre-registered: change them only as a new dated version of the plan, never after the data. Arms of the hook bandit change only by pull request (section 3.3).",
+  "version": 2,
   "start": "2026-10-12",
   "seed": "oddeyes-learning-2026-10-12",
   "tests": {
@@ -78,6 +78,36 @@
       "block": 4,
       "min_n": {"per_arm": 10},
       "note": "off: the first comment is not posted within 5 minutes and pinned yet (plan Task 8), so the precondition is not met"
+    },
+    "G": {
+      "name": "zoom pulses on the beat",
+      "status": "on",
+      "assignment": "block_coin",
+      "key": "zoom",
+      "question": "does a punch-in (zoom_hit 1.06) on every 4th beat, picture only, reach 1.3x the median outlier_x of a master without pulses?",
+      "platform": "instagram",
+      "arms": [true, false],
+      "block": 4,
+      "needs_beats": true,
+      "eligible": "masters with beats (the clip's own audio or ai_beat); a silent in_app master, or a clip with no sound, takes no position",
+      "min_n": {"zoom": 10, "none": 10},
+      "decision": {"zoom_for_all_if_ratio_at_least": 1.3},
+      "note": "otherwise no pulses (the default wins ties); secondary, report only: x72, skip rate, watched %; no credits (ffmpeg only)"
+    },
+    "H": {
+      "name": "the first hook pops in word by word on the beat",
+      "status": "on",
+      "assignment": "block_coin",
+      "key": "word_pop",
+      "question": "does the first hook coming in one word per beat (word_pop) reach 1.3x the median outlier_x of the character's own kit entrance?",
+      "platform": "instagram",
+      "arms": [true, false],
+      "block": 4,
+      "needs_beats": true,
+      "eligible": "masters with beats (the clip's own audio or ai_beat); a silent in_app master, or a clip with no sound, takes no position",
+      "min_n": {"word_pop": 10, "kit_entrance": 10},
+      "decision": {"word_pop_for_all_if_ratio_at_least": 1.3},
+      "note": "otherwise the kits' own entrances (the default wins ties); secondary, report only: x72, skip rate, watched %; no credits (PIL and ffmpeg only)"
     }
   }
 }
