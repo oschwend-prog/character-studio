@@ -1336,3 +1336,30 @@ def test_the_command_without_a_database_is_a_caller_error(monkeypatch):
     monkeypatch.delenv("DATABASE_URL", raising=False)
     r = CliRunner().invoke(app, ["review", "weekly"])
     assert r.exit_code == 2 and "DATABASE_URL" in r.output
+
+
+# ---- the pre-registered numbers are pinned ---------------------------------------------------------------------------------------------
+
+
+def test_the_frozen_numbers_of_the_plan_are_pinned_and_match_the_test_registry():
+    assert (weekly.SCORE_INTERIM_N, weekly.SCORE_FINAL_N) == (20, 40)
+    assert (weekly.SCORE_INTERIM_VALIDATED_RHO, weekly.SCORE_INTERIM_FAILED_RHO, weekly.SCORE_FINAL_VALIDATED_RHO) == (0.45, 0.0, 0.31)
+    assert (weekly.SCORE_MIN_SPAN, weekly.SCORE_BUCKET_WIDTH) == (15, 20)
+    assert (weekly.FLOORS_FROM, weekly.FLOORS_TO, weekly.FLOORS_APPLY_FROM) == (date(2026, 10, 5), date(2026, 10, 18), date(2026, 10, 19))
+    assert (weekly.FLOOR_MIN_OWN, weekly.FLOOR_MIN_STUDIO, weekly.FLOOR_FLAG_MIN) == (4, 6, 2)
+    assert (weekly.DO_MORE_LIFT, weekly.DO_MORE_MIN_N, weekly.STOP_LIFT, weekly.STOP_MIN_N) == (1.5, 5, 0.7, 8)
+    assert (weekly.RULE_READY_LIFT, weekly.CALL_MIN_POSTS, weekly.PLAYBOOK_MIN_POSTS) == (1.2, 10, 5)
+    assert (weekly.ARM_RETIRE_MIN_USES, weekly.ARM_RETIRE_MAX_WIN_RATE, weekly.ARM_RETIRE_MAX_MEDIAN) == (10, 0.20, 0.7)
+    reg = experiments.load_experiments(Path(__file__).resolve().parents[1] / "config" / "experiments.json")
+    a = reg.test("A").params
+    assert a["min_n"] == {"interim": weekly.SCORE_INTERIM_N, "final": weekly.SCORE_FINAL_N}
+    assert a["decision"]["interim"] == {"validated_rho_at_least": weekly.SCORE_INTERIM_VALIDATED_RHO, "failed_rho_at_most": weekly.SCORE_INTERIM_FAILED_RHO}
+    assert a["decision"]["final"] == {"validated_rho_at_least": weekly.SCORE_FINAL_VALIDATED_RHO}
+    assert a["decision"]["uninformative_if_middle_80_percent_spans_under"] == weekly.SCORE_MIN_SPAN
+
+
+def test_the_bar_thresholds_the_digest_quotes_are_the_codes_not_copies():
+    from studio import review
+
+    assert (review.CHARACTER_MIN_POSTS, review.CHARACTER_MIN_AGE.days) == (20, 28)  # the "9 of 20 posts, day 14 of 28" of the digest
+    assert weekly.PROPOSAL_BASE == "build/slice1" and weekly.PROPOSAL_REPO == "https://github.com/oschwend-prog/character-studio"
