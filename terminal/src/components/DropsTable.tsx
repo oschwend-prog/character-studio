@@ -17,6 +17,7 @@ import {
   PART_LABEL, RECOMMEND, avoidLabel, characterChoice, characterMenu, dropCredits, dropLine, dropTitle, effectiveDrop,
   isDropCard, recommendationLine, retryAdjust, sectionLabel, type CharacterMenu,
 } from '../lib/drop';
+import { isDeciding } from '../lib/clipsview';
 import { formatCredits } from '../lib/format';
 import { href } from '../lib/hooks';
 import { scoreOf } from '../lib/ranking';
@@ -148,7 +149,7 @@ function DropItem({ row, roster, now }: { row: TrackerRow; roster: ReadonlyArray
         score={score ?? undefined} scoreTitle="The free check’s score: how likely the clip gets views with him in it" reason={reason}
         price={priced ? cardPrice(credits, e.length_s) : d.state === 'checking' || d.state === 'uploading' ? 'priced by the check' : undefined}
         sheetPrice={priced ? `about ${credits} credits · ${sectionLabel(e.start_s, e.length_s)}` : undefined}
-        character={row.character_slug ? `For ${row.character_name ?? nameOf(row.character_slug)}` : 'No character yet'}
+        character={isDeciding(row) ? 'Recommend: chosen after the check' : row.character_slug ? `For ${row.character_name ?? nameOf(row.character_slug)}` : 'No character yet'}
         dataChar={row.character_slug ?? 'none'} original={original}
         extra={
           <>

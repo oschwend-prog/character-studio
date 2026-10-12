@@ -1,7 +1,7 @@
 // Clips by character (spec section 6): the sections, the Top pick badge, the versions line, the folded line, the view switch.
 import { describe, expect, it } from 'vitest';
 import {
-  cantUseLine, clipsByCharacter, clipsViewQuery, filterAddressQuery, isTopPick, makeTheseIds, needYourChoice, parseClipsView,
+  cantUseLine, clipsByCharacter, clipsViewQuery, filterAddressQuery, isDeciding, isTopPick, makeTheseIds, needYourChoice, parseClipsView,
   readyWithChoice, sectionSummary, versionsLine,
 } from './clipsview';
 import type { DropCard, DropState, TrackerRow } from './types';
@@ -142,5 +142,29 @@ describe('versionsLine and the folded line', () => {
   it('folds the blocked and failed clips into one line', () => {
     expect(cantUseLine(1)).toBe('1 clip can’t be used: see why');
     expect(cantUseLine(3)).toBe('3 clips can’t be used: see why');
+  });
+});
+
+describe('a Recommend drop the check has not placed yet (owner 2026-10-12: the upload is generic)', () => {
+  const placeholder = row('franz', card('checking', { character_by: 'studio' }));
+  const uploading = row('franz', card('uploading', { character_by: 'studio' }));
+  const placed = row('reginald', card('ready', { character_by: 'studio', recommended: { slug: 'reginald', reason: 'a waiter' } }));
+  const ownersChoice = row('franz', card('checking'));
+  const failedRecommend = row('franz', card('failed', { character_by: 'studio' }));
+
+  it('is in the Recommend group, never under its placeholder character', () => {
+    const { groups, deciding } = clipsByCharacter([placeholder, uploading, placed, ownersChoice, failedRecommend], LIVE);
+    expect(deciding.map((r) => r.pick_id).sort()).toEqual([placeholder.pick_id, uploading.pick_id].sort());
+    expect(groups[0].onTheWay).toEqual([ownersChoice]);
+    expect([...groups[1].needsYou, ...groups[1].ready]).toEqual([placed]); // placed: under the character the check chose
+    expect(groups[0].problems).toEqual([failedRecommend]); // a failed check keeps the owner's way out: pick a character, Try again
+  });
+
+  it('is told apart by who chose the character and whether the check has recommended', () => {
+    expect(isDeciding(placeholder)).toBe(true);
+    expect(isDeciding(uploading)).toBe(true);
+    expect(isDeciding(placed)).toBe(false);
+    expect(isDeciding(ownersChoice)).toBe(false);
+    expect(isDeciding(row('franz', null))).toBe(false);
   });
 });

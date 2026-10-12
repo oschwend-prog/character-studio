@@ -54,14 +54,29 @@ export interface CharacterClips {
 }
 
 /**
+ * A Recommend drop the check has not placed yet (owner 2026-10-12: the upload is generic, the character comes from the check):
+ * `character_by` studio, no recommendation, still being added or checked. Its `character_slug` is only the placeholder add_drop
+ * needs, so it is shown in the Recommend group, never under that character.
+ */
+export function isDeciding(row: Pick<TrackerRow, 'drop_card' | 'clip_state' | 'clip_id'>): boolean {
+  const d = row.drop_card;
+  if (!d || d.character_by !== 'studio' || d.recommended) return false;
+  const chip = clipChip(row as TrackerRow);
+  return chip === 'adding' || chip === 'checking';
+}
+
+/**
  * The By character sections: one per character in `characters` (the live ones, in the owner's order), from the rows with a drop
- * card. `others` are the dropped clips of no listed character (none chosen, or a paused one): All clips shows them.
+ * card. `deciding` are the Recommend drops still waiting for the check's choice (`isDeciding`), in no character's section.
+ * `others` are the dropped clips of no listed character (none chosen, or a paused one): All clips shows them.
  */
 export function clipsByCharacter(
   rows: ReadonlyArray<TrackerRow>,
   characters: ReadonlyArray<{ slug: string; name: string }>,
-): { groups: CharacterClips[]; others: TrackerRow[] } {
-  const clips = rows.filter((r) => r.drop_card);
+): { groups: CharacterClips[]; others: TrackerRow[]; deciding: TrackerRow[] } {
+  const all = rows.filter((r) => r.drop_card);
+  const deciding = newestFirst(all.filter(isDeciding));
+  const clips = all.filter((r) => !isDeciding(r));
   const groups = characters.map((c) => {
     const his = clips.filter((r) => r.character_slug === c.slug);
     const by = (...chips: string[]) => his.filter((r) => chips.includes(clipChip(r)));
@@ -76,7 +91,7 @@ export function clipsByCharacter(
     };
   });
   const listed = new Set(characters.map((c) => c.slug));
-  return { groups, others: clips.filter((r) => !r.character_slug || !listed.has(r.character_slug)) };
+  return { groups, others: clips.filter((r) => !r.character_slug || !listed.has(r.character_slug)), deciding };
 }
 
 /** The Top pick badge (spec 6): one of the first three of his ranked Ready clips, and scored (an unscored clip is "not scored yet",

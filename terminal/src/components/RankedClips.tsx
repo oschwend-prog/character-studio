@@ -48,7 +48,7 @@ export function RankedClips({
   compact?: boolean;
 }) {
   const { data } = useStudio();
-  const { groups, others } = clipsByCharacter(rows, characters);
+  const { groups, others, deciding } = clipsByCharacter(rows, characters);
   const names = new Map((data?.characters ?? []).map((c) => [c.slug, c.name]));
 
   if (!characters.length) {
@@ -104,6 +104,20 @@ export function RankedClips({
 
   return (
     <div className="stack ranked">
+      {deciding.length > 0 && (
+        <section className="pick-sec" id="clips-recommend" aria-labelledby="clips-recommend-name">
+          <header className="pick-sec-head">
+            <h2 className="h2" id="clips-recommend-name"><span aria-hidden="true">★ </span>Recommend</h2>
+            <span className="small muted num sec-count">{deciding.length === 1 ? '1 clip' : `${deciding.length} clips`}</span>
+          </header>
+          <p className="small muted" style={{ margin: 0 }}>
+            Chosen after the check: once the studio has looked at the clip, it goes to the character who fits.
+          </p>
+          <ClipGrid label="Clips waiting for the check to choose a character">
+            {deciding.map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={null} />)}
+          </ClipGrid>
+        </section>
+      )}
       {groups.map((g) => (
         <CharacterSection key={g.slug} group={g} rows={data?.tracker ?? rows} names={names} ticked={ticked} onTick={onTick} now={now} />
       ))}
