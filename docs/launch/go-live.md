@@ -48,7 +48,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
   - `printf %s "$(security find-generic-password -s cs-supabase-service-key -w)" | gh secret set SUPABASE_SERVICE_KEY`
   - `printf %s "$(security find-generic-password -s cs-postiz-api-key -w)" | gh secret set POSTIZ_API_KEY`
 - [ ] Enable publishing and metrics: `for w in publish metrics; do gh workflow enable $w.yml; done`
-- [ ] **Hold `health.yml` until step 11**: it fails, and GitHub emails you every 3 hours, until the first daily run is logged.
+- [ ] **Hold `health.yml` until step 11.** Since 12 Oct 2026 it no longer requires a daily run (the Mac's daily run is off; add `--daily-run` to its `uv run studio health` step when it is on again).
 - [ ] Drop a video (the cloud jobs, `.github/workflows/studio-drop.yml`): make the keys and set them, `gh` asks for each value (nothing typed inline): `gh secret set HF_API_KEY_ID` and `gh secret set HF_API_KEY_SECRET` (console.higgsfield.ai > API keys; check there whether the API spends your plan credits or separate API credits), `gh secret set GEMINI_API_KEY` (aistudio.google.com > Get API key). Then `gh workflow enable studio-drop.yml`.
 - [ ] The cloud hits job (`.github/workflows/studio-hits.yml`, daily 06:30 London; spec 2026-10-07 terminal v3 section 10): apply migration 0016 first, then `gh secret set SCRAPECREATORS_API_KEY` (scrapecreators.com > API key; `gh` asks for the value, nothing typed inline) and `gh workflow enable studio-hits.yml`. It spends at most `config/scan.json` `hits.daily_credit_cap` (45) credits a London day: about 25 on searches and at most `hits.download_cap_per_day` (2) one-post downloads of 10 for the links yt-dlp cannot fetch from the cloud. A link it filed is only ever fetched in the cloud, never by the Mac: one that could not be fetched is tried again on a later day while the day's downloads allow, and dropped after 3 days ("couldn't be fetched in the cloud"). About 1 billed minute a day.
 - [ ] A fine-grained GitHub token for this repo only (Contents: read and write; the repository_dispatch endpoint needs Contents, not Actions), stored in Supabase > Project Settings > Vault as `github_dispatch_token`: the terminal's Checking / Make it then starts the job at once (without it the 2-hourly sweep picks it up).
@@ -87,7 +87,7 @@ outside the repo). Secrets only ever go into the Keychain or GitHub secrets: nev
 
 ## 11. Scheduled tasks (Claude creates them from this project folder)
 - [ ] `studio-daily-run`: daily 08:00 Europe/London, Sonnet, prompt `/daily-run`. `studio-weekly-review`: Mondays 09:00, Opus, prompt `/weekly-review`. Claude records both ids in `CLAUDE.md`.
-- [ ] Claude triggers one daily run and checks it finishes without stalling on a permission prompt, and that `bin/studio health` exits 0 (a `daily` row in `runs`).
+- [ ] Claude triggers one daily run and checks it finishes without stalling on a permission prompt, and that `bin/studio health --daily-run` exits 0 (a `daily` row in `runs`; plain `bin/studio health` does not ask for a daily run since 12 Oct 2026).
 - [ ] Now enable the watchdog: `gh workflow enable health.yml`
 - Turns ✅: `github: workflow health enabled`. Everything green means `bin/studio golive check` ends with "Ready to go live."
 

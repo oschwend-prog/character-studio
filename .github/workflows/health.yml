@@ -1,6 +1,8 @@
-# The watchdog, every 3 hours (`studio health`): exits 1, so GitHub emails the owner, when no daily run
-# finished in the last 26 h, a post is `failed` or `needs_check`, or the month's committed credits
-# reached 80 % of the cap.
+# The watchdog, every 3 hours (`studio health`): exits 1, so GitHub emails the owner, when a post is
+# `failed` or `needs_check`, a Story is stuck, or the month's committed credits reached 80 % of the cap.
+# It does NOT require a daily run (the owner turned the Mac's daily run off on 12 Oct 2026; the cloud jobs do
+# the work). When the Mac's daily run is on again, change the last step to `uv run studio health --daily-run`
+# to also flag "no daily run finished in the last 26 h".
 #
 # Secrets (repo secrets, added by the owner at go-live): DATABASE_URL, SUPABASE_URL,
 # SUPABASE_SERVICE_KEY, POSTIZ_API_KEY. Until DATABASE_URL exists the job prints a notice and

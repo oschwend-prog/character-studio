@@ -4,11 +4,14 @@
 scheduled workflow emails the owner through GitHub's own notifications, so ``studio health`` just exits 1
 with the problems printed. The four checks, in this order:
 
-1. **The daily run.** Some ``runs`` row of kind ``daily`` must have *finished* within the last 26 h
-   (``DAILY_MAX_AGE``, inclusive) without ending in ``error``. A run that never reported an end does not
-   count, nor does one that crashed (``status='error'``: the skill logs it when a step crashed), so a bad
-   night is not hidden behind its own log line for a day. ``ok`` and ``budget_stop`` both count: stopping
-   on the cap is a normal outcome. Other kinds (weekly, publish, metrics) never count.
+1. **The daily run (only with ``--daily-run``).** Off by default since 12 Oct 2026: the owner turned the Mac's
+   daily run off and the cloud jobs (hits, drop sweep, publish, metrics) do the work, so requiring a daily run
+   kept the check red for good. ``check(..., daily_run=True)`` / ``studio health --daily-run`` brings it back
+   (turn it on when the Mac's daily run is on again). When on, some ``runs`` row of kind ``daily`` must have
+   *finished* within the last 26 h (``DAILY_MAX_AGE``, inclusive) without ending in ``error``. A run that never
+   reported an end does not count, nor does one that crashed (``status='error'``: the skill logs it when a step
+   crashed), so a bad night is not hidden behind its own log line for a day. ``ok`` and ``budget_stop`` both
+   count: stopping on the cap is a normal outcome. Other kinds (weekly, publish, metrics) never count.
 2. **Posts.** Every post in ``failed`` or ``needs_check`` is a problem of its own, named with its
    account's handle and the stored error. These never clear themselves: ``needs_check`` is a human's call
    (is the post live?) and ``failed`` ran out of attempts.
@@ -142,19 +145,36 @@ def _budget_problem(store: Store, now: datetime) -> str | None:
     return None
 
 
-def check(store: Store, now: datetime) -> list[str]:
-    """The problems found at ``now`` (aware), empty when all is well. Read-only."""
+def check(store: Store, now: datetime, *, daily_run: bool = False) -> list[str]:
+    """The problems found at ``now`` (aware), empty when all is well. Read-only.
+
+    ``daily_run`` adds the check that a daily run finished in the last 26 h; it is off by default because the
+    Mac's daily run is off (the cloud jobs do the work).
+    """
     require_aware(now, "health.check(now)")
-    found = [_daily_run_problem(store, now), *_post_problems(store), *_story_problems(store, now), _budget_problem(store, now)]
+    found = [
+        _daily_run_problem(store, now) if daily_run else None,
+        *_post_problems(store),
+        *_story_problems(store, now),
+        _budget_problem(store, now),
+    ]
     return [p for p in found if p is not None]
 
 
 # ---- CLI -----------------------------------------------------------------------------------------
 
 
-def health_command() -> None:
-    """Check the daily run, failed posts, stuck Stories and the budget; exit 1 with the problems when any is found."""
-    problems = check(open_store(), now_london())
+def health_command(
+    daily_run: Annotated[
+        bool,
+        typer.Option(
+            "--daily-run",
+            help="Also require a daily run in the last 26 h (turn on when the Mac's daily run is on again).",
+        ),
+    ] = False,
+) -> None:
+    """Check failed posts, stuck Stories and the budget (and with --daily-run the daily run); exit 1 with the problems when any is found."""
+    problems = check(open_store(), now_london(), daily_run=daily_run)
     emit({"ok": not problems, "problems": problems})
     if problems:
         raise typer.Exit(1)

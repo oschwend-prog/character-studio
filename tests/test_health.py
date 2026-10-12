@@ -67,23 +67,33 @@ def add_post(store: MemoryStore, status: PostStatus, error: str | None = None) -
 
 
 def test_a_fresh_store_with_a_recent_daily_run_is_healthy():
+    assert check(fresh(), NOW, daily_run=True) == []
     assert check(fresh(), NOW) == []
 
 
 def test_health_flags_missing_daily_run():
     store = MemoryStore()
-    problems = check(store, NOW)
+    problems = check(store, NOW, daily_run=True)
     assert len(problems) == 1 and "daily run" in problems[0] and "ever" in problems[0]
 
     daily(store, ago=timedelta(hours=26, minutes=1))  # one minute too old
-    problems = check(store, NOW)
+    problems = check(store, NOW, daily_run=True)
     assert len(problems) == 1 and "26 h" in problems[0] and "last daily run" in problems[0]
+
+
+def test_the_daily_run_is_not_required_by_default():
+    """The Mac's daily run is off (12 Oct 2026): the default check no longer asks for one, however old or absent."""
+    store = MemoryStore()  # no daily run ever logged
+    assert check(store, NOW) == []
+    daily(store, ago=timedelta(hours=40), status="error")  # a stale, crashed run is no problem either
+    assert check(store, NOW) == []
+    assert len(check(store, NOW, daily_run=True)) == 1  # the same store is red once the daily run is required again
 
 
 def test_a_daily_run_exactly_26_hours_old_still_counts():
     store = MemoryStore()
     daily(store, ago=DAILY_MAX_AGE)
-    assert check(store, NOW) == []
+    assert check(store, NOW, daily_run=True) == []
 
 
 def test_only_a_finished_daily_run_that_did_not_error_counts():
@@ -91,21 +101,21 @@ def test_only_a_finished_daily_run_that_did_not_error_counts():
     daily(store, ago=timedelta(hours=1), finished=False)  # started, never reported an end
     store.add_run(Run(kind="weekly", status="ok", finished_at=NOW - timedelta(hours=1)))  # other kinds do not count
     store.add_run(Run(kind="publish", status="ok", finished_at=NOW - timedelta(hours=1)))
-    assert len(check(store, NOW)) == 1
+    assert len(check(store, NOW, daily_run=True)) == 1
 
     daily(store, ago=timedelta(hours=1), status="error")  # it crashed: not a healthy day
-    problems = check(store, NOW)
+    problems = check(store, NOW, daily_run=True)
     assert len(problems) == 1 and "error" in problems[0]
 
     daily(store, ago=timedelta(hours=1), status="budget_stop")  # stopping on the cap is a normal outcome
-    assert check(store, NOW) == []
+    assert check(store, NOW, daily_run=True) == []
 
 
 def test_the_message_names_the_last_daily_run_when_there_was_one():
     store = MemoryStore()
     daily(store, ago=timedelta(hours=40), status="ok")
     daily(store, ago=timedelta(hours=30), status="error")
-    (problem,) = check(store, NOW)
+    (problem,) = check(store, NOW, daily_run=True)
     assert "error" in problem and "2026-10-06" in problem  # the newest one, with its London time
 
 
@@ -232,9 +242,12 @@ def test_problems_come_in_a_stable_order_and_check_refuses_a_naive_now():
     store = bare()
     spend(store, 6000)
     add_post(store, PostStatus.failed)
-    problems = check(store, NOW)
+    problems = check(store, NOW, daily_run=True)
     assert [("daily run" in p, "post " in p, "credits" in p) for p in problems] == [
         (True, False, False), (False, True, False), (False, False, True),
+    ]
+    assert [("daily run" in p, "post " in p, "credits" in p) for p in check(store, NOW)] == [
+        (False, True, False), (False, False, True),  # without --daily-run the same order, minus the daily run
     ]
     with pytest.raises(ValueError, match="timezone-aware"):
         check(store, datetime(2026, 10, 7, 12, 0))
@@ -268,6 +281,27 @@ def test_cli_health_prints_the_problems_and_exits_1(cli_store, monkeypatch):
     assert r.exit_code == 1
     out = json.loads(r.stdout)
     assert out["ok"] is False and len(out["problems"]) == 1 and "needs_check" in out["problems"][0]
+
+
+def test_cli_health_does_not_require_a_daily_run_by_default(monkeypatch):
+    store = MemoryStore()  # no daily run ever logged
+    monkeypatch.setattr(health, "open_store", lambda: store)
+    monkeypatch.setattr(health, "now_london", lambda: NOW)
+    r = run("health")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout) == {"ok": True, "problems": []}
+
+
+def test_cli_health_daily_run_flag_requires_a_daily_run(monkeypatch):
+    store = MemoryStore()  # the same store as above: no daily run ever logged
+    monkeypatch.setattr(health, "open_store", lambda: store)
+    monkeypatch.setattr(health, "now_london", lambda: NOW)
+    r = run("health", "--daily-run")
+    assert r.exit_code == 1
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and len(out["problems"]) == 1 and "daily run" in out["problems"][0]
+    daily(store, ago=timedelta(hours=1))
+    assert run("health", "--daily-run").exit_code == 0  # a finished daily run satisfies it
 
 
 def test_cli_health_without_a_database_exits_2(monkeypatch):
@@ -336,9 +370,9 @@ def test_a_logged_daily_run_satisfies_health(cli_store, monkeypatch):
     stale = MemoryStore()
     monkeypatch.setattr(health, "open_store", lambda: stale)
     monkeypatch.setattr(health, "now_london", lambda: datetime.now(LONDON))
-    assert run("health").exit_code == 1  # nothing logged yet
+    assert run("health", "--daily-run").exit_code == 1  # nothing logged yet
     assert run("run", "log", "--kind", "daily", "--status", "ok", "--summary", "2 clips").exit_code == 0
-    assert run("health").exit_code == 0
+    assert run("health", "--daily-run").exit_code == 0
 
 
 # ---- run log --details-file and --open (migration 0007: the Scanner card's data) ---------------------------
@@ -424,7 +458,7 @@ def test_an_open_run_never_counts_as_a_finished_daily_run(monkeypatch):
     monkeypatch.setattr(health, "open_store", lambda: store)
     monkeypatch.setattr(health, "now_london", lambda: NOW)
     assert run("run", "log", "--kind", "daily", "--status", "ok", "--open").exit_code == 0
-    problems = check(store, NOW)
+    problems = check(store, NOW, daily_run=True)
     assert len(problems) == 1 and "never finished" in problems[0]  # the watchdog still says the run did not report in
 
 
