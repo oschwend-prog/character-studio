@@ -690,11 +690,11 @@ def test_the_story_label_is_legible_inside_the_story_safe_zone_and_clear_of_the_
 
 
 def test_a_built_master_comes_with_its_labelled_story_video(tmp_path):
-    """The master build also writes the Story video next to the master (``<stem>-story.mp4``): the same picture and sound with
-    the AI label burned in; the master itself carries no label."""
+    """With Stories on the master build also writes the Story video next to the master (``<stem>-story.mp4``): the same picture
+    and sound with the AI label burned in; the master itself carries no label."""
     dance = flat_video(tmp_path / "dance.mp4", 2)
     spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
-    out = build_master(spec)
+    out = build_master(spec, story=True)
     story = master.story_file(out)
     assert story == tmp_path / "master-story.mp4" and story.is_file()
     m, s = probe(out), probe(story)
@@ -706,8 +706,54 @@ def test_a_built_master_comes_with_its_labelled_story_video(tmp_path):
     assert bright_pixels(in_master, STORY_BAND, floor=235) == 0  # the Reel's master stays clean: its caption carries the line
 
 
-def test_a_failed_story_render_fails_the_build_and_leaves_no_file(tmp_path, monkeypatch):
-    """Both files land together or neither does: a Story video never belongs to another build's master."""
+def _story_spy(monkeypatch):
+    """Count the Story encodes: ``render_story`` is the only place the build encodes a Story video."""
+    calls: list[Path] = []
+    real = master.render_story
+
+    def spy(*a, **k):
+        calls.append(Path(a[0]))
+        return real(*a, **k)
+
+    monkeypatch.setattr(master, "render_story", spy)
+    return calls
+
+
+def test_with_stories_off_the_master_build_encodes_no_story_video(tmp_path, monkeypatch):
+    """Task 14 item 1: no Story is posted while ``reach.stories`` is off, so the build does not pay a second encode for it."""
+    scan = tmp_path / "scan.json"
+    scan.write_text('{"reach": {"stories": false}}', encoding="utf-8")
+    monkeypatch.setattr("studio.publish.reach.SCAN_PATH", scan)
+    calls = _story_spy(monkeypatch)
+    spec = spec_for(tmp_path, flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
+    out = build_master(spec)  # the switch decides
+    assert out.is_file() and calls == [] and not master.story_file(out).exists()
+
+
+def test_with_stories_on_in_the_config_the_master_build_writes_the_story_video(tmp_path, monkeypatch):
+    scan = tmp_path / "scan.json"
+    scan.write_text('{"reach": {"stories": true}}', encoding="utf-8")
+    monkeypatch.setattr("studio.publish.reach.SCAN_PATH", scan)
+    calls = _story_spy(monkeypatch)
+    spec = spec_for(tmp_path, flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
+    out = build_master(spec)
+    assert len(calls) == 1 and master.story_file(out).is_file()
+
+
+@pytest.mark.parametrize("text", [None, "{not json", "[]", '{"reach": {"stories": "yes"}}'])
+def test_stories_enabled_is_off_with_a_warning_when_the_config_cannot_be_read(tmp_path, monkeypatch, capsys, text):
+    scan = tmp_path / "scan.json"
+    if text is not None:
+        scan.write_text(text, encoding="utf-8")
+    monkeypatch.setattr("studio.publish.reach.SCAN_PATH", scan)
+    assert master.stories_enabled() is False
+    err = capsys.readouterr().err
+    assert "warning:" in err and "no Story video is rendered" in err
+
+
+def test_a_failed_story_render_never_fails_the_master(tmp_path, monkeypatch, capsys):
+    """Task 14 item 1 (supersedes the old both-or-neither rule): the Reel goes out without a Story, the master is built and its
+    Story video is absent (so ``upload_master`` leaves ``story_path`` unset), with a warning."""
     dance = flat_video(tmp_path / "dance.mp4", 2)
     spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
 
@@ -715,9 +761,17 @@ def test_a_failed_story_render_fails_the_build_and_leaves_no_file(tmp_path, monk
         raise master.MasterError("ffmpeg failed (1): story")
 
     monkeypatch.setattr(master, "render_story", broken)
-    with pytest.raises(master.MasterError, match="story"):
-        build_master(spec)
-    assert not spec.out.exists() and not master.story_file(spec.out).exists()
+    out = build_master(spec, story=True)
+    assert out == spec.out and out.is_file() and probe(out).duration_s > 1
+    assert not master.story_file(out).exists()
+    assert "warning:" in capsys.readouterr().err
+
+
+def test_a_story_video_left_by_an_earlier_build_is_removed_when_this_build_has_none(tmp_path):
+    spec = spec_for(tmp_path, flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
+    master.story_file(spec.out).write_bytes(b"an older master's story")
+    out = build_master(spec, story=False)
+    assert out.is_file() and not master.story_file(out).exists()
 
 
 def test_slowmo_extends_duration(tmp_path):

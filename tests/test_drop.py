@@ -824,7 +824,8 @@ def test_no_make_it_no_credits(world, portrait, gen_out):
     assert hf.submits == [] and store.list_clips() == [] and store.ledger_month(NOW.strftime("%Y-%m")) == []
 
 
-def test_make_it_swaps_qas_masters_and_waits_for_the_owners_ok(world, portrait, gen_out):
+def test_make_it_swaps_qas_masters_and_waits_for_the_owners_ok(world, portrait, gen_out, monkeypatch):
+    monkeypatch.setattr("studio.media.master.stories_enabled", lambda: True)  # the Story video is built only with reach.stories on
     store, storage = world
     pid = ready_drop(store, storage, portrait)
     tap_make(store, pid)

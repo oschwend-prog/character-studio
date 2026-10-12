@@ -91,10 +91,13 @@ publishing and the terminal sign), sets ``clip.master_path`` and writes the mast
 ``upload_master``; ``master build`` writes nothing on a clip). A file that misses the spec is not
 uploaded (exit 1, the JSON lists the problems); the clip's state is left to ``clip set --state``.
 
-**The labelled Story video** (task 8 fix 1: a Story shows no caption, so its AI disclosure must be in the picture). Every
-``master build`` also writes ``<stem>-story.mp4`` next to the master (``story_file``, ``render_story``): the finished master with
+**The labelled Story video** (task 8 fix 1: a Story shows no caption, so its AI disclosure must be in the picture). With
+``config/scan.json`` ``reach.stories`` on (``stories_enabled``, the switch the publisher reads; off by default) ``master build``
+also writes ``<stem>-story.mp4`` next to the master (``story_file``, ``render_story``): the finished master with
 ``captions.AI_LABEL`` burned in, white on a semi-transparent dark pill in the lower third (``overlays.STORY_LABEL_BAND``, y
-1450-1600 of 1920: above Instagram's Story reply bar, never over the two-dot bug). Both files land together or neither does.
+1450-1600 of 1920: above Instagram's Story reply bar, never over the two-dot bug). With Stories off nothing is encoded (no double
+encode). A Story render that fails never fails the master (task 14): a warning goes to stderr, the master lands without a Story
+video and the clip's ``story_path`` stays unset; a Story video left next to ``out`` by an earlier build is removed.
 ``upload_master`` uploads it to ``<character>/<clip id>-story.mp4`` and records it on the clip as ``features.story_path``; a
 master with no matching Story video next to it (not 1080x1920, or not its length) clears that, and the publisher then skips the
 Story ("no labelled story video"): a Story is only ever posted from this file, never from the master.
@@ -108,6 +111,7 @@ import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
@@ -635,6 +639,22 @@ def story_file(master: Path | str) -> Path:
     return m.with_name(f"{m.stem}{STORY_SUFFIX}.mp4")
 
 
+def stories_enabled() -> bool:
+    """``config/scan.json`` ``reach.stories``: whether the master build renders the labelled Story video. The publisher reads the
+    same switch (``studio.publish.reach``). Off when the file or the switch cannot be read (a warning on stderr: the publisher
+    refuses to run on the same error, so nothing goes out without a Story video that was never rendered)."""
+    from studio.publish import reach  # late: studio.publish pulls in the whole publishing CLI
+
+    try:
+        scan = json.loads(reach.SCAN_PATH.read_text(encoding="utf-8"))
+        if not isinstance(scan, Mapping):
+            raise ValueError("must be a JSON object")
+        return reach.stories(scan)
+    except (OSError, ValueError) as e:
+        print(f"warning: {reach.SCAN_PATH}: {e}; no Story video is rendered", file=sys.stderr)
+        return False
+
+
 def render_story(master: Path, out: Path, work: Path, preset: str = "slow") -> Path:
     """The Story video of the finished ``master``: the same picture and sound with the AI label burned in
     (``overlays.story_label_png`` of ``captions.AI_LABEL``: a Story shows no caption). The sound is copied as it is; the picture
@@ -795,12 +815,14 @@ def _check_inputs(spec: MasterSpec) -> tuple[Path, Path | None]:
     return dance, closeup
 
 
-def build_master(spec: MasterSpec) -> Path:
+def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
     """Render ``spec`` to ``spec.out`` (see the module docstring); returns that path.
 
     Raises ``ValueError`` for a bad spec (checked before anything renders) and ``MasterError`` when
-    ffmpeg fails. The finished file replaces ``out`` only when the whole build succeeded, together with its labelled Story video
-    (``render_story``) at ``story_file(out)``: both or neither.
+    ffmpeg fails. The finished file replaces ``out`` only when the whole build succeeded. Its labelled Story video
+    (``render_story``, at ``story_file(out)``) is rendered only when ``story`` is true (``None``: ``stories_enabled()``, the
+    ``reach.stories`` switch); a Story render that fails logs a warning and leaves the master without a Story video, it never
+    fails the master. Whatever Story video an earlier build left next to ``out`` is removed.
     """
     items = parse_enhancements(spec.enhancements)
     kit = _kit(spec)
@@ -924,9 +946,16 @@ def build_master(spec: MasterSpec) -> Path:
                 "-af", _loudnorm_params(mix), "-c:a", "aac", "-b:a", "320k", "-ar", "48000",
                 "-shortest", "-movflags", "+faststart", finished,
             )  # fmt: skip
-        story = render_story(finished, work / "story.mp4", work, spec.preset)  # the Story's own file, its AI label burned in
+        story_video: Path | None = None
+        if stories_enabled() if story is None else story:
+            try:  # the Story's own file, its AI label burned in; a failure here costs the Story, never the master
+                story_video = render_story(finished, work / "story.mp4", work, spec.preset)
+            except Exception as e:
+                print(f"warning: no Story video for {out.name}: {type(e).__name__}: {str(e)[:200]}", file=sys.stderr)
         out.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(story, story_file(out))
+        story_file(out).unlink(missing_ok=True)  # an earlier build's Story video never belongs to this master
+        if story_video is not None:
+            shutil.move(story_video, story_file(out))
         shutil.move(finished, out)
     return out
 
