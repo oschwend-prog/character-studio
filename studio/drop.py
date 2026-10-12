@@ -11,7 +11,8 @@ video goes to Storage ``sources/owner/<pick id>/<file>`` (``attach_clip``); a pa
 YouTube URL. ``studio.request_job(pick, kind)`` (security definer, pg_net + the Vault secret ``github_dispatch_token``) records
 the request and fires the ``studio-drop`` GitHub workflow, which runs ``studio drop process`` or ``studio drop make``; a
 2-hourly ``studio drop sweep`` picks up anything left pending, in three parallel workers (``STUDIO_WORKER`` makes each worker's
-``job_id`` its own, so the lease keeps them off each other's drop; a drop another worker holds or has finished is no failure).
+``job_id`` its own, so the lease keeps them off each other's drop; a drop another worker holds or has finished is no failure;
+a check that still has to download its clip is worker 1's alone, ``takes_downloads``: one download at a time).
 ``drop.state`` moves::
 
     uploading -> checking -> ready -----------(Make it: request_job make)----------> making -> made
@@ -2273,8 +2274,29 @@ def auto_retry_kind(pick: Favorite, now: datetime) -> str | None:
     return kind if kind is not None and auto_retries_used(d) < AUTO_RETRY_MAX else None
 
 
+def needs_fetch(store: Store, pick: Favorite) -> bool:
+    """Does checking this drop still download its clip? Yes for a pasted or auto-filed link whose clip is not in storage yet (what
+    ``_get_source`` would fetch with yt-dlp, else ScrapeCreators' copy of that one post); no for the owner's upload (a file drop, or
+    a clip attached to the pick) and for a drop whose source is already stored. It over-reads a link another pick already fetched
+    (``fetch.fetch_pick_clip`` would share that copy): harmless, only the first worker then takes it."""
+    if pick.proposal.get("owner_clip_path") or pick.platform == DROP_PLATFORM:
+        return False
+    if pick.source_id:
+        found = next(iter(store.list_sources(id=pick.source_id)), None)
+        if found is not None and found.storage_path:
+            return False
+    return True
+
+
+def takes_downloads() -> bool:
+    """May this run take a drop that needs a download? Of the sweep's three parallel workers (``STUDIO_WORKER``, the matrix value of
+    ``studio-drop.yml``) only the first: CLAUDE.md has the cloud fetch a clip ONE at a time, and three workers listing the same rows
+    would start up to three downloads at once. A run with no worker number (the Mac, a hand run) is alone, so it may."""
+    return (os.environ.get("STUDIO_WORKER") or "").strip() in ("", "1")
+
+
 def pending(
-    store: Store, *, include_waiting: bool = False, now: datetime | None = None, auto_retry: bool = False,
+    store: Store, *, include_waiting: bool = False, now: datetime | None = None, auto_retry: bool = False, fetches: bool = True,
 ) -> list[dict[str, str]]:
     """The drops a run should take, oldest first: ``checking`` (and an ``uploading`` one whose file is attached) -> process,
     ``making`` with the owner's Make it -> make; ``waiting`` links only with ``include_waiting`` (the Mac: the cloud could not
@@ -2288,7 +2310,9 @@ def pending(
     For the cloud (no ``include_waiting``) a drop ``failed`` in its CHECK for a temporary cause is ``process`` again
     (``auto_retry_kind``: a Gemini timeout, 5xx or busy answer up to ``AUTO_RETRY_MAX`` times; the daily quota once it has reset);
     ``process_drop(auto_retry=True)`` moves it back to ``checking`` when the run claims it. A failed make is never listed. Its row
-    also carries ``failed_at`` and ``retried_at`` (``failure_stamp``), so a worker can tell the failure it listed from a later one."""
+    also carries ``failed_at`` and ``retried_at`` (``failure_stamp``), so a worker can tell the failure it listed from a later one.
+    ``fetches=False`` (a sweep worker other than the first, ``takes_downloads``) leaves out the checks that still need their clip
+    downloaded (``needs_fetch``); expiring and making never download."""
     now = now or now_london()
     today = now.astimezone(LONDON).date().isoformat()
     out: list[tuple[datetime | None, dict[str, str]]] = []
@@ -2323,6 +2347,8 @@ def pending(
             out.append((f.created_at, {"pick_id": f.id, "job": "process", "state": state}))
         elif state == "making" and owner_requested_make(f):
             out.append((f.created_at, {"pick_id": f.id, "job": "make", "state": state}))
+    if not fetches:
+        out = [(at, row) for at, row in out if row["job"] != "process" or not needs_fetch(store, store.get_favorite(row["pick_id"]))]
     out.sort(key=lambda p: p[0].timestamp() if p[0] else 0.0)
     return [p for _, p in out]
 
@@ -2653,12 +2679,16 @@ def sweep_command(
     """Run every pending drop job, one after another (the 2-hourly safety net; the cloud runs three of these workers side by
     side, ``STUDIO_WORKER``, and the lease keeps them off each other's drop). Exit 1 when one of them stopped on a failure: a
     drop another worker holds (busy) or has already moved on is none, and neither is a check that Gemini's quota (HTTP 429) failed
-    and the sweep takes again by itself (``Outcome.red``)."""
+    and the sweep takes again by itself (``Outcome.red``). A check that still has to download its clip is worker 1's alone
+    (``takes_downloads``): the others go on to the rest."""
     store, storage = open_store(), open_storage()
     hf, client, media = HiggsfieldClient.from_env(), gemini.GeminiClient.from_env(), _media(store)
     results: list[dict[str, Any]] = []
     failed = False
-    for row in pending(store, include_waiting=include_waiting, auto_retry=not include_waiting and _auto_retry(media)):
+    rows = pending(
+        store, include_waiting=include_waiting, auto_retry=not include_waiting and _auto_retry(media), fetches=takes_downloads(),
+    )  # workers 2 and 3 leave the checks that still download a clip to worker 1: one download at a time
+    for row in rows:
         try:
             if _moved_on(store, row):
                 results.append({"job": row["job"], "pick_id": row["pick_id"], "ok": True, "moved_on": True})

@@ -28,7 +28,9 @@
 # identical copies of the job side by side (matrix `worker` 1-3, fail-fast off: a failed worker stops no other); a dispatched
 # run (one pick) and the key check run one. Each exports STUDIO_WORKER, which `studio.drop.job_id()` appends to the run id
 # (gh-<run>-<attempt>-w<worker>), so the lease tells the workers apart: all three list the same drops in the same order, the
-# first takes a drop, the others find it busy (or already done) and go on to the next. Both are no failure of the sweep.
+# first takes a drop, the others find it busy (or already done) and go on to the next. Both are no failure of the sweep. A drop
+# that still has to download its clip (a pasted or auto-filed link) is worker 1's alone: the others leave it out of their list
+# (`studio.drop.takes_downloads` reads STUDIO_WORKER), so the cloud fetches one clip at a time, as CLAUDE.md says.
 name: studio-drop
 
 on:

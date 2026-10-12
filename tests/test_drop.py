@@ -521,6 +521,60 @@ def test_the_job_id_carries_the_sweep_worker_so_two_workers_of_one_run_differ(mo
     assert "-w2" not in drop.job_id()  # off GitHub the machine and the process already tell runs apart
 
 
+def test_a_drop_that_still_needs_its_clip_downloaded_is_told_from_one_that_does_not(world, portrait):
+    """Final review M6: which rows a sweep worker other than the first leaves alone."""
+    store, storage = world
+    link, _ = add_drop(store, "reginald", TIKTOK, NOW)  # a pasted link: its clip is still to be downloaded
+    assert drop.needs_fetch(store, link) is True
+    auto, _ = add_drop(store, None, TIKTOK.replace("7688386199270001953", "7688386199270009999"), NOW, auto_filed=True, hit={"id": "h", "lane": "reginald"})
+    assert drop.needs_fetch(store, auto) is True
+    pid = drop_file(store, storage, portrait)  # an owner's upload: nothing to download
+    assert drop.needs_fetch(store, store.get_favorite(pid)) is False
+    unfinished, _ = add_drop(store, "reginald", None, NOW)  # a file drop whose upload is still to come
+    assert drop.needs_fetch(store, unfinished) is False
+    src = sources.add_source(store, "owner_inbox", None, "biped", 1, 20.0, storage_path="fetched/x.mp4")
+    store.update_favorite(link.id, source_id=src.id)  # a link whose clip is already in storage is checked from there
+    assert drop.needs_fetch(store, store.get_favorite(link.id)) is False
+
+
+def test_pending_leaves_out_the_rows_that_need_a_download_when_asked(world, portrait):
+    store, storage = world
+    link, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    upload = drop_file(store, storage, portrait)
+    ready = ready_drop(store, storage, portrait)
+    tap_make(store, ready)
+    both = {p["pick_id"]: p["job"] for p in pending(store, now=NOW)}
+    assert both == {link.id: "process", upload: "process", ready: "make"}
+    assert pending(store, now=NOW, fetches=False) == [p for p in pending(store, now=NOW) if p["pick_id"] != link.id]  # same order
+
+
+@pytest.mark.parametrize(("worker", "takes"), [("1", True), ("2", False), ("3", False), (None, True), ("  ", True)])
+def test_only_the_first_sweep_worker_takes_a_drop_that_needs_a_download(monkeypatch, tmp_path, portrait, worker, takes):
+    """CLAUDE.md: an auto-filed clip is fetched ONE at a time. Three workers list the same rows; workers 2 and 3 go on to the rest."""
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    link, _ = add_drop(store, "reginald", TIKTOK, NOW)
+    upload = drop_file(store, storage, portrait)
+    if worker is None:
+        monkeypatch.delenv("STUDIO_WORKER", raising=False)
+    else:
+        monkeypatch.setenv("STUDIO_WORKER", worker)
+    ran = []
+    monkeypatch.setattr(drop, "process_drop", lambda s, st, pick_id, **kw: ran.append(pick_id) or drop.Outcome(pick_id, "ready"))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    assert sorted(ran) == sorted([link.id, upload] if takes else [upload])
+    assert drop.takes_downloads() is takes
+
+
+def test_a_failed_check_with_its_clip_already_in_storage_is_retaken_by_any_worker(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid = failed_check(store, storage, portrait, TIMEOUT_REASON)  # an uploaded clip: nothing to download
+    monkeypatch.setenv("STUDIO_WORKER", "3")
+    ran = []
+    monkeypatch.setattr(drop, "process_drop", lambda s, st, pick_id, **kw: ran.append(pick_id) or drop.Outcome(pick_id, "ready"))
+    assert CliRunner().invoke(app, ["drop", "sweep"]).exit_code == 0 and ran == [pid]
+
+
 def test_two_workers_of_the_same_run_never_take_the_same_drop(world, portrait):
     store, storage = world
     pid = drop_file(store, storage, portrait)
