@@ -66,6 +66,22 @@ def test_a_link_dropped_again_keeps_the_earlier_drops_keys_and_the_new_keys_win(
     assert again["status"] == "approved" and again["proposal"]["decision"]["decision"] == "approve"
 
 
+def test_the_earlier_drops_score_and_the_hits_jobs_tags_do_not_outlive_a_fresh_drop_but_the_lease_does(db):
+    first = add_drop(db, "reginald", TIKTOK)
+    earlier = {
+        "state": "ready", "hooks": ["a"], "score": 81, "hit_rules_version": 3, "auto_filed": True, "hit": {"views": 9}, "fetch_days": ["2026-10-10"],
+        "job": {"holder": "run-7", "at": "2026-10-12T10:00:00+00:00"},
+    }
+    db.execute(
+        f"update {SCHEMA}.favorites set proposal = jsonb_set(proposal, '{{drop}}', (proposal -> 'drop') || %s::jsonb) where id = %s",
+        [json.dumps(earlier), first["id"]],
+    )
+    d = add_drop(db, "reginald", TIKTOK)["proposal"]["drop"]
+    for gone in ("score", "hit_rules_version", "auto_filed", "hit", "fetch_days"):
+        assert gone not in d, gone
+    assert d["hooks"] == ["a"] and d["job"] == earlier["job"] and d["state"] == "checking"  # the rest stays, a live lease included
+
+
 def test_a_drop_that_is_no_object_is_replaced_not_merged(db):
     first = add_drop(db, "franz", TIKTOK)
     db.execute(f"update {SCHEMA}.favorites set proposal = jsonb_set(proposal, '{{drop}}', 'null'::jsonb) where id = %s", [first["id"]])

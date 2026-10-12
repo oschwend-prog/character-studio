@@ -4,10 +4,17 @@
 -- again as a fresh drop. 0012/0013/0015's add_drop did that by replacing `proposal.drop` wholesale
 -- (`jsonb_build_object('decision', rec, 'drop', drop_)`), so everything the earlier drop had worked out or been given (the
 -- check's hooks, window and deconstruct, the owner's Adjust, the make request, the recommendation, ...) was lost. Now the earlier
--- drop's keys stay and the new drop's keys win: `proposal.drop = old drop || drop_`. The new drop still sets state 'checking',
--- kind, at, reason null, own_footage false and character_by, so the duplicate is checked again exactly as before; only the keys
--- the new drop does not mention survive. A `drop` that is missing or not an object is treated as empty (jsonb 'null' || object
--- would make an array).
+-- drop's keys stay and the new drop's keys win: `proposal.drop = (old drop - the strip list below) || drop_`. The new drop still
+-- sets state 'checking', kind, at, reason null, own_footage false and character_by, so the duplicate is checked again exactly as
+-- before; only the keys the new drop does not mention survive. A `drop` that is missing or not an object is treated as empty
+-- (jsonb 'null' || object would make an array).
+--
+-- THE STRIP LIST (final review M1): five keys describe the earlier drop, not the owner's new one, and are removed before the merge:
+-- `score` and `hit_rules_version` (a drop back at 'checking' has no score until the check ends ready again, the invariant
+-- `request_recheck` and `set_drop_character` keep), and `auto_filed`, `hit` and `fetch_days` (the hits job's tags: a link the owner
+-- drops himself is an owner drop, not an auto-filed one, so learning tags it `owner_saved`, the lane's daily auto-file quota does not
+-- count it and the 3-day fetch skip starts over). `job` is kept on purpose: it holds a live worker's lease. This migration has never
+-- been applied anywhere, so it is amended in place (no 0018).
 --
 -- Additive / replacing only, schema studio only: ONE function, `create or replace` with the signature, the language, the
 -- security (invoker, empty search_path) and the grants of 0015's add_drop (the latest definition: 0013's was re-created there);
@@ -93,8 +100,11 @@ begin
            character_slug = slug_,
            -- the earlier drop's keys stay (hooks, window, the owner's Adjust, ...), the new keys win; a drop that is not an object
            -- (never written by the studio) is replaced, not merged: jsonb 'null' || object would make an array
+           -- but not its score, rules version or the hits job's tags (see THE STRIP LIST above); `job` stays: a live lease
            proposal = (fa.proposal - 'hold_reason') || jsonb_build_object('decision', rec, 'drop',
-                        (case when jsonb_typeof(fa.proposal -> 'drop') = 'object' then fa.proposal -> 'drop' else '{}'::jsonb end) || drop_)
+                        (case when jsonb_typeof(fa.proposal -> 'drop') = 'object'
+                         then (fa.proposal -> 'drop') - 'score' - 'hit_rules_version' - 'auto_filed' - 'hit' - 'fetch_days'
+                         else '{}'::jsonb end) || drop_)
      where fa.id = f.id
     returning fa.* into f;
     return to_jsonb(f) || jsonb_build_object('duplicate', true);
