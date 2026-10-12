@@ -37,6 +37,16 @@ that has no ``outlier_x`` yet, so a crash between the snapshot write and the cli
 next run. A value, once written, is only recomputed when one of its posts gets a new 7 d snapshot. The
 other keys of ``features`` are never touched.
 
+**72-hour reads and ``x72``** (``docs/launch/measurement-and-learning-plan.md`` sections 1.1-1.2, learning build item 5). A post's
+**72-hour views** are the ``views`` of its FIRST snapshot from 72 h up to day 7 (``views_at_72h``: its 72 h window; a reading
+from day 7 on is the 7-day figure, so a post whose 72 h window was missed has none). ``x72`` = 72-hour views / the median
+72-hour views of the account's last 15 strictly earlier posts, by the very rules of ``outlier_x`` (at least 3 usable priors, a
+missing figure is left out and never 0, a zero median is undefined; ``x72`` / ``post_x72``). It is **not binding**: only the hook
+bandit (``studio.learn``) and the quick reads use it. Nothing about it is stored (no migration, no feature key): ``post_reads``
+computes every posted post's ``views_72h``, ``x72``, ``views_7d`` and ``outlier_x`` on read, per account and so **per platform**
+(an account has one platform; ``best_by_platform`` rolls a clip's posts up by platform, beside the binding
+``features['outlier_x']``, which stays the better of the clip's accounts'). ``studio review data`` prints them under ``posts``.
+
 **Instagram insights.** ``ingest_ig_insights(store, rows)`` takes the rows of vidIQ's
 ``instagram_owner_insights`` (the weekly-review skill fetches them; ``studio metrics ingest-ig`` feeds
 them in), matches each to a post on ``platform_post_id`` and writes a snapshot of views / likes /
@@ -53,13 +63,15 @@ again), exit 2 for anything the caller must fix
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import math
 import statistics
 import subprocess
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from shutil import which
@@ -86,6 +98,7 @@ WINDOWS: tuple[tuple[str, timedelta], ...] = (
     ("7d", timedelta(days=7)),
 )
 SEVEN_DAYS = dict(WINDOWS)["7d"]
+THREE_DAYS = dict(WINDOWS)["72h"]
 # The 7 d window is the last one and has no end as a classification (a late snapshot still belongs
 # to it), but a pull gives up on a post older than ABANDON_AFTER with no 7 d snapshot: it is reported as
 # abandoned for ABANDON_REPORT_FOR more days (so the owner sees it), then dropped from the run entirely:
@@ -201,18 +214,37 @@ def _snapshots_in_window(store: Store, post: Post, window: str) -> list[Snapshot
     ]  # fmt: skip
 
 
-def views_at_7d(store: Store, post: Post) -> int | None:
-    """``views`` of the FIRST snapshot taken at or after day 7 that has any, else ``None``."""
-    at = posted_at(post)
-    for snap in sorted(store.snapshots_for(post.id), key=lambda s: s.captured_at):
-        if snap.views is not None and snap.captured_at - at >= SEVEN_DAYS:
+def _views_between(snapshots: list[Snapshot], at: datetime, start: timedelta, end: timedelta | None = None) -> int | None:
+    """``views`` of the FIRST snapshot (by time) that has any and whose age (since ``at``) is ``start`` or more and, when ``end`` is
+    given, below it; ``None`` when there is none. First, so the figure never moves once it exists."""
+    for snap in sorted(snapshots, key=lambda s: s.captured_at):
+        age = snap.captured_at - at
+        if snap.views is not None and age >= start and (end is None or age < end):
             return snap.views
     return None
 
 
-def post_outlier_x(store: Store, post: Post) -> float | None:
-    """This post's ``outlier_x``: its 7-day views against the account's earlier posts' 7-day views."""
-    views = views_at_7d(store, post)
+def views_at_7d(store: Store, post: Post) -> int | None:
+    """``views`` of the FIRST snapshot taken at or after day 7 that has any, else ``None``."""
+    return _views_between(store.snapshots_for(post.id), posted_at(post), SEVEN_DAYS)
+
+
+def views_at_72h(store: Store, post: Post) -> int | None:
+    """The post's 72-hour views (learning plan section 1.1): ``views`` of the FIRST snapshot that has any and was taken from 72 h
+    up to (not including) day 7, i.e. the post's 72 h window (``window_at``). A reading from day 7 on is the 7-day figure, not
+    a 72-hour one, so a post whose 72 h window was missed has none (the plan: neither a win nor a loss)."""
+    return _views_between(store.snapshots_for(post.id), posted_at(post), THREE_DAYS, SEVEN_DAYS)
+
+
+def x72(views_72h: int | None, prior_views_72h: list[int | None]) -> float | None:
+    """``x72``, the early read (learning plan section 1.2): the post's 72-hour views / the median 72-hour views of the account's
+    last ``MAX_PRIORS`` earlier posts. The same rules as ``outlier_x`` (fewer than ``MIN_PRIORS`` usable priors, no views of its own
+    or a zero median: ``None``), only with 72-hour readings. Never binding: only the hook bandit and the quick reads use it."""
+    return outlier_x(views_72h, prior_views_72h)
+
+
+def _post_ratio(store: Store, post: Post, views_of: Callable[[Store, Post], int | None]) -> float | None:
+    views = views_of(store, post)
     if views is None:
         return None
     me = posted_at(post)
@@ -223,11 +255,83 @@ def post_outlier_x(store: Store, post: Post) -> float | None:
     )  # fmt: skip
     priors: list[int] = []  # newest first, until the last MAX_PRIORS usable ones are in hand
     for p in reversed(earlier):
-        if (v := views_at_7d(store, p)) is not None:
+        if (v := views_of(store, p)) is not None:
             priors.append(v)
             if len(priors) == MAX_PRIORS:
                 break
     return outlier_x(views, priors[::-1])
+
+
+def post_outlier_x(store: Store, post: Post) -> float | None:
+    """This post's ``outlier_x``: its 7-day views against the account's earlier posts' 7-day views."""
+    return _post_ratio(store, post, views_at_7d)
+
+
+def post_x72(store: Store, post: Post) -> float | None:
+    """This post's ``x72``: its 72-hour views against the account's earlier posts' 72-hour views."""
+    return _post_ratio(store, post, views_at_72h)
+
+
+@dataclass(frozen=True)
+class PostRead:
+    """What one posted post has been read at (compute on read: nothing here is stored). ``outlier_x`` and ``x72`` are the post's own
+    account's (so per platform: an account has one platform); a ``None`` is "no value yet", never 0."""
+
+    post_id: str
+    clip_id: str
+    account_id: str
+    character_slug: str
+    platform: str
+    handle: str
+    posted_at: datetime
+    views_72h: int | None
+    x72: float | None
+    views_7d: int | None
+    outlier_x: float | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {**dataclasses.asdict(self), "posted_at": self.posted_at.isoformat()}
+
+
+def post_reads(store: Store, *, character_slug: str | None = None) -> list[PostRead]:
+    """The 72-hour and 7-day reads of every ``posted`` post of every account (or of one character's), oldest first per account.
+
+    Each post's own ``views_72h`` / ``views_7d`` come from its first snapshot of that window; ``x72`` / ``outlier_x`` divide them
+    by the median of the account's last ``MAX_PRIORS`` strictly earlier posts' figure, as ``post_x72`` / ``post_outlier_x`` do (the
+    same numbers, with one snapshot query per post instead of one per prior)."""
+    reads: list[PostRead] = []
+    for account in store.accounts(character_slug):
+        posts = sorted(
+            (p for p in store.list_posts(account_id=account.id, status=PostStatus.posted)),
+            key=lambda p: (posted_at(p), p.id),
+        )  # fmt: skip
+        views: dict[str, tuple[int | None, int | None]] = {}
+        for p in posts:
+            snaps, at = store.snapshots_for(p.id), posted_at(p)
+            views[p.id] = (_views_between(snaps, at, THREE_DAYS, SEVEN_DAYS), _views_between(snaps, at, SEVEN_DAYS))
+        for p in posts:
+            earlier = [q for q in posts if posted_at(q) < posted_at(p)]
+            v72, v7 = views[p.id]
+            reads.append(
+                PostRead(
+                    post_id=p.id, clip_id=p.clip_id, account_id=account.id, character_slug=account.character_slug,
+                    platform=account.platform.value, handle=account.handle, posted_at=posted_at(p),
+                    views_72h=v72, x72=x72(v72, [views[q.id][0] for q in earlier]),
+                    views_7d=v7, outlier_x=outlier_x(v7, [views[q.id][1] for q in earlier]),
+                )  # fmt: skip
+            )
+    return reads
+
+
+def best_by_platform(reads: Iterable[PostRead], field: str) -> dict[str, float]:
+    """The best (largest) non-``None`` ``field`` (``"x72"`` or ``"outlier_x"``) of ``reads`` per platform, only the platforms
+    that have one: a clip's values beside the binding one (``features['outlier_x']`` stays the better of its accounts')."""
+    out: dict[str, float] = {}
+    for r in reads:
+        value = getattr(r, field)
+        if value is not None and value > out.get(r.platform, float("-inf")):
+            out[r.platform] = value
+    return out
 
 
 def _refresh_clip(store: Store, clip_id: str) -> tuple[float | None, bool]:

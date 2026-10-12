@@ -580,10 +580,38 @@ def test_review_payload_is_json_serialisable_and_has_every_section():
     payload = review_payload(rig.store, NOW)
     again = json.loads(json.dumps(payload))
     assert again == payload
-    assert {"as_of", "bars", "clips", "lifts", "formats", "hooks", "characters", "accounts", "ig_guard"} <= set(
+    assert {"as_of", "bars", "clips", "lifts", "formats", "hooks", "characters", "accounts", "ig_guard", "posts"} <= set(
         payload
     )
     assert payload["as_of"] == NOW.isoformat()
+
+
+def test_review_payload_posts_carry_the_72h_and_7d_reads_per_account():
+    """``posts``: raw 72 h / 7-day views and ``x72`` / ``outlier_x`` against the post's own account (so per platform),
+    ``null`` where there is no value yet (learning plan 1.1-1.2); the clip-level bars do not read them."""
+    rig = Rig()
+    for i, (v72, v7) in enumerate([(100, 400), (200, 600), (300, 900)]):
+        p = rig.post("@biscuit.ig", age_days=30 - i, views7=v7)
+        rig.store.add_snapshot(Snapshot(post_id=p.id, captured_at=p.claimed_at + 72 * H, views=v72))
+    last = rig.post("@biscuit.ig", age_days=20, views7=1_200)
+    rig.store.add_snapshot(Snapshot(post_id=last.id, captured_at=last.claimed_at + 72 * H, views=600))
+    rig.post("@biscuit.tt", age_days=20, views7=50)  # another platform: its own baseline (none yet)
+    rig.post("@biscuit.ig", age_days=1)  # too young for any read
+    payload = review_payload(rig.store, NOW)
+    again = json.loads(json.dumps(payload["posts"]))
+    assert again == payload["posts"]
+    by_post = {r["post_id"]: r for r in payload["posts"]}
+    assert len(by_post) == 6
+    mine = by_post[last.id]
+    assert (mine["platform"], mine["handle"], mine["character_slug"]) == ("instagram", "@biscuit.ig", "biscuit")
+    assert (mine["views_72h"], mine["x72"]) == (600, 3.0)  # 600 / median(100, 200, 300)
+    assert (mine["views_7d"], mine["outlier_x"]) == (1_200, 2.0)  # 1,200 / median(400, 600, 900) = 1,200 / 600
+    tiktok = next(r for r in payload["posts"] if r["platform"] == "tiktok")
+    assert (tiktok["views_72h"], tiktok["x72"], tiktok["views_7d"], tiktok["outlier_x"]) == (None, None, 50, None)
+    young = next(r for r in payload["posts"] if r["views_7d"] is None and r["platform"] == "instagram" and r["post_id"] != last.id
+                 and r["x72"] is None and r["views_72h"] is None and r["posted_at"].startswith("2026-11-09"))
+    assert young["outlier_x"] is None
+    assert payload["clips"]["measured"] == 0  # reads change no bar: no clip carries an outlier_x here
 
 
 def test_review_payload_format_hook_and_lift_sections():

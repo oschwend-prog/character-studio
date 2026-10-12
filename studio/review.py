@@ -71,7 +71,7 @@ import typer
 from studio.cli_support import emit, fail, open_store, text_option
 from studio.clips import LEARN_FEATURES, REQUIRED_FEATURES
 from studio.config import now_london
-from studio.metrics import posted_at, views_at_7d
+from studio.metrics import post_reads, posted_at, views_at_7d
 from studio.models import Account, Clip, ClipState, Platform, PostStatus, Review, Snapshot
 from studio.store import Store, require_aware
 
@@ -445,7 +445,10 @@ def review_payload(store: Store, now: datetime, *, apply_guard: bool = False) ->
     Sections: ``as_of``, ``bars``, ``clips`` (counts and hit rate), ``lifts``, ``formats`` (with
     verdicts), ``hooks`` (with ``proven``), ``characters`` (bar and evidence), ``accounts`` (this
     week's median ``non_follower_pct`` / ``skip_rate`` / ``watched_pct``, ``null`` when no snapshot of
-    the week reported it) and ``ig_guard`` (one entry per Instagram account).
+    the week reported it), ``ig_guard`` (one entry per Instagram account) and ``posts`` (every posted post's raw
+    ``views_72h`` and ``views_7d`` with its ``x72`` and ``outlier_x`` against its own account's last 15 posts, so per
+    platform; ``null`` = no value yet; ``studio.metrics.post_reads``; reported, never a bar: the binding figure is the
+    clip's ``outlier_x`` in ``clips`` / ``formats`` / ``hooks``).
     """
     require_aware(now, "review_payload(now)")
     clips = [
@@ -532,6 +535,7 @@ def review_payload(store: Store, now: datetime, *, apply_guard: bool = False) ->
         ],
         "accounts": accounts_out,
         "ig_guard": guard_out,
+        "posts": [r.as_dict() for r in post_reads(store)],
     }
 
 

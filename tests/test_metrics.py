@@ -1166,6 +1166,150 @@ def test_cli_ingest_ig_missing_file_is_a_caller_error(cli, tmp_path):
     assert r.exit_code == 2
 
 
+# ---- 72-hour views, x72 and the per-platform reads (learning plan sections 1.1-1.2, build item 5) -----------------------
+
+
+def three_day_views(rig: Rig, post: Post, views: int | None, *, offset: timedelta = timedelta(0)) -> None:
+    rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=post.claimed_at + 72 * H + offset, views=views))
+
+
+def day_stack(rig: Rig, handle: str, v72: list[int | None], *, v7: list[int | None] | None = None) -> list[Post]:
+    """Earlier posts on one account, one per day, oldest first, each with its 72 h reading (and its 7-day one when given); the
+    newest is 20 days before ``NOW``, so every figure exists."""
+    posts = []
+    for i, v in enumerate(v72):
+        p = rig.post(handle, age=(len(v72) - i + 19) * D)
+        three_day_views(rig, p, v)
+        if v7 is not None:
+            rig.seven_day_views(p, v7[i])
+        posts.append(p)
+    return posts
+
+
+def test_x72_follows_the_rules_of_outlier_x():
+    assert metrics.x72(600, [100, 200, 300]) == 3.0
+    assert metrics.x72(None, [100, 200, 300]) is None  # no 72 h reading of its own: nothing, never 0
+    assert metrics.x72(600, [100, 200]) is None  # fewer than 3 usable priors
+    assert metrics.x72(600, [100, None, 200, None]) is None
+    assert metrics.x72(600, [0, 0, 0]) is None
+    assert metrics.x72(0, [100, 200, 300]) == 0.0
+    assert metrics.x72(300, [5_000] * 8 + [100] * 15) == 3.0  # the last 15 only
+    assert metrics.x72(500, [100, 200, 300, 400]) == 2.0  # the median of an even count
+
+
+def test_views_at_72h_is_the_first_reading_of_the_72h_window(rig):
+    post = rig.post(age=10 * D)
+    at = post.claimed_at
+    for age, views in [(24 * H, 90), (72 * H - MIN, 95), (72 * H, None), (72 * H + 30 * MIN, 300), (5 * D, 400),
+                       (7 * D, 5_000), (9 * D, 6_000)]:  # fmt: skip
+        rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=at + age, views=views))
+    # 90 and 95 are too early, None is not a reading, 300 is the first one in the window: later ones never move it
+    assert metrics.views_at_72h(rig.store, post) == 300
+    assert metrics.views_at_7d(rig.store, post) == 5_000
+
+
+def test_views_at_72h_takes_exactly_72_hours_and_stops_before_day_7(rig):
+    exact, week, early, none = rig.post(age=10 * D), rig.post(age=10 * D), rig.post(age=10 * D), rig.post(age=10 * D)
+    rig.store.add_snapshot(Snapshot(post_id=exact.id, captured_at=exact.claimed_at + 72 * H, views=70))
+    rig.store.add_snapshot(Snapshot(post_id=week.id, captured_at=week.claimed_at + 7 * D, views=7_000))  # the 7-day figure, not a 72 h one
+    rig.store.add_snapshot(Snapshot(post_id=early.id, captured_at=early.claimed_at + 72 * H - MIN, views=60))
+    assert metrics.views_at_72h(rig.store, exact) == 70
+    assert metrics.views_at_72h(rig.store, week) is None  # its 72 h window was missed: neither a win nor a loss
+    assert metrics.views_at_72h(rig.store, early) is None
+    assert metrics.views_at_72h(rig.store, none) is None
+
+
+def test_the_first_three_posts_of_an_account_have_no_x72_and_the_fourth_has(rig):
+    posts = day_stack(rig, "@biscuit.ig", [100, 200, 300])
+    last = rig.post("@biscuit.ig", age=15 * D)
+    three_day_views(rig, last, 600)
+    assert [metrics.post_x72(rig.store, p) for p in posts] == [None, None, None]
+    assert metrics.post_x72(rig.store, last) == 3.0  # 600 / median(100, 200, 300)
+
+
+def test_x72_priors_are_this_accounts_earlier_posts_only(rig):
+    posts = day_stack(rig, "@biscuit.ig", [100, 200, 300])
+    day_stack(rig, "@biscuit.tt", [9_000] * 5)  # another platform's account must not count
+    me = rig.post("@biscuit.ig", age=15 * D)
+    three_day_views(rig, me, 400)
+    later = rig.post("@biscuit.ig", age=2 * D)
+    three_day_views(rig, later, 99_999)  # a later post is no prior
+    assert metrics.post_x72(rig.store, me) == 2.0
+    assert posts[0].id != me.id
+
+
+def test_a_prior_without_a_72h_reading_is_left_out_not_counted_as_zero(rig):
+    day_stack(rig, "@biscuit.ig", [100, None, 300])  # two usable priors: no baseline
+    me = rig.post("@biscuit.ig", age=15 * D)
+    three_day_views(rig, me, 600)
+    assert metrics.post_x72(rig.store, me) is None
+    rig2 = Rig()  # a fourth usable prior: the None is simply skipped (median of 100, 300, 200 = 200)
+    day_stack(rig2, "@biscuit.ig", [100, None, 300, 200])
+    me2 = rig2.post("@biscuit.ig", age=15 * D)
+    three_day_views(rig2, me2, 600)
+    assert metrics.post_x72(rig2.store, me2) == 3.0
+
+
+def test_post_reads_equal_the_per_post_functions_for_every_post(rig):
+    """The batch (one snapshot query per post) must give the numbers ``post_x72`` / ``post_outlier_x`` give."""
+    day_stack(rig, "@biscuit.ig", [100, 200, 300, 150, None, 400, 250], v7=[500, 900, 1_200, None, 600, 2_000, 1_000])
+    day_stack(rig, "@biscuit.tt", [10, 20, 30, 40], v7=[100, 200, 300, 400])
+    day_stack(rig, "@reginald.tt", [5, 5, 5, 50])
+    same = rig.post("@biscuit.ig", age=1 * D)  # two posts at the very same time: neither is a prior of the other
+    twin = rig.post("@biscuit.ig", age=1 * D)
+    for p in (same, twin):
+        three_day_views(rig, p, 300)
+        rig.seven_day_views(p, 700)
+    reads = metrics.post_reads(rig.store)
+    assert len(reads) == len(rig.store.list_posts(status=PostStatus.posted))
+    for r in reads:
+        post = next(p for p in rig.store.list_posts() if p.id == r.post_id)
+        assert r.x72 == metrics.post_x72(rig.store, post), r
+        assert r.outlier_x == metrics.post_outlier_x(rig.store, post), r
+        assert r.views_72h == metrics.views_at_72h(rig.store, post)
+        assert r.views_7d == metrics.views_at_7d(rig.store, post)
+    by_post = {r.post_id: r for r in reads}
+    assert by_post[same.id].x72 == by_post[twin.id].x72 is not None
+
+
+def test_post_reads_say_which_platform_and_filter_by_character(rig):
+    day_stack(rig, "@biscuit.ig", [100, 200, 300, 400])
+    day_stack(rig, "@biscuit.tt", [1, 2, 3, 4])
+    day_stack(rig, "@reginald.tt", [7, 8, 9, 10])
+    reads = metrics.post_reads(rig.store)
+    assert {(r.character_slug, r.platform, r.handle) for r in reads} == {
+        ("biscuit", "instagram", "@biscuit.ig"), ("biscuit", "tiktok", "@biscuit.tt"), ("reginald", "tiktok", "@reginald.tt"),
+    }
+    mine = metrics.post_reads(rig.store, character_slug="reginald")
+    assert {r.character_slug for r in mine} == {"reginald"} and len(mine) == 4
+    assert [r.x72 for r in mine] == [None, None, None, 10 / 8]
+    assert metrics.post_reads(MemoryStore()) == []
+
+
+def test_post_reads_leave_missing_figures_out_never_zero(rig):
+    p = rig.post("@biscuit.ig", age=2 * D)  # too young for any reading
+    (read,) = metrics.post_reads(rig.store)
+    assert read.post_id == p.id
+    assert (read.views_72h, read.x72, read.views_7d, read.outlier_x) == (None, None, None, None)
+    out = read.as_dict()
+    assert json.loads(json.dumps(out)) == out and out["posted_at"] == p.claimed_at.isoformat()
+
+
+def test_best_by_platform_keeps_each_platforms_best_value_and_skips_none(rig):
+    day_stack(rig, "@biscuit.ig", [100, 200, 300, 400], v7=[100, 200, 300, 400])
+    day_stack(rig, "@biscuit.tt", [10, 20, 30, 40], v7=[10, 20, 30, 40])
+    clip = rig.clip()
+    ig, tt = rig.post("@biscuit.ig", age=15 * D, clip=clip), rig.post("@biscuit.tt", age=15 * D, clip=clip)
+    for p, v72, v7 in ((ig, 1_000, 2_000), (tt, 20, None)):
+        three_day_views(rig, p, v72)
+        if v7 is not None:
+            rig.seven_day_views(p, v7)
+    mine = [r for r in metrics.post_reads(rig.store) if r.clip_id == clip.id]
+    assert metrics.best_by_platform(mine, "x72") == {"instagram": 1_000 / 250, "tiktok": 20 / 25}
+    assert metrics.best_by_platform(mine, "outlier_x") == {"instagram": 2_000 / 250}  # the TikTok post has no 7-day figure yet
+    assert metrics.best_by_platform([], "x72") == {}
+
+
 def test_metrics_replaced_the_empty_skeleton():
     from studio import cli as cli_module
 
