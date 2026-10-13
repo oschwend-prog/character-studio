@@ -861,6 +861,19 @@ def test_quota_window_reads_the_naming_of_the_limit(text, window):
     assert gemini.quota_window(text) == window
 
 
+def test_a_429_logs_each_limit_it_names_with_the_model_and_the_cap(clip, caplog):
+    with caplog.at_level("WARNING", logger="studio.gemini"):
+        _raises_after_429(clip, google_429("GenerateRequestsPerDayPerProjectPerModel-FreeTier"))
+    lines = [r.getMessage() for r in caplog.records if "HTTP 429" in r.getMessage()]
+    assert lines and all("GenerateRequestsPerDayPerProjectPerModel-FreeTier (" in x and ") limit 20" in x for x in lines)
+    assert KEY not in caplog.text
+
+
+@pytest.mark.parametrize("text", ["rate limited", "", "{}", '{"error": {"details": "x"}}', '{"error": {"details": [1, {"violations": [2]}]}}'])
+def test_quota_violations_reads_nothing_from_other_bodies(text):
+    assert gemini.quota_violations(text) == []
+
+
 def test_a_429_that_is_not_the_last_answer_is_still_asked_again(clip):
     # the tag changes what is raised, never how often Gemini is asked: a 429 is busy, asked again after each wait
     waits: list[float] = []

@@ -196,6 +196,23 @@ def quota_window(text: str) -> str | None:
     return None
 
 
+def quota_violations(text: str) -> list[str]:
+    """Each limit a 429 body lists (Google's ``QuotaFailure`` details) as ``<quotaId> (<model>) limit <quotaValue>``, for the log:
+    the error's reason keeps only the body's first characters, which never reach the quota id or the day's cap. [] for any other
+    body."""
+    try:
+        details = json.loads(text)["error"]["details"]
+    except (ValueError, KeyError, TypeError):
+        return []
+    out = []
+    for d in details if isinstance(details, list) else []:
+        for v in (d.get("violations") or []) if isinstance(d, dict) else []:
+            if isinstance(v, dict):
+                dims = v.get("quotaDimensions") if isinstance(v.get("quotaDimensions"), dict) else {}
+                out.append(f"{v.get('quotaId', '?')} ({dims.get('model', '?')}) limit {v.get('quotaValue', '?')}")
+    return out
+
+
 class GeminiBlocked(GeminiError):
     """Gemini refused the request (a safety block): nothing to read."""
 
@@ -246,6 +263,8 @@ class GeminiClient:
     def _error(self, response: httpx.Response) -> GeminiError:
         """The error for a failed answer: a 429 that names its limit in the whole body is a ``GeminiQuota`` (tagged)."""
         message = f"Gemini answered HTTP {response.status_code}: {self._body(response)}"
+        if response.status_code == 429 and (limits := quota_violations(response.text)):
+            log.warning("gemini: HTTP 429: %s", "; ".join(limits))  # which model's cap ran out, and how big it is
         if response.status_code == 429 and (window := quota_window(response.text)) is not None:
             return GeminiQuota(message, window)
         return GeminiError(message, response.status_code)
