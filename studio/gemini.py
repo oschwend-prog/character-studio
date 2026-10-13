@@ -73,6 +73,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import math
 import os
 import re
@@ -86,6 +87,8 @@ import httpx
 
 from studio.captions import BANNED_HASHTAGS, clean_tags
 from studio.models import HOOK_PATTERNS
+
+log = logging.getLogger("studio.gemini")
 
 API_ROOT = "https://generativelanguage.googleapis.com"
 DEFAULT_MODEL = "gemini-3.8-flash"  # the current stable Flash (ai.google.dev/gemini-api/docs/models, 2026-10-06); GEMINI_MODEL overrides
@@ -361,7 +364,8 @@ class GeminiClient:
                 part = {"fileData": {"mimeType": mime, "fileUri": uri}}
             answer = self._generate(part, prompt, schema)
             problems = check(answer) if check else []
-            if problems:
+            if problems:  # logged: how often the first answer misses (one hook per arm) is what says the prompt needs work
+                log.warning("gemini: the first answer broke %d rule(s), asking once more: %s", len(problems), "; ".join(problems)[:300])
                 retry = (
                     f"{prompt}\n\nYour previous answer broke these rules, fix them and answer again in full:\n"
                     + "\n".join(f"- {p}" for p in problems)
