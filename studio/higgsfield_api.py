@@ -30,11 +30,20 @@ followed). Error messages never carry the key.
 does not exist or belongs to another account"). A status read creates and spends nothing, so a 404 for a request that cannot exist
 means the key was accepted, and a 401 that it was not (``studio drop check-keys``).
 
+**What is left on the account?** ``balance`` reads the credits the account still has, for free (``studio drop auto-make`` asks
+before it requests a clip: owner decision 2026-10-14, "the studio makes them", within the credits the account really holds). A
+read creates and spends nothing. UNVERIFIED: Higgsfield's REST docs describe no balance route that this repo has seen (the MCP's
+``balance`` tool is the owner's way), so ``BALANCE_PATH`` is a best guess; ``parse_balance`` accepts a few usual field names and
+guesses nothing else. Whatever goes wrong (a 404, another shape, no answer) raises ``HiggsfieldError`` and the caller treats the
+balance as unknown: auto-make then waits and says why in its JSON, it never makes a clip on a guess. If the route is another one,
+change ``BALANCE_PATH`` and nothing else.
+
 Tests drive the client with an ``httpx.MockTransport``; nothing here is called without the owner's keys.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import time
 import uuid
@@ -48,6 +57,8 @@ import httpx
 
 API_ROOT = "https://api.higgsfield.ai"
 OBJECT_SWAP_PATH = "/higgsfield/genjutsu/object-swap/v1.0"
+BALANCE_PATH = "/user/credits"  # UNVERIFIED (see the module doc): the free read of what the account still holds
+BALANCE_FIELDS = ("credits", "balance", "credit_balance", "available_credits", "available")  # the names parse_balance accepts
 RESOLUTIONS = ("480p", "720p", "1080p")
 PENDING = frozenset({"queued", "in_progress"})
 TERMINAL = frozenset({"completed", "failed", "nsfw", "canceled"})
@@ -311,6 +322,24 @@ class HiggsfieldClient:
             return f"invalid: {detail}"
         return f"error: {detail}"
 
+    # ---- the balance ------------------------------------------------------------------------------------------------
+
+    def balance(self) -> int:
+        """The credits the account still holds, whole credits (a read: nothing is created or spent). ``HiggsfieldError`` when the
+        call fails or answers a non-success status; ``UnexpectedResponse`` when the answer is not JSON or names no credits
+        (``parse_balance``). The key never appears in an error."""
+        try:
+            response = self._client.get(f"{self._root}{BALANCE_PATH}", headers=self._auth())
+        except httpx.HTTPError as e:
+            raise HiggsfieldError(f"the balance call failed ({type(e).__name__})") from None
+        if not response.is_success:
+            raise HiggsfieldError(f"the balance call answered HTTP {response.status_code}: {self._body(response)}", response.status_code)
+        data = self._json(response, "balance")
+        credits = parse_balance(data)
+        if credits is None:
+            raise UnexpectedResponse(f"balance: no credits in the answer: {self._body(response)}", response.status_code)
+        return credits
+
     # ---- the output -------------------------------------------------------------------------------------------------
 
     def download(self, url: str, dest: Path | str) -> Path:
@@ -362,6 +391,32 @@ def parse_status(data: Mapping[str, Any]) -> RequestStatus:
     )
 
 
+def _credits(value: Any) -> int | None:
+    """A credit count as a whole number (floored), from a number or a numeric string; None for anything else (a bool, a negative
+    number, NaN or infinity, text)."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        try:
+            value = float(value.strip())
+        except ValueError:
+            return None
+    if isinstance(value, (int, float)) and math.isfinite(value) and value >= 0:
+        return math.floor(value)
+    return None
+
+
+def parse_balance(data: Mapping[str, Any]) -> int | None:
+    """The credits an account-balance answer names, whole credits, or None. Looks for ``BALANCE_FIELDS`` at the top and then one
+    level down (inside any object value, e.g. ``{"user": {"credits": 91}}``), in the order of the names; the first usable number
+    wins. Nothing else is guessed: no field, a negative or non-numeric value, a bool is None."""
+    for scope in (data, *(v for v in data.values() if isinstance(v, Mapping))):
+        for name in BALANCE_FIELDS:
+            if (credits := _credits(scope.get(name))) is not None:
+                return credits
+    return None
+
+
 def check_credentials(env: Mapping[str, str] | None = None, **kw: Any) -> str:
     """``HiggsfieldClient.check_credentials`` for the key pair in the environment; ``"missing: ..."`` when it is not set."""
     client = HiggsfieldClient.from_env(env, **kw)
@@ -375,5 +430,5 @@ def check_credentials(env: Mapping[str, str] | None = None, **kw: Any) -> str:
 
 __all__ = [
     "HiggsfieldClient", "HiggsfieldError", "PollTimeout", "RequestStatus", "SubmitUncertain", "Submitted", "UnexpectedResponse",
-    "check_credentials", "parse_status",
+    "check_credentials", "parse_balance", "parse_status",
 ]

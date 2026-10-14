@@ -48,6 +48,11 @@
       "instagram_trending": true
     }
   },
+  "auto_make": {
+    "_doc": "The cloud makes the clips by itself (owner decision 2026-10-14, \"the studio makes them\"; replaces the launch-phase rule that production waits for the owner's Make it). `studio drop auto-make` runs at the start of every drop sweep (.github/workflows/studio-drop.yml, worker 1): for each live character with a connected account whose next posting slot (Europe/London, studio.settings cadence) starts within `horizon_hours`, and with nothing in the pipeline for it (no make asked for, no clip on its way for that slot), it asks for ONE of his ready drops exactly as Make it does, marked `make_requested.by` `studio` (the best score; one clip in every 4 from below his median, test A's Explore pick). It stays inside the monthly credit cap and Higgsfield's balance, never runs with the kill switch on, and waits quietly (exit 0) when credits are short. Accounts stay in approval mode: a made clip waits for the owner's one tap. `enabled` false switches it off; the owner can still press Make it on any clip first. studio/drop.py reads this block (`auto_make_config`).",
+    "enabled": true,
+    "horizon_hours": 30
+  },
   "tier_rules": {
     "_doc": "The category (tier) of a pick the analyst did not tier, in this order; the first rule that holds wins. A pick with an explicit proposal.tier keeps it. studio/favorites.py TIER_RULES and terminal/src/lib/scanConfig.ts must equal these numbers (tests pin both). age = days since posted_at (or the scan's age_days); velocity = views per day since posting (the stored proposal.velocity, else views / max(age, velocity_min_age_days)). An unknown age is viral_now.",
     "iconic_min_age_days": 180,

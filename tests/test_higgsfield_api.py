@@ -20,6 +20,7 @@ from studio.higgsfield_api import (
     SubmitUncertain,
     UnexpectedResponse,
     check_credentials,
+    parse_balance,
     parse_status,
 )
 
@@ -311,3 +312,48 @@ def test_hf_key_holds_the_whole_value_as_the_console_copies_it_and_wins_over_the
     single = HiggsfieldClient.from_env({"HF_KEY": "one-token-key"})
     assert single is not None and single._auth()["Authorization"] == "Key one-token-key"
     assert "one-token-key" not in single._scrub("Key one-token-key failed")
+
+
+# ---- the free balance read (studio drop auto-make) ---------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("answer, credits", [
+    ({"credits": 42}, 42),
+    ({"credits": 42.36}, 42),  # the MCP shows decimals; a whole credit is what a make needs, so it is floored
+    ({"balance": 1500}, 1500),
+    ({"credit_balance": "250"}, 250),
+    ({"available_credits": 7}, 7),
+    ({"user": {"id": "u1", "credits": 91}}, 91),  # one level down
+    ({"data": {"wallet": {"credits": 3}}}, None),  # two levels down is not searched
+    ({"credits": -5}, None),
+    ({"credits": True}, None),
+    ({"credits": None, "plan": "pro"}, None),
+    ({"credits": "plenty"}, None),
+    ({"credits": float("inf")}, None),
+    ({}, None),
+])
+def test_the_balance_is_read_from_a_few_named_fields_and_nothing_is_guessed(answer, credits):
+    assert parse_balance(answer) == credits
+
+
+def test_the_balance_is_one_get_with_the_key_and_whole_credits_come_back():
+    fake = Fake((200, {"credits": 120.9, "plan": "creator"}))
+    assert client(fake).balance() == 120
+    (req,) = fake.requests
+    assert req.method == "GET" and req.url.host == "api.higgsfield.ai" and not req.content
+    assert req.headers["Authorization"] == f"Key {KEY_ID}:{SECRET}"
+
+
+def test_a_balance_that_cannot_be_read_is_an_error_and_never_shows_the_key():
+    with pytest.raises(HiggsfieldError, match="HTTP 404") as e:
+        client(Fake((404, "no such route"))).balance()
+    assert e.value.status == 404
+    with pytest.raises(HiggsfieldError) as e:
+        client(Fake((401, f"bad key {KEY_ID}:{SECRET}"))).balance()
+    assert SECRET not in str(e.value) and KEY_ID not in str(e.value)
+    with pytest.raises(UnexpectedResponse, match="no credits"):
+        client(Fake((200, {"plan": "creator"}))).balance()
+    with pytest.raises(UnexpectedResponse, match="not JSON"):
+        client(Fake((200, "<html>"))).balance()
+    with pytest.raises(HiggsfieldError, match="ConnectError"):
+        client(Fake(httpx.ConnectError("refused"))).balance()

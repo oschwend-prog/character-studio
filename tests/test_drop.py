@@ -970,6 +970,70 @@ def test_make_it_swaps_qas_masters_and_waits_for_the_owners_ok(world, portrait, 
     assert len(hf.submits) == 1
 
 
+class Balance:
+    """What ``studio drop auto-make`` asks Higgsfield for: the balance."""
+
+    def __init__(self, credits):
+        self.credits = credits
+
+    def balance(self):
+        return self.credits
+
+
+def studio_asks(store, storage, portrait):
+    """What the sweep's ``studio drop auto-make`` does: Reginald (live, with an account, slot 19:30 today) gets his ready drop asked for."""
+    from studio.config import LONDON
+    from studio.models import Account
+
+    store.upsert_character(Character(slug="reginald", name="Reginald", status="live", bodies=[Body.biped]))
+    store.add_account(Account(character_slug="reginald", platform="instagram", handle="@reginald", postiz_integration_id="pz-reginald"))
+    pid = ready_drop(store, storage, portrait)
+    wednesday = datetime(2026, 10, 14, 9, 0, tzinfo=LONDON)  # the default cadence: Reginald Tue/Wed/Thu 19:30
+    out = drop.auto_make(store, wednesday, hf=Balance(5000), scan={})
+    assert [r["pick_id"] for r in out["requested"]] == [pid], out
+    return pid
+
+
+def test_the_studios_make_it_is_made_exactly_like_the_owners(world, portrait, gen_out, fast_master):
+    """Owner decision 2026-10-14: ``studio drop auto-make`` writes the same request Make it does, with ``by`` studio; the sweep's
+    pending list takes it, ``make_drop`` accepts it and the clip is made, tagged and paid for like any other."""
+    store, storage = world
+    pid = studio_asks(store, storage, portrait)
+    pick = store.get_favorite(pid)
+    assert pick.proposal["make_requested"]["by"] == "studio" and pick.proposal["drop"]["state"] == "making"
+    assert pending(store) == [{"pick_id": pid, "job": "make", "state": "making"}]
+    hf = FakeHF(gen_out)
+    out = make(store, storage, pid, hf, FakeGemini(QA_PASS))
+    assert out.ok and out.state == "made", out
+    (clip,) = store.list_clips()
+    assert clip.state is ClipState.awaiting_approval and clip.features["fav_id"] == pid and clip.features["source_kind"] == "owner_saved"
+    assert clip.features["explore_pick"] is False and clip.features["version_index"] == 1  # the learning tags are written as ever
+    assert [e.kind for e in store.ledger_month(NOW.strftime("%Y-%m"))] == ["reserve", "settle"]
+    after = store.get_favorite(pid)
+    assert after.status == "made" and after.proposal["make_requested"]["by"] == "studio"  # who asked stays on the record
+    assert len(hf.submits) == 1
+
+
+def test_the_studios_request_is_accepted_by_the_cli_and_a_forged_one_is_not(monkeypatch, tmp_path, portrait):
+    store, storage = make_store(), LocalStorage(tmp_path / "s")
+    pid = studio_asks(store, storage, portrait)
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: storage)
+    monkeypatch.delenv("HF_API_KEY_ID", raising=False)
+    monkeypatch.delenv("HF_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    r = CliRunner().invoke(app, ["drop", "pending"])
+    assert json.loads(r.output) == [{"pick_id": pid, "job": "make", "state": "making"}]
+    r = CliRunner().invoke(app, ["drop", "make", pid])  # no keys here: it gets as far as waiting for Higgsfield, which the owner's Make it does too
+    assert r.exit_code == 0 and json.loads(r.output)["reason"].startswith("waiting for the Higgsfield key")
+    f = store.get_favorite(pid)
+    for forged in ({"at": NOW.isoformat(), "by": "robot"}, {"at": "yesterday", "by": "studio"}, {"by": "studio"}):
+        store.update_favorite(pid, proposal={**f.proposal, "make_requested": forged})
+        r = CliRunner().invoke(app, ["drop", "make", pid])
+        assert r.exit_code == 2 and "no Make it from the owner or the studio" in r.output
+        assert pending(store) == []
+
+
 def test_the_next_drop_of_the_character_rotates_the_engagement_line(world, portrait, gen_out, fast_master):
     store, storage = world
     for expected in ("Send this to your butler.", "Which eye did you notice first?"):

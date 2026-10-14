@@ -122,8 +122,23 @@ count; 0 when the sound had no beat after all), ``features['hook_entrance']`` (t
 the analysis leaves out a clip with no beat (both arms) or whose edit did not happen (the treated arm). The Recreate path assigns no
 test arms (it writes ``test_arms`` ``{}``), so it is not part of G and H.
 
-**Make** (``make_drop``, paid, ONLY after the owner's Make it): refused unless ``proposal['make_requested']`` is the owner's
-record (``{"at", "by": "owner"}``, written only by ``request_job``; nothing in this CLI writes it). The owner's Adjust
+**The studio makes them** (owner decision 2026-10-14, replacing the launch-phase rule that production waits for the owner's Make it:
+"once Higgsfield has credits the cloud makes clips by itself"). ``studio drop auto-make`` (``auto_make``, run first by every cloud
+sweep, ``studio-drop.yml``) looks at each live character with a connected account: when his next posting slot (``planning.upcoming_slot``,
+London, ``studio.settings`` cadence) starts within ``auto_make.horizon_hours`` (``config/scan.json``, 30) and nothing covers it, it asks
+for ONE of his ready drops (``request_make``), written exactly as ``request_job`` writes the owner's Make it but with
+``make_requested.by`` = ``studio`` and no Adjust. Covered means a pick of his with a make requested (making, or about to be), or a clip
+of his from generating to scheduled that has no post yet or a post on that slot's London day (``_covering_clip``); a studio make that
+failed in the last day holds him until the owner looks. The drop is the best score (ties: the oldest; no score last), except one clip
+in every 4 (test A, ``explore_turn``), which is the best drop below the median of his checked scores, the pool the clip's ``explore_pick``
+tag is judged by at Make it. It is priced at the check's price and must fit the monthly cap, Higgsfield's balance
+(``HiggsfieldClient.balance``, a free read) and the credits already spoken for; the kill switch, the cap or too few credits ask for
+nothing and print why as ``waiting`` with exit 0 (a normal state until the owner tops up: never a red run). An unreadable balance waits too.
+It is idempotent and changes no account mode: a made clip still waits for the owner's one tap. Off: ``auto_make.enabled`` false.
+
+**Make** (``make_drop``, paid, ONLY after a Make it, the owner's or the studio's): refused unless ``proposal['make_requested']`` is
+a record (``{"at", "by": "owner"}`` written only by ``request_job``, or ``{"at", "by": "studio", ...}`` written only by
+``request_make``; ``make_requested`` / ``make_requested_by``). The owner's Adjust
 (``drop['adjust']``: who is replaced, his part, gadgets, hook, section start and length, crop) overrides the defaults. A clip is
 created (``clip new``, ``fav_id`` = the pick, the pick ``queued``), the window trimmed and cropped (at least 409,600 pixels a
 frame), the credits reserved (``budget.reserve``: the monthly cap and the kill switch refuse), then the **Higgsfield API**
@@ -219,9 +234,9 @@ from studio.media.analyze import AnalysisError, analyze_clip
 from studio.media.master import MasterSpec, audio_problem, build_master, edits_from_arms, style_lead_s, upload_master
 from studio.media.qa import QAError, check_master, contact_sheet, frame_sheet, probe
 from studio.models import HOOK_PATTERNS, Body, Clip, ClipState, Favorite, Mode, Source
-from studio.planning import estimate_credits
+from studio.planning import TAKEN_STATUSES, estimate_credits, upcoming_slot
 from studio.storage import Storage, StorageError
-from studio.store import Store
+from studio.store import Store, require_aware
 
 log = logging.getLogger("studio.drop")
 S = ClipState
@@ -310,10 +325,22 @@ def _moment(raw: Any) -> datetime | None:
     return at if at.tzinfo is not None else None
 
 
-def owner_requested_make(pick: Favorite) -> bool:
-    """Did the owner tap Make it: ``proposal['make_requested']`` is ``{"at": <aware ISO time>, "by": "owner"}`` (request_job)."""
+MAKE_BY = ("owner", "studio")  # who may ask for a make: the owner's Make it, or the studio's own ``auto-make`` (owner decision 2026-10-14)
+
+
+def make_requested_by(pick: Favorite) -> str | None:
+    """Who asked for the make: ``proposal['make_requested']`` is ``{"at": <aware ISO time>, "by": "owner"}`` (written by
+    ``request_job``, the terminal's Make it) or ``{"at": ..., "by": "studio", ...}`` (written by ``request_make``, ``studio drop
+    auto-make``); ``"owner"`` / ``"studio"``, or None for no record or a forged one (another ``by``, a time that is no aware ISO time)."""
     rec = pick.proposal.get("make_requested")
-    return isinstance(rec, Mapping) and rec.get("by") == "owner" and _moment(rec.get("at")) is not None
+    if isinstance(rec, Mapping) and rec.get("by") in MAKE_BY and _moment(rec.get("at")) is not None:
+        return rec["by"]
+    return None
+
+
+def make_requested(pick: Favorite) -> bool:
+    """Was this video sent to be made, by the owner's Make it or the studio's auto-make: the one gate of every paid step."""
+    return make_requested_by(pick) is not None
 
 
 def _update(store: Store, pick: Favorite, now: datetime, *, status: str | None = None, **drop_changes: Any) -> Favorite:
@@ -956,7 +983,7 @@ def request_recheck(store: Store, pick_id: str, now: datetime | None = None) -> 
     pick = _load(store, pick_id)
     state = drop_of(pick).get("state")
     if pick.proposal.get("make_requested") is not None:
-        raise DropError(f"pick {pick.id} has the owner's Make it: a recheck would move a paid job")
+        raise DropError(f"pick {pick.id} has a Make it (the owner's or the studio's): a recheck would move a paid job")
     if state in ("making", "made"):
         raise DropError(f"pick {pick.id} is {state}: a recheck would move a paid job")
     if pick.status in ("made", "queued"):
@@ -1680,8 +1707,10 @@ def make_drop(
         raise DropError("--credits only goes with --generated-file (what that job cost)")
     pick = _load(store, pick_id)
     drop = drop_of(pick)
-    if not owner_requested_make(pick):
-        raise DropError(f"pick {pick_id}: no Make it from the owner (proposal.make_requested): nothing is generated without it")
+    if not make_requested(pick):
+        raise DropError(
+            f"pick {pick_id}: no Make it from the owner or the studio (proposal.make_requested): nothing is generated without it"
+        )
     if drop["state"] != "making":
         raise DropError(f"pick {pick_id} is {drop['state']}: a make runs on a drop the owner sent with Make it (making)")
     for key in ("source_id", "window", "star", "credits"):
@@ -1698,7 +1727,7 @@ def make_drop(
         # read again under the lease: a parallel worker may have made this drop (or the owner taken Make it back) since it was
         # listed, and a stale listing must never pay Higgsfield twice
         fresh = _load(store, pick_id)
-        if drop_of(fresh).get("state") != "making" or not owner_requested_make(fresh):
+        if drop_of(fresh).get("state") != "making" or not make_requested(fresh):
             made = drop_of(fresh).get("state") != "making"  # else the owner took Make it back: nobody made anything
             text = "another run already made this video" if made else "this video is no longer waiting to be made"
             return Outcome(pick_id, drop_of(fresh).get("state"), text, detail={"busy": True})
@@ -2319,7 +2348,7 @@ def pending(
     store: Store, *, include_waiting: bool = False, now: datetime | None = None, auto_retry: bool = False, fetches: bool = True,
 ) -> list[dict[str, str]]:
     """The drops a run should take, oldest first: ``checking`` (and an ``uploading`` one whose file is attached) -> process,
-    ``making`` with the owner's Make it -> make; ``waiting`` links only with ``include_waiting`` (the Mac: the cloud could not
+    ``making`` with a Make it (the owner's, or the studio's auto-make) -> make; ``waiting`` links only with ``include_waiting`` (the Mac: the cloud could not
     fetch them). A pick another run holds (a live lease) is left out.
 
     An auto-filed drop (``drop.auto_filed``, the hits job's) is never the Mac's: with ``include_waiting`` it is left out of the
@@ -2365,7 +2394,7 @@ def pending(
             continue  # the cloud checks it; the Mac never fetches an auto-filed link
         if state == "checking" or (state == "uploading" and f.proposal.get("owner_clip_path")) or (state == "waiting" and include_waiting):
             out.append((f.created_at, {"pick_id": f.id, "job": "process", "state": state}))
-        elif state == "making" and owner_requested_make(f):
+        elif state == "making" and make_requested(f):
             out.append((f.created_at, {"pick_id": f.id, "job": "make", "state": state}))
     if not fetches:
         out = [(at, row) for at, row in out if row["job"] != "process" or not needs_fetch(store, store.get_favorite(row["pick_id"]))]
@@ -2399,6 +2428,320 @@ def _auto_retry(media: Any) -> bool:
     """Whether the cloud tries a waiting auto-filed link again now: with the ScrapeCreators key, while the day's one-post
     downloads allow (yt-dlp first, then the copy); without it, with yt-dlp alone (free)."""
     return media is None or media.refusal() is None
+
+
+# ---- auto-make: the studio asks for the clip of every coming slot ---------------------------------------------------------------------
+
+AUTO_MAKE_DEFAULTS = {"enabled": True, "horizon_hours": 30}  # config/scan.json ``auto_make``
+AUTO_MAKE_MAX_HORIZON_H = 168  # a week: further ahead than that, a slot is not "coming"
+STUDIO_FAILED_HOLD_H = 24  # a make the studio asked for that failed holds its character this long: the owner looks first
+WATCHED_CLIP_STATES = (  # a clip in one of these may cover a slot (``_covering_clip``); planned, rejected and dropped never do
+    S.generating, S.gen_failed, S.generated, S.qa_failed, S.qa_passed, S.mastered, S.awaiting_approval, S.approved, S.scheduled, S.posted,
+)
+
+
+def _scan() -> dict[str, Any]:
+    """``config/scan.json`` (the file ``studio.hits`` reads; imported here, not at the top: ``studio.hits`` imports this module)."""
+    from studio import hits
+
+    return hits.load_scan()
+
+
+def auto_make_config(scan: Mapping[str, Any]) -> dict[str, Any]:
+    """``config/scan.json`` ``auto_make`` with its defaults (``AUTO_MAKE_DEFAULTS``): ``enabled`` (true or false) and
+    ``horizon_hours`` (a whole number of 1 to 168: how far ahead of a slot the clip is asked for). ``ValueError`` names the key."""
+    raw = scan.get("auto_make") if isinstance(scan.get("auto_make"), Mapping) else {}
+    enabled = raw.get("enabled", AUTO_MAKE_DEFAULTS["enabled"])
+    if not isinstance(enabled, bool):
+        raise ValueError(f"config/scan.json auto_make.enabled must be true or false, got {enabled!r}")
+    horizon = raw.get("horizon_hours", AUTO_MAKE_DEFAULTS["horizon_hours"])
+    if isinstance(horizon, bool) or not isinstance(horizon, int) or not 1 <= horizon <= AUTO_MAKE_MAX_HORIZON_H:
+        raise ValueError(
+            f"config/scan.json auto_make.horizon_hours must be a whole number of 1 to {AUTO_MAKE_MAX_HORIZON_H}, got {horizon!r}"
+        )
+    return {"enabled": enabled, "horizon_hours": horizon}
+
+
+@dataclass(frozen=True)
+class Balance:
+    """What Higgsfield says is left (``credits``), or why it could not be read (``problem``): never both, never a guess."""
+
+    credits: int | None
+    problem: str | None = None
+
+
+def read_balance(hf: Any) -> Balance:
+    """Higgsfield's free balance read (``HiggsfieldClient.balance``). Whatever goes wrong (no key, a refusal, another shape, no
+    answer) is a ``problem``, not an error: auto-make then waits and says why."""
+    if hf is None:
+        return Balance(None, "no Higgsfield key in this run (HF_KEY): its balance is unknown")
+    try:
+        credits = hf.balance()
+    except Exception as e:  # noqa: BLE001 - a read that fails for any reason leaves the balance unknown, which waits
+        return Balance(None, f"Higgsfield's balance could not be read ({type(e).__name__}: {' '.join(str(e).split())[:140]})")
+    if isinstance(credits, bool) or not isinstance(credits, int) or credits < 0:
+        return Balance(None, f"Higgsfield's balance could not be read (it answered {credits!r})")
+    return Balance(credits)
+
+
+def explore_turn(store: Store, slug: str, now: datetime, registry: experiments.Registry | None = None) -> bool:
+    """Is the next clip of this character test A's Explore pick: one in every ``explore.every`` (4), like the terminal's suggestions
+    (``terminal/src/lib/ranking.ts``: the best 3, then one from below the median). Counted over his clips made since the test
+    began (``registry.start``, London): those that carry the ``explore_pick`` tag (made from a drop; a Recreate has none), a
+    given-up clip (``dropped``) left out. It is his turn when ``every - 1`` of them in a row, newest last, were not Explore picks,
+    so a turn that could not be served (nothing below the median yet) stays his until it can. False while test A is off."""
+    registry = registry or experiments.load_experiments()
+    if not registry.is_active("A", now):
+        return False
+    every = registry.test("A").params["explore"]["every"]
+    began = datetime.combine(registry.start, time(0, 0), tzinfo=LONDON)
+    mine = sorted(
+        (c for c in store.list_clips(character_slug=slug)
+         if c.state is not S.dropped and c.created_at is not None and c.created_at >= began and isinstance(c.features.get("explore_pick"), bool)),
+        key=lambda c: (c.created_at, c.id),
+    )  # fmt: skip
+    since = 0
+    for c in reversed(mine):
+        if c.features["explore_pick"]:
+            break
+        since += 1
+    return since >= every - 1
+
+
+def _is_ready_choice(f: Favorite, now: datetime) -> bool:
+    """A drop auto-make may ask for: ready, checked (a source, a window, a star) and priced, not skipped, nobody has asked for it
+    and no run holds it (a live lease)."""
+    d = f.proposal.get("drop")
+    if not isinstance(d, Mapping) or f.status != "approved" or d.get("state") != "ready" or f.proposal.get("make_requested") is not None:
+        return False
+    credits = d.get("credits")
+    if isinstance(credits, bool) or not isinstance(credits, int) or credits <= 0:
+        return False
+    if not all(d.get(key) for key in ("source_id", "window", "star")):
+        return False
+    held = d.get("job")
+    return not (isinstance(held, Mapping) and (since := _moment(held.get("at"))) is not None and now - since < timedelta(minutes=LEASE_MINUTES))
+
+
+def _ranked(picks: list[Favorite]) -> list[Favorite]:
+    """Best first: the highest ``drop.score.total``; a tie goes to the pick filed first; a drop without a score ranks last (oldest
+    first among those)."""
+    def key(f: Favorite) -> tuple[bool, int, float, str]:
+        score = _score_of(f)
+        return (score is None, -(score or 0), f.created_at.timestamp() if f.created_at else 0.0, f.id)
+
+    return sorted(picks, key=key)
+
+
+def choose_ready_drop(
+    store: Store, picks: list[Favorite], slug: str, now: datetime, registry: experiments.Registry,
+) -> tuple[Favorite, bool]:
+    """``(the drop to ask for, whether it is an Explore pick)`` among a character's ready drops (at least one): the best-ranked
+    (``_ranked``), except on his Explore turn (``explore_turn``), when it is the best drop below the median score of his checked
+    drops (``experiments.is_explore`` over ``checked_scores``: the same pool the clip's ``explore_pick`` tag will be judged by at
+    Make it). With nothing below the median the best drop is taken and the turn stays his. The flag says what the tag will say."""
+    ranked = _ranked(picks)
+    pool = checked_scores(store, ranked[0])
+    if explore_turn(store, slug, now, registry):
+        below = [f for f in ranked if experiments.is_explore(_score_of(f), pool)]
+        if below:
+            return below[0], True
+    best = ranked[0]
+    return best, registry.is_active("A", now) and experiments.is_explore(_score_of(best), pool)
+
+
+def _post_days(store: Store, clip: Clip) -> set[date]:
+    """The London days on which the clip has a post that holds a day (``planning.TAKEN_STATUSES``; a failed post never held one),
+    dated like ``planning.taken_days``: when it really went out, else when it is scheduled."""
+    return {
+        (p.claimed_at or p.scheduled_for).astimezone(LONDON).date()
+        for p in store.list_posts(clip_id=clip.id) if p.status in TAKEN_STATUSES
+    }
+
+
+def _covering_clip(store: Store, slug: str, slot: datetime) -> Clip | None:
+    """A clip of his that already stands for the slot: in the pipeline from generating to scheduled (``WATCHED_CLIP_STATES``) and
+    either with no post that holds a day yet (it takes the next free slot once it is approved) or with one on the slot's London
+    day; a posted clip only by the second (a post earlier in the day). Planned, rejected and dropped clips cover nothing."""
+    day = slot.astimezone(LONDON).date()
+    for c in store.list_clips(character_slug=slug):
+        if c.state not in WATCHED_CLIP_STATES:
+            continue
+        days = _post_days(store, c)
+        if day in days or (not days and c.state is not S.posted):
+            return c
+    return None
+
+
+def _studio_failure(picks: list[Favorite], now: datetime) -> Favorite | None:
+    """A make the studio asked for that failed within ``STUDIO_FAILED_HOLD_H`` hours: the owner looks at it before the studio
+    spends on another drop of his (a failure that repeats must not eat the drops one sweep after another). An owner's failed make
+    never holds anyone: it is his to retry."""
+    for f in picks:
+        d = f.proposal["drop"]
+        failed_at = _moment(d.get("at"))
+        if (d.get("state") == "failed" and make_requested_by(f) == "studio" and failed_at is not None
+                and now - failed_at < timedelta(hours=STUDIO_FAILED_HOLD_H)):  # fmt: skip
+            return f
+    return None
+
+
+@dataclass
+class _Want:
+    """One request the plan makes."""
+
+    character: str
+    pick_id: str
+    slot: datetime
+    credits: int
+    explore: bool
+
+    def json(self) -> dict[str, Any]:
+        return {"character": self.character, "pick_id": self.pick_id, "slot": self.slot.isoformat(), "credits": self.credits, "explore": self.explore}
+
+
+def _london_words(at: datetime) -> str:
+    return at.astimezone(LONDON).strftime("%a %d %b %H:%M")
+
+
+def plan_auto_make(
+    store: Store, now: datetime, cfg: Mapping[str, Any], registry: experiments.Registry, balance: Balance,
+) -> tuple[list[_Want], list[dict[str, str]], str | None]:
+    """``(what to ask for, who is left alone and why, the credits reason if any character waits for them)``. Writes nothing.
+
+    Every live character (``status`` live) in the order of his next slot: no connected account, no slot, a slot further than the
+    horizon, something already covering it (a pick with a make requested, ``_covering_clip``), a studio make that failed lately
+    (``_studio_failure``) or no ready drop leaves him alone, each with its own line. Otherwise his drop is chosen
+    (``choose_ready_drop``) and priced at the check's price; it must fit the monthly cap
+    and Higgsfield's balance, counting what is already spoken for: the ledger (settled and reserved), the makes asked for that have not reserved yet
+    (``making`` without ``make.reserved``) and, in the slot order, what this plan asks for before him. A character that does not
+    fit waits, and the first such reason is the plan's ``waiting``."""
+    settings = store.get_settings()
+    picks = [f for f in store.list_favorites() if is_drop(f.proposal) and f.status != "skipped"]
+    promised = 0
+    for f in picks:
+        d = f.proposal["drop"]
+        if d.get("state") == "making" and make_requested(f) and not (d.get("make") or {}).get("reserved"):
+            credits = d.get("credits")
+            promised += credits if isinstance(credits, int) and not isinstance(credits, bool) else 0
+    held = budget.committed(store, budget.month_key(now)) + promised
+    cap = settings.monthly_cap_credits
+    horizon = timedelta(hours=cfg["horizon_hours"])
+    wants: list[_Want] = []
+    skipped: list[dict[str, str]] = []
+    waiting: str | None = None
+    slotted: list[tuple[datetime, str]] = []
+    for c in sorted((c for c in store.characters() if c.status == "live"), key=lambda c: c.slug):
+        if not any(a.postiz_integration_id for a in store.accounts(c.slug)):
+            skipped.append({"character": c.slug, "reason": "no connected account to post to"})
+            continue
+        try:
+            slot = upcoming_slot(c.slug, now, settings.cadence)
+        except ValueError as e:
+            skipped.append({"character": c.slug, "reason": f"no posting slot: {e}"})
+            continue
+        if slot - now > horizon:
+            skipped.append({"character": c.slug, "reason": f"his next slot, {_london_words(slot)}, is more than {cfg['horizon_hours']} h away"})
+            continue
+        slotted.append((slot, c.slug))
+    spent = 0  # what this plan has already asked for (it counts against the cap and the balance for the next character)
+    for slot, slug in sorted(slotted):
+        mine = [f for f in picks if f.character_slug == slug]
+        asked = next((f for f in mine if make_requested(f) and f.proposal["drop"].get("state") in ("making", "ready")), None)
+        if asked is not None:
+            skipped.append({"character": slug, "reason": f"a make is already requested for pick {asked.id}"})
+            continue
+        on_its_way = _covering_clip(store, slug, slot)
+        if on_its_way is not None:
+            skipped.append({"character": slug, "reason": f"a clip is already on its way ({on_its_way.state.value}, {on_its_way.id}) for {_london_words(slot)}"})
+            continue
+        failed = _studio_failure(mine, now)
+        if failed is not None:
+            skipped.append({"character": slug, "reason": f"the studio's make of pick {failed.id} failed lately: waiting for the owner to look at it"})
+            continue
+        choices = [f for f in mine if _is_ready_choice(f, now)]
+        if not choices:
+            skipped.append({"character": slug, "reason": "no ready drop to make (checked, priced, not skipped, nobody has asked for it)"})
+            continue
+        pick, explore = choose_ready_drop(store, choices, slug, now, registry)
+        price = pick.proposal["drop"]["credits"]
+        reason = None
+        if held + spent + price > cap:
+            reason = f"the monthly cap would be passed ({held + spent} + {price} > {cap})"
+        elif balance.credits is None:
+            reason = balance.problem
+        elif balance.credits - promised - spent < price:
+            reason = f"Higgsfield has {balance.credits} credits ({promised + spent} already spoken for), a clip costs {price}"
+        if reason is not None:
+            skipped.append({"character": slug, "reason": reason})
+            waiting = waiting or f"waiting for credits: {reason}"
+            continue
+        spent += price
+        wants.append(_Want(slug, pick.id, slot, price, explore))
+    return wants, skipped, waiting
+
+
+def request_make(store: Store, pick_id: str, now: datetime, *, slot: datetime, explore: bool) -> Favorite:
+    """Ask for the make of a ready drop as the studio: what ``studio.request_job(pick, 'make')`` (migration 0012) writes for the
+    owner, with no Adjust (the check's own choices) and the studio's name on it: the drop goes ``making`` (``requested.make``
+    stamped, the reason cleared) and ``proposal['make_requested']`` is ``{"at", "by": "studio", "slot", "explore"}`` (the slot it
+    is for and whether it is test A's Explore pick, for the record). Nothing is dispatched: the sweep that asked takes it up next.
+    ``KeyError`` for an unknown pick; ``DropError`` for a drop that is not ``ready`` any more or already has a make requested (the
+    owner may have tapped Make it a moment ago: his request stands)."""
+    pick = store.get_favorite(pick_id)
+    if pick is None:
+        raise KeyError(pick_id)
+    d = drop_of(pick)
+    if d.get("state") != "ready":
+        raise DropError(f"pick {pick_id} is {d.get('state')}: only a ready drop is asked for")
+    if pick.proposal.get("make_requested") is not None:
+        raise DropError(f"pick {pick_id}: a make is already requested")
+    d.pop("adjust", None)
+    d.update(state="making", reason=None, at=now.isoformat(), requested={**(d.get("requested") or {}), "make": now.isoformat()})
+    record = {"at": now.isoformat(), "by": "studio", "slot": slot.isoformat(), "explore": explore}
+    return mark_favorite(store, pick_id, pick.status, proposal={**pick.proposal, "drop": d, "make_requested": record})
+
+
+def auto_make(
+    store: Store, now: datetime | None = None, *, hf: Any, dry_run: bool = False, scan: Mapping[str, Any] | None = None,
+    registry: experiments.Registry | None = None,
+) -> dict[str, Any]:
+    """The studio makes them (owner decision 2026-10-14: once Higgsfield has credits the cloud makes clips by itself): for every
+    live character with a posting slot coming up and nothing in the pipeline for it, ask for the make of one of his ready drops
+    (``plan_auto_make``, ``request_make``). Returns ``{"requested": [{character, pick_id, slot, credits, explore}], "skipped":
+    [{character, reason}], "waiting": reason | None}`` (plus ``dry_run`` true for a dry run, which writes nothing, and ``enabled``
+    false when ``config/scan.json`` ``auto_make.enabled`` switches it off).
+
+    The kill switch, the monthly cap and Higgsfield's balance ask for nothing and set ``waiting``: a normal state until the owner
+    tops up, never an error. The balance is read first and outside the lock (``read_balance``; a read that fails leaves it unknown,
+    which waits, never guesses), then the plan is drawn and written under the settings row lock (the one ``budget.reserve`` takes),
+    so two runs never ask for two drops of one character. It is idempotent: a second run finds the asked-for make covering the slot.
+    ``ValueError`` for a naive ``now``, a broken ``auto_make`` config or a broken test registry (the caller fixes those)."""
+    now = require_aware(now or now_london(), "auto_make(now)")
+    cfg = auto_make_config(scan if scan is not None else _scan())
+    out: dict[str, Any] = {"requested": [], "skipped": [], "waiting": None}
+    if not cfg["enabled"]:
+        return {**out, "enabled": False}
+    registry = registry or experiments.load_experiments()
+    if store.get_settings().kill_switch:
+        return {**out, "waiting": "waiting: the kill switch is on, nothing is made"}
+    balance = read_balance(hf)
+    if dry_run:
+        wants, skipped, waiting = plan_auto_make(store, now, cfg, registry, balance)
+        asked = wants
+    else:
+        with store.transaction():
+            store.get_settings()  # the settings row lock: two runs (or a run and a Make it's reserve) never plan on the same numbers
+            wants, skipped, waiting = plan_auto_make(store, now, cfg, registry, balance)
+            asked = []
+            for want in wants:
+                try:
+                    request_make(store, want.pick_id, now, slot=want.slot, explore=want.explore)
+                except DropError as e:  # the owner tapped Make it on it a moment ago: his request stands
+                    skipped.append({"character": want.character, "reason": str(e)})
+                else:
+                    asked.append(want)
+    return {**out, "requested": [w.json() for w in asked], "skipped": skipped, "waiting": waiting, **({"dry_run": True} if dry_run else {})}
 
 
 # ---- CLI --------------------------------------------------------------------------------------------------------------------------
@@ -2731,6 +3074,26 @@ def sweep_command(
     emit({"ran": len(results), "results": results})
     if failed:
         raise typer.Exit(EXIT_FAILED)
+
+
+@app.command("auto-make")
+def auto_make_command(
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print what would be asked for; write nothing.")] = False,
+) -> None:
+    """The studio makes them: ask for the make of one ready drop for every live character whose next slot is coming and has nothing
+    on its way, within the credit cap and Higgsfield's balance (see ``auto_make``). Runs at the start of every cloud sweep. Prints one
+    JSON object, {"requested": [...], "skipped": [...], "waiting": reason | null}; exit 0 even while it waits for credits (every
+    day until the owner tops up), 2 for a broken config or test registry."""
+    store = open_store()
+    hf = HiggsfieldClient.from_env()
+    try:
+        out = auto_make(store, now_london(), hf=hf, dry_run=dry_run, scan=_scan())
+    except ValueError as e:  # a broken config/scan.json or config/experiments.json: the caller fixes it
+        fail(str(e))
+    finally:
+        if hf is not None:
+            hf.close()
+    emit(out)
 
 
 def _sync_stopped(error: BaseException) -> NoReturn:

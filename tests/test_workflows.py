@@ -247,6 +247,23 @@ def test_a_sweep_runs_three_identical_workers_in_parallel_and_one_pick_or_a_key_
     assert "uv run studio drop pending --count" in t and "steps.pending.outputs.count != '0'" in t  # the "nothing pending" early stop
 
 
+def test_a_sweep_starts_with_auto_make_on_worker_one_before_the_pending_count_and_a_failure_never_stops_the_sweep():
+    """Owner decision 2026-10-14, "the studio makes them": `studio drop auto-make` asks for the clip of every coming slot. It runs before
+    the pending count (what it asks for is counted, so the same sweep installs ffmpeg and makes it), on the first matrix entry only, and
+    only for a sweep (never for a dispatched pick or the key check)."""
+    blocks = steps("studio-drop")
+    heads = [b.splitlines()[0] for b in blocks]
+    auto = blocks[heads.index("name: Make for the coming slots")]
+    assert heads.index("name: Make for the coming slots") < heads.index("name: Anything pending")
+    assert GATE.split(" == ")[0] in auto and "steps.job.outputs.command == 'sweep'" in auto
+    assert "strategy.job-index == 0" in auto  # worker 1 only: two runs of it would only repeat each other
+    assert "uv run studio drop auto-make" in auto and "--dry-run" not in auto
+    assert "if ! uv run studio drop auto-make; then" in auto and "::error" in auto  # an annotation, and the sweep goes on
+    assert "ffmpeg" not in auto  # it needs no media tools: the early stop of an idle sweep still saves the install
+    t = text("studio-drop")
+    assert t.count("studio drop auto-make") >= 2 and "Auto-make (owner decision 2026-10-14" in t  # described in the header comment
+
+
 def test_drop_installs_ffmpeg_and_yt_dlp_only_when_there_is_work():
     t = text("studio-drop")
     assert "sudo apt-get update" in t and "sudo apt-get install -y ffmpeg fonts-dejavu-core fontconfig" in t
@@ -264,6 +281,9 @@ def test_drop_secrets_reach_only_the_job_that_needs_them():
     assert "POSTIZ_API_KEY" not in text("studio-drop")  # nothing here posts
     for block in blocks[1:-1]:
         names = set(re.findall(r"secrets\.([A-Z_]+)", block))
+        if block.startswith("name: Make for the coming slots"):  # auto-make: the database, and Higgsfield's free balance read
+            assert names == {"DATABASE_URL", "HF_KEY", "HF_API_KEY_ID", "HF_API_KEY_SECRET"}, names
+            continue
         assert names <= {"DATABASE_URL", "SCRAPECREATORS_API_KEY"}, block[:60]  # the pending count: the database, and the key
     pending = next(b for b in blocks if b.startswith("name: Anything pending"))
     # the count sees the key as the sweep does: a waiting auto-filed link counts only while the day's downloads allow
