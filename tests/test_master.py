@@ -143,6 +143,28 @@ def test_the_studio_pill_is_a_full_frame_overlay_in_the_safe_zone_with_the_two_d
     assert overlays.PILL_FONT.is_file()  # the committed Figtree: the same caption on the Mac and in the cloud
 
 
+@pytest.mark.parametrize(
+    ("text", "drawn"),
+    [
+        ("Close the deal at 30,000 feet 💼", "Close the deal at 30,000 feet"),  # 14 Oct, Lenny's check
+        ("I command 📞 this cabin", "I command this cabin"),
+        ("👍🏽 skin tones and ⭐ stars ☕", "skin tones and stars"),
+        ("🇬🇧 flags, 1️⃣ keycaps", "flags, 1 keycaps"),
+        ("Café — naïve, 30% «off»", "Café — naïve, 30% «off»"),  # letters and punctuation stay
+    ],
+)
+def test_drawable_drops_the_emoji_our_fonts_cannot_draw(text, drawn):
+    assert overlays.drawable(text) == drawn
+
+
+def test_a_hook_with_an_emoji_draws_the_pill_it_draws_without_one(tmp_path):
+    a = overlays.pill_png(["Close the deal 💼"], tmp_path / "a.png")
+    b = overlays.pill_png(["Close the deal"], tmp_path / "b.png")
+    assert Image.open(a).tobytes() == Image.open(b).tobytes()  # no empty box where the emoji was
+    with pytest.raises(ValueError):
+        overlays.pill_png(["💼 📞"], tmp_path / "c.png")  # nothing left to draw: refused, never a box
+
+
 def test_a_long_hook_wraps_to_two_lines_and_a_low_pill_moves_up_out_of_the_buttons(tmp_path):
     short = Image.open(overlays.pill_png(["The household is unaware."], tmp_path / "s.png")).getchannel("A").getbbox()
     long = Image.open(overlays.pill_png(["Breakfast will be served at eight. As usual. Naturally."], tmp_path / "l.png"))

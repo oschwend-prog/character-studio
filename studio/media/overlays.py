@@ -138,8 +138,19 @@ def _save(img: Image.Image, out: str | Path) -> Path:
     return out
 
 
+# Emoji and pictographs: the committed fonts have no glyph for them, so one in a hook drew an empty box in the pill (14 Oct:
+# Gemini wrote "Close the deal at 30,000 feet 💼" for Lenny). Variation selectors, joiners and keycaps go with them.
+_NO_GLYPH = re.compile("[\U0001F000-\U0001FAFF\u2600-\u27BF\u2B00-\u2BFF\uFE00-\uFE0F\u200D\u20E3\U000E0020-\U000E007F]")
+
+
+def drawable(text: str) -> str:
+    """``text`` without the emoji and pictographs our fonts cannot draw, its spaces collapsed (the caption keeps them: only what
+    is burned into the picture goes through this)."""
+    return " ".join(_NO_GLYPH.sub("", text).split())
+
+
 def _clean(lines: list[str]) -> list[str]:
-    kept = [line for line in lines if line.strip()]
+    kept = [line for line in (drawable(x) for x in lines) if line]
     if not kept:
         raise ValueError("need at least one non-empty line of text")
     return kept

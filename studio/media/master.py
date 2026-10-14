@@ -853,7 +853,7 @@ def entrance_frames(
             frames.append(overlays.entrance_png(png, work / f"{png.stem}_{kind}{i}.png", **look))
         return _stepped([*frames, png], [start + span * i / (n - 1) for i in range(n)], end)
     if kind == "word_pop":
-        words = " ".join(lines or ()).split()
+        words = overlays.drawable(" ".join(lines or ())).split()  # an emoji is no word: the pill cannot draw it
         if not words:
             return [_boxed(png, start, end)]
         partial = [

@@ -751,7 +751,7 @@ caption pill for the first seconds, read with the sound off, so it must land in 
 within its first 3 seconds, TRUE to what happens in this clip (the video pays it off), and opens a gap the viewer needs the clip \
 to close: a deadpan understatement of an absurd moment, a mundane frame on a wild one, a confident claim the clip proves wrong. \
 Use a different angle for each; the strongest first. When the clip has a trend or moment name, one of the three names it. Never \
-explain the joke, never a greeting, never "POV:" or "wait for it", never mention AI.
+explain the joke, never a greeting, never "POV:" or "wait for it", never mention AI, no emoji (the pill cannot draw one).
 - hook_patterns: the pattern of each hook, in the same order as hooks ({HOOKS_FREE} names), each one of: {patterns}."""
     wanted = "; ".join(f"{name} ({HOOK_PATTERN_WORDS[name]})" for name in arms.patterns)
     gated = [name for name in arms.patterns if name in arms.needs_moment]
@@ -766,7 +766,7 @@ and {HOOK_MAX} characters each: the line in the caption pill for the first secon
 glance. Each one is ONE claim the clip proves within its first 3 seconds, TRUE to what happens in this clip (the video pays it off), \
 and opens a gap the viewer needs the clip to close. Write every hook the way its pattern says, with a different angle for each; \
 the strongest first, whichever pattern it has.{gate} Never explain the joke, never a greeting, never "POV:" or "wait for it", \
-never mention AI.
+never mention AI, no emoji (the pill cannot draw one).
 - hook_patterns: the pattern of each hook, in the same order as hooks ({arms.count} names), each one of: {patterns}."""
 
 
