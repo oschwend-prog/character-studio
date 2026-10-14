@@ -346,3 +346,101 @@ def test_a_watch_file_that_times_out_is_a_clipwork_error_the_check_can_catch(tmp
     with pytest.raises(clipwork.ClipworkError, match="timed out after 120 s"):
         clipwork.cover_frame(source, tmp_path / "c.jpg", 2.0)
     assert not (tmp_path / "p.mp4").exists() and not (tmp_path / "c.jpg").exists()
+
+
+# ---- the vertical crop: text in a band at the top or bottom is zoomed away before Genjutsu sees it (owner 2026-10-14) -----------
+
+
+def spy_ffmpeg(monkeypatch) -> list[tuple]:
+    seen: list[tuple] = []
+    real = clipwork._ffmpeg
+
+    def run(*args, **kw):
+        seen.append(args)
+        return real(*args, **kw)
+
+    monkeypatch.setattr(clipwork, "_ffmpeg", run)
+    return seen
+
+
+def filter_of(call: tuple) -> str:
+    return call[call.index("-vf") + 1]
+
+
+def test_crop_box_cuts_the_bands_and_keeps_9_16_around_the_centre():
+    # 540x960, the top 15% cut: 816 px tall from y 144, 9:16 wide (459 -> 458, even), centred on the middle (x 40)
+    assert clipwork.crop_box(540, 960, {"top": 0.15, "bottom": 0.0, "x": 0.5}) == (458, 816, 40, 144)
+    # the bottom 12% only: y stays 0 and the window ends above the band
+    w, h, x, y = clipwork.crop_box(540, 960, {"top": 0.0, "bottom": 0.12, "x": 0.5})
+    assert y == 0 and h == 844 // 2 * 2 - 0 and y + h <= 960 * 0.88 + 1e-9 and w == int(h * 9 / 16) // 2 * 2
+    # both bands; every number even (yuv420p), the centre clamped inside the frame
+    w, h, x, y = clipwork.crop_box(540, 960, {"top": 0.1, "bottom": 0.1, "x": 0.2})
+    assert y >= 96 and y + h <= 864 and all(n % 2 == 0 for n in (w, h, x, y)) and x == 0
+    # a landscape clip: the zoom is centred where crop_x (the star) says, not where the crop_y centre says
+    assert clipwork.crop_box(640, 360, {"top": 0.1, "bottom": 0.0, "x": 0.9}, crop_x=0.5) == (182, 324, 228, 36)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"top": -0.1, "bottom": 0.0}, {"top": 0.0, "bottom": 0.6}, {"top": 0.3, "bottom": 0.3}, {"top": float("nan"), "bottom": 0.0},
+        {"top": True, "bottom": 0.0}, {"top": 0.1, "bottom": 0.0, "x": 1.5}, {"top": 0.1}, "top", [0.1, 0.1],
+    ],
+)
+def test_crop_box_refuses_a_crop_that_makes_no_sense(bad):
+    with pytest.raises(ValueError, match="crop_y"):
+        clipwork.crop_box(540, 960, bad)
+
+
+def test_trim_zooms_a_vertical_clip_by_the_crop_and_hands_ffmpeg_a_crop_filter_that_misses_the_band(tmp_path, source, monkeypatch):
+    seen = spy_ffmpeg(monkeypatch)
+    out = trim_clip(source, tmp_path / "z.mp4", 1.0, 3.0, crop_y={"top": 0.15, "bottom": 0.05, "x": 0.5})
+    w, h, x, y = clipwork.crop_box(270, 480, {"top": 0.15, "bottom": 0.05, "x": 0.5})
+    assert filter_of(seen[0]) == f"crop={w}:{h}:{x}:{y}" and y >= 72 and y + h <= 456  # 15% of 480 = 72 off the top, 5% = 24 off the bottom
+    report = probe(out)
+    assert (report.width, report.height) == (w, h) and report.has_audio and report.duration_s == pytest.approx(3.0, abs=0.25)
+
+
+def test_trim_zooms_a_landscape_clip_around_the_star_and_still_scales_up_for_the_swap(tmp_path, landscape_source, monkeypatch):
+    seen = spy_ffmpeg(monkeypatch)
+    out = trim_clip(
+        landscape_source, tmp_path / "z.mp4", 0.0, 3.0, crop_x=0.3, crop_y={"top": 0.0, "bottom": 0.2, "x": 0.5},
+        min_pixels=clipwork.OBJECT_SWAP_MIN_PIXELS,
+    )
+    w, h, x, y = clipwork.crop_box(640, 360, {"top": 0.0, "bottom": 0.2, "x": 0.5}, crop_x=0.3)
+    assert filter_of(seen[0]).startswith(f"crop={w}:{h}:{x}:{y},scale=") and y == 0 and h <= 288  # the star's 0.3, not the crop_y centre
+    report = probe(out, loudness=False)
+    assert report.width * report.height >= 409_600 and abs(report.width / report.height - 9 / 16) < 0.01
+
+
+def test_without_a_crop_y_the_filters_are_exactly_what_they_were(tmp_path, landscape_source, monkeypatch):
+    seen = spy_ffmpeg(monkeypatch)
+    trim_clip(landscape_source, tmp_path / "a.mp4", 0.0, 2.0, crop_x=0.5)
+    assert filter_of(seen[0]) == "crop=202:360:218:0"
+
+
+def test_a_bad_crop_y_is_refused_before_the_file_is_read(tmp_path):
+    with pytest.raises(ValueError, match="crop_y"):
+        trim_clip(tmp_path / "nope.mp4", tmp_path / "t.mp4", 0, 3, crop_y={"top": 0.9, "bottom": 0.9})
+
+
+def test_the_watch_copy_and_cover_show_the_zoomed_section_the_master_is_made_from(tmp_path, source):
+    from PIL import Image
+
+    crop = {"top": 0.2, "bottom": 0.0, "x": 0.5}
+    assert clipwork._watch_framing(270, 480, None, crop, (540, 960)).startswith("crop=")
+    assert clipwork._watch_framing(270, 480, None, None, (540, 960)).startswith("scale=")  # no crop: as before
+    r = probe(clipwork.preview_video(source, tmp_path / "p.mp4", 1.0, 3.0, crop_y=crop), loudness=False)
+    assert (r.width, r.height) == (540, 960) and r.duration_s == pytest.approx(3.0, abs=0.1)
+    with Image.open(clipwork.cover_frame(source, tmp_path / "c.jpg", 2.0, crop_y=crop)) as img:
+        assert img.size == (540, 960)
+
+
+def test_trim_takes_a_longer_window_when_the_caller_allows_it(tmp_path, source):
+    """The owner's attached clip over the sheet's limit is cut to its best section (studio.sources), far past a master's 16 s."""
+    with pytest.raises(ValueError, match="at most 16"):
+        trim_clip(source, tmp_path / "t.mp4", 0.0, 17.0)
+    out = trim_clip(source, tmp_path / "t.mp4", 1.0, 8.0, max_seconds=8.0)
+    assert probe(out, loudness=False).duration_s == pytest.approx(8.0, abs=0.25)
+    with pytest.raises(ValueError, match="at most 5"):
+        trim_clip(source, tmp_path / "t2.mp4", 0.0, 6.0, max_seconds=5.0)

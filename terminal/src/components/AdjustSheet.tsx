@@ -1,10 +1,12 @@
 // "Adjust" on a ready drop: who is replaced, his part, his gadgets, the hook, the section (start and length: never over the
-// moments the check saw text or a watermark on screen) and, for a landscape clip, where the 9:16 crop sits. The price follows
+// moments the check saw text or a watermark on screen, unless a band at the top or bottom can be zoomed away) and, for a
+// landscape clip, where the 9:16 crop sits. The price follows
 // the section live. Its button is Make it with these settings: only what the owner changed is sent (request_job checks it, and
 // the CLI checks it again before anything is spent).
 import { useId, useMemo, useState, type FormEvent } from 'react';
 import {
-  DROP_MIN_SECONDS, PART_LABEL, adjustChanges, avoidLabel, dropCredits, effectiveDrop, isLandscape, maxSectionSeconds, sectionLabel, validateAdjust,
+  DROP_MIN_SECONDS, PART_LABEL, adjustChanges, avoidLabel, cropLabel, dropCredits, effectiveDrop, isLandscape, maxSectionSeconds, sectionLabel,
+  validateAdjust,
 } from '../lib/drop';
 import { PROPS_MAX, PROP_MAX_CHARS, traitProps } from '../lib/rules';
 import { useStudio } from '../lib/store';
@@ -44,6 +46,8 @@ export function AdjustSheet({
   const changes = adjustChanges(d, wanted, hookChosen);
   const checked = validateAdjust(changes, d);
   const credits = dropCredits(d, checked.ok ? changes : {});
+  // the text this section shows is zoomed away (owner 2026-10-14): say how much, so the owner knows what he is picking
+  const zoom = checked.ok ? cropLabel(effectiveDrop(d, { ...changes, start_s: Number(from), length_s: Number(length) }).crop_y) : null;
 
   const chooseHook = (text: string) => {
     setHook(text);
@@ -139,6 +143,7 @@ export function AdjustSheet({
             {checked.ok ? sectionLabel(Number(from), Number(length)) : checked.reason}
             {d.duration_s ? ` · the video is ${Number(d.duration_s.toFixed(1))} s` : ''} · a classic 12-15 s, other clips 8-10 s
             {avoidLabel(d) ? ` · keep clear of ${avoidLabel(d)}` : ''}
+            {zoom ? ` · zoomed to cut the text out (${zoom})` : ''}
           </span>
         </div>
 

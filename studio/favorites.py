@@ -284,7 +284,7 @@ WHY_MAX_CHARS = 600
 ENGAGEMENT_KEYS = ("likes", "comments", "shares", "saves")
 CAMERAS = ("static", "handheld", "moving")
 ANALYSIS_REQUIRED = ("people_count", "camera", "watermark", "overlay", "minors")
-ANALYSIS_KEYS = (*ANALYSIS_REQUIRED, "main_subject", "best_window", "bpm", "notes")
+ANALYSIS_KEYS = (*ANALYSIS_REQUIRED, "main_subject", "best_window", "bpm", "notes", "crop_y")
 ANALYSIS_SUBJECT_MAX_CHARS = 80
 ANALYSIS_NOTES_MAX_CHARS = 500
 BPM_RANGE = (30.0, 300.0)
@@ -547,8 +547,9 @@ def validate_analysis(analysis: Any) -> None:
 
     Required: ``people_count`` (whole number), ``camera`` (static, handheld or moving) and the three yes/no flags
     ``watermark``, ``overlay`` and ``minors`` (a child anywhere in the clip: recorded only, it blocks nothing). Optional:
-    ``main_subject``, ``best_window`` (``{start_s, end_s}``, 0 <= start < end, seconds), ``bpm`` (30-300 or null) and
-    ``notes``. An unknown key is refused, so a typo is never stored as if it were data.
+    ``main_subject``, ``best_window`` (``{start_s, end_s}``, 0 <= start < end, seconds), ``bpm`` (30-300 or null), ``notes`` and
+    ``crop_y`` (``{top, bottom}``: the shares of the frame height a drop's section is zoomed by to cut text away, owner
+    2026-10-14). An unknown key is refused, so a typo is never stored as if it were data.
     """
     what = "proposal.analysis"
     if not isinstance(analysis, Mapping) or not analysis:
@@ -572,6 +573,13 @@ def validate_analysis(analysis: Any) -> None:
         (n := _finite(bpm)) is not None and BPM_RANGE[0] <= n <= BPM_RANGE[1]
     ):
         raise ValueError(f"{what}.bpm must be {BPM_RANGE[0]:g}-{BPM_RANGE[1]:g} or null, got {bpm!r:.40}")
+    if (crop := analysis.get("crop_y")) is not None:  # owner 2026-10-14: the share of the height zoomed away to cut text out
+        shares = (
+            (_finite(crop["top"]), _finite(crop["bottom"]))
+            if isinstance(crop, Mapping) and set(crop) == {"top", "bottom"} else (None, None)
+        )
+        if None in shares or min(shares) < 0 or sum(shares) >= 0.5:
+            raise ValueError(f"{what}.crop_y must be {{top, bottom}}, shares of the height with 0 <= top + bottom < 0.5, got {crop!r:.80}")
     if (window := analysis.get("best_window")) is not None:
         start = end = None
         if isinstance(window, Mapping) and set(window) == {"start_s", "end_s"}:

@@ -733,13 +733,72 @@ def test_the_deconstruct_asks_when_text_or_a_watermark_is_on_screen():
     props = gemini.DECONSTRUCT_SCHEMA["properties"]
     for key in ("watermark_spans", "burned_in_text_spans"):
         assert key in gemini.DECONSTRUCT_SCHEMA["required"] and props[key]["type"] == "array"
-        assert props[key]["items"]["required"] == ["start_s", "end_s"]
+        assert props[key]["items"]["required"] == ["start_s", "end_s", "top", "bottom"]  # the model is asked for where it sits too
     prompt = gemini.deconstruct_prompt(REGINALD)
     assert "watermark_spans: WHEN it shows" in prompt and "burned_in_text_spans: WHEN" in prompt
     assert "Only the section we use is judged" in prompt
     spans = {**GOOD, "burned_in_text": True, "burned_in_text_spans": [{"start_s": 4, "end_s": 6.123}, {"start_s": 0, "end_s": 2.5}]}
     assert deconstruct_problems(spans, REGINALD) == []
     assert gemini.tidy_deconstruct(spans, REGINALD)["burned_in_text_spans"] == [{"start_s": 0.0, "end_s": 2.5}, {"start_s": 4.0, "end_s": 6.12}]
+
+
+# ---- WHERE on the frame the text or watermark sits (owner 2026-10-14: a band at the top or bottom is cropped away) ---------------------
+
+
+def test_a_span_may_carry_the_box_of_what_is_on_screen_and_the_schema_asks_for_it():
+    props = gemini.DECONSTRUCT_SCHEMA["properties"]
+    for key in ("watermark_spans", "burned_in_text_spans"):
+        box = props[key]["items"]["properties"]
+        for edge in ("top", "bottom"):
+            assert box[edge]["type"] == "number" and (box[edge]["minimum"], box[edge]["maximum"]) == (0, 1)
+    star = props["star"]["properties"]  # and the star's own top and bottom edge, optional: a crop must keep the star in frame
+    assert star["top"]["type"] == "number" and star["bottom"]["type"] == "number"
+    assert "top" not in props["star"]["required"] and "bottom" not in props["star"]["required"]
+    prompt = gemini.deconstruct_prompt(REGINALD)
+    assert "top and bottom" in prompt and "fractions of the frame height" in prompt
+
+
+def test_boxes_are_accepted_and_an_old_answer_without_them_is_exactly_as_valid_as_before():
+    boxed = {**GOOD, "burned_in_text": True, "watermark": True,
+             "burned_in_text_spans": [{"start_s": 0, "end_s": 2.5, "top": 0.05, "bottom": 0.15}],
+             "watermark_spans": [{"start_s": 1, "end_s": 6, "top": 0.88, "bottom": 1}]}
+    assert deconstruct_problems(boxed, REGINALD) == []
+    old = {**GOOD, "burned_in_text": True, "burned_in_text_spans": [{"start_s": 0, "end_s": 2.5}]}
+    assert deconstruct_problems(old, REGINALD) == []
+    assert gemini.tidy_deconstruct(old, REGINALD)["burned_in_text_spans"] == [{"start_s": 0.0, "end_s": 2.5}]  # no box invented
+    tidy = gemini.tidy_deconstruct(boxed, REGINALD)
+    assert tidy["burned_in_text_spans"] == [{"start_s": 0.0, "end_s": 2.5, "top": 0.05, "bottom": 0.15}]
+    assert tidy["watermark_spans"] == [{"start_s": 1.0, "end_s": 6.0, "top": 0.88, "bottom": 1.0}]
+    rough = {**boxed, "burned_in_text_spans": [{"start_s": 0, "end_s": 2, "top": 0.04999, "bottom": 0.151234}]}
+    assert gemini.tidy_deconstruct(rough, REGINALD)["burned_in_text_spans"] == [{"start_s": 0.0, "end_s": 2.0, "top": 0.05, "bottom": 0.151}]
+
+
+@pytest.mark.parametrize(
+    "span",
+    [
+        {"start_s": 0, "end_s": 2, "top": 0.5, "bottom": 0.4},  # upside down
+        {"start_s": 0, "end_s": 2, "top": 0.5, "bottom": 0.5},  # no height
+        {"start_s": 0, "end_s": 2, "top": -0.1, "bottom": 0.2},  # off the frame
+        {"start_s": 0, "end_s": 2, "top": 0.1, "bottom": 1.2},
+        {"start_s": 0, "end_s": 2, "top": "0.1", "bottom": 0.2},  # not a number
+        {"start_s": 0, "end_s": 2, "top": True, "bottom": 0.2},
+        {"start_s": 0, "end_s": 2, "top": float("nan"), "bottom": 0.2},
+        {"start_s": 0, "end_s": 2, "top": 0.1},  # half a box
+        {"start_s": 0, "end_s": 2, "bottom": 0.9},
+    ],
+)
+def test_a_broken_box_is_refused_like_a_broken_span(span):
+    problems = deconstruct_problems({**GOOD, "burned_in_text": True, "burned_in_text_spans": [span]}, REGINALD)
+    assert any("burned_in_text_spans must be a list" in p and "top" in p and "bottom" in p for p in problems)
+    assert any("watermark_spans must be a list" in p for p in deconstruct_problems({**GOOD, "watermark_spans": [span]}, REGINALD))
+
+
+def test_the_stars_top_and_bottom_are_optional_and_checked_when_given():
+    assert deconstruct_problems({**GOOD, "star": {**GOOD["star"], "top": 0.1, "bottom": 0.9}}, REGINALD) == []
+    assert gemini.tidy_deconstruct({**GOOD, "star": {**GOOD["star"], "top": 0.1234, "bottom": 0.9}}, REGINALD)["star"]["top"] == 0.123
+    for star in ({"top": 0.9, "bottom": 0.1}, {"top": -0.1, "bottom": 0.5}, {"top": 0.2}, {"top": "a", "bottom": 0.5}):
+        problems = deconstruct_problems({**GOOD, "star": {**GOOD["star"], **star}}, REGINALD)
+        assert any("star.top and star.bottom" in p for p in problems), star
 
 
 # ---- the balance of suggestions and fresh hooks (controller 2026-10-08: 17 of 19 suggested for Lenny, his hooks alike) ----------

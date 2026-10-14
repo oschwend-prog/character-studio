@@ -6,10 +6,12 @@
 // rules mirror studio.drop (validate_adjust, estimate) and request_job in migration 0012: the database and the CLI check them.
 import { nameOf, type RosterEntry } from './roster';
 import { CLIP_MAX_SECONDS, canonicalVideoUrl, estimateCredits } from './rules';
-import type { DropAdjust, DropAvoid, DropCard, DropState, OwnerPresence, TrackerRow } from './types';
+import type { DropAdjust, DropAvoid, DropCard, DropCrop, DropState, OwnerPresence, TrackerRow } from './types';
 
-export const DROP_MIN_SECONDS = 6; // a master is 6-16 s
+export const DROP_MIN_SECONDS = 4; // a master is 4-16 s (owner 2026-10-14: 4 s when that is all the clean section a clip has)
 export const DROP_MAX_SECONDS = 16;
+export const MAX_CROP_FRACTION = 0.25; // studio.drop.MAX_CROP_FRACTION: a zoom that cuts text away removes at most this share of the height
+export const CROP_PAD = 0.03; // studio.drop.CROP_PAD: the crop goes this far past the box of the text
 export const ADJUST_KEYS = ['star', 'part', 'gadgets', 'hook', 'start_s', 'length_s', 'crop_x'] as const;
 const SLACK_S = 0.15;
 /** An upload that has not reached Checking after this long did not finish (the phone slept, the tab closed). */
@@ -57,6 +59,60 @@ export function avoidHit(start: number, length: number, avoid: ReadonlyArray<Dro
   return (avoid ?? []).find((x) => start < x.end_s - 1e-9 && start + length > x.start_s + 1e-9) ?? null;
 }
 
+const up = (v: number) => Math.ceil(v * 1000 - 1e-9) / 1000 + 0; // a share of the height rounded UP to a thousandth (+ 0: never -0)
+const edge = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1 ? v : null);
+
+/**
+ * What cutting the text and watermarks of the section `start`..`start + length` away takes (owner 2026-10-14), as the shares of the
+ * frame height cut at the top and the bottom: `{ top: 0, bottom: 0 }` when nothing on screen touches the section, null when it
+ * cannot be done. The same rule as studio.drop.section_cut, which is binding: every span the section touches must carry its `bands`
+ * (a check made before boxes has none: the section stays unusable), each band is cut from the nearer edge with CROP_PAD to spare,
+ * the cheapest split is taken, and it may not cut more than MAX_CROP_FRACTION in all, nor into the star's top and bottom when the
+ * check gave them.
+ */
+export function sectionCut(
+  start: number, length: number, avoid: ReadonlyArray<DropAvoid> | undefined, star?: { top?: number; bottom?: number } | null,
+): { top: number; bottom: number } | null {
+  const bands: Array<[number, number]> = [];
+  for (const span of avoid ?? []) {
+    if (!(start < span.end_s - 1e-9 && start + length > span.start_s + 1e-9)) continue;
+    if (!Array.isArray(span.bands) || !span.bands.length) return null;
+    for (const b of span.bands) {
+      const top = b?.top;
+      const bottom = b?.bottom;
+      if (typeof top !== 'number' || typeof bottom !== 'number' || !Number.isFinite(top) || !Number.isFinite(bottom) || !(top >= 0 && top < bottom && bottom <= 1)) return null;
+      bands.push([Math.max(0, top - CROP_PAD), Math.min(1, bottom + CROP_PAD)]);
+    }
+  }
+  if (!bands.length) return { top: 0, bottom: 0 };
+  const starTop = edge(star?.top);
+  const starBottom = edge(star?.bottom);
+  let best: { top: number; bottom: number } | null = null;
+  for (const cutTop of [...new Set([0, ...bands.map(([, hi]) => hi)])].sort((a, b) => a - b)) {
+    const top = up(cutTop);
+    const below = bands.filter(([, hi]) => hi > cutTop + 1e-12).map(([lo]) => lo);
+    const bottom = below.length ? up(1 - Math.min(...below)) : 0;
+    if (top + bottom > MAX_CROP_FRACTION + 1e-9) continue;
+    if ((starTop !== null && top > starTop + 1e-9) || (starBottom !== null && bottom > 1 - starBottom + 1e-9)) continue;
+    if (best === null || top + bottom < best.top + best.bottom || (top + bottom === best.top + best.bottom && top < best.top)) best = { top, bottom };
+  }
+  return best;
+}
+
+/** "top 18%" / "bottom 15%" / "top 11% and bottom 11%": what a zoom cuts away; null for no zoom. */
+export function cropLabel(c: Pick<DropCrop, 'top' | 'bottom'> | null | undefined): string | null {
+  if (!c || (!(c.top > 0) && !(c.bottom > 0))) return null;
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
+  return [c.top > 0 ? `top ${pct(c.top)}` : null, c.bottom > 0 ? `bottom ${pct(c.bottom)}` : null].filter(Boolean).join(' and ');
+}
+
+/** "kept 15–75 s of a 75 s clip": an attached clip over 60 s that was cut to its best 60 s; null when it was not. */
+export function trimmedLabel(d: Pick<DropCard, 'trimmed'>): string | null {
+  const t = d.trimmed;
+  if (!t || typeof t.from_s !== 'number' || typeof t.to_s !== 'number') return null;
+  return `kept ${n(t.from_s)}–${n(t.to_s)} s${typeof t.original_s === 'number' ? ` of a ${n(t.original_s)} s clip` : ''}`;
+}
+
 /** "text on screen 0–5.5 s": when the check saw text or a watermark (the section keeps clear of it); null when it saw none. */
 export function avoidLabel(d: Pick<DropCard, 'avoid'>): string | null {
   const spans = d.avoid ?? [];
@@ -81,14 +137,19 @@ export function maxSectionSeconds(d: Pick<DropCard, 'max_length_s'>): number {
 
 /** What Make it will use: the check's choices with the owner's Adjust on top (like studio.drop.effective). */
 export function effectiveDrop(d: DropCard, adjust: DropAdjust = {}) {
+  const start_s = adjust.start_s ?? d.window?.start_s ?? 0;
+  const length_s = adjust.length_s ?? d.window?.length_s ?? 8;
+  const cut = sectionCut(start_s, length_s, d.avoid, d.star);
   return {
     star: adjust.star ?? d.star?.description ?? 'the main performer',
     part: adjust.part ?? d.part ?? 'featured',
     gadgets: adjust.gadgets ?? d.gadgets ?? [],
     hook: adjust.hook ?? d.hook ?? d.hooks?.[0] ?? '',
-    start_s: adjust.start_s ?? d.window?.start_s ?? 0,
-    length_s: adjust.length_s ?? d.window?.length_s ?? 8,
+    start_s,
+    length_s,
     crop_x: adjust.crop_x !== undefined ? adjust.crop_x : d.crop_x ?? null,
+    // the zoom that cuts the text of THIS section away (like studio.drop.effective); null when the section shows none
+    crop_y: cut && (cut.top > 0 || cut.bottom > 0) ? cut : null,
   };
 }
 
@@ -99,10 +160,10 @@ export function dropCredits(d: DropCard, adjust: DropAdjust = {}): number {
 
 /**
  * The owner's Adjust, checked like studio.drop.validate_adjust and request_job (migration 0012): who is replaced and the hook
- * 1-80 characters on one line, his part, at most 3 gadgets of 1-40 characters, a section of 6-16 s (less his kit's pause:
+ * 1-80 characters on one line, his part, at most 3 gadgets of 1-40 characters, a section of 4-16 s (less his kit's pause:
  * drop_card.max_length_s) inside the clip and clear of
- * the text and watermark moments (drop_card.avoid: refused here and by the CLI before anything is spent), a crop from 0 to 1
- * only for a landscape clip.
+ * the text and watermark moments (drop_card.avoid: refused here and by the CLI before anything is spent) unless they sit in a
+ * band at the top or bottom that can be cropped away (sectionCut), a crop from 0 to 1 only for a landscape clip.
  */
 export function validateAdjust(adjust: DropAdjust, d: DropCard): { ok: true } | { ok: false; reason: string } {
   const bad = (reason: string) => ({ ok: false as const, reason });
@@ -133,9 +194,11 @@ export function validateAdjust(adjust: DropAdjust, d: DropCard): { ok: true } | 
     if (d.duration_s && e.start_s + e.length_s > d.duration_s + SLACK_S) {
       return bad(`The section runs past the end of the ${Number(d.duration_s.toFixed(1))} s video`);
     }
-    const hit = avoidHit(e.start_s, e.length_s, d.avoid); // only the section is judged: it may not show text or a watermark
+    // only the section is judged: text or a watermark it shows must be croppable away (a band at the top or bottom)
+    const hit = sectionCut(e.start_s, e.length_s, d.avoid, d.star) === null ? avoidHit(e.start_s, e.length_s, d.avoid) : null;
     if (hit) {
-      return bad(`The section shows ${hit.what === 'watermark' ? 'a watermark' : 'text'} on screen (${n(hit.start_s)}–${n(hit.end_s)} s): Genjutsu would keep it`);
+      const hard = hit.bands?.length ? ' and cropping it out would cut too much of the picture' : '';
+      return bad(`The section shows ${hit.what === 'watermark' ? 'a watermark' : 'text'} on screen (${n(hit.start_s)}–${n(hit.end_s)} s)${hard}: Genjutsu would keep it`);
     }
   }
   if (adjust.crop_x != null) {

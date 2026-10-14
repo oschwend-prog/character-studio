@@ -155,9 +155,14 @@ def test_fps_float_noise_is_tolerated():
 
 @pytest.mark.parametrize(
     "seconds,ok",
-    [(6.0, True), (7.0, True), (10.5, True), (16.0, True), (5.9, False), (16.1, False), (25.0, False), (0.0, False)],
+    [
+        (4.0, True), (4.5, True), (5.9, True), (6.0, True), (7.0, True), (10.5, True), (16.0, True),
+        (3.5, False), (3.9, False), (16.1, False), (25.0, False), (0.0, False),
+    ],
 )
-def test_master_duration_6_to_16(seconds, ok):  # 6-9 s is the target of a trimmed Drop-in, 16 s the hard maximum
+def test_master_duration_4_to_16(seconds, ok):
+    """4-16 s (owner 2026-10-14: 4 s when that is all the clean section a clip has; 8-10 s is still the target of a trimmed
+    Drop-in, 16 s the hard maximum)."""
     problems = check_master(good_report(duration_s=seconds))
     assert (problems == []) is ok
     assert ok or keys(problems) == ["duration"]
@@ -174,22 +179,25 @@ def test_eye_loop_duration_6_to_8(seconds, ok):
 
 
 def test_loop_flag_is_a_replacement_range_not_an_extension():
-    # 6.5 s is fine both ways (a trimmed Drop-in is 6-9 s); 10 s is a normal master but too long for an eye loop,
-    # and 5.5 s is too short for either.
+    # 6.5 s is fine both ways; 10 s is a normal master but too long for an eye loop, and 5.5 s is a master (4 s is the
+    # least, owner 2026-10-14) but too short for an eye loop (6-8 s: LOOP_SECONDS is unchanged).
     assert check_master(good_report(duration_s=6.5)) == []
     assert check_master(good_report(duration_s=6.5), loop=True) == []
     assert check_master(good_report(duration_s=10.0)) == []
     assert keys(check_master(good_report(duration_s=10.0), loop=True)) == ["duration"]
-    assert keys(check_master(good_report(duration_s=5.5))) == ["duration"]
+    assert check_master(good_report(duration_s=5.5)) == []
     assert keys(check_master(good_report(duration_s=5.5), loop=True)) == ["duration"]
+    assert check_master(good_report(duration_s=4.0)) == [] and keys(check_master(good_report(duration_s=3.5))) == ["duration"]
 
 
 def test_duration_allows_encoder_padding_of_a_frame_or_two():
-    # AAC priming / container rounding: 6 s of video often reads 5.99x or 6.02x.
-    assert check_master(good_report(duration_s=5.97)) == []
+    # AAC priming / container rounding: 4 s of video often reads 3.99x or 4.02x.
+    assert check_master(good_report(duration_s=3.97)) == []
     assert check_master(good_report(duration_s=16.03)) == []
-    assert keys(check_master(good_report(duration_s=5.93))) == ["duration"]
+    assert keys(check_master(good_report(duration_s=3.93))) == ["duration"]
     assert keys(check_master(good_report(duration_s=16.07))) == ["duration"]
+    assert check_master(good_report(duration_s=5.97), loop=True) == []  # an eye loop still needs 6 s (to 6.0 - 0.05)
+    assert keys(check_master(good_report(duration_s=5.93), loop=True)) == ["duration"]
 
 
 @pytest.mark.parametrize(

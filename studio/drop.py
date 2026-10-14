@@ -47,7 +47,17 @@ asks for the check again; a check that finds its character changed under it star
 
 **Only the section we use is judged** (owner 2026-10-06). The deconstruct says when text or a watermark is on screen
 (``burned_in_text_spans``, ``watermark_spans``); the section (``drop_window``) keeps ``SPAN_PAD_S`` clear of them
-(``drop['avoid']``, which the owner's Adjust may not overlap either), and only a clip with no clean section of 6 s is blocked.
+(``drop['avoid']``, which the owner's Adjust may not overlap either), and only a clip with no clean section of 4 s is blocked.
+**Crop the text out** (owner 2026-10-14: 29 drops sat blocked for text on screen, and Genjutsu keeps any text in the picture): a
+span that carries the box of what is on screen (``top`` and ``bottom``, fractions of the height) and sits in a band at the TOP or
+BOTTOM of the frame no longer makes its section unusable. The section is zoomed instead (``section_cut``: the source is cropped to
+the 9:16 window that starts below the top band and ends above the bottom one, ``clipwork.crop_box``, BEFORE the trim goes to
+Genjutsu, so the model never sees the text), at most ``MAX_CROP_FRACTION`` of the height in all, never into the star when his
+``top`` / ``bottom`` are known (else the middle half of the frame is always left). The zoom is ``drop['crop_y']``
+(``{top, bottom, x}``) and ``analysis['crop_y']``; the cover, the strip and the watch copy show the section as it is cropped. A span
+with no box (a check made before boxes, a hand-written deconstruct, a family version's section) or a box that cannot be cut away
+still blocks its section exactly as before. A clean section is always preferred to a cropped one of the same length class, and the
+longer class to a shorter one (target, then 6 s or more, then 4 s or more).
 The check also writes ``drop['max_length_s']`` (16 s less what his kit adds before the dance: 15.6 s for Reginald's pause) so the
 terminal's Adjust refuses a longer section before Make it, as ``validate_adjust`` would at Make it.
 
@@ -260,8 +270,11 @@ PARTS = ("cameo", "featured", "star")
 ADJUST_KEYS = ("star", "part", "gadgets", "hook", "start_s", "length_s", "crop_x")
 WINDOW_CLASSIC = (12.0, 15.0)  # owner 2026-10-05: a classic keeps its whole recognisable section
 WINDOW_OTHER = (8.0, 10.0)
-MASTER_MIN_S = 6.0  # the master spec
+MASTER_MIN_S = 4.0  # the master spec (owner 2026-10-14: 4 s when that is all the clean section a clip has; studio.media.qa.MASTER_SECONDS)
+PREFERRED_MIN_S = 6.0  # the shortest section the window search takes before it falls back to MASTER_MIN_S (and a shot is never cut shorter)
 MASTER_MAX_S = 16.0
+MAX_CROP_FRACTION = 0.25  # owner 2026-10-14: a zoom that cuts text away removes at most this share of the height, top and bottom together (1.33x)
+CROP_PAD = 0.03  # Gemini's boxes are approximate: the crop goes this far past the text on the side it is cut from
 WINDOW_STEP_S = 0.5
 SLACK_S = 0.15
 LEASE_MINUTES = 70  # longer than the job's 60-minute timeout (studio-drop.yml): a lease never expires under a live run, so no second worker takes over a paid make
@@ -296,7 +309,7 @@ class DropError(ValueError):
 
 
 class NoCleanSection(ValueError):
-    """Text or a watermark is on screen in every section of 6 s or more the clip could give."""
+    """Text or a watermark is on screen in every section of 4 s or more the clip could give, and none of it can be cropped away."""
 
 
 class _CharacterChanged(Exception):
@@ -564,22 +577,122 @@ def _shots(cuts: list[float], duration: float) -> list[tuple[float, float]]:
 def avoid_spans(look: Mapping[str, Any], duration: float) -> list[dict[str, Any]]:
     """The moments no section may touch (``drop['avoid']``): the deconstruct's text and watermark spans, each widened by
     ``SPAN_PAD_S``, kept inside the clip and merged per kind, as ``{start_s, end_s, what}`` (``what`` = text or watermark) in
-    time order. Fail closed: a flag with no span is the whole clip, and a span is used even when its flag says no."""
+    time order. Fail closed: a flag with no span is the whole clip, and a span is used even when its flag says no.
+
+    A span that carries its box (owner 2026-10-14: ``top`` and ``bottom``, fractions of the height) gives its entry ``bands``: the
+    boxes of the merged spans, as ``[{top, bottom}]``, boxes that overlap vertically being one band (a caption at the top and one
+    at the bottom stay two bands). One span of a merge without a box, a flag with no span or a broken box leaves the entry
+    without ``bands``: nobody knows where it sits, so its section cannot be cropped (``section_cut``)."""
     out: list[dict[str, Any]] = []
     for what, flag, key in (("watermark", "watermark", "watermark_spans"), ("text", "burned_in_text", "burned_in_text_spans")):
-        spans = [(float(x["start_s"]), float(x["end_s"])) for x in look.get(key) or []]
+        spans = [(float(x["start_s"]), float(x["end_s"]), _box_of(x)) for x in look.get(key) or []]
         if look.get(flag) and not spans:
-            spans = [(0.0, duration)]
-        merged: list[tuple[float, float]] = []
-        for a, b in sorted((max(0.0, a - SPAN_PAD_S), min(duration, b + SPAN_PAD_S)) for a, b in spans):
+            spans = [(0.0, duration, None)]  # a flag with no span: the whole clip, and nobody knows where
+        merged: list[list[Any]] = []  # [start, end, boxes]: boxes is None as soon as one span of the merge has no box
+        for a, b, box in sorted(((max(0.0, a - SPAN_PAD_S), min(duration, b + SPAN_PAD_S), box) for a, b, box in spans), key=lambda s: s[:2]):
             if b <= a:
                 continue
             if merged and a <= merged[-1][1]:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+                merged[-1][1] = max(merged[-1][1], b)
+                merged[-1][2] = None if merged[-1][2] is None or box is None else [*merged[-1][2], box]
             else:
-                merged.append((a, b))
-        out.extend({"start_s": round(a, 2), "end_s": round(b, 2), "what": what} for a, b in merged)
+                merged.append([a, b, None if box is None else [box]])
+        for a, b, boxes in merged:
+            entry: dict[str, Any] = {"start_s": round(a, 2), "end_s": round(b, 2), "what": what}
+            if boxes is not None:  # where it sits, band by band: a top caption and a bottom one stay two bands, never one tall box
+                entry["bands"] = [{"top": t, "bottom": bt} for t, bt in _union_bands(boxes)]
+            out.append(entry)
     return sorted(out, key=lambda x: (x["start_s"], x["end_s"], x["what"]))
+
+
+def _box_of(span: Mapping[str, Any]) -> tuple[float, float] | None:
+    """The ``(top, bottom)`` box a deconstruct span carries, or None when it has none (or a broken one: fail closed)."""
+    top, bottom = span.get("top"), span.get("bottom")
+    if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) for v in (top, bottom)):
+        return None
+    return (round(float(top), 3), round(float(bottom), 3)) if 0 <= top < bottom <= 1 else None
+
+
+def _union_bands(boxes: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """The boxes as bands: boxes that overlap vertically are one band, the rest stay apart, top to bottom."""
+    bands: list[tuple[float, float]] = []
+    for top, bottom in sorted(boxes):
+        if bands and top <= bands[-1][1]:
+            bands[-1] = (bands[-1][0], max(bands[-1][1], bottom))
+        else:
+            bands.append((top, bottom))
+    return bands
+
+
+NO_CUT = (0.0, 0.0)
+
+
+def _up(share: float) -> float:
+    """A share of the height rounded UP to a thousandth: a crop is never rounded into the band it is there to cut."""
+    return math.ceil(share * 1000 - 1e-9) / 1000
+
+
+def _edge(star: Mapping[str, Any] | None, key: str) -> float | None:
+    v = star.get(key) if isinstance(star, Mapping) else None
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and 0 <= v <= 1 else None
+
+
+def section_cut(
+    start: float, length: float, avoid: list[Mapping[str, Any]] | tuple = (), star: Mapping[str, Any] | None = None,
+) -> tuple[float, float] | None:
+    """What cutting the text and watermarks of the section ``start``..``start + length`` away takes, as the shares of the frame
+    height cut at the top and at the bottom ``(top, bottom)``: ``(0.0, 0.0)`` when no span of ``avoid`` touches the section, None
+    when it cannot be done (pure; owner 2026-10-14).
+
+    Every ``avoid`` span that overlaps the section must carry its ``bands`` (``avoid_spans``): a span with none (a check made before
+    boxes, a hand-written deconstruct, a family version's section, a broken box) cannot be cropped, so the section stays unusable
+    exactly as before. A band is cut from the nearer edge, ``CROP_PAD`` past the box, and bands in the middle of the frame cost
+    more than ``MAX_CROP_FRACTION`` from either side, so they stay uncroppable without a rule of their own. The cheapest split of the
+    bands between the two edges is taken (fewest share cut, then the smaller top), and refused when it cuts more than
+    ``MAX_CROP_FRACTION`` of the height in all, or more than the star leaves: when ``star`` carries its ``top`` and ``bottom``
+    the crop may not enter them; when it does not, the middle half of the frame is untouched whatever the split (each side is at
+    most ``MAX_CROP_FRACTION``, a quarter)."""
+    bands: list[tuple[float, float]] = []
+    for span in avoid:
+        if not overlaps(start, length, span):
+            continue
+        got = span.get("bands")
+        if not isinstance(got, (list, tuple)) or not got:
+            return None
+        for band in got:
+            box = _box_of(band) if isinstance(band, Mapping) else None
+            if box is None:
+                return None
+            bands.append((max(0.0, box[0] - CROP_PAD), min(1.0, box[1] + CROP_PAD)))
+    if not bands:
+        return NO_CUT
+    star_top, star_bottom = _edge(star, "top"), _edge(star, "bottom")
+    best: tuple[float, float] | None = None
+    for cut_top in sorted({0.0, *(hi for _, hi in bands)}):  # the top cut reaches the bottom of some band, or there is none
+        top = _up(cut_top)
+        below = [lo for lo, hi in bands if hi > cut_top + 1e-12]  # the bands the top cut does not reach: cut from the bottom
+        bottom = _up(1 - min(below)) if below else 0.0
+        if top + bottom > MAX_CROP_FRACTION + 1e-9:
+            continue
+        if (star_top is not None and top > star_top + 1e-9) or (star_bottom is not None and bottom > 1 - star_bottom + 1e-9):
+            continue
+        if best is None or (top + bottom, top) < (best[0] + best[1], best[0]):
+            best = (top, bottom)
+    return best
+
+
+def crop_y_for(
+    start: float, length: float, avoid: list[Mapping[str, Any]] | tuple = (), star: Mapping[str, Any] | None = None,
+) -> dict[str, float] | None:
+    """The zoom of a section as the drop records it (``drop['crop_y']``) and ``clipwork.trim_clip`` takes it: ``{top, bottom, x}``
+    (shares of the height cut, and the share of the width the zoom is centred on: the star's ``x_center``, else the middle); None
+    when the section needs no crop (or cannot be cropped: ``section_cut`` tells those apart)."""
+    cut = section_cut(start, length, avoid, star)
+    if cut is None or cut == NO_CUT:
+        return None
+    x = star.get("x_center") if isinstance(star, Mapping) else None
+    centre = round(min(max(float(x), 0.0), 1.0), 3) if isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) else 0.5
+    return {"top": cut[0], "bottom": cut[1], "x": centre}
 
 
 def overlaps(start: float, length: float, span: Mapping[str, Any]) -> bool:
@@ -588,18 +701,23 @@ def overlaps(start: float, length: float, span: Mapping[str, Any]) -> bool:
 
 
 def drop_window(
-    analysis: Mapping[str, Any], *, classic: bool, duration: float, avoid: list[Mapping[str, Any]] | tuple = (), lead_s: float = 0.0
+    analysis: Mapping[str, Any], *, classic: bool, duration: float, avoid: list[Mapping[str, Any]] | tuple = (), lead_s: float = 0.0,
+    star: Mapping[str, Any] | None = None,
 ) -> dict[str, float]:
     """The section Genjutsu gets: ``{start_s, length_s}`` (pure).
 
-    The target is 12-15 s for a classic and 8-10 s for any other clip (owner 2026-10-05), never over 16 s or under 6 s. It
+    The target is 12-15 s for a classic and 8-10 s for any other clip (owner 2026-10-05), never over 16 s or under 4 s. It
     stays inside one shot when one is long enough (the analysis' cuts), else in the longest shot (at least 6 s), else it
     crosses as few cuts as it must. Among the windows that qualify, the one with the most motion wins (the analysis' energy per
     0.5 s), ties to the longer then the earlier; the ends move to the nearest beats when that keeps the length in range. A
-    clip shorter than 6 s is refused (``ValueError``).
+    clip shorter than 4 s is refused (``ValueError``).
 
-    ``avoid`` (``avoid_spans``: text or a watermark on screen): no window may overlap one. When none of the target length is
-    clear, a shorter one (never under 6 s) is taken; when none of 6 s is clear, ``NoCleanSection``.
+    ``avoid`` (``avoid_spans``: text or a watermark on screen): no window may show one unless it can be cropped away (owner
+    2026-10-14: ``section_cut``, with the ``star``'s edges when known; the caller records the zoom with ``crop_y_for``). The
+    search goes down three length classes, the target length, then 6 s or more (``PREFERRED_MIN_S``), then 4 s or more
+    (``MASTER_MIN_S``: the owner accepts a 4-6 s master when that is all the clean section a clip has), and within each class takes a
+    section with nothing to cut first and a cropped one only when there is none, so a clip that was fine before is made exactly as
+    before unless it can now give a longer cropped section; when no class has one, ``NoCleanSection``.
 
     ``lead_s`` is what the character's kit adds before the dance (Reginald's pause, ``master.style_lead_s``): the window is at
     most ``MASTER_MAX_S - lead_s``, so the master stays within 16 s."""
@@ -621,16 +739,18 @@ def drop_window(
     def inside(a: float, b: float) -> int:
         return sum(1 for c in cuts if a + 0.3 < c < b - 0.3)
 
-    def clean(a: float, b: float) -> bool:
-        return not any(overlaps(a, b - a, s) for s in avoid)
+    def usable(a: float, b: float, cropped: bool) -> bool:
+        """No span is on screen (``cropped`` False: exactly the old rule), or every one can be cropped away (``cropped`` True)."""
+        cut = section_cut(a, b - a, avoid, star)
+        return cut is not None and (cropped or cut == NO_CUT)
 
-    def search(shortest: float, longest: float) -> tuple[int, float, float, float] | None:
+    def search(shortest: float, longest: float, cropped: bool) -> tuple[int, float, float, float] | None:
         best: tuple[int, float, float, float] | None = None  # (cuts, -energy, -length, start)
         length = shortest
         while length <= longest + 1e-9:
             start = 0.0
             while start + length <= total + 1e-9:
-                if clean(start, start + length):
+                if usable(start, start + length, cropped):
                     key = (inside(start, start + length), -round(mean_energy(start, start + length), 6), -length, start)
                     if best is None or key < best:
                         best = key
@@ -642,11 +762,21 @@ def drop_window(
     lo = min(lo, hi)
     longest_shot = max((b - a for a, b in _shots(cuts, total)), default=total)
     if longest_shot < lo:  # no shot is long enough: shorten to the longest shot (never under 6 s)
-        lo = max(MASTER_MIN_S, math.floor(longest_shot / WINDOW_STEP_S) * WINDOW_STEP_S)
+        lo = max(PREFERRED_MIN_S, math.floor(longest_shot / WINDOW_STEP_S) * WINDOW_STEP_S)
         hi = max(lo, min(hi, lo))
-    best = search(lo, hi)
-    if best is None and lo > MASTER_MIN_S:  # text or a watermark in every window of the target length: a shorter clean one
-        best = search(MASTER_MIN_S, lo - WINDOW_STEP_S)
+    classes = [(lo, hi)]  # the target length, then (text or a watermark in every window of it) a shorter one, never under 4 s
+    if lo > PREFERRED_MIN_S:
+        classes.append((PREFERRED_MIN_S, lo - WINDOW_STEP_S))
+    if min(lo, PREFERRED_MIN_S) > MASTER_MIN_S:
+        classes.append((MASTER_MIN_S, min(lo, PREFERRED_MIN_S) - WINDOW_STEP_S))
+    best, cropped = None, False
+    for shortest, longest in classes:
+        for cropped in (False, True):  # a section with nothing to cut before one that must be zoomed
+            best = search(shortest, longest, cropped)
+            if best is not None:
+                break
+        if best is not None:
+            break
     if best is None:
         raise NoCleanSection("text or a watermark is on screen in every usable section")
     start, length = best[3], -best[2]
@@ -655,7 +785,7 @@ def drop_window(
         e2 = min(beats, key=lambda b: abs(b - (start + length)))
         shortest = min(lo, length)
         if abs(s2 - start) <= 0.35 and abs(e2 - start - length) <= 0.35 and shortest - 1e-9 <= e2 - s2 <= hi + 1e-9 and e2 <= total + 1e-9:
-            if inside(s2, e2) <= best[0] and clean(s2, e2) and s2 >= 0:
+            if inside(s2, e2) <= best[0] and usable(s2, e2, cropped) and s2 >= 0:
                 start, length = s2, e2 - s2
     return {"start_s": round(start, 3), "length_s": round(length, 3)}
 
@@ -704,12 +834,14 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any], *, lead_s: float = 0.0
     """The owner's Adjust of a ready drop (``drop['adjust']``, written by request_job), checked again here (fail closed).
 
     Every key optional: ``star`` (1-80 characters: who is replaced), ``part`` (cameo, featured or star), ``gadgets`` (at most 3
-    of 1-40 characters), ``hook`` (1-80 characters), ``start_s`` (0 or more) and ``length_s`` (6-16 s, inside the video, clear
-    of the text and watermark moments of ``drop['avoid']``), ``crop_x`` (0-1 or null). ``ValueError`` names the first problem.
+    of 1-40 characters), ``hook`` (1-80 characters), ``start_s`` (0 or more) and ``length_s`` (4-16 s, inside the video, clear
+    of the text and watermark moments of ``drop['avoid']`` unless they can be cropped away, ``section_cut``: the zoom of the section
+    the owner picks is worked out again from the drop, ``effective``), ``crop_x`` (0-1 or null). ``ValueError`` names the first
+    problem.
 
     ``lead_s`` is what the character's kit adds before the dance (``master.style_lead_s``: Reginald's pause): the section is at
     most ``MASTER_MAX_S - lead_s`` s, so the master (the lead plus the section) can never pass 16 s once Genjutsu has been paid.
-    The terminal and ``request_job`` only know 6-16 s: this check is the binding one."""
+    The terminal and ``request_job`` only know 4-16 s: this check is the binding one."""
     if adjust is None:
         return {}
     if not isinstance(adjust, Mapping):
@@ -757,13 +889,15 @@ def validate_adjust(adjust: Any, drop: Mapping[str, Any], *, lead_s: float = 0.0
             raise ValueError(f"adjust.length_s must be {MASTER_MIN_S:g}-{longest:g} s{why}")
         if duration and start + length > duration + SLACK_S:
             raise ValueError(f"the section {start:g}-{start + length:g} s runs past the end of the {duration:g} s video")
-        for span in drop.get("avoid") or []:  # only the section is judged: it may not show text or a watermark
-            if overlaps(start, length, span):
-                what = "a watermark" if span.get("what") == "watermark" else "text"
-                raise ValueError(
-                    f"the section {start:g}-{start + length:g} s shows {what} on screen ({span['start_s']:g}-{span['end_s']:g} s): "
-                    "Genjutsu would keep it"
-                )
+        avoid = drop.get("avoid") or []
+        if section_cut(start, length, avoid, drop.get("star")) is None:  # only the section is judged: text it shows must be croppable
+            span = next(s for s in avoid if overlaps(start, length, s))  # None can only come from a span that overlaps
+            what = "a watermark" if span.get("what") == "watermark" else "text"
+            hard = " and cropping it out would cut too much of the picture" if span.get("bands") else ""
+            raise ValueError(
+                f"the section {start:g}-{start + length:g} s shows {what} on screen ({span['start_s']:g}-{span['end_s']:g} s){hard}: "
+                "Genjutsu would keep it"
+            )
         out["start_s"], out["length_s"] = start, length
     if "crop_x" in adjust:
         if adjust["crop_x"] is None:
@@ -791,15 +925,20 @@ def effective(drop: Mapping[str, Any], *, lead_s: float = 0.0, swap_part: str | 
     chosen = bandit_hook(drop)
     if chosen is not None and "hook" not in adjust:
         hook = chosen  # the bandit's draw, unless the owner's Adjust saved a hook (his own choice always wins)
+    start = adjust.get("start_s", float(window.get("start_s", 0.0)))
+    length = adjust.get("length_s", float(window.get("length_s", 0.0)))
     return {
         "star": adjust.get("star", star.get("description")),
         "body": star.get("body"),
         "part": adjust.get("part") or swap_part or drop.get("part") or "featured",
         "gadgets": adjust.get("gadgets", drop.get("gadgets", [])),
         "hook": hook,
-        "start_s": adjust.get("start_s", float(window.get("start_s", 0.0))),
-        "length_s": adjust.get("length_s", float(window.get("length_s", 0.0))),
+        "start_s": start,
+        "length_s": length,
         "crop_x": adjust["crop_x"] if "crop_x" in adjust else drop.get("crop_x"),
+        # the zoom that cuts the text of THIS section away: worked out again from the drop's boxes, so an Adjust that moves the
+        # section gets its own (None: nothing on screen, or a check made before boxes, whose section is clean)
+        "crop_y": crop_y_for(start, length, drop.get("avoid") or [], star),
     }
 
 
@@ -974,8 +1113,62 @@ def request_check(store: Store, pick_id: str, now: datetime | None = None) -> Fa
         raise DropError(f"a check runs on an uploading, checking, waiting or failed drop; pick {pick.id} is {state}")
     if state == "uploading" and not pick.proposal.get("owner_clip_path"):
         raise DropError("the upload has not finished: attach the video first")
-    requested = {**(d.get("requested") or {}), "process": now.isoformat()}
-    return _update(store, pick, now, state="checking", reason=None, at=now.isoformat(), requested=requested)
+    return _ask_check(store, pick, now)
+
+
+def _ask_check(store: Store, pick: Favorite, now: datetime, **more: Any) -> Favorite:
+    """The stamp ``request_check`` writes (and ``request_recheck`` and ``recheck_blocked`` after it): the drop goes to ``checking``
+    with its ``reason`` cleared, ``at`` and ``requested.process`` set to ``now``."""
+    requested = {**(drop_of(pick).get("requested") or {}), "process": now.isoformat()}
+    return _update(store, pick, now, state="checking", reason=None, at=now.isoformat(), requested=requested, **more)
+
+
+RELAXED_BLOCKS = (  # (name, how the reason starts, a word it must also hold): what owner 2026-10-14 relaxed, in the words the cloud wrote
+    ("text_or_watermark", "text or a watermark is on screen in every usable section", ""),  # a band can be cropped; 4 s is enough
+    ("too_long", "the attached clip is ", "the sheet takes at most"),  # a long clip is cut to its best section
+)
+
+
+def relaxed_block(reason: Any) -> str | None:
+    """Which relaxed rule blocked a drop: ``text_or_watermark`` or ``too_long`` from the reason line it was blocked with, else None
+    (a child as the star, the wrong star, nobody to replace, a clip Gemini would not look at, a video under 4 s, a failed fetch ...
+    stay blocked: only these two lines are looked at again)."""
+    if not isinstance(reason, str):
+        return None
+    return next((name for name, start, also in RELAXED_BLOCKS if reason.startswith(start) and also in reason), None)
+
+
+def recheck_blocked(store: Store, now: datetime | None = None) -> dict[str, Any]:
+    """Put back to ``checking`` every blocked drop whose reason is a relaxed one (``relaxed_block``: text or a watermark on screen in
+    every usable section, or an attached clip over the sheet's 60 s), stamped exactly as ``request_check`` stamps a drop (free;
+    owner 2026-10-14: the cloud's 29 text and 3 too-long blocks get a new look under the new rules). Nothing is dispatched: the
+    cloud sweep takes them. A pick the owner skipped, a pick already made or queued, or one with a Make it is left where it is.
+
+    Returns ``{"rechecked": [pick ids], "by_reason": {"text_or_watermark": n, "too_long": n}, "left": [{"pick_id", "reason",
+    "note"?}]}``: every blocked drop it did not take, with its reason (``note`` says why when it WAS a relaxed reason but the pick
+    is not to be touched)."""
+    now = now or now_london()
+    rechecked: list[str] = []
+    by_reason = {name: 0 for name, _, _ in RELAXED_BLOCKS}
+    left: list[dict[str, Any]] = []
+    for f in store.list_favorites():
+        if not is_drop(f.proposal) or f.proposal["drop"].get("state") != "blocked":
+            continue
+        reason = f.proposal["drop"].get("reason")
+        kind = relaxed_block(reason)
+        note = (
+            None if kind is None else "the pick was skipped" if f.status == "skipped"
+            else f"the pick is already {f.status}" if f.status in ("made", "queued")
+            else "the pick has a Make it" if f.proposal.get("make_requested") is not None
+            else "the pick has no character" if not f.character_slug else None
+        )
+        if kind is None or note is not None:
+            left.append({"pick_id": f.id, "reason": reason, **({"note": note} if note else {})})
+            continue
+        _ask_check(store, f, now)
+        rechecked.append(f.id)
+        by_reason[kind] += 1
+    return {"rechecked": rechecked, "by_reason": by_reason, "left": left}
 
 
 def request_recheck(store: Store, pick_id: str, now: datetime | None = None) -> Favorite:
@@ -998,9 +1191,7 @@ def request_recheck(store: Store, pick_id: str, now: datetime | None = None) -> 
         raise DropError(f"pick {pick.id} is already {pick.status}")
     if state != "ready":
         raise DropError(f"only a ready drop is checked again; pick {pick.id} is {state}")
-    d = drop_of(pick)
-    requested = {**(d.get("requested") or {}), "process": now.isoformat()}
-    return _update(store, pick, now, state="checking", reason=None, at=now.isoformat(), requested=requested, score=None)
+    return _ask_check(store, pick, now, score=None)
 
 
 def copy_drop(
@@ -1166,7 +1357,9 @@ def _get_source(store: Store, storage: Storage, pick: Favorite, now: datetime, r
     return _source(store, result["source_id"])
 
 
-def _analysis_card(answer: Mapping[str, Any], free: Mapping[str, Any], window: Mapping[str, float]) -> dict[str, Any]:
+def _analysis_card(
+    answer: Mapping[str, Any], free: Mapping[str, Any], window: Mapping[str, float], crop_y: Mapping[str, float] | None = None,
+) -> dict[str, Any]:
     card = {
         "people_count": int(answer["people_count"]), "main_subject": answer["star"]["description"][:80],
         "camera": answer["camera"], "watermark": bool(answer["watermark"]), "overlay": bool(answer["burned_in_text"]),
@@ -1174,6 +1367,8 @@ def _analysis_card(answer: Mapping[str, Any], free: Mapping[str, Any], window: M
         "best_window": {"start_s": window["start_s"], "end_s": round(window["start_s"] + window["length_s"], 3)},
         "bpm": free.get("audio", {}).get("bpm"),
     }
+    if crop_y:  # the text the section had on screen was zoomed away (owner 2026-10-14): the share of the height cut each side
+        card["crop_y"] = {"top": crop_y["top"], "bottom": crop_y["bottom"]}
     if answer.get("notes"):
         card["notes"] = answer["notes"][:500]
     validate_analysis(card)
@@ -1199,18 +1394,18 @@ def _unclean_reason(avoid: list[Mapping[str, Any]], link: bool) -> str:
 
 def _section(
     free: Mapping[str, Any], *, classic: bool, duration: float, avoid: list[Mapping[str, Any]], others: list[Mapping[str, Any]],
-    lead_s: float,
+    lead_s: float, star: Mapping[str, Any] | None = None,
 ) -> dict[str, float]:
     """The section a check takes: the best one (``drop_window``), or, for a family member, another part of the clip clear of
     the other members' sections too (``family_spans``) when that part is as long as the target (12 s for a classic, 8 s for any
     other clip, capped as ``drop_window`` caps) or as the best section, whichever is shorter. The family's sections are no text:
     a version never takes a shorter cut to avoid them (``drop_window``'s shorter fallback is for text and watermarks only).
     ``NoCleanSection`` only when text or a watermark leaves no section at all."""
-    best = drop_window(free, classic=classic, duration=duration, avoid=avoid, lead_s=lead_s)
+    best = drop_window(free, classic=classic, duration=duration, avoid=avoid, lead_s=lead_s, star=star)
     if not others:
         return best
-    try:
-        other = drop_window(free, classic=classic, duration=duration, avoid=[*avoid, *others], lead_s=lead_s)
+    try:  # a family member's section has no box: nothing of it can be cropped away, so a version never overlaps one
+        other = drop_window(free, classic=classic, duration=duration, avoid=[*avoid, *others], lead_s=lead_s, star=star)
     except NoCleanSection:
         return best
     target = min((WINDOW_CLASSIC if classic else WINDOW_OTHER)[0], MASTER_MAX_S - lead_s, duration)
@@ -1401,7 +1596,7 @@ def _process(
             try:
                 window = _section(
                     free, classic=look["classic"], duration=report.duration_s, avoid=avoid, others=family_spans(store, pick),
-                    lead_s=style_lead_s(ref.get("style")),
+                    lead_s=style_lead_s(ref.get("style")), star=look["star"],
                 )
             except NoCleanSection:
                 blocked = _unclean_reason(avoid, drop_of(pick).get("kind") == "link")
@@ -1409,10 +1604,12 @@ def _process(
             _unready(store, pick, now, state="blocked", reason=blocked, **basics, star=look["star"], recommended=recommended, avoid=avoid)
             return Outcome(pick.id, "blocked", blocked, detail={"character": slug, "recommended": recommended})
         crop_x = crop_for(report.width, report.height, look["star"]["x_center"])
+        crop_y = crop_y_for(window["start_s"], window["length_s"], avoid, look["star"])  # the text the section shows, zoomed away
         credits = estimate_credits(Mode.dropin, window["length_s"], MUSIC)
-        preview = _preview(storage, local, work, pick.id, window, crop_x)
-        watch, _ = _watch_files(storage, local, work, pick.id, window, crop_x)  # never a reason to fail the check
-    card = _analysis_card(look, free, window)
+        preview = _preview(storage, local, work, pick.id, window, crop_x, crop_y)
+        watch, _ = _watch_files(storage, local, work, pick.id, window, crop_x, crop_y)  # never a reason to fail the check
+    card = _analysis_card(look, free, window, crop_y)
+    trimmed = pick.proposal.get("owner_clip_trim")  # an attached clip over the sheet's limit was cut to its best section (sources)
     hook = look["hooks"][0]
     pick = _still(store, pick.id, slug)  # read again: the owner's toggles during the look are kept
     proposal = {
@@ -1420,7 +1617,8 @@ def _process(
         "analysis": card,
         "drop": {
             **drop_of(pick), **basics, "state": "ready", "reason": None, "at": now.isoformat(),
-            "window": window, "crop_x": crop_x, "star": look["star"], "classic": look["classic"],
+            "window": window, "crop_x": crop_x, "crop_y": crop_y, "star": look["star"], "classic": look["classic"],
+            "trimmed": trimmed if isinstance(trimmed, Mapping) else None,
             # his own part when his refs.json has one (Make it reads it again): the Adjust sheet's default is what is made
             "part": ref.get("swap_part") or look["suggested_part"], "gadgets": look["gadgets"], "hooks": look["hooks"], "hook": hook,
             "deconstruct": look, "music": MUSIC, "seconds": window["length_s"], "credits": credits, "preview_path": preview,
@@ -1432,18 +1630,28 @@ def _process(
             "hit_rules_version": rules_version,  # copied to the clip at make (learning plan section 2)
         },
     }
-    proposal["drop"] = {k: v for k, v in proposal["drop"].items() if v is not None or k in ("reason", "crop_x")}
+    # a null that is there on purpose stays: the recheck's section may need no crop where the earlier check's did, and an older check's must go
+    proposal["drop"] = {k: v for k, v in proposal["drop"].items() if v is not None or k in ("reason", "crop_x", "crop_y")}
     mark_favorite(store, pick.id, pick.status, proposal=proposal, source_id=src.id)
     return Outcome(
         pick.id, "ready", None,
-        detail={"credits": credits, "window": window, "crop_x": crop_x, "preview_path": preview, "character": slug, "recommended": recommended},
+        detail={
+            "credits": credits, "window": window, "crop_x": crop_x, "crop_y": crop_y, "preview_path": preview, "character": slug,
+            "recommended": recommended,
+        },
     )
 
 
-def _preview(storage: Storage, local: Path, work: Path, pick_id: str, window: Mapping[str, float], crop_x: float | None) -> str | None:
-    """Five frames of the section side by side, in ``sources/owner/<pick id>/preview.jpg`` (the owner's browser may read it)."""
+def _preview(
+    storage: Storage, local: Path, work: Path, pick_id: str, window: Mapping[str, float], crop_x: float | None,
+    crop_y: Mapping[str, float] | None = None,
+) -> str | None:
+    """Five frames of the section side by side, in ``sources/owner/<pick id>/preview.jpg`` (the owner's browser may read it),
+    zoomed like the master when ``crop_y`` cuts a band of text away."""
     try:
-        cut = clipwork.trim_clip(local, work / "section.mp4", window["start_s"], window["length_s"], keep_audio=False, crop_x=crop_x)
+        cut = clipwork.trim_clip(
+            local, work / "section.mp4", window["start_s"], window["length_s"], keep_audio=False, crop_x=crop_x, crop_y=crop_y,
+        )
         sheet, _ = contact_sheet(cut, work / PREVIEW_NAME, cols=5, rows=1, width=160)
     except (QAError, clipwork.ClipworkError, ValueError):
         return None  # a missing strip never blocks a drop: the card shows the thumbnail-less frame
@@ -1454,16 +1662,21 @@ def _preview(storage: Storage, local: Path, work: Path, pick_id: str, window: Ma
 
 def _watch_files(
     storage: Storage, local: Path, work: Path, pick_id: str, window: Mapping[str, float], crop_x: float | None,
+    crop_y: Mapping[str, float] | None = None,
 ) -> tuple[dict[str, str | None], list[str]]:
     """The clip card's picture and the owner's watch copy of the section (terminal v3 Task 11), next to the strip in
     ``sources/owner/<pick id>/``: ``cover.jpg`` (the middle frame of the section) and ``preview.mp4`` (the section with its own
-    sound, 540x960; ``clipwork.cover_frame`` / ``preview_video``, cropped like the master when ``crop_x``). Returns
+    sound, 540x960; ``clipwork.cover_frame`` / ``preview_video``, cropped like the master when ``crop_x``, and zoomed like it when
+    ``crop_y`` cuts the text away). Returns
     ``({"cover_path": key | None, "preview_video_path": key | None}, problems)``. Never a reason to fail a check: any error (ffmpeg,
     the disk, our own Storage) is a warning and leaves that field None (the card then shows the strip, or the tile)."""
     start, length = float(window["start_s"]), float(window["length_s"])
     jobs = (
-        ("cover_path", COVER_NAME, "the cover", lambda out: clipwork.cover_frame(local, out, start + length / 2, crop_x=crop_x)),
-        ("preview_video_path", PREVIEW_VIDEO_NAME, "the watch copy", lambda out: clipwork.preview_video(local, out, start, length, crop_x=crop_x)),
+        ("cover_path", COVER_NAME, "the cover", lambda out: clipwork.cover_frame(local, out, start + length / 2, crop_x=crop_x, crop_y=crop_y)),
+        (
+            "preview_video_path", PREVIEW_VIDEO_NAME, "the watch copy",
+            lambda out: clipwork.preview_video(local, out, start, length, crop_x=crop_x, crop_y=crop_y),
+        ),
     )
     paths: dict[str, str | None] = {}
     problems: list[str] = []
@@ -1500,10 +1713,11 @@ def make_previews(store: Store, storage: Storage, pick_id: str) -> dict[str, Any
     if src is None or not src.storage_path:
         raise DropError("the clip is not in Storage any more (deleted after posting, or by retention)")
     crop_x = d.get("crop_x") if isinstance(d.get("crop_x"), (int, float)) else None
+    crop_y = d.get("crop_y") if isinstance(d.get("crop_y"), Mapping) else None  # the section as it is zoomed, when text was cropped away
     with tempfile.TemporaryDirectory(prefix="studio-previews-") as tmp:
         work = Path(tmp)
         local = _fetch_local(storage, src, work, "clip")
-        paths, problems = _watch_files(storage, local, work, pick.id, window, crop_x)
+        paths, problems = _watch_files(storage, local, work, pick.id, window, crop_x, crop_y)
     made = {k: v for k, v in paths.items() if v is not None}
     if made:
         fresh = store.get_favorite(pick.id) or pick  # read again: only these two keys change
@@ -1662,6 +1876,7 @@ def _features(
         "motion_type": "object_swap", "audio_arm": "original_audio", "bodies_in_frame": int(look.get("people_count") or 1),
         "seamless_loop": False, "eye_closeup_end": False, "trend_name": look.get("moment_name") or "evergreen",
         "music": MUSIC, "fav_id": pick.id, "drop": True, "presence": eff["part"], "engagement_kind": kind,
+        **({"crop_y": eff["crop_y"]} if eff.get("crop_y") else {}),  # the text of the section was zoomed away: learning can tell these clips
         **learn_tags(pick, drop, eff, version_index=version_index, test_arms=test_arms, explore_pick=explore_pick),
     }
 
@@ -1927,17 +2142,21 @@ def _make(
 
 
 def _child(store: Store, storage: Storage, pick: Favorite, clip: Clip, now: datetime) -> Source:
-    """The trimmed (and cropped, and big enough) section Genjutsu is given, made once per clip."""
+    """The trimmed (and cropped, and zoomed, and big enough) section Genjutsu is given, made once per clip. The zoom that cuts a band
+    of text away (``effective``'s ``crop_y``, owner 2026-10-14) is part of this cut, so the model never sees the text."""
     if clip.source_id:
         return _source(store, clip.source_id)
     drop = drop_of(pick)
     eff = effective(drop)
     child = sources.trim_source(
         store, storage, drop["source_id"], eff["start_s"], eff["length_s"], crop_x=eff["crop_x"],
-        min_pixels=clipwork.OBJECT_SWAP_MIN_PIXELS,
+        min_pixels=clipwork.OBJECT_SWAP_MIN_PIXELS, crop_y=eff["crop_y"],
     )
     if "avoid" in drop:  # the section is judged, not the clip: the cut carries its own text and watermark flags
-        seen = {x["what"] for x in drop["avoid"] if overlaps(eff["start_s"], eff["length_s"], x)}
+        # (what was cropped away is not in the cut: ``effective`` only gives a crop when every span the section touches can be cut)
+        seen = (
+            set() if eff["crop_y"] else {x["what"] for x in drop["avoid"] if overlaps(eff["start_s"], eff["length_s"], x)}
+        )
         child = sources.record_checks(
             store, child.id, has_watermark="watermark" in seen, has_overlay="text" in seen,
             other_people=child.other_people or 0, has_minors=bool(child.has_minors),
@@ -2927,12 +3146,24 @@ def recheck_command(
     all_ready: Annotated[
         bool, typer.Option("--all-ready", help="Every ready drop without the owner's Make it, scored or not.")
     ] = False,
+    blocked: Annotated[
+        bool,
+        typer.Option(
+            "--blocked",
+            help="Every BLOCKED drop whose reason the owner relaxed on 2026-10-14 (text or a watermark on screen in every usable "
+            "section, or an attached clip over 60 s): never a child as the star or the wrong star.",
+        ),
+    ] = False,
 ) -> None:
     """Check ready drops again for free (the score, the current hit rules): each goes back to checking for the cloud sweep. Prints
-    {"rechecked": [...], "refused": [{"pick_id", "reason"}]}; exit 2 when the one pick named was refused. Nothing is dispatched."""
-    if (pick is None) == (not all_ready):
-        fail("give a pick or --all-ready (not both)")
+    {"rechecked": [...], "refused": [{"pick_id", "reason"}]}; exit 2 when the one pick named was refused. Nothing is dispatched.
+    With --blocked it puts back the blocked drops of the two relaxed reasons instead and prints {"rechecked", "by_reason", "left"}."""
+    if (pick is not None) + all_ready + blocked != 1:
+        fail("give a pick, --all-ready or --blocked (exactly one)")
     store = open_store()
+    if blocked:
+        emit(recheck_blocked(store))
+        return
     if pick is not None:
         ids = [pick]
     else:

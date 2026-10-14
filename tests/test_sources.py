@@ -1,10 +1,12 @@
 import json
 import shutil
+import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from studio.media.analyze import AnalysisError
 from studio.media.qa import probe
 from typer.testing import CliRunner
 
@@ -1055,13 +1057,82 @@ def test_ingest_owner_clip_reports_a_missing_object_and_a_file_that_is_not_a_vid
     assert store.list_sources() == []
 
 
-def test_ingest_owner_clip_refuses_a_clip_longer_than_the_sheet_allows(tmp_path, clip_file, monkeypatch):
+def long_clip(tmp_path: Path, seconds: int) -> Path:
+    """A small real video of ``seconds`` seconds (160x284, 5 fps, a tone): long enough to be over the sheet's 60 s, cheap to cut."""
+    out = tmp_path / f"long{seconds}.mp4"
+    proc = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-f", "lavfi", "-i", f"testsrc2=size=160x284:rate=5:duration={seconds}",
+         "-f", "lavfi", "-i", f"sine=frequency=440:sample_rate=48000:duration={seconds}", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac",
+         "-shortest", str(out)], capture_output=True, text=True,
+    )  # fmt: skip
+    assert proc.returncode == 0, proc.stderr[-300:]
+    return out
+
+
+def test_a_clip_longer_than_the_sheet_allows_is_cut_to_its_best_section_and_the_cut_is_recorded(tmp_path, monkeypatch):
+    """Owner 2026-10-14: 3 drops were blocked as "the attached clip is N s long". Now the best 60 s is taken and the check goes on."""
     store, storage = make_store(), LocalStorage(tmp_path / "store")
-    pick, _ = owner_pick(store, storage, clip_file)
-    long = type("R", (), {"duration_s": 75.0})()
-    monkeypatch.setattr(sources, "probe", lambda *a, **k: long)
-    with pytest.raises(ValueError, match="60"):
-        sources.ingest_owner_clip(store, storage, pick.id)
+    pick, path = owner_pick(store, storage, long_clip(tmp_path, 75))
+    energy = [0.0] * 60 + [5.0] * 90  # 30 s of nothing, then the action: the best minute is the last one (15-75 s)
+    monkeypatch.setattr(sources, "motion_profile", lambda *a, **k: (energy, []))
+    s = sources.ingest_owner_clip(store, storage, pick.id)
+    cut = path.rsplit(".", 1)[0] + "-trimmed.mp4"
+    assert s.storage_path == cut == s.url and s.duration_s == pytest.approx(60.0, abs=0.5) and s.kind is SourceKind.owner_inbox
+    assert s.credit_handle == "@eatfryhaven"
+    trim = store.get_favorite(pick.id).proposal["owner_clip_trim"]
+    assert trim == {"original_s": pytest.approx(75.0, abs=0.2), "from_s": 15.0, "to_s": 75.0, "seconds": 60.0}
+    assert store.get_favorite(pick.id).source_id == s.id
+    r = probe(storage.download("sources", cut, tmp_path / "cut.mp4"), loudness=False)
+    assert r.duration_s == pytest.approx(60.0, abs=0.5) and r.has_audio and (r.width, r.height) == (160, 284)  # the sound is kept
+    assert storage.download("sources", path, tmp_path / "orig.mp4").exists()  # the owner's own upload is left alone
+    # idempotent: the same pick again is the same source, nothing is cut or catalogued twice
+    again = sources.ingest_owner_clip(store, storage, pick.id)
+    assert again.id == s.id and len(store.list_sources()) == 1
+    assert store.get_favorite(pick.id).proposal["owner_clip_trim"] == trim
+
+
+def test_a_sibling_pick_of_a_long_clip_reuses_the_cut_and_carries_the_same_record(tmp_path, monkeypatch):
+    from studio.models import Favorite
+
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, _ = owner_pick(store, storage, long_clip(tmp_path, 70))
+    monkeypatch.setattr(sources, "motion_profile", lambda *a, **k: ([1.0] * 140, []))
+    twin = store.add_favorite(Favorite(
+        url=pick.url, platform="instagram", creator_handle=pick.creator_handle, status="approved", character_slug="biscuit",
+        proposal=dict(pick.proposal),
+    ))
+    a = sources.ingest_owner_clip(store, storage, pick.id)
+    b = sources.ingest_owner_clip(store, storage, twin.id)
+    assert a.id == b.id and len(store.list_sources()) == 1 and store.get_favorite(twin.id).source_id == a.id
+    assert store.get_favorite(twin.id).proposal["owner_clip_trim"] == store.get_favorite(pick.id).proposal["owner_clip_trim"]
+    assert store.get_favorite(pick.id).proposal["owner_clip_trim"]["from_s"] == 0.0  # all alike: the first minute
+
+
+def test_a_long_clip_whose_analysis_fails_or_that_is_over_three_minutes_is_cut_from_its_start(tmp_path, monkeypatch):
+    def broken(*a, **k):
+        raise AnalysisError("ffmpeg could not decode it")
+
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    monkeypatch.setattr(sources, "motion_profile", broken)
+    pick, _ = owner_pick(store, storage, long_clip(tmp_path, 75))
+    s = sources.ingest_owner_clip(store, storage, pick.id)
+    trim = store.get_favorite(pick.id).proposal["owner_clip_trim"]
+    assert (trim["from_s"], trim["to_s"], trim["seconds"]) == (0.0, 60.0, 60.0) and s.duration_s == pytest.approx(60.0, abs=0.5)
+    # over three minutes the free analysis does not run at all: the first minute
+    asked: list[float] = []
+    monkeypatch.setattr(sources, "motion_profile", lambda path, duration: asked.append(duration) or ([9.0] * 400, []))
+    pick2, _ = owner_pick(store, storage, long_clip(tmp_path, 200), name="2.mp4")
+    sources.ingest_owner_clip(store, storage, pick2.id)
+    trim2 = store.get_favorite(pick2.id).proposal["owner_clip_trim"]
+    assert asked == [] and (trim2["from_s"], trim2["to_s"]) == (0.0, 60.0) and trim2["original_s"] == pytest.approx(200.0, abs=0.3)
+
+
+def test_a_clip_within_the_sheets_limit_is_taken_as_it_is_and_carries_no_trim_record(tmp_path, clip_file):
+    store, storage = make_store(), LocalStorage(tmp_path / "store")
+    pick, path = owner_pick(store, storage, clip_file)
+    s = sources.ingest_owner_clip(store, storage, pick.id)
+    assert s.storage_path == path and "owner_clip_trim" not in store.get_favorite(pick.id).proposal
+    assert sources.OWNER_CLIP_MAX_S == 60.0
 
 
 def test_cli_ingest_owner_prints_the_source_and_links_the_pick(cli_store, cli_storage, clip_file):
@@ -1184,6 +1255,22 @@ def test_cli_trim_takes_crop_x(cli_store, cli_storage, synth_video):
     parent = add_source(cli_store, "owner_inbox", key, "biped", 1, 5.0, storage_path=key)
     assert run("trim", parent.id, "--start", "0", "--duration", "2", "--crop-x", "0.3").exit_code == 0
     assert run("trim", parent.id, "--start", "0", "--duration", "2", "--crop-x", "1.5").exit_code == 2
+
+
+def test_trim_source_can_zoom_a_band_of_text_away_and_the_cli_takes_crop_top_and_bottom(cli_store, cli_storage, tmp_path, synth_video):
+    # owner 2026-10-14: the band is cut BEFORE the window is catalogued, so what Genjutsu is given never shows it
+    clip = synth_video(w=320, h=568, dur=5, audio=False)
+    parent = stored_source(cli_store, cli_storage, clip)
+    child = sources.trim_source(cli_store, cli_storage, parent.id, 0.0, 2.0, crop_y={"top": 0.15, "bottom": 0.0, "x": 0.5})
+    out = tmp_path / "zoomed.mp4"
+    out.write_bytes(fetch(cli_storage, tmp_path, child.storage_path))
+    r = probe(out, loudness=False)
+    assert (r.width, r.height) == (270, 482) and abs(r.width / r.height - 9 / 16) < 0.01  # 568 - 86 px (15% rounded up) = 482 tall, 9:16 wide
+    cli = run("trim", parent.id, "--start", "0", "--duration", "2", "--crop-top", "0.12", "--crop-bottom", "0.05")
+    assert cli.exit_code == 0, cli.output
+    assert run("trim", parent.id, "--start", "0", "--duration", "2", "--crop-top", "0.7").exit_code == 2  # a band of at most half
+    with pytest.raises(ValueError, match="crop_y"):
+        sources.trim_source(cli_store, cli_storage, parent.id, 0.0, 2.0, crop_y={"top": 0.4, "bottom": 0.4})
 
 
 def test_cli_trim_exit_codes(cli_store, cli_storage, clip_file):

@@ -8,7 +8,8 @@ report as well as a probed one.
 
 **Master spec** (Global Constraints): 1080x1920, 30 fps, H.264 High, 10-20 Mbps video bitrate
 (the encode targets ~15), AAC at 48 kHz, an audio track, integrated loudness -14 LUFS +/- 1, true
-peak <= -1 dBFS, 6-16 s (6-9 s is the target of a trimmed Drop-in, 16 s the hard maximum; an eye loop,
+peak <= -1 dBFS, 4-16 s (owner 2026-10-14: 4 s when that is all the clean section a clip has; 8-10 s is still the target of a trimmed
+Drop-in, 16 s the hard maximum; an eye loop,
 ``loop=True``, is 6-8 s instead). The AAC "320k" is an
 encoder setting, not a property of the content (ffmpeg's encoder spends fewer bits on sparse
 audio), so it is not checked; the codec and the sample rate are. Durations accept 0.05 s either
@@ -52,7 +53,7 @@ from studio.models import MUSIC_ARMS
 MASTER_SIZE = (1080, 1920)
 MASTER_FPS = 30.0
 MASTER_KBPS = (10_000.0, 20_000.0)
-MASTER_SECONDS = (6.0, 16.0)
+MASTER_SECONDS = (4.0, 16.0)  # owner 2026-10-14: 4 s when that is all the clean section a clip has; 8-10 s is still the target
 LOOP_SECONDS = (6.0, 8.0)
 MASTER_AUDIO_CODEC = "aac"
 MASTER_AUDIO_HZ = 48_000

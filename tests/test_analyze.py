@@ -206,6 +206,19 @@ def test_a_clip_shorter_than_six_seconds_is_its_own_window(tmp):
     assert w["start_s"] == 0.0 and w["end_s"] == pytest.approx(4.0, abs=0.1) and "whole clip" in w["note"]
 
 
+def test_the_busiest_section_of_a_long_clip_starts_where_the_movement_is_densest():
+    """Owner 2026-10-14: an attached clip over the sheet's 60 s is cut to its best section (``busiest_section``, pure)."""
+    energy = [1.0] * 100 + [5.0] * 120 + [1.0] * 80  # 150 s, the lively minute is 50-110 s
+    assert analyze.busiest_section(energy, 150.0, 60.0) == 50.0
+    assert analyze.busiest_section([2.0] * 300, 150.0, 60.0) == 0.0  # all alike: the earliest
+    assert analyze.busiest_section([0.0] * 200 + [4.0] * 100, 150.0, 60.0) == 90.0  # the action is at the end: the last 60 s
+    late = [0.0] * 60 + [5.0] * 90  # 75 s: 30 s of nothing then the action
+    assert analyze.busiest_section(late, 75.0, 60.0) == 15.0 and analyze.busiest_section(late, 75.0, 60.0) + 60.0 <= 75.0
+    assert analyze.busiest_section([5.0] * 100, 50.0, 60.0) == 0.0 and analyze.busiest_section([], 120.0, 60.0) == 0.0  # nothing to choose
+    assert analyze.busiest_section([1.0, 2.0] * 90, 90.0, 60.0, step_s=0.5) == 0.0
+    assert analyze.MAX_ANALYSIS_SECONDS == 180.0
+
+
 def test_best_window_prefers_the_shorter_one_when_everything_is_equal_and_never_leaves_the_clip():
     flat = [2.0] * 40  # 20 s of identical motion
     w = best_window(flat, [], [], None, 20.0)

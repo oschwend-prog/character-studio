@@ -416,11 +416,19 @@ def test_biscuit_takes_a_dog_star_and_refuses_a_person(world, portrait):
     assert out.state == "blocked" and "Biscuit replaces a dog or a small animal, this clip's star is a person" in out.reason
 
 
-def test_a_video_under_six_seconds_is_blocked(world, synth_video):
+def test_a_video_under_four_seconds_is_blocked(world, synth_video):
     store, storage = world
-    pid = drop_file(store, storage, synth_video(w=540, h=960, dur=5))
+    pid = drop_file(store, storage, synth_video(w=540, h=960, dur=3))
     out = process_drop(store, storage, pid, gemini_client=FakeGemini(), now=NOW, job="t")
-    assert out.state == "blocked" and "at least 6 s" in out.reason
+    assert out.state == "blocked" and "at least 4 s" in out.reason
+
+
+def test_a_five_second_video_is_now_a_ready_drop_of_five_seconds(world, synth_video):
+    """Owner 2026-10-14: the master may be 4-16 s, so a 5 s clip (blocked as under 6 s before) is its own section."""
+    store, storage = world
+    pid = ready_drop(store, storage, synth_video(w=540, h=960, dur=5))
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["window"] == {"start_s": 0.0, "length_s": 5.0} and d["credits"] == drop.estimate_credits("dropin", 5.0, "original")
 
 
 def test_without_the_gemini_key_it_waits_and_the_deconstruct_by_hand_finishes_it(world, portrait):
@@ -815,12 +823,20 @@ def test_the_window_stays_in_one_shot_and_takes_the_liveliest_part():
 
 
 def test_a_short_shot_shortens_the_window_but_never_under_six_seconds():
+    """A shot is never cut shorter than 6 s (``PREFERRED_MIN_S``): the 4 s of owner 2026-10-14 is for text and a short clip only."""
     w = drop_window(analysis([2.0] * 40, cuts=[7.0, 14.0]), classic=True, duration=20.0)
     assert w["length_s"] in (6.0, 6.5, 7.0) and (w["start_s"] >= 7.0 - 1e-9 or w["start_s"] + w["length_s"] <= 7.0 + 1e-9)
     tiny = drop_window(analysis([2.0] * 20, cuts=[3.0, 6.0]), classic=False, duration=10.0)
     assert tiny["length_s"] >= 6.0
-    with pytest.raises(ValueError, match="at least 6 s"):
-        drop_window(analysis([1.0] * 8), classic=False, duration=4.0)
+    chopped = drop_window(analysis([2.0] * 40, cuts=[4.5, 9.0, 13.5, 18.0]), classic=False, duration=20.0)  # shots of 4.5 s
+    assert chopped["length_s"] >= 6.0
+
+
+def test_a_video_needs_at_least_four_seconds_and_a_short_one_is_its_own_section():
+    with pytest.raises(ValueError, match="at least 4 s"):
+        drop_window(analysis([1.0] * 7), classic=False, duration=3.5)
+    assert drop_window(analysis([1.0] * 8), classic=False, duration=4.0) == {"start_s": 0.0, "length_s": 4.0}
+    assert drop_window(analysis([1.0] * 11), classic=False, duration=5.5) == {"start_s": 0.0, "length_s": 5.5}
 
 
 def test_the_window_snaps_to_the_beat_when_it_stays_in_range():
@@ -870,7 +886,7 @@ def test_the_adjust_is_checked_again_and_fails_closed():
         "start_s": 4.0, "length_s": 12.0, "crop_x": 0.4, "part": "star", "gadgets": ["gold chain"],
     }
     for bad, msg in (
-        ({"length_s": 5}, "6-16 s"), ({"length_s": 17}, "6-16 s"), ({"start_s": 15, "length_s": 9}, "runs past the end"),
+        ({"length_s": 3.5}, "4-16 s"), ({"length_s": 17}, "4-16 s"), ({"start_s": 15, "length_s": 9}, "runs past the end"),
         ({"part": "lead"}, "adjust.part"), ({"gadgets": ["a", "b", "c", "d"]}, "at most 3"), ({"hook": "x" * 81}, "1-80"),
         ({"crop_x": 1.5}, "from 0 to 1"), ({"colour": "red"}, "unknown key"), ("start", "an object"),
     ):
@@ -886,13 +902,13 @@ def test_a_pause_characters_section_is_capped_so_the_master_stays_within_16_s():
     lead = drop.style_lead_s({"hook_edit": "pause"})
     assert lead == 0.4
     assert validate_adjust({"start_s": 0, "length_s": 15.6}, d, lead_s=lead) == {"start_s": 0.0, "length_s": 15.6}
-    with pytest.raises(ValueError, match=r"6-15\.6 s.*0\.4 s.*within 16 s"):
+    with pytest.raises(ValueError, match=r"4-15\.6 s.*0\.4 s.*within 16 s"):
         validate_adjust({"start_s": 0, "length_s": 15.7}, d, lead_s=lead)
-    with pytest.raises(ValueError, match=r"6-15\.6 s"):
+    with pytest.raises(ValueError, match=r"4-15\.6 s"):
         validate_adjust({"start_s": 0, "length_s": 16}, d, lead_s=lead)
     assert validate_adjust({"start_s": 0, "length_s": 16}, d) == {"start_s": 0.0, "length_s": 16.0}  # no pause: today's 16 s
     assert drop.effective({**d, "adjust": {"length_s": 15.6}}, lead_s=lead)["length_s"] == 15.6
-    with pytest.raises(ValueError, match=r"6-15\.6 s"):  # the same rule for the length the Adjust leaves alone
+    with pytest.raises(ValueError, match=r"4-15\.6 s"):  # the same rule for the length the Adjust leaves alone
         validate_adjust({"start_s": 1}, {**d, "window": {"start_s": 2.0, "length_s": 15.8}}, lead_s=lead)
 
 
@@ -1611,8 +1627,11 @@ def test_the_window_keeps_clear_of_text_and_shortens_or_gives_up_only_when_it_mu
     tight = [{"start_s": 0.0, "end_s": 12.0, "what": "text"}, {"start_s": 19.0, "end_s": 30.0, "what": "watermark"}]
     w = drop_window(analysis([2.0] * 60), classic=True, duration=30.0, avoid=tight)
     assert 12.0 <= w["start_s"] and w["start_s"] + w["length_s"] <= 19.0 and 6.0 <= w["length_s"] <= 7.0
+    # only 5 s clear (25-30 s): since owner 2026-10-14 a 4 s section is enough, so it is taken; under 4 s it is not
+    w = drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=[{"start_s": 0.0, "end_s": 25.0, "what": "text"}])
+    assert w == {"start_s": 25.0, "length_s": 5.0}
     with pytest.raises(drop.NoCleanSection):
-        drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=[{"start_s": 0.0, "end_s": 25.0, "what": "text"}])
+        drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=[{"start_s": 0.0, "end_s": 26.5, "what": "text"}])
     beats = [i * 0.5 + 0.4 for i in range(60)]  # the nearest beat (10.4 s) would pull the section back onto the caption
     w = drop_window(analysis(energy, beats=beats), classic=False, duration=30.0, avoid=caption)
     assert w["start_s"] >= 10.5
@@ -1659,6 +1678,221 @@ def test_the_cut_section_carries_its_own_clean_flags(world, synth_video, gen_out
     clip = store.get_clip(store.get_favorite(pid).clip_id)
     child = next(iter(store.list_sources(id=clip.source_id)))
     assert child.has_overlay is False and child.has_watermark is False  # the section Genjutsu was given has none
+
+
+# ---- crop the text out: a band at the top or bottom of the frame is zoomed away before Genjutsu sees it (owner 2026-10-14) ------
+
+
+def band(start, end, top, bottom, what="text"):
+    """An ``avoid`` entry that knows where the text sits (``avoid_spans`` writes ``bands`` when the deconstruct gave a box)."""
+    return {"start_s": start, "end_s": end, "what": what, "bands": [{"top": top, "bottom": bottom}]}
+
+
+def test_avoid_spans_carry_the_boxes_band_by_band_and_fail_closed_without_one():
+    look = {"watermark": False, "watermark_spans": [], "burned_in_text": True, "burned_in_text_spans": [
+        {"start_s": 0, "end_s": 4, "top": 0.0, "bottom": 0.1},      # a caption at the top ...
+        {"start_s": 3, "end_s": 6, "top": 0.05, "bottom": 0.15},    # ... that grows: one band
+        {"start_s": 5.5, "end_s": 8, "top": 0.9, "bottom": 1.0},    # and one at the bottom: a second band, never one tall box
+    ]}
+    (span,) = drop.avoid_spans(look, 20.0)
+    assert span == {"start_s": 0.0, "end_s": 8.5, "what": "text", "bands": [{"top": 0.0, "bottom": 0.15}, {"top": 0.9, "bottom": 1.0}]}
+    # one span of the merge without a box, a flag with no span at all, a broken box: nobody knows where it sits
+    mixed = {**look, "burned_in_text_spans": [*look["burned_in_text_spans"][:2], {"start_s": 5.5, "end_s": 8}]}
+    assert "bands" not in drop.avoid_spans(mixed, 20.0)[0]
+    assert drop.avoid_spans({**look, "burned_in_text_spans": []}, 12.0) == [{"start_s": 0.0, "end_s": 12.0, "what": "text"}]
+    for bad in ({"top": 0.6, "bottom": 0.5}, {"top": "a", "bottom": 0.5}, {"top": 0.1}, {"top": -1, "bottom": 0.2}):
+        broken = {**look, "burned_in_text_spans": [{"start_s": 0, "end_s": 4, **bad}]}
+        assert drop.avoid_spans(broken, 20.0) == [{"start_s": 0.0, "end_s": 4.5, "what": "text"}], bad
+    # separate time spans keep their own boxes; the watermark and the text are merged apart
+    two = {"watermark": True, "watermark_spans": [{"start_s": 0, "end_s": 20, "top": 0.0, "bottom": 0.08}], "burned_in_text": True,
+           "burned_in_text_spans": [{"start_s": 2, "end_s": 3, "top": 0.88, "bottom": 1.0}]}
+    assert drop.avoid_spans(two, 20.0) == [
+        {"start_s": 0.0, "end_s": 20.0, "what": "watermark", "bands": [{"top": 0.0, "bottom": 0.08}]},
+        {"start_s": 1.5, "end_s": 3.5, "what": "text", "bands": [{"top": 0.88, "bottom": 1.0}]},
+    ]
+
+
+def test_a_band_at_the_top_or_the_bottom_is_cut_with_a_margin_from_the_nearer_edge():
+    assert drop.section_cut(0, 8, []) == (0.0, 0.0)  # nothing on screen: nothing to cut
+    assert drop.section_cut(0, 8, [band(0, 4, 0.0, 0.15)]) == (0.18, 0.0)  # the box plus CROP_PAD (0.03)
+    assert drop.section_cut(5, 8, [band(0, 4, 0.0, 0.15)]) == (0.0, 0.0)  # the text is gone by then
+    assert drop.section_cut(0, 8, [band(0, 9, 0.88, 1.0)]) == (0.0, 0.15)
+    assert drop.section_cut(0, 8, [{**band(0, 9, 0.0, 0.08), "bands": [{"top": 0.0, "bottom": 0.08}, {"top": 0.92, "bottom": 1.0}]}]) == (0.11, 0.11)
+    # several spans: the biggest band on each side counts, a span the section does not touch does not
+    assert drop.section_cut(0, 8, [band(0, 3, 0.0, 0.05), band(2, 9, 0.0, 0.12), band(20, 30, 0.0, 0.5)]) == (0.15, 0.0)
+    got = drop.crop_y_for(0, 8, [band(0, 4, 0.0, 0.15)], {"x_center": 0.3})
+    assert got == {"top": 0.18, "bottom": 0.0, "x": 0.3}  # centred on the star
+    assert drop.crop_y_for(0, 8, [band(0, 4, 0.0, 0.15)], None)["x"] == 0.5
+    assert drop.crop_y_for(0, 8, [], {"x_center": 0.3}) is None  # nothing to cut: no crop to record
+
+
+def test_text_in_the_middle_a_crop_over_a_quarter_or_a_span_without_a_box_cannot_be_cropped():
+    assert drop.section_cut(0, 8, [band(0, 9, 0.4, 0.6)]) is None  # the middle costs more than a quarter from either edge
+    assert drop.section_cut(0, 8, [band(0, 9, 0.0, 0.22)]) == (0.25, 0.0)  # exactly the limit: allowed
+    assert drop.section_cut(0, 8, [band(0, 9, 0.0, 0.23)]) is None  # 0.26 > MAX_CROP_FRACTION
+    assert drop.section_cut(0, 8, [band(0, 9, 0.0, 0.2), band(0, 9, 0.85, 1.0)]) is None  # 0.23 + 0.18: over a quarter in all
+    assert drop.section_cut(0, 8, [{"start_s": 0, "end_s": 9, "what": "text"}]) is None  # no box: as before
+    assert drop.section_cut(0, 8, [{"start_s": 0, "end_s": 9, "what": "version"}]) is None  # a family member's section
+    assert drop.section_cut(0, 8, [{**band(0, 9, 0.0, 0.1), "bands": [{"top": 0.5, "bottom": 0.2}]}]) is None  # a broken stored box
+    assert drop.section_cut(0, 8, [{**band(0, 9, 0.0, 0.1), "bands": []}]) is None
+    assert drop.MAX_CROP_FRACTION == 0.25
+
+
+def test_the_stars_edges_limit_the_crop_and_without_them_the_middle_half_is_always_left():
+    top = [band(0, 9, 0.0, 0.15)]  # needs 0.18 off the top
+    assert drop.section_cut(0, 8, top, {"top": 0.3, "bottom": 0.95}) == (0.18, 0.0)  # his head is below it
+    assert drop.section_cut(0, 8, top, {"top": 0.1, "bottom": 0.95}) is None  # the crop would cut his head
+    assert drop.section_cut(0, 8, top, {"x_center": 0.5}) == (0.18, 0.0)  # position unknown: allowed, the middle 50% stays whole
+    bottom = [band(0, 9, 0.88, 1.0)]
+    assert drop.section_cut(0, 8, bottom, {"top": 0.1, "bottom": 0.9}) is None  # 0.15 off the bottom would cut his feet
+    assert drop.section_cut(0, 8, bottom, {"top": 0.1, "bottom": 0.8}) == (0.0, 0.15)
+    both = [band(0, 9, 0.0, 0.08), band(0, 9, 0.92, 1.0)]
+    assert drop.section_cut(0, 8, both, {"top": 0.05, "bottom": 0.95}) is None
+    for cut in (drop.section_cut(0, 8, [band(0, 9, t, t + 0.1)]) for t in (0.0, 0.05, 0.1, 0.8, 0.85, 0.9)):
+        assert cut is None or max(cut) <= 0.25  # each side at most a quarter: the middle half (0.25-0.75) is never touched
+
+
+def test_a_section_with_text_only_in_a_band_is_usable_and_one_with_nothing_to_cut_is_taken_first():
+    caption = [band(0.0, 30.0, 0.0, 0.15)]  # text over the whole clip: before, NoCleanSection; now a zoomed section
+    w = drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=caption)
+    assert 8.0 <= w["length_s"] <= 10.0 and drop.section_cut(w["start_s"], w["length_s"], caption) == (0.18, 0.0)
+    plain = [{"start_s": 0.0, "end_s": 30.0, "what": "text"}]  # the same text with no box still blocks
+    with pytest.raises(drop.NoCleanSection):
+        drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=plain)
+    # the liveliest part (0-10 s) has the caption, a clean 8-10 s section exists after it: it wins over the livelier cropped one
+    energy = [5.0] * 20 + [1.0] * 40
+    w = drop_window(analysis(energy), classic=False, duration=30.0, avoid=[band(0.0, 10.5, 0.0, 0.15)])
+    assert w["start_s"] >= 10.5 and drop.section_cut(w["start_s"], w["length_s"], [band(0.0, 10.5, 0.0, 0.15)]) == (0.0, 0.0)
+    assert drop_window(analysis(energy), classic=False, duration=30.0)["start_s"] < 10.5
+    # the longer length class first: only 7 s are clean (0-7 s), but 12 s (9-21 s) can be cropped, so the 8-10 s target is cropped
+    avoid = [{"start_s": 7.0, "end_s": 9.0, "what": "text"}, band(9.0, 21.0, 0.0, 0.15), {"start_s": 21.0, "end_s": 30.0, "what": "text"}]
+    w = drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=avoid)
+    assert 9.0 <= w["start_s"] and w["start_s"] + w["length_s"] <= 21.0 and 8.0 <= w["length_s"] <= 10.0
+    # text in the middle of the frame, or over a quarter of it: still unusable
+    for blocked in ([band(0.0, 30.0, 0.4, 0.6)], [band(0.0, 30.0, 0.0, 0.3)], [band(0.0, 30.0, 0.0, 0.2), band(0.0, 30.0, 0.85, 1.0)]):
+        with pytest.raises(drop.NoCleanSection):
+            drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=blocked)
+    # the star's own top: the crop may not cut his head
+    with pytest.raises(drop.NoCleanSection):
+        drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=caption, star={"top": 0.1, "bottom": 0.9})
+    assert drop_window(analysis([2.0] * 60), classic=False, duration=30.0, avoid=caption, star={"top": 0.3, "bottom": 0.9})["length_s"] >= 8.0
+    # the beat snap keeps the rule: a cropped window snaps only to one that can still be cropped
+    beats = [i * 0.5 + 0.2 for i in range(60)]
+    w = drop_window(analysis([2.0] * 60, beats=beats), classic=False, duration=30.0, avoid=caption)
+    assert drop.section_cut(w["start_s"], w["length_s"], caption) == (0.18, 0.0)
+
+
+def test_four_clean_seconds_are_enough_when_nothing_longer_is_clear_and_longer_is_still_preferred():
+    flat = analysis([2.0] * 60)
+    # 4.5 s clear (12-16.5 s): a 4.5 s section, where the rule was 6 s and the clip was blocked
+    four = [{"start_s": 0.0, "end_s": 12.0, "what": "text"}, {"start_s": 16.5, "end_s": 30.0, "what": "text"}]
+    assert drop_window(flat, classic=False, duration=30.0, avoid=four) == {"start_s": 12.0, "length_s": 4.5}
+    assert drop_window(flat, classic=True, duration=30.0, avoid=four) == {"start_s": 12.0, "length_s": 4.5}
+    exact = [{"start_s": 0.0, "end_s": 12.0, "what": "text"}, {"start_s": 16.0, "end_s": 30.0, "what": "text"}]
+    assert drop_window(flat, classic=False, duration=30.0, avoid=exact) == {"start_s": 12.0, "length_s": 4.0}
+    short = [{"start_s": 0.0, "end_s": 12.0, "what": "text"}, {"start_s": 15.5, "end_s": 30.0, "what": "text"}]  # 3.5 s
+    with pytest.raises(drop.NoCleanSection):
+        drop_window(flat, classic=False, duration=30.0, avoid=short)
+    # 7 s clear and 4.5 s clear in the same clip: the 7 s one, as before (the search tries the longer classes first)
+    both = [{"start_s": 0.0, "end_s": 5.0, "what": "text"}, {"start_s": 9.5, "end_s": 14.0, "what": "text"}, {"start_s": 21.0, "end_s": 30.0, "what": "text"}]
+    w = drop_window(flat, classic=False, duration=30.0, avoid=both)  # clear: 5-9.5 (4.5 s), 14-21 (7 s)
+    assert w == {"start_s": 14.0, "length_s": 7.0}
+    assert drop.MASTER_MIN_S == 4.0 and drop.PREFERRED_MIN_S == 6.0
+
+
+def test_a_check_with_text_only_in_a_top_band_ends_ready_with_the_crop_recorded_and_shown(world, synth_video):
+    store, storage = world
+    pid = drop_file(store, storage, synth_video(w=540, h=960, dur=16))
+    look = deconstruct(burned_in_text=True, burned_in_text_spans=[{"start_s": 0, "end_s": 16, "top": 0.0, "bottom": 0.12}])
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(look), now=NOW, job="t")
+    pick = store.get_favorite(pid)
+    d = pick.proposal["drop"]
+    assert out.ok and out.state == d["state"] == "ready" and out.json()["crop_y"] == d["crop_y"]
+    assert d["crop_y"] == {"top": 0.15, "bottom": 0.0, "x": 0.5}  # 0.12 + the 0.03 margin
+    assert d["avoid"] == [{"start_s": 0.0, "end_s": 16.0, "what": "text", "bands": [{"top": 0.0, "bottom": 0.12}]}]
+    assert 8.0 <= d["window"]["length_s"] <= 10.0 and d["crop_x"] is None
+    assert pick.proposal["analysis"]["crop_y"] == {"top": 0.15, "bottom": 0.0}  # the card and the analysis carry it
+    root = Path(storage.root) / "sources"  # the strip, the cover and the watch copy show the zoomed section
+    assert (root / d["preview_path"]).is_file() and probe(root / d["preview_video_path"], loudness=False).width == 540
+    assert drop.effective(d)["crop_y"] == d["crop_y"]
+
+
+def test_text_in_the_middle_or_without_a_box_still_blocks_the_check_with_the_same_line(world, synth_video):
+    store, storage = world
+    clip = synth_video(w=540, h=960, dur=8)
+    reason = "text or a watermark is on screen in every usable section: Genjutsu would keep it, drop a clean copy"
+    for span in (
+        {"start_s": 0, "end_s": 8, "top": 0.4, "bottom": 0.6},  # the middle of the frame
+        {"start_s": 0, "end_s": 8, "top": 0.0, "bottom": 0.4},  # more than a quarter
+        {"start_s": 0, "end_s": 8},  # no box: a check made before boxes
+    ):
+        pid = drop_file(store, storage, clip)
+        out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(burned_in_text=True, burned_in_text_spans=[span])), now=NOW, job="t")
+        d = store.get_favorite(pid).proposal["drop"]
+        assert out.state == d["state"] == "blocked" and d["reason"] == reason and "crop_y" not in d and "window" not in d
+
+
+def test_a_recheck_that_no_longer_needs_the_crop_forgets_the_old_one(world, synth_video):
+    store, storage = world
+    pid = drop_file(store, storage, synth_video(w=540, h=960, dur=16))
+    look = deconstruct(burned_in_text=True, burned_in_text_spans=[{"start_s": 0, "end_s": 16, "top": 0.0, "bottom": 0.12}])
+    process_drop(store, storage, pid, gemini_client=FakeGemini(look), now=NOW, job="t")
+    assert store.get_favorite(pid).proposal["drop"]["crop_y"] is not None
+    drop.request_recheck(store, pid, NOW)
+    process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["state"] == "ready" and d["crop_y"] is None and "crop_y" not in store.get_favorite(pid).proposal["analysis"]
+
+
+def test_the_owners_adjust_may_take_a_section_that_can_be_cropped_and_gets_its_own_crop():
+    d = {"duration_s": 30.0, "window": {"start_s": 12.0, "length_s": 9.0}, "star": {"x_center": 0.4},
+         "avoid": [band(0.0, 10.0, 0.0, 0.15), {"start_s": 25.0, "end_s": 30.0, "what": "text"}]}
+    assert validate_adjust({"start_s": 4.0, "length_s": 8.0}, d) == {"start_s": 4.0, "length_s": 8.0}  # it shows the caption: cropped
+    assert drop.effective({**d, "adjust": {"start_s": 4.0, "length_s": 8.0}})["crop_y"] == {"top": 0.18, "bottom": 0.0, "x": 0.4}
+    assert drop.effective(d)["crop_y"] is None  # the check's own section (12-21 s) is clean
+    with pytest.raises(ValueError, match=r"shows text on screen \(25-30 s\): Genjutsu would keep it"):  # no box: refused as ever
+        validate_adjust({"start_s": 20.0, "length_s": 8.0}, d)
+    tall = {**d, "avoid": [band(0.0, 10.0, 0.0, 0.3)]}
+    with pytest.raises(ValueError, match=r"shows text on screen \(0-10 s\) and cropping it out would cut too much of the picture"):
+        validate_adjust({"start_s": 4.0, "length_s": 8.0}, tall)
+    assert validate_adjust({"length_s": 4.0}, d) == {"start_s": 12.0, "length_s": 4.0}  # and a 4 s section is allowed
+    with pytest.raises(ValueError, match="4-16 s"):
+        validate_adjust({"length_s": 3.9}, d)
+    old = {k: v for k, v in d.items() if k != "star"}
+    assert drop.effective({**old, "avoid": [{"start_s": 0.0, "end_s": 5.0, "what": "text"}]})["crop_y"] is None  # a check without boxes
+
+
+def test_the_cropped_section_is_what_genjutsu_is_given_and_it_is_clean_by_its_own_flags(world, synth_video, gen_out, fast_master, monkeypatch):
+    store, storage = world
+    pid = drop_file(store, storage, synth_video(w=540, h=960, dur=16))
+    look = deconstruct(burned_in_text=True, burned_in_text_spans=[{"start_s": 0, "end_s": 16, "top": 0.0, "bottom": 0.12}])
+    process_drop(store, storage, pid, gemini_client=FakeGemini(look), now=NOW, job="t")
+    seen: list[dict] = []
+    real = sources.trim_clip
+    monkeypatch.setattr(sources, "trim_clip", lambda *a, **k: (seen.append(k), real(*a, **k))[1])
+    tap_make(store, pid)
+    hf = FakeHF(gen_out)
+    assert make(store, storage, pid, hf, FakeGemini(QA_PASS)).state == "made"
+    (call,) = seen  # the one cut Genjutsu was given: zoomed by the crop, before it left the machine
+    assert call["crop_y"] == {"top": 0.15, "bottom": 0.0, "x": 0.5} and call["crop_x"] is None
+    clip = store.get_clip(store.get_favorite(pid).clip_id)
+    child = next(iter(store.list_sources(id=clip.source_id)))
+    assert child.has_overlay is False and child.has_watermark is False  # the text is not in what was cut
+    assert hf.submits and clip.features["crop_y"] == {"top": 0.15, "bottom": 0.0, "x": 0.5}  # learning can tell these clips
+    r = probe(Path(storage.root) / "sources" / child.storage_path, loudness=False)
+    assert r.width * r.height >= 409_600 and abs(r.width / r.height - 9 / 16) < 0.01
+
+
+def test_a_made_drop_without_a_crop_is_cut_exactly_as_before(world, portrait, gen_out, fast_master, monkeypatch):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    seen: list[dict] = []
+    real = sources.trim_clip
+    monkeypatch.setattr(sources, "trim_clip", lambda *a, **k: (seen.append(k), real(*a, **k))[1])
+    tap_make(store, pid)
+    assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
+    assert seen[0]["crop_y"] is None
+    assert "crop_y" not in store.get_clip(store.get_favorite(pid).clip_id).features
 
 
 # ---- the clip score (terminal v3, spec section 3): free, stored only when the check ends ready --------------------------------
@@ -1858,9 +2092,100 @@ def test_cli_drop_recheck_one_or_every_ready_drop(monkeypatch, tmp_path, portrai
     assert r.exit_code == 2 and json.loads(r.output)["refused"] == [{"pick_id": "nope", "reason": "unknown pick nope"}]
     for args in ([], [a, "--all-ready"]):
         r = CliRunner().invoke(app, ["drop", "recheck", *args])
-        assert r.exit_code == 2 and "a pick or --all-ready" in r.output
+        assert r.exit_code == 2 and "a pick, --all-ready or --blocked" in r.output
     r = CliRunner().invoke(app, ["drop", "recheck", "--help"], env={"COLUMNS": "200"})
     assert "scored or not" in r.output and "checked before the score" not in r.output  # it takes every ready drop without Make it
+
+
+TEXT_REASON = "text or a watermark is on screen in every usable section: Genjutsu would keep it, drop a clean copy"
+LONG_REASON = "the attached clip is 75 s long: the sheet takes at most 60 s"
+
+
+def blocked_pick(store, storage, clip, reason, slug="reginald"):
+    """A drop the cloud blocked earlier, with the line it wrote then (the rules this change relaxes, and the ones it does not)."""
+    pid = drop_file(store, storage, clip, slug)
+    f = store.get_favorite(pid)
+    store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "state": "blocked", "reason": reason}})
+    return pid
+
+
+def test_recheck_blocked_takes_only_the_text_and_the_too_long_ones_and_says_what_it_left(world, portrait):
+    store, storage = world
+    text = blocked_pick(store, storage, portrait, TEXT_REASON)
+    mark = blocked_pick(store, storage, portrait, "text or a watermark is on screen in every usable section: we cannot use this clip")
+    link = blocked_pick(store, storage, portrait, "text or a watermark is on screen in every usable section: paste the link instead")
+    long = blocked_pick(store, storage, portrait, LONG_REASON)
+    kept = {
+        "child": blocked_pick(store, storage, portrait, "the star is a child: our character only replaces an adult"),
+        "wrong": blocked_pick(store, storage, portrait, "Reginald replaces a person, this clip's star is a dog"),
+        "nobody": blocked_pick(store, storage, portrait, "there is nobody to replace in this clip"),
+        "short": blocked_pick(store, storage, portrait, "the video is 5.5 s: a video needs at least 6 s"),
+        "gemini": blocked_pick(store, storage, portrait, "Gemini would not look at this clip (blocked): we cannot use it"),
+    }
+    skipped = blocked_pick(store, storage, portrait, TEXT_REASON)
+    store.update_favorite(skipped, status="skipped")  # the owner passed on it: it stays passed on
+    ready = ready_drop(store, storage, portrait)  # not blocked: not this command's business
+    later = NOW + timedelta(hours=1)
+    out = drop.recheck_blocked(store, later)
+    assert sorted(out["rechecked"]) == sorted([text, mark, link, long]) and out["by_reason"] == {"text_or_watermark": 3, "too_long": 1}
+    assert {x["pick_id"]: x["reason"] for x in out["left"]} == {
+        **{pid: store.get_favorite(pid).proposal["drop"]["reason"] for pid in kept.values()}, skipped: TEXT_REASON,
+    }
+    assert [x["note"] for x in out["left"] if x["pick_id"] == skipped] == ["the pick was skipped"]
+    for pid in (text, mark, link, long):  # stamped exactly as request_check stamps a drop that asks for its check
+        d = store.get_favorite(pid).proposal["drop"]
+        assert d["state"] == "checking" and d["reason"] is None and d["at"] == later.isoformat() and d["requested"]["process"] == later.isoformat()
+    for pid in (*kept.values(), skipped):
+        assert store.get_favorite(pid).proposal["drop"]["state"] == "blocked"  # untouched
+    assert store.get_favorite(ready).proposal["drop"]["state"] == "ready"
+    assert sorted(x["pick_id"] for x in pending(store, now=later)) == sorted([text, mark, link, long])  # the sweep takes them; nothing is dispatched
+    assert drop.recheck_blocked(store, later)["rechecked"] == []  # nothing is blocked for those reasons any more
+
+
+def test_a_blocked_clip_put_back_is_checked_again_for_free_and_can_now_end_ready(world, synth_video):
+    store, storage = world
+    pid = drop_file(store, storage, synth_video(w=540, h=960, dur=16))
+    look = deconstruct(burned_in_text=True, burned_in_text_spans=[{"start_s": 0, "end_s": 16}])  # no box: blocked as it always was
+    assert process_drop(store, storage, pid, gemini_client=FakeGemini(look), now=NOW, job="t").state == "blocked"
+    boxed = deconstruct(burned_in_text=True, burned_in_text_spans=[{"start_s": 0, "end_s": 16, "top": 0.0, "bottom": 0.1}])
+    out = drop.recheck_blocked(store, NOW)
+    assert out["rechecked"] == [pid] and out["left"] == []
+    assert process_drop(store, storage, pid, gemini_client=FakeGemini(boxed), now=NOW, job="t").state == "ready"  # the model gives boxes now
+    assert store.get_favorite(pid).proposal["drop"]["crop_y"]["top"] == 0.13
+    assert store.list_clips() == [] and store.ledger_month(NOW.strftime("%Y-%m")) == []  # all free
+
+
+def test_cli_drop_recheck_blocked(monkeypatch, tmp_path, portrait):
+    store, storage = make_store(), LocalStorage(tmp_path / "s")
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    text = blocked_pick(store, storage, portrait, TEXT_REASON)
+    child = blocked_pick(store, storage, portrait, "the star is a child: our character only replaces an adult")
+    r = CliRunner().invoke(app, ["drop", "recheck", "--blocked"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.output)
+    assert out["rechecked"] == [text] and out["by_reason"] == {"text_or_watermark": 1, "too_long": 0}
+    assert [x["pick_id"] for x in out["left"]] == [child] and out["left"][0]["reason"].startswith("the star is a child")
+    assert store.get_favorite(text).proposal["drop"]["state"] == "checking" and store.get_favorite(child).proposal["drop"]["state"] == "blocked"
+    for args in (["--blocked", "--all-ready"], ["--blocked", text], []):  # exactly one of a pick, --all-ready and --blocked
+        r = CliRunner().invoke(app, ["drop", "recheck", *args])
+        assert r.exit_code == 2 and "a pick, --all-ready or --blocked" in r.output, args
+    help_ = CliRunner().invoke(app, ["drop", "recheck", "--help"], env={"COLUMNS": "200"}).output
+    assert "--blocked" in help_ and "scored or not" in help_
+
+
+def test_the_check_of_a_cut_long_clip_goes_on_with_the_section_and_its_card_says_it_was_trimmed(world, tmp_path, monkeypatch):
+    """Owner 2026-10-14: an attached clip over 60 s is cut to its best minute (studio.sources), the check runs on that."""
+    store, storage = world
+    long = tmp_path / "long.mp4"
+    ffmpeg("-f", "lavfi", "-i", "testsrc2=size=160x284:rate=5:duration=75", "-f", "lavfi", "-i", "sine=frequency=440:sample_rate=48000:duration=75",
+           "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", str(long))
+    pid = drop_file(store, storage, long)
+    monkeypatch.setattr(sources, "motion_profile", lambda *a, **k: ([1.0] * 150, []))
+    out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
+    d = store.get_favorite(pid).proposal["drop"]
+    assert out.state == d["state"] == "ready" and d["duration_s"] == pytest.approx(60.0, abs=0.5)
+    assert d["trimmed"] == {"original_s": pytest.approx(75.0, abs=0.2), "from_s": 0.0, "to_s": 60.0, "seconds": 60.0}
+    assert d["window"]["start_s"] + d["window"]["length_s"] <= 60.5 and store.get_favorite(pid).proposal["owner_clip_trim"]["seconds"] == 60.0
 
 
 # ---- Franz takes a person too (owner 2026-10-07: "franz not only replaces dogs") ------------------------------------------------

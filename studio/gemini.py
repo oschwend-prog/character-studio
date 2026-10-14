@@ -28,7 +28,14 @@ no block.
 
 **When, not only whether** (owner 2026-10-06: "judge only the chosen section"). Besides the ``watermark`` and
 ``burned_in_text`` flags, the deconstruct says WHEN each is on screen (``watermark_spans``, ``burned_in_text_spans``: lists of
-``{start_s, end_s}``); ``studio.drop`` keeps its section clear of them and blocks a clip only when no clean section of 6 s is left.
+``{start_s, end_s}``); ``studio.drop`` keeps its section clear of them and blocks a clip only when no clean section of 4 s is left.
+
+**Where, too** (owner 2026-10-14: 29 drops were blocked for text on screen). Each span also carries ``top`` and ``bottom``, the box
+of what is on screen as fractions of the frame height (0 = the top edge, 1 = the bottom edge), and the star may carry its own
+``top`` and ``bottom``. ``studio.drop`` crops a band at the top or the bottom of the frame away (a zoom, before Genjutsu sees the
+clip) instead of giving the section up. Both are optional for us: an answer, a hand-written deconstruct file or a stored check
+without them is exactly as valid as before (and a span with no box still blocks its section, as it always did); the model is asked
+for them (the response schema requires the span's) and a box it gives is held to ``0 <= top < bottom <= 1``.
 
 **What gets views now** (terminal v3, spec section 3). The deconstruct also rates the clip's ``potential`` (a whole score 0-10
 and a one-line reason of at most ``REASON_MAX`` characters: how likely this clip, with our character swapped in, gets views),
@@ -565,12 +572,17 @@ def _traits_text(c: Character) -> str:
 
 _STR = {"type": "string"}
 _BOOL = {"type": "boolean"}
+_EDGE = {"type": "number", "minimum": 0, "maximum": 1}
 _SPANS = {
     "type": "array",
     "items": {
         "type": "object",
-        "properties": {"start_s": {"type": "number", "minimum": 0}, "end_s": {"type": "number", "minimum": 0}},
-        "required": ["start_s", "end_s"],
+        "properties": {
+            "start_s": {"type": "number", "minimum": 0}, "end_s": {"type": "number", "minimum": 0},
+            "top": {**_EDGE, "description": "the top edge of what is on screen, a fraction of the frame height (0 = the top of the frame)"},
+            "bottom": {**_EDGE, "description": "the bottom edge of what is on screen, a fraction of the frame height (1 = the bottom of the frame)"},
+        },
+        "required": ["start_s", "end_s", "top", "bottom"],
     },
     "maxItems": SPANS_MAX,
 }
@@ -615,8 +627,10 @@ DECONSTRUCT_SCHEMA: dict[str, Any] = {
                 "x_center": {"type": "number", "minimum": 0, "maximum": 1, "description": "horizontal centre of the star, 0 left, 1 right"},
                 "full_body": _BOOL,
                 "child": {**_BOOL, "description": "the person we would replace is a child, under 18"},
+                "top": {**_EDGE, "description": "the highest point of the star, a fraction of the frame height (0 = the top of the frame)"},
+                "bottom": {**_EDGE, "description": "the lowest point of the star, a fraction of the frame height (1 = the bottom of the frame)"},
             },
-            "required": ["kind", "body", "description", "x_center", "full_body", "child"],
+            "required": ["kind", "body", "description", "x_center", "full_body", "child"],  # top and bottom: optional for us
         },
         "minors": {**_BOOL, "description": "a child is visible anywhere in the clip; recorded, not a reason to refuse it"},
         "watermark": {**_BOOL, "description": "a platform watermark or another creator's handle is visible"},
@@ -793,12 +807,16 @@ Watch the whole clip and answer with one JSON object:
 quadruped (on four); description = how to point at them in one short phrase, by position or clothes ("the man in the red jacket in \
 the middle"), at most 80 characters; x_center = the horizontal centre of the star in the frame (0 left edge, 1 right edge); \
 full_body = the whole body is in frame; child = true only when the person to replace is a child (under 18), false for an adult, \
-a dog or an animal.
+a dog or an animal; top and bottom = the star's highest and lowest point in the frame, as fractions of the frame height (0 = the top \
+edge, 1 = the bottom edge).
 - minors: true when a child is visible anywhere in the clip (we only record it: children in a crowd or a family are fine). \
 watermark: true when a platform watermark or another creator's handle shows; watermark_spans: WHEN it shows, a list of \
-{{start_s, end_s}} in seconds of the clip ([] when never, one span over the whole clip when always). burned_in_text: true when \
-text is burned into the picture (captions, titles, stickers); burned_in_text_spans: WHEN, in the same form. Only the section we \
-use is judged, so time them closely: a caption in the first seconds only is one short span. camera: static, handheld or moving.
+{{start_s, end_s, top, bottom}} in seconds of the clip ([] when never, one span over the whole clip when always); top and bottom say \
+WHERE it sits in the frame during that span, as fractions of the frame height (0 = the top edge, 1 = the bottom edge): the box \
+around all of it, so a caption in the lowest tenth of the frame is top 0.9, bottom 1.0 and a logo in the top corner top 0.0, \
+bottom 0.08. burned_in_text: true when text is burned into the picture (captions, titles, stickers); burned_in_text_spans: WHEN \
+and WHERE, in the same form. Only the section we use is judged, so time them closely: a caption in the first seconds only is one \
+short span. camera: static, handheld or moving.
 - setting and what_happens: one sentence each (at most 120 and 300 characters).
 - classic: true only for a famous moment almost everyone knows; moment_name: its name or the trend's name ("" when none).
 - suggested_part: cameo, featured or star (how big {c.name}'s part should be).
@@ -873,12 +891,17 @@ def deconstruct_problems(
             p.append("star.full_body must be true or false")
         if not isinstance(star.get("child"), bool):
             p.append("star.child must be true or false")
+        if ("top" in star or "bottom" in star) and not _edges_ok(star.get("top"), star.get("bottom")):
+            p.append("star.top and star.bottom must be given together, with 0 <= top < bottom <= 1")
     for flag in ("minors", "watermark", "burned_in_text", "classic"):
         if not isinstance(answer[flag], bool):
             p.append(f"{flag} must be true or false")
     for key in SPAN_KEYS:
         if not spans_ok(answer[key]):
-            p.append(f"{key} must be a list of at most {SPANS_MAX} {{start_s, end_s}} with 0 <= start_s < end_s")
+            p.append(
+                f"{key} must be a list of at most {SPANS_MAX} {{start_s, end_s}} with 0 <= start_s < end_s "
+                "(and, when a span has a box, both top and bottom with 0 <= top < bottom <= 1)"
+            )
     if answer["camera"] not in CAMERAS:
         p.append(f"camera must be one of {', '.join(CAMERAS)}")
     if answer["suggested_part"] not in PARTS:
@@ -956,13 +979,22 @@ def potential_problems(potential: Any) -> list[str]:
     return p
 
 
-def spans_ok(spans: Any) -> bool:
-    """A list of at most ``SPANS_MAX`` ``{start_s, end_s}`` with ``0 <= start_s < end_s`` (numbers, seconds of the clip)."""
-    def number(v: Any) -> bool:
-        return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+def _number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
+
+def _edges_ok(top: Any, bottom: Any) -> bool:
+    """A box's two edges, fractions of the frame height: numbers with ``0 <= top < bottom <= 1``."""
+    return _number(top) and _number(bottom) and 0 <= top < bottom <= 1
+
+
+def spans_ok(spans: Any) -> bool:
+    """A list of at most ``SPANS_MAX`` ``{start_s, end_s}`` with ``0 <= start_s < end_s`` (numbers, seconds of the clip). A span
+    may also carry the box of what is on screen (owner 2026-10-14): ``top`` and ``bottom``, both or neither, fractions of the frame
+    height with ``0 <= top < bottom <= 1``; a span without them is as valid as it always was."""
     return isinstance(spans, list) and len(spans) <= SPANS_MAX and all(
-        isinstance(x, Mapping) and number(x.get("start_s")) and number(x.get("end_s")) and 0 <= x["start_s"] < x["end_s"]
+        isinstance(x, Mapping) and _number(x.get("start_s")) and _number(x.get("end_s")) and 0 <= x["start_s"] < x["end_s"]
+        and (("top" not in x and "bottom" not in x) or _edges_ok(x.get("top"), x.get("bottom")))
         for x in spans
     )
 
@@ -1007,11 +1039,17 @@ def tidy_deconstruct(answer: Mapping[str, Any], c: Character) -> dict[str, Any]:
         out[key] = answer[key].strip()
     out["recommended"] = {"slug": answer["recommended"]["slug"], "reason": answer["recommended"]["reason"].strip()}
     out["potential"] = {"score": answer["potential"]["score"], "reason": answer["potential"]["reason"].strip()}
-    for key in SPAN_KEYS:  # in time order, rounded: only what the window search reads
+    for key in SPAN_KEYS:  # in time order, rounded: only what the window search reads (and the box, when the answer has one)
         out[key] = sorted(
-            ({"start_s": round(float(x["start_s"]), 2), "end_s": round(float(x["end_s"]), 2)} for x in answer[key]),
+            (
+                {"start_s": round(float(x["start_s"]), 2), "end_s": round(float(x["end_s"]), 2)}
+                | ({"top": round(float(x["top"]), 3), "bottom": round(float(x["bottom"]), 3)} if "top" in x else {})
+                for x in answer[key]
+            ),
             key=lambda x: (x["start_s"], x["end_s"]),
         )
+    if "top" in answer["star"]:
+        out["star"]["top"], out["star"]["bottom"] = round(float(answer["star"]["top"]), 3), round(float(answer["star"]["bottom"]), 3)
     return out
 
 

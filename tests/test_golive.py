@@ -252,7 +252,7 @@ def test_database_and_schema_pass_when_everything_is_applied(world):
     checks = world.run()
     assert checks["database"].status == "pass"
     assert checks["schema"].status == "pass"
-    assert "0001" in checks["schema"].title and "0017" in checks["schema"].title
+    assert "0001" in checks["schema"].title and "0018" in checks["schema"].title
 
 
 def test_no_database_url_fails_both_and_points_at_the_keychain(world):
@@ -320,6 +320,7 @@ def test_a_missing_table_fails_the_schema_check_naming_it(world):
         (("function", "set_hit_status"), "0016"),
         (("function", "set_drop_keep"), "0016"),
         (("definition", golive.ADD_DROP_MERGES), "0017"),
+        (("definition", golive.REQUEST_JOB_MIN_4S), "0018"),
     ],
 )
 def test_each_migration_is_detected_by_its_own_objects(world, missing, migration):
@@ -391,6 +392,18 @@ def test_the_0017_definition_marker_is_in_the_probe_and_only_in_the_migration_th
     assert token in (migrations / "0017_add_drop_merge.sql").read_text()
     for older in sorted(p for p in migrations.glob("*.sql") if not p.name.startswith("0017")):
         assert token not in older.read_text(), older.name  # no earlier add_drop has the merge: 0017 is what adds it
+
+
+def test_the_0018_definition_marker_is_in_the_probe_and_only_in_the_migration_that_adds_it():
+    """0018 re-creates request_job without a new object: the probe tells it from 0012's by `length_ < 4` in its source."""
+    token = "length_ < 4 or length_ > 16"
+    assert ("definition", golive.REQUEST_JOB_MIN_4S) in golive.MIGRATION_MARKERS["0018"]
+    assert f"select 'definition', '{golive.REQUEST_JOB_MIN_4S}'" in golive.PROBE_SQL
+    assert "p.proname = 'request_job'" in golive.PROBE_SQL and f"strpos(p.prosrc, '{token}') > 0" in golive.PROBE_SQL
+    migrations = ROOT / "supabase" / "migrations"
+    assert token in (migrations / "0018_section_min_4s.sql").read_text()
+    for older in sorted(p for p in migrations.glob("*.sql") if not p.name.startswith("0018")):
+        assert token not in older.read_text(), older.name  # 0012 reads `length_ < 6`: 0018 is what lowers it
 
 
 # ---- (c) Data API ----------------------------------------------------------------------------------

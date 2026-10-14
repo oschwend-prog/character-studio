@@ -1013,7 +1013,9 @@ def test_0012_make_it_is_the_one_writer_of_make_requested_and_checks_the_adjust(
     from studio import drop
 
     assert drop.ADJUST_KEYS == ("star", "part", "gadgets", "hook", "start_s", "length_s", "crop_x")
-    assert (drop.MASTER_MIN_S, drop.MASTER_MAX_S) == (6.0, 16.0) and drop.PARTS == ("cameo", "featured", "star")
+    # (0012 as it was applied says 6 s; migration 0018 re-creates request_job at 4 s, the minimum since owner 2026-10-14)
+    assert (drop.MASTER_MIN_S, drop.MASTER_MAX_S) == (4.0, 16.0) and drop.PARTS == ("cameo", "featured", "star")
+    assert "length_ < 4 or length_ > 16" in (MIGRATIONS / "0018_section_min_4s.sql").read_text()
     # a check runs from these states, and an upload must be attached first
     assert "state_ not in ('uploading', 'checking', 'waiting', 'failed')" in body
     assert "the upload has not finished" in body
@@ -1862,3 +1864,39 @@ def test_0017_add_drop_is_0015s_word_for_word_but_the_duplicate_branch_merges_th
     assert new.count("jsonb_build_object('decision', rec, 'drop', drop_)") == 2
     for line in ("revoke all on function studio.add_drop(text, text) from public;", "grant execute on function studio.add_drop(text, text) to authenticated;"):
         assert line in MERGE_SQL and line in V3_SQL
+
+
+# ---- 0018: the Adjust's section may be 4 s (owner 2026-10-14) --------------------------------------------------------------------
+
+MIN4_PATH = MIGRATIONS / "0018_section_min_4s.sql"
+MIN4_SQL = MIN4_PATH.read_text() if MIN4_PATH.is_file() else ""  # read lazily: a missing file fails these tests, not the module
+MIN4_CODE = re.sub(r"--[^\n]*", "", MIN4_SQL)
+
+
+def test_0018_is_request_job_and_its_grants_only():
+    assert MIN4_PATH.is_file()
+    assert re.findall(r"create or replace function studio\.(\w+)", MIN4_CODE) == ["request_job"]
+    code = re.sub(r"create or replace function studio\.\w+\(.*?\n\$\$;", "", MIN4_CODE, flags=re.S)
+    code = re.sub(r"do \$\$.*?\n\$\$;", "", code, flags=re.S)
+    statements = [s.strip() for s in code.split(";") if s.strip()]
+    assert statements == [
+        "revoke all on function studio.request_job(uuid, text, jsonb) from public",
+        "grant execute on function studio.request_job(uuid, text, jsonb) to authenticated",
+    ]  # the grants of 0012, and the anon revoke in its do block: nothing else (no table, view, other function or policy)
+    assert "revoke all on function studio.request_job(uuid, text, jsonb) from anon" in MIN4_CODE
+    assert not re.search(r"\b(truncate|delete|alter|create table|create or replace view|drop function|drop view|drop table)\b", MIN4_CODE, re.I)
+    for said in ("WHY.", "studio_0018_section_min_4s", "AFTER 0017", "TO UNDO", "Re-run safe", "hkcafvzjwkeibbmvskko"):
+        assert said in MIN4_SQL, said
+
+
+def test_0018_request_job_is_0012s_word_for_word_but_the_section_may_be_4_s():
+    old, new = _function(DROPVIDEO_SQL, "request_job"), _function(MIN4_SQL, "request_job")
+    assert old.count("length_ < 6 or length_ > 16") == 1 and old.count("last 6-16 s") == 1
+    assert new == old.replace("length_ < 6 or length_ > 16", "length_ < 4 or length_ > 16").replace("last 6-16 s", "last 4-16 s")
+    assert "security definer" in new and "set search_path = ''" in new  # the Vault token and the owner check stay exactly as 0012's
+    from studio import drop
+
+    assert drop.MASTER_MIN_S == 4.0 and "length_ < 4" in new  # the same minimum as the CLI's own check
+    for later in sorted(MIGRATIONS.glob("*.sql")):
+        if later.name > MIN4_PATH.name:
+            assert "function studio.request_job(" not in later.read_text(), later.name  # nothing later re-creates it

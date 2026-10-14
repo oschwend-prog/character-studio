@@ -415,7 +415,15 @@ export interface DropCard {
   height?: number;
   window?: { start_s: number; length_s: number };
   crop_x?: number | null;
-  star?: { kind: 'person' | 'dog' | 'animal' | 'none'; body: 'biped' | 'quadruped'; description: string; x_center: number; full_body?: boolean };
+  /** The zoom that cut the section's text away (owner 2026-10-14); null/absent when the section shows none. */
+  crop_y?: DropCrop | null;
+  /** Set when an attached clip over 60 s was cut to its best 60 s before the check. */
+  trimmed?: DropTrimmed | null;
+  star?: {
+    kind: 'person' | 'dog' | 'animal' | 'none'; body: 'biped' | 'quadruped'; description: string; x_center: number; full_body?: boolean;
+    /** The star's highest and lowest point, fractions of the frame height: a crop never cuts into them. Optional. */
+    top?: number; bottom?: number;
+  };
   classic?: boolean;
   /** Where the clip's trend is (rising, peak, fading, classic, none): written by the hits job when it files a drop; absent on every
    * other drop. Only the freshness order of Make these reads it (after a failed score test). */
@@ -487,6 +495,26 @@ export interface DropAvoid {
   start_s: number;
   end_s: number;
   what: 'text' | 'watermark';
+  /** Where it sits in the frame (owner 2026-10-14): bands as fractions of the frame height (0 = the top edge, 1 = the bottom edge).
+   * With them a band at the top or bottom can be zoomed away (studio.drop.section_cut); without them (a check made before boxes)
+   * the section must keep clear of it, as ever. */
+  bands?: Array<{ top: number; bottom: number }>;
+}
+
+/** The zoom that cuts text away (owner 2026-10-14): the shares of the frame height cut at the top and the bottom, and where the
+ * zoom is centred across the frame (0-1). */
+export interface DropCrop {
+  top: number;
+  bottom: number;
+  x?: number;
+}
+
+/** An attached clip over the sheet's 60 s was cut to its best section (studio.sources.ingest_owner_clip). */
+export interface DropTrimmed {
+  original_s?: number;
+  from_s?: number;
+  to_s?: number;
+  seconds?: number;
 }
 
 /** Virality category of a pick (`proposal.tier`): the keys and labels are the owner's (see TIER_LABELS in rules.ts). */

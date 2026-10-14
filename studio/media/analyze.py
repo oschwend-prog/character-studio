@@ -281,6 +281,25 @@ def best_window(
     }  # fmt: skip
 
 
+def busiest_section(energy: list[float], duration_s: float, length_s: float, step_s: float = MOTION_STEP_S) -> float:
+    """Where the busiest stretch of ``length_s`` seconds of a clip begins (pure): the start, in seconds, of the section with the
+    highest mean motion energy (``energy`` is per ``step_s``, as ``motion_profile`` gives it), ties to the earlier one. A clip no
+    longer than the section starts at 0. Owner 2026-10-14: the owner's attached clip over the sheet's limit is cut to its best
+    section before it is checked (``studio.sources.ingest_owner_clip``); the check then picks the 8-10 s window inside it."""
+    if duration_s <= length_s + 1e-9 or not energy:
+        return 0.0
+    bins = max(1, round(length_s / step_s))
+    prefix = [0.0]
+    for e in energy:
+        prefix.append(prefix[-1] + e)
+    best_start, best_sum = 0, -1.0
+    for i in range(0, max(0, min(len(energy), math.ceil(duration_s / step_s)) - bins) + 1):
+        total = prefix[min(i + bins, len(energy))] - prefix[i]
+        if total > best_sum + 1e-9:
+            best_start, best_sum = i, total
+    return round(min(best_start * step_s, duration_s - length_s), 3)
+
+
 # ---- the whole analysis ----------------------------------------------------------------------------------------------
 
 
@@ -325,4 +344,7 @@ def analyze_clip(path: str | Path, sheet: str | Path) -> dict[str, Any]:
     }
 
 
-__all__ = ["AnalysisError", "QAError", "analyze_clip", "best_window", "drop_time_s", "estimate_beat", "motion_profile"]
+__all__ = [
+    "AnalysisError", "MAX_ANALYSIS_SECONDS", "QAError", "analyze_clip", "best_window", "busiest_section", "drop_time_s", "estimate_beat",
+    "motion_profile",
+]

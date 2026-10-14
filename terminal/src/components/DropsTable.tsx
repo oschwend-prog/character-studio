@@ -14,8 +14,8 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { cardPrice, originalLink, playableFor } from '../lib/clipcard';
 import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipActions, clipChip, makeTotal } from '../lib/clipstatus';
 import {
-  PART_LABEL, RECOMMEND, avoidLabel, characterChoice, characterMenu, dropCredits, dropLine, dropTitle, effectiveDrop,
-  isDropCard, recommendationLine, retryAdjust, sectionLabel, type CharacterMenu,
+  PART_LABEL, RECOMMEND, avoidLabel, characterChoice, characterMenu, cropLabel, dropCredits, dropLine, dropTitle, effectiveDrop,
+  isDropCard, recommendationLine, retryAdjust, sectionLabel, trimmedLabel, type CharacterMenu,
 } from '../lib/drop';
 import { isDeciding } from '../lib/clipsview';
 import { formatCredits } from '../lib/format';
@@ -327,6 +327,8 @@ function DropDetail({ row, character, remove }: { row: TrackerRow; character: Re
   const e = effectiveDrop(d, d.adjust ?? {});
   const own = d.own_footage === true;
   const avoid = avoidLabel(d);
+  const zoom = cropLabel(e.crop_y); // the zoom that cuts the text of the (adjusted) section away, owner 2026-10-14
+  const trimmed = trimmedLabel(d); // an attached clip over 60 s was cut to its best 60 s
 
   useEffect(() => {
     let live = true;
@@ -353,11 +355,16 @@ function DropDetail({ row, character, remove }: { row: TrackerRow; character: Re
         <dl className="drop-facts">
           <div><dt>Replaces</dt><dd>{e.star}</dd></div>
           <div><dt>His part</dt><dd>{PART_LABEL[e.part]}{e.gadgets.length ? ` · ${e.gadgets.join(', ')}` : ''}</dd></div>
-          <div><dt>Section</dt><dd className="num">{sectionLabel(e.start_s, e.length_s)}{e.crop_x != null ? ' · cropped to 9:16' : ''}</dd></div>
+          <div><dt>Section</dt><dd className="num">{sectionLabel(e.start_s, e.length_s)}{e.crop_x != null ? ' · cropped to 9:16' : ''}{zoom ? ` · zoomed to cut the text out (${zoom})` : ''}</dd></div>
+          {trimmed && <div><dt>Trimmed</dt><dd className="num">{trimmed}</dd></div>}
           <div><dt>Hook</dt><dd>“{e.hook}”</dd></div>
         </dl>
       )}
-      {avoid && <p className="hint" style={{ margin: 0 }}>Seen: {avoid}. Only the section is judged: it keeps clear of them.</p>}
+      {avoid && (
+        <p className="hint" style={{ margin: 0 }}>
+          Seen: {avoid}. {zoom ? 'The section shows some of it, so the picture is zoomed to cut it out before the video is made.' : 'Only the section is judged: it keeps clear of them.'}
+        </p>
+      )}
       <div className="drop-footage" role="group" aria-label="Where the video comes from">
         <div className="seg">
           <button type="button" aria-pressed={!own} disabled={working} onClick={() => setFootage(false)}>

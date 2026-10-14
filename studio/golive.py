@@ -78,6 +78,9 @@ VAULT_SQL = "select count(*) from vault.secrets where name = 'github_dispatch_to
 # The probe's `definition` row for migration 0017: a function re-created without a new object is told from its earlier self by a
 # piece of its source (pg_proc.prosrc). tests/test_golive.py pins the text in PROBE_SQL to the one in the migration file.
 ADD_DROP_MERGES = "add_drop merges the earlier drop"
+# ... and for migration 0018: request_job re-created with the Adjust's section minimum at 4 s (owner 2026-10-14), told from 0012's by
+# the `length_ < 4` in its source (0012 reads `length_ < 6`).
+REQUEST_JOB_MIN_4S = "request_job takes a 4 s section"
 
 # What each migration leaves behind in schema studio: (kind, name). tests/test_golive.py pins these to
 # the text of supabase/migrations/*.sql, so a new migration or object cannot be forgotten here.
@@ -168,6 +171,9 @@ MIGRATION_MARKERS: dict[str, tuple[tuple[str, str], ...]] = {
     # 0012), so the function's name cannot tell it from 0016. The probe's `definition` row can: add_drop's source holds 0017's
     # merge (see ADD_DROP_MERGES and PROBE_SQL).
     "0017": (("function", "add_drop"), ("definition", ADD_DROP_MERGES)),
+    # 0018 (the Adjust's section may be 4 s): it too creates no object, only re-creates request_job (which exists since 0012), so the
+    # probe's `definition` row tells it from 0012's: request_job's source holds `length_ < 4` (see REQUEST_JOB_MIN_4S and PROBE_SQL).
+    "0018": (("function", "request_job"), ("definition", REQUEST_JOB_MIN_4S)),
 }
 
 PROBE_SQL = """
@@ -196,6 +202,11 @@ select 'definition', 'add_drop merges the earlier drop'
 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
 where n.nspname = 'studio' and p.proname = 'add_drop'
   and strpos(p.prosrc, 'jsonb_typeof(fa.proposal -> ''drop'') = ''object''') > 0
+union all
+select 'definition', 'request_job takes a 4 s section'
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'studio' and p.proname = 'request_job'
+  and strpos(p.prosrc, 'length_ < 4 or length_ > 16') > 0
 """
 
 CHARACTERS_SQL = """

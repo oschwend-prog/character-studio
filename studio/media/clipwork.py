@@ -15,6 +15,12 @@ pixels a frame. ``trim_clip(..., min_pixels=N)`` scales a window that is smaller
 404x720) up, keeping its shape, to the smallest even size of at least N pixels. ``proxy_clip`` makes the small copy of a clip
 (the longer side 640 px, 15 fps, mono AAC) that is sent to Gemini for the deconstruct: the same picture and sound, smaller.
 
+**Text in a band at the top or bottom is zoomed away before Genjutsu sees it** (owner 2026-10-14): Genjutsu keeps any text or
+watermark in the picture, so ``trim_clip(..., crop_y={"top", "bottom", "x"})`` crops the section to the 9:16 window that starts below
+the top band and ends above the bottom one (``crop_box``; the same zoom factor on the width, centred on the star), in the same cut,
+before the Object swap's minimum size scales it up. The strip, the cover and the watch copy show that zoomed section. Which bands
+may be cropped (at most a quarter of the height, never into the star) is ``studio.drop.section_cut``'s decision, not this module's.
+
 **What the owner sees on a clip card** (terminal v3 Task 11, owner 2026-10-08: "make them larger so I can actually see them ...
 Even better if I could click and watch them"): ``preview_video`` is the watch copy of the section (540x960, small H.264 with the
 clip's own sound, faststart) and ``cover_frame`` one JPEG frame of it, both framed the same way (the 9:16 crop around the star of
@@ -30,7 +36,9 @@ import math
 import os
 import subprocess
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
 
 from studio.media.qa import QAError, probe
 
@@ -93,6 +101,47 @@ def crop_window(width: int, height: int, centre_x: float) -> tuple[int, int, int
     return crop_w, height, x - x % 2
 
 
+def _crop_y(crop_y: Any) -> tuple[float, float, float]:
+    """``(top, bottom, x)`` of a vertical crop ``{"top", "bottom", "x"}`` (``x`` optional, 0.5): ``top`` and ``bottom`` are the shares
+    of the frame height cut away (0 up to, not including, 0.5 together: a zoom of at most 2x), ``x`` where the zoom is centred
+    across the frame (0-1). ``ValueError`` (naming ``crop_y``) for anything else."""
+    if not isinstance(crop_y, Mapping) or "top" not in crop_y or "bottom" not in crop_y:
+        raise ValueError(f"crop_y must be an object with top and bottom, got {crop_y!r}")
+    top, bottom = _number(crop_y["top"], "crop_y.top"), _number(crop_y["bottom"], "crop_y.bottom")
+    centre = _number(crop_y.get("x", 0.5), "crop_y.x")
+    if top < 0 or bottom < 0 or top + bottom >= 0.5:
+        raise ValueError(f"crop_y.top and crop_y.bottom must be shares of the height, 0 or more and under half together, got {top:g} and {bottom:g}")
+    if not 0.0 <= centre <= 1.0:
+        raise ValueError(f"crop_y.x must be between 0 and 1 (a fraction of the width), got {centre:g}")
+    return top, bottom, centre
+
+
+def crop_box(width: int, height: int, crop_y: Mapping[str, float], crop_x: float | None = None) -> tuple[int, int, int, int]:
+    """``(crop width, crop height, x offset, y offset)`` of the 9:16 window that cuts the bands of ``crop_y`` away (owner 2026-10-14:
+    text or a watermark in a band at the top or bottom of the frame is zoomed out before Genjutsu sees the clip).
+
+    ``crop_y`` = ``{"top", "bottom", "x"}``: the share of the height cut at the top and at the bottom (the window starts at or
+    below ``top`` and ends at or above the ``bottom`` band, so the band is never in it, whatever the rounding) and the share of the
+    width the zoom is centred on (``crop_x`` wins when it is given: a landscape clip is centred on the star, as ``crop_window``
+    does). The window keeps the 9:16 shape of the master (its width is 9/16 of its height, even, never wider than the frame), so
+    the width is cropped by the same factor as the height. Every number is even (yuv420p). ``ValueError`` for a ``crop_y`` that
+    makes no sense (see ``_crop_y``) or a crop that leaves no picture.
+    """
+    top, bottom, centre = _crop_y(crop_y)
+    if crop_x is not None:
+        centre = _number(crop_x, "crop_x")
+        if not 0.0 <= centre <= 1.0:
+            raise ValueError(f"crop_x must be between 0 and 1 (a fraction of the width), got {centre:g}")
+    y = math.ceil(top * height - 1e-9)
+    y += y % 2
+    crop_h = (math.floor(height * (1 - bottom) + 1e-9) - y) // 2 * 2
+    if crop_h < 2:
+        raise ValueError(f"crop_y leaves no picture of the {width}x{height} frame")
+    crop_w = min(int(crop_h * 9 / 16) // 2 * 2, width // 2 * 2)
+    x = min(max(round(centre * width - crop_w / 2), 0), width - crop_w)
+    return crop_w, crop_h, x - x % 2, y
+
+
 def upscaled_size(width: int, height: int, min_pixels: int) -> tuple[int, int] | None:
     """The smallest even ``(w, h)`` of the same shape with at least ``min_pixels`` pixels, or None when the frame has enough."""
     if width <= 0 or height <= 0:
@@ -115,15 +164,21 @@ def trim_clip(
     keep_audio: bool = True,
     crop_x: float | None = None,
     min_pixels: int | None = None,
+    crop_y: Mapping[str, float] | None = None,
+    max_seconds: float = TRIM_MAX_SECONDS,
 ) -> Path:
     """Cut ``duration_s`` seconds from ``start_s`` of ``src`` into ``out`` (H.264 + AAC, re-encoded for an exact cut).
 
     ``crop_x`` (owner 2026-10-05: iconic clips are often landscape) also cuts the full-height 9:16 window centred at
     that fraction of the width (``crop_window``), so a landscape clip becomes a vertical source with its own sound.
-    ``min_pixels`` scales a smaller result up to at least that many pixels a frame (``upscaled_size``; the Object swap's
-    409,600). ``ValueError`` for a window that makes no sense (non-positive or over 16 s, a negative start, or one that
-    ends after the clip does) or a crop that does (see ``crop_window``); ``QAError`` for a missing or unreadable file;
-    ``ClipworkError`` when ffmpeg fails.
+    ``crop_y`` (owner 2026-10-14: text or a watermark in a band at the top or bottom of the frame) zooms the band away: one
+    ``crop`` of the 9:16 window that starts below the top band and ends above the bottom band (``crop_box``; centred on ``crop_x``
+    when that is given, else on ``crop_y['x']``), so the band never reaches Genjutsu. ``min_pixels`` scales a smaller result up
+    to at least that many pixels a frame (``upscaled_size``; the Object swap's 409,600), the zoomed window included.
+    ``max_seconds`` (a master's 16 s) is the longest window taken: the one caller that cuts more is the owner's attached clip
+    that is over the sheet's limit. ``ValueError`` for a window that makes no sense (non-positive or over ``max_seconds``, a
+    negative start, or one that ends after the clip does) or a crop that does (see ``crop_window`` and ``crop_box``);
+    ``QAError`` for a missing or unreadable file; ``ClipworkError`` when ffmpeg fails.
     """
     src, out = Path(src), Path(out)
     start, duration = _number(start_s, "start"), _number(duration_s, "duration")
@@ -131,17 +186,23 @@ def trim_clip(
         raise ValueError(f"start must be 0 or more seconds, got {start:g}")
     if duration <= 0:
         raise ValueError(f"duration must be positive, got {duration:g}")
-    if duration > TRIM_MAX_SECONDS:
-        raise ValueError(f"a window is at most {TRIM_MAX_SECONDS:g} s (the hard maximum of a master), got {duration:g}")
+    if duration > max_seconds:
+        raise ValueError(f"a window is at most {max_seconds:g} s" + (" (the hard maximum of a master)" if max_seconds == TRIM_MAX_SECONDS else "") + f", got {duration:g}")
     if crop_x is not None:
         _number(crop_x, "crop_x")  # a NaN is refused before the file is read
+    if crop_y is not None:
+        _crop_y(crop_y)
     report = probe(src, loudness=False)
     total = report.duration_s
     if start + duration > total + _SLACK:
         raise ValueError(f"the source ends at {total:.2f} s, before the window {start:g}-{start + duration:g} s does")
     filters: list[str] = []
     size = (report.width, report.height)
-    if crop_x is not None:
+    if crop_y is not None:
+        crop_w, crop_h, x, y = crop_box(report.width, report.height, crop_y, crop_x)
+        filters.append(f"crop={crop_w}:{crop_h}:{x}:{y}")
+        size = (crop_w, crop_h)
+    elif crop_x is not None:
         crop_w, crop_h, x = crop_window(report.width, report.height, crop_x)
         filters.append(f"crop={crop_w}:{crop_h}:{x}:0")
         size = (crop_w, crop_h)
@@ -178,12 +239,18 @@ def proxy_clip(src: Path | str, out: Path | str, *, long_side: int = PROXY_LONG_
         return _finish(work, out)
 
 
-def _watch_framing(width: int, height: int, crop_x: float | None, size: tuple[int, int]) -> str:
+def _watch_framing(
+    width: int, height: int, crop_x: float | None, crop_y: Mapping[str, float] | None, size: tuple[int, int],
+) -> str:
     """The filters of the owner's watch copy and cover: the 9:16 crop around the star when ``crop_x`` (the master's
-    ``crop_window``), then the frame fitted into ``size`` and padded, centred (a frame already 9:16 is only scaled)."""
+    ``crop_window``), or the zoom that cuts the text band away when ``crop_y`` (``crop_box``, which also takes ``crop_x`` as its
+    centre), then the frame fitted into ``size`` and padded, centred (a frame already 9:16 is only scaled)."""
     w, h = size
     filters: list[str] = []
-    if crop_x is not None:
+    if crop_y is not None:
+        crop_w, crop_h, x, y = crop_box(width, height, crop_y, crop_x)
+        filters.append(f"crop={crop_w}:{crop_h}:{x}:{y}")
+    elif crop_x is not None:
         crop_w, crop_h, x = crop_window(width, height, crop_x)
         filters.append(f"crop={crop_w}:{crop_h}:{x}:0")
     filters += [
@@ -204,21 +271,24 @@ def _inside(report_duration: float, start: float, length: float) -> None:
 
 def preview_video(
     src: Path | str, out: Path | str, start_s: float, duration_s: float, *, crop_x: float | None = None,
-    size: tuple[int, int] = PREVIEW_SIZE,
+    size: tuple[int, int] = PREVIEW_SIZE, crop_y: Mapping[str, float] | None = None,
 ) -> Path:
     """The owner's watch copy of a section (terminal v3 Task 11: tap a clip card to watch it): ``duration_s`` seconds from
     ``start_s`` (at most ``TRIM_MAX_SECONDS``), framed like ``_watch_framing`` at ``size`` (540x960), H.264 CRF 28 veryfast
     yuv420p, the clip's own sound as AAC 96k 48 kHz when it has any, ``+faststart`` (a phone starts playing before the whole
-    file is in): typically 1-3 MB. ``ValueError`` for a window that makes no sense or ends after the clip, ``QAError`` for an
-    unreadable file, ``ClipworkError`` when ffmpeg fails."""
+    file is in): typically 1-3 MB. ``crop_y`` shows the section zoomed as the master will be (the text band cut away). ``ValueError``
+    for a window that makes no sense or ends after the clip, ``QAError`` for an unreadable file, ``ClipworkError`` when ffmpeg
+    fails."""
     src, out = Path(src), Path(out)
     start = _number(start_s, "start")
     length = min(_number(duration_s, "duration"), TRIM_MAX_SECONDS)
     if crop_x is not None:
         _number(crop_x, "crop_x")
+    if crop_y is not None:
+        _crop_y(crop_y)
     report = probe(src, loudness=False)
     _inside(report.duration_s, start, length)
-    framing = _watch_framing(report.width, report.height, crop_x, size)
+    framing = _watch_framing(report.width, report.height, crop_x, crop_y, size)
     with tempfile.TemporaryDirectory(prefix="studio-watch-") as tmp:
         work = Path(tmp) / "preview.mp4"
         _ffmpeg(
@@ -232,7 +302,7 @@ def preview_video(
 
 def cover_frame(
     src: Path | str, out: Path | str, at_s: float, *, crop_x: float | None = None, size: tuple[int, int] = PREVIEW_SIZE,
-    quality: int = COVER_QUALITY,
+    quality: int = COVER_QUALITY, crop_y: Mapping[str, float] | None = None,
 ) -> Path:
     """One frame of ``src`` at ``at_s`` (the middle of the section: the clip card's picture), framed like the watch copy, as a
     JPEG of ``quality``. ``ValueError`` for a moment outside the clip, ``QAError`` for an unreadable file, ``ClipworkError`` when
@@ -243,9 +313,11 @@ def cover_frame(
     at = _number(at_s, "at")
     if crop_x is not None:
         _number(crop_x, "crop_x")
+    if crop_y is not None:
+        _crop_y(crop_y)
     report = probe(src, loudness=False)
     _inside(report.duration_s, at, 1e-3)
-    framing = _watch_framing(report.width, report.height, crop_x, size)
+    framing = _watch_framing(report.width, report.height, crop_x, crop_y, size)
     with tempfile.TemporaryDirectory(prefix="studio-cover-") as tmp:
         frame = Path(tmp) / "frame.png"
         _ffmpeg(

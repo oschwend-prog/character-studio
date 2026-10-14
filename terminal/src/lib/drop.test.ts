@@ -4,13 +4,14 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  ADJUST_KEYS, DROP_STATE_LABEL, RECOMMEND, STALE_UPLOAD_MINUTES, adjustChanges, isStaleUpload, avoidHit, avoidLabel, canChooseCharacter, characterChoice, characterMenu,
+  ADJUST_KEYS, CROP_PAD, DROP_MIN_SECONDS, DROP_STATE_LABEL, MAX_CROP_FRACTION, RECOMMEND, STALE_UPLOAD_MINUTES, adjustChanges, isStaleUpload,
+  avoidHit, avoidLabel, canChooseCharacter, characterChoice, characterMenu, cropLabel,
   dropActions, dropCredits, dropLine, dropLink, dropRows, dropTitle, effectiveDrop, isDropCard, isLandscape, maxSectionSeconds, readyTotal,
-  recommendationLine, retryAdjust, sectionLabel, validateAdjust,
+  recommendationLine, retryAdjust, sectionCut, sectionLabel, trimmedLabel, validateAdjust,
 } from './drop';
 import { estimateCredits } from './rules';
 import { trackerStep } from './tracker';
-import type { DropCard, DropState, TrackerRow } from './types';
+import type { DropAvoid, DropCard, DropState, TrackerRow } from './types';
 
 const NOW = Date.parse('2026-10-06T12:00:00Z');
 const MIN = 60_000;
@@ -86,7 +87,7 @@ describe('the Adjust: the same rules as the CLI and request_job', () => {
   it('accepts a fitting Adjust and refuses each broken rule with its reason', () => {
     expect(validateAdjust({ part: 'star', start_s: 4, length_s: 14, gadgets: ['gold chain'], hook: 'Tea is at four.' }, READY)).toEqual({ ok: true });
     const bad: [Parameters<typeof validateAdjust>[0], RegExp][] = [
-      [{ length_s: 5 }, /6-16 s/], [{ length_s: 17 }, /6-16 s/], [{ start_s: 15, length_s: 9 }, /runs past the end/], [{ start_s: -1 }, /0 s or later/],
+      [{ length_s: 3.5 }, /4-16 s/], [{ length_s: 17 }, /4-16 s/], [{ start_s: 15, length_s: 9 }, /runs past the end/], [{ start_s: -1 }, /0 s or later/],
       [{ part: 'lead' as never }, /cameo, featured or star/], [{ gadgets: ['a', 'b', 'c', 'd'] }, /at most 3/], [{ hook: 'x'.repeat(81) }, /1-80/],
       [{ star: ' ' }, /1-80/], [{ crop_x: 1.5 }, /from 0 to 1/], [{ crop_x: 0.5 }, /already vertical/],
       [{ colour: 'red' } as never, /unknown setting/],
@@ -187,7 +188,7 @@ describe('the demo', () => {
     snap = await demo.load();
     const card = snap.tracker.find((r) => r.pick_id === ids[0])!.drop_card!;
     expect(card.state).toBe('ready');
-    await expect(demo.requestJob(ids[0], 'make', { length_s: 40 })).rejects.toThrow(/6-15\.6 s|runs past/); // Reginald: his pause leaves 15.6 s
+    await expect(demo.requestJob(ids[0], 'make', { length_s: 40 })).rejects.toThrow(/4-15\.6 s|runs past/); // Reginald: his pause leaves 15.6 s
     await demo.requestJob(ids[0], 'make', { part: 'star', length_s: 8 });
     snap = await demo.load();
     const making = snap.tracker.find((r) => r.pick_id === ids[0])!;
@@ -309,6 +310,66 @@ describe('only the section we use is judged (owner 2026-10-06)', () => {
     expect(avoidLabel(mark)).toBe('a watermark on screen 12–20 s');
     expect(avoidLabel(READY)).toBeNull();
   });
+
+  it('takes a 4 s section (owner 2026-10-14: a master is 4-16 s) and no shorter', () => {
+    expect(DROP_MIN_SECONDS).toBe(4);
+    expect(validateAdjust({ start_s: 2, length_s: 4 }, READY)).toEqual({ ok: true });
+    expect(validateAdjust({ start_s: 2, length_s: 3.9 }, READY)).toMatchObject({ ok: false, reason: expect.stringContaining('4-16 s') });
+    expect(maxSectionSeconds({ max_length_s: 15.6 })).toBe(15.6);
+    expect(maxSectionSeconds({ max_length_s: 3 })).toBe(16); // a card that says under 4 s is no card
+  });
+});
+
+describe('crop the text out (owner 2026-10-14): the same rule as studio.drop.section_cut', () => {
+  const band = (start_s: number, end_s: number, top: number, bottom: number): DropAvoid => ({ start_s, end_s, what: 'text', bands: [{ top, bottom }] });
+
+  it('cuts a band at the top or the bottom from the nearer edge, a margin past the box', () => {
+    expect(sectionCut(0, 8, [])).toEqual({ top: 0, bottom: 0 });
+    expect(sectionCut(0, 8, [band(0, 4, 0, 0.15)])).toEqual({ top: 0.18, bottom: 0 });
+    expect(sectionCut(5, 8, [band(0, 4, 0, 0.15)])).toEqual({ top: 0, bottom: 0 }); // gone by then
+    expect(sectionCut(0, 8, [band(0, 9, 0.88, 1)])).toEqual({ top: 0, bottom: 0.15 });
+    expect(sectionCut(0, 8, [{ ...band(0, 9, 0, 0.08), bands: [{ top: 0, bottom: 0.08 }, { top: 0.92, bottom: 1 }] }])).toEqual({ top: 0.11, bottom: 0.11 });
+    expect(sectionCut(0, 8, [band(0, 3, 0, 0.05), band(2, 9, 0, 0.12), band(20, 30, 0, 0.5)])).toEqual({ top: 0.15, bottom: 0 });
+  });
+
+  it('cannot crop the middle, more than a quarter, a span with no box, or into the star', () => {
+    expect(sectionCut(0, 8, [band(0, 9, 0.4, 0.6)])).toBeNull();
+    expect(sectionCut(0, 8, [band(0, 9, 0, 0.22)])).toEqual({ top: 0.25, bottom: 0 }); // exactly the limit
+    expect(sectionCut(0, 8, [band(0, 9, 0, 0.23)])).toBeNull();
+    expect(sectionCut(0, 8, [band(0, 9, 0, 0.2), band(0, 9, 0.85, 1)])).toBeNull();
+    expect(sectionCut(0, 8, [{ start_s: 0, end_s: 9, what: 'text' }])).toBeNull(); // a check made before boxes
+    expect(sectionCut(0, 8, [{ ...band(0, 9, 0, 0.1), bands: [{ top: 0.5, bottom: 0.2 }] }])).toBeNull();
+    expect(sectionCut(0, 8, [band(0, 9, 0, 0.15)], { top: 0.3, bottom: 0.95 })).toEqual({ top: 0.18, bottom: 0 });
+    expect(sectionCut(0, 8, [band(0, 9, 0, 0.15)], { top: 0.1, bottom: 0.95 })).toBeNull(); // it would cut his head
+    expect(sectionCut(0, 8, [band(0, 9, 0.88, 1)], { top: 0.1, bottom: 0.9 })).toBeNull(); // ... or his feet
+    expect(MAX_CROP_FRACTION).toBe(0.25);
+    expect(CROP_PAD).toBe(0.03);
+  });
+
+  it('lets the Adjust take a section that can be zoomed, with its crop, and says when it cannot', () => {
+    const d: DropCard = {
+      ...READY, duration_s: 40, window: { start_s: 12, length_s: 9 }, star: { ...READY.star!, x_center: 0.4 },
+      avoid: [band(0, 10, 0, 0.15), { start_s: 25, end_s: 30, what: 'text' }],
+    };
+    expect(validateAdjust({ start_s: 4, length_s: 8 }, d)).toEqual({ ok: true });
+    expect(effectiveDrop(d, { start_s: 4, length_s: 8 }).crop_y).toEqual({ top: 0.18, bottom: 0 });
+    expect(effectiveDrop(d).crop_y).toBeNull(); // the check's own section is clear
+    expect(validateAdjust({ start_s: 20, length_s: 8 }, d)).toEqual({ ok: false, reason: 'The section shows text on screen (25–30 s): Genjutsu would keep it' });
+    const tall: DropCard = { ...d, avoid: [band(0, 10, 0, 0.3)] };
+    expect(validateAdjust({ start_s: 4, length_s: 8 }, tall)).toEqual({
+      ok: false, reason: 'The section shows text on screen (0–10 s) and cropping it out would cut too much of the picture: Genjutsu would keep it',
+    });
+  });
+
+  it('words the zoom and the trim for the card', () => {
+    expect(cropLabel({ top: 0.18, bottom: 0 })).toBe('top 18%');
+    expect(cropLabel({ top: 0, bottom: 0.15 })).toBe('bottom 15%');
+    expect(cropLabel({ top: 0.11, bottom: 0.11 })).toBe('top 11% and bottom 11%');
+    expect(cropLabel({ top: 0, bottom: 0 })).toBeNull();
+    expect(cropLabel(null)).toBeNull();
+    expect(trimmedLabel({ trimmed: { original_s: 183.2, from_s: 12.5, to_s: 72.5, seconds: 60 } })).toBe('kept 12.5–72.5 s of a 183.2 s clip');
+    expect(trimmedLabel({})).toBeNull();
+  });
 });
 
 describe('the demo: Recommend and the character menu', () => {
@@ -396,7 +457,7 @@ describe('a pause character’s section, and Try again after a failed Make it (f
     for (const length_s of [15.7, 16]) {
       const r = validateAdjust({ start_s: 0, length_s }, PAUSE);
       expect([length_s, r.ok]).toEqual([length_s, false]);
-      if (!r.ok) expect(r.reason).toMatch(/6-15\.6 s.*pause.*0\.4 s/); // the CLI refuses it at Make it: the sheet refuses it first
+      if (!r.ok) expect(r.reason).toMatch(/4-15\.6 s.*pause.*0\.4 s/); // the CLI refuses it at Make it: the sheet refuses it first
     }
     expect(validateAdjust({ start_s: 0, length_s: 16 }, { ...READY, duration_s: 30 })).toEqual({ ok: true }); // no pause: today's 16 s
     expect(validateAdjust({ start_s: 1 }, { ...PAUSE, window: { start_s: 1.5, length_s: 15.8 } })).toMatchObject({ ok: false }); // the length the Adjust leaves alone
@@ -412,7 +473,7 @@ describe('a pause character’s section, and Try again after a failed Make it (f
   it('offers Adjust again on a failed drop that has a price, and Try again only with an Adjust that still fits', () => {
     expect(dropActions({ ...READY, state: 'failed' }, NOW)).toEqual(['retry-make', 'adjust', 'remove']);
     expect(dropActions({ state: 'failed' }, NOW)).toEqual(['retry-check', 'remove']); // the check itself failed: no section to adjust
-    const tooLong: DropCard = { ...PAUSE, state: 'failed', adjust: { start_s: 0, length_s: 15.8 }, reason: 'the Adjust is not valid: adjust.length_s must be 6-15.6 s' };
+    const tooLong: DropCard = { ...PAUSE, state: 'failed', adjust: { start_s: 0, length_s: 15.8 }, reason: 'the Adjust is not valid: adjust.length_s must be 4-15.6 s' };
     expect(dropActions(tooLong, NOW)).toEqual(['adjust', 'remove']); // the same Try again would fail the same way: Adjust is the way on
     expect(dropActions({ ...tooLong, adjust: { start_s: 0, length_s: 15.6 } }, NOW)).toEqual(['retry-make', 'adjust', 'remove']);
   });
@@ -445,7 +506,7 @@ describe('a pause character’s section, and Try again after a failed Make it (f
     expect(rows.find((r) => r.pick_id === ids.reginald)!.drop_card).toMatchObject({ state: 'ready', max_length_s: 15.6 });
     expect(rows.find((r) => r.pick_id === ids.franz)!.drop_card).toMatchObject({ state: 'ready', max_length_s: 16 });
     const card = rows.find((r) => r.pick_id === ids.reginald)!.drop_card!;
-    await expect(demo.requestJob(ids.reginald, 'make', { start_s: 0, length_s: 15.8 })).rejects.toThrow(/6-15\.6 s/);
+    await expect(demo.requestJob(ids.reginald, 'make', { start_s: 0, length_s: 15.8 })).rejects.toThrow(/4-15\.6 s/);
     expect(card.state).toBe('ready'); // refused before anything is spent
   });
 });

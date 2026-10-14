@@ -42,7 +42,9 @@ Instagram, so the owner attaches it on the terminal's Make-it sheet: the browser
 ``proposal.owner_clip_path``. ``ingest_owner_clip`` (``studio source ingest-owner --pick <id>``) then reads that object
 from our own Storage, probes it (duration), and catalogues it as an ``owner_inbox`` source with ``storage_path``
 and the pick's creator as ``credit_handle``, unchecked (it is not Drop-in eligible until the visual check) and
-links the pick (``source_id``). Idempotent: the same path is one source, shared by a "Both" sibling pick.
+links the pick (``source_id``). Idempotent: the same path is one source, shared by a "Both" sibling pick. A clip over 60 s is
+cut to its best 60 s first (owner 2026-10-14, ``OWNER_CLIP_MAX_S``: the busiest stretch by the free motion analysis, else the first
+minute; the cut sits next to the upload as ``<name>-trimmed.mp4`` and is the source; ``proposal.owner_clip_trim`` says what was kept).
 
 **Trim before generating** (owner decision 2026-10-05: Genjutsu is paid per second). ``trim_source`` (``studio source
 trim <id> --start S --duration D [--file LOCAL]``) cuts the best 6-9 s window (16 s at most) out of a source with
@@ -83,17 +85,17 @@ import statistics
 import tempfile
 import uuid
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, TypeVar
 from urllib.parse import urlsplit
 
 import typer
 
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
-from studio.media.analyze import AnalysisError, analyze_clip
+from studio.media.analyze import MAX_ANALYSIS_SECONDS, AnalysisError, analyze_clip, busiest_section, motion_profile
 from studio.media.clipwork import ClipworkError, trim_clip
 from studio.media.qa import QAError, probe
-from studio.models import Body, Character, Mode, Source, SourceKind
+from studio.models import Body, Character, Favorite, Mode, Source, SourceKind
 from studio.storage import Storage, StorageError
 from studio.store import Store
 
@@ -111,9 +113,10 @@ INBOX_VIDEO_SUFFIXES = frozenset({".mp4", ".mov", ".webm"})
 SOURCES_BUCKET = "sources"
 INBOX_PREFIX = "owner_inbox"
 DEFAULT_URL_EXPIRES_S = 3600
-# What the terminal's "Attach clip" writes: bucket sources, owner/<pick id>/<file>; the sheet allows 60 s.
+# What the terminal's "Attach clip" writes: bucket sources, owner/<pick id>/<file>; the sheet allows 60 s (a longer clip is cut to it).
 OWNER_CLIP_PATH = re.compile(r"owner/[0-9a-fA-F-]{36}/[^/\s]+")
-OWNER_CLIP_MAX_S = 60.0
+OWNER_CLIP_MAX_S = 60.0  # longer than this (owner 2026-10-14) and the clip is cut to its best section of this length, never refused
+TRIMMED_SUFFIX = "-trimmed"  # the cut of a long attached clip is stored next to it as <name>-trimmed.mp4
 
 _E = TypeVar("_E", bound=Enum)
 
@@ -356,9 +359,18 @@ def ingest_owner_clip(
 ) -> Source:
     """Catalogue the clip the owner attached to a pick as an ``owner_inbox`` source and link the pick to it.
 
-    ``KeyError`` for an unknown pick; ``ValueError`` for a pick with no ``owner_clip_path``, a path the terminal
-    could not have written, a file that is not a readable video or is longer than 60 s; ``StorageError`` when
-    the object is not in the ``sources`` bucket. Idempotent (see the module doc).
+    **A clip over ``OWNER_CLIP_MAX_S`` (60 s) is cut, never refused** (owner 2026-10-14: 3 drops sat blocked as "the attached clip
+    is N s long"). The best section of that length is taken (``busiest_section`` of the free motion analysis of
+    ``studio.media.analyze``, for a clip of at most ``MAX_ANALYSIS_SECONDS``; else, or when the analysis fails, the first
+    ``OWNER_CLIP_MAX_S`` seconds), cut with its sound (``clipwork.trim_clip``), stored next to the upload as
+    ``<name>-trimmed.mp4`` and catalogued as the pick's source: the check then goes on with that section, so every time in the
+    drop is a time of the section. What was kept is recorded on the pick, ``proposal.owner_clip_trim`` = ``{original_s, from_s,
+    to_s, seconds}``, which the check copies to ``drop['trimmed']`` for the card. The owner's own upload is left where it is.
+
+    ``KeyError`` for an unknown pick; ``ValueError`` for a pick with no ``owner_clip_path``, a path the terminal could not have
+    written or a file that is not a readable video; ``ClipworkError`` when the long clip cannot be cut; ``StorageError`` when the
+    object is not in the ``sources`` bucket. Idempotent (see the module doc): a pick, or its "Both" sibling, finds the source
+    the first ingest made (the upload's path, or the cut's) and the record the cut left.
     """
     pick = store.get_favorite(pick_id)
     if pick is None:
@@ -368,25 +380,77 @@ def ingest_owner_clip(
         raise ValueError(f"no clip attached to pick {pick_id}: the owner attaches it on the Make-it sheet")
     if not OWNER_CLIP_PATH.fullmatch(path):
         raise ValueError(f"owner_clip_path {path!r} is not a path the terminal writes (owner/<pick id>/<file>)")
-    source = next(iter(store.list_sources(storage_path=path)), None)
+    cut_path = trimmed_path(path)
+    record: dict[str, Any] | None = None
+    source = next(iter(store.list_sources(storage_path=path)), None) or next(iter(store.list_sources(storage_path=cut_path)), None)
     if source is None:
         with tempfile.TemporaryDirectory(prefix="studio-owner-clip-") as tmp:
-            local = storage.download(SOURCES_BUCKET, path, Path(tmp) / Path(path).name)
+            work = Path(tmp)
+            local = storage.download(SOURCES_BUCKET, path, work / Path(path).name)
             try:
                 duration = probe(local, loudness=False).duration_s
             except QAError as e:
                 raise ValueError(f"the attached clip is not a readable video: {e}") from None
-        if not duration > 0:
-            raise ValueError("the attached clip is not a readable video: it has no duration")
-        if duration > OWNER_CLIP_MAX_S + 1:
-            raise ValueError(f"the attached clip is {duration:.0f} s long: the sheet takes at most {OWNER_CLIP_MAX_S:.0f} s")
+            if not duration > 0:
+                raise ValueError("the attached clip is not a readable video: it has no duration")
+            if duration > OWNER_CLIP_MAX_S + 1:
+                start = _best_section_start(local, duration)
+                cut = trim_clip(local, work / "cut.mp4", start, OWNER_CLIP_MAX_S, max_seconds=OWNER_CLIP_MAX_S)
+                storage.upload(SOURCES_BUCKET, cut_path, cut)
+                record = {
+                    "original_s": round(duration, 3), "from_s": round(start, 3), "to_s": round(start + OWNER_CLIP_MAX_S, 3),
+                    "seconds": OWNER_CLIP_MAX_S,
+                }
+                duration = probe(cut, loudness=False).duration_s
+                path_kept = cut_path
+            else:
+                path_kept = path
         source = add_source(
-            store, SourceKind.owner_inbox, path, body, bodies, duration,
-            credit_handle=pick.creator_handle, storage_path=path,
+            store, SourceKind.owner_inbox, path_kept, body, bodies, duration,
+            credit_handle=pick.creator_handle, storage_path=path_kept,
         )
+    if source.storage_path == cut_path and record is None:
+        record = _trim_record(store, pick, path, source)
+    changes: dict[str, Any] = {}
     if pick.source_id != source.id:
-        store.update_favorite(pick.id, source_id=source.id)
+        changes["source_id"] = source.id
+    if record is not None and pick.proposal.get("owner_clip_trim") != record:
+        changes["proposal"] = {**pick.proposal, "owner_clip_trim": record}
+    if changes:
+        store.update_favorite(pick.id, **changes)
     return source
+
+
+def trimmed_path(path: str) -> str:
+    """Where the cut of a long attached clip is stored: ``owner/<pick id>/<name>-trimmed.mp4`` next to the upload (it is still a
+    path the terminal could have written, and it is the same for every pick that carries the upload's path)."""
+    p = PurePosixPath(path)
+    return str(p.with_name(f"{p.stem}{TRIMMED_SUFFIX}.mp4"))
+
+
+def _best_section_start(local: Path, duration: float) -> float:
+    """Where the best ``OWNER_CLIP_MAX_S`` of a long clip begins: the busiest stretch by the free motion analysis, or 0 (the first
+    minute) when the clip is too long for it (over ``MAX_ANALYSIS_SECONDS``) or the analysis cannot read it. Never past the end."""
+    if duration > MAX_ANALYSIS_SECONDS:
+        return 0.0
+    try:
+        energy, _cuts = motion_profile(local, duration)
+    except (AnalysisError, QAError):
+        return 0.0
+    return min(busiest_section(energy, duration, OWNER_CLIP_MAX_S), max(0.0, duration - OWNER_CLIP_MAX_S))
+
+
+def _trim_record(store: Store, pick: Favorite, path: str, source: Source) -> dict[str, Any]:
+    """The record of the cut a pick's source came from, for a pick that did not make it (a "Both" sibling, or a second call):
+    its own, else the one of another pick carrying the same upload, else only what the source itself says (its seconds)."""
+    own = pick.proposal.get("owner_clip_trim")
+    if isinstance(own, dict):
+        return own
+    for other in store.list_favorites():
+        found = other.proposal.get("owner_clip_trim")
+        if other.proposal.get("owner_clip_path") == path and isinstance(found, dict):
+            return found
+    return {"seconds": round(source.duration_s, 3)}
 
 
 def trim_source(
@@ -399,10 +463,13 @@ def trim_source(
     file: Path | str | None = None,
     crop_x: float | None = None,
     min_pixels: int | None = None,
+    crop_y: dict[str, float] | None = None,
 ) -> Source:
     """Cut a window out of a source and catalogue it as a new ``owner_inbox`` source (see the module doc).
 
     ``min_pixels`` scales a smaller window up (``clipwork.trim_clip``): the Object swap needs 409,600 pixels a frame.
+    ``crop_y`` (``{"top", "bottom", "x"}``, owner 2026-10-14) zooms a band of text or a watermark at the top or bottom of the
+    frame away BEFORE the window is catalogued, so Genjutsu never sees it (``clipwork.crop_box``).
 
     ``KeyError`` for an unknown source; ``ValueError`` for a window that makes no sense, a source that is not in
     Storage (and no ``file``), or a missing ``file``; ``QAError`` / ``ClipworkError`` / ``StorageError`` when the
@@ -424,7 +491,7 @@ def trim_source(
                 f"source {source_id} is not in Storage (a library source is used through its own url): "
                 "download its preview and pass it with --file"
             )
-        trimmed = trim_clip(local, work / "window.mp4", start_s, duration_s, crop_x=crop_x, min_pixels=min_pixels)
+        trimmed = trim_clip(local, work / "window.mp4", start_s, duration_s, crop_x=crop_x, min_pixels=min_pixels, crop_y=crop_y)
         seconds = probe(trimmed, loudness=False).duration_s
         key = f"{INBOX_PREFIX}/{uuid.uuid4()}.mp4"
         storage.upload(SOURCES_BUCKET, key, trimmed)
@@ -688,12 +755,30 @@ def trim_command(
             "(0 = left edge, 0.5 = middle, 1 = right edge), around the star.",
         ),
     ] = None,
+    crop_top: Annotated[
+        float | None,
+        typer.Option(
+            "--crop-top", min=0.0, max=0.49,
+            help="Zoom text or a watermark in a band at the TOP of the frame away: the share of the height to cut (0.12 = the top 12%).",
+        ),
+    ] = None,
+    crop_bottom: Annotated[
+        float | None,
+        typer.Option(
+            "--crop-bottom", min=0.0, max=0.49,
+            help="The same for a band at the BOTTOM of the frame (centred on --crop-x when given, else the middle).",
+        ),
+    ] = None,
 ) -> None:
     """Cut the best window out of a source (audio kept) as a new `owner_inbox` source: what Genjutsu is given."""
     store = open_store()
     storage = open_storage()
+    crop_y = (
+        {"top": crop_top or 0.0, "bottom": crop_bottom or 0.0, "x": 0.5 if crop_x is None else crop_x}
+        if crop_top or crop_bottom else None
+    )
     try:
-        child = trim_source(store, storage, id, start, duration, file=file, crop_x=crop_x)
+        child = trim_source(store, storage, id, start, duration, file=file, crop_x=crop_x, crop_y=crop_y)
     except KeyError:
         fail(f"unknown source {id}")
     except (ValueError, QAError, ClipworkError, StorageError) as e:
