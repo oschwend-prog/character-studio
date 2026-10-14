@@ -9,6 +9,10 @@
 # `sudo apt-get update` first, as ci.yml does.
 #
 # The Postiz CLI is pinned (postiz@2.0.16, see publish.yml): its analytics output is parsed by studio.metrics.
+#
+# Before the pull, `studio publish confirm` asks Postiz (one `postiz posts:list`) whether the posts it accepted were really published,
+# so a post Postiz failed is not pulled for metrics as if it were live. It never fails this job (continue-on-error, and a Postiz
+# hiccup exits 0 anyway); publish.yml runs it too, right after every publish run.
 name: metrics
 
 on:
@@ -50,6 +54,13 @@ jobs:
       - name: Install the Postiz CLI
         if: steps.gate.outputs.configured == 'true'
         run: npm i -g postiz@2.0.16
+      - name: Confirm what Postiz published
+        if: steps.gate.outputs.configured == 'true'
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
+        run: uv run studio publish confirm
       - name: Pull metrics
         if: steps.gate.outputs.configured == 'true'
         env:

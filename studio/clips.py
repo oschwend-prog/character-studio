@@ -1,6 +1,7 @@
 """Clip state machine and feature tags.
 
-Every clip walks one fixed path (``ALLOWED``); ``transition`` is the only way its state moves::
+Every clip walks one fixed path (``ALLOWED``); ``transition`` is the only way its state moves, with one narrow exception
+(``unpost_clip``, dotted below)::
 
     planned -> generating -> generated -> qa_passed -> mastered -> awaiting_approval -> approved
                   |  ^           |                       |               |               |
@@ -12,10 +13,20 @@ Every clip walks one fixed path (``ALLOWED``); ``transition`` is the only way it
                                                                                scheduled once every post
                                                                                of the clip was dropped)
 
+    posted ......> scheduled     not a table entry: ``unpost_clip``, for a posted clip whose posts never went out (below)
+
 ``rejected``, ``posted`` and ``dropped`` are final: they have no entry in ``ALLOWED``. A clip that leaves
 ``scheduled`` for ``rejected`` / ``dropped`` takes its never-sent posts with it, in the same transaction
 (``scheduled`` / ``failed`` ones with no platform id and no metrics snapshot); a ``posting``, ``needs_check``
 or ``posted`` post stays, it may be live.
+
+**The one way out of ``posted``** (``unpost_clip``, used by ``studio.publish.confirm`` and nothing else; not in ``ALLOWED``, so
+``transition`` still refuses it and the dotted arrow above is not a table entry). A post is ``posted`` the moment Postiz accepts it, but
+Postiz publishes to the platform afterwards and can fail; ``studio publish confirm`` asks Postiz and fails such a post. If the clip
+was only ``posted`` because of posts that never went out, it has to go back to ``scheduled`` so ``studio publish resolve --retry``
+(which wants a ``scheduled`` clip) can send it again. ``unpost_clip`` does that, and only that, and only when it is safe: the clip is
+``posted`` and no post of it is live (``posted`` with a url, or holding any metrics snapshot, which proves the platform showed it).
+Otherwise ``IllegalTransition`` and nothing is written. There is no command line path to it.
 
 **Re-rolls.** A clip that failed QA may go back to ``generating`` exactly once
 (``qa_failed -> generating``); ``features['rerolls']`` counts it and a second one raises
@@ -368,6 +379,30 @@ def transition(store: Store, clip_id: str, to: ClipState | str, **fields: Any) -
         if clip.state is S.scheduled and to in (S.rejected, S.dropped):
             _discard_unsent_posts(store, clip_id)
         return moved
+
+
+def unpost_clip(store: Store, clip_id: str) -> Clip:
+    """``posted -> scheduled`` for a clip whose posts turned out never to have gone out: the one exception to "``posted`` is final".
+
+    Only ``studio.publish.confirm`` calls it, after it failed a post Postiz could not publish (see the module docstring). The clip
+    must be ``posted`` and none of its posts may be live: a post counts as live when it is ``posted`` with a url, or when it holds any
+    metrics snapshot (a reading means the platform showed it, whatever status the post has now). A ``posted`` post with no url
+    and no snapshot is only unconfirmed, not live. ``KeyError`` for an unknown clip, ``IllegalTransition`` otherwise; a refused call
+    writes nothing, and no post is touched either way.
+    """
+    with store.transaction():  # one connection: the posts checked are the posts the clip moves on
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(clip_id)
+        if clip.state is not S.posted:
+            raise IllegalTransition(f"{clip.state.value} -> scheduled is not an unpost: only a posted clip can be sent back")
+        live = [
+            p.id for p in store.list_posts(clip_id=clip_id)
+            if store.snapshots_for(p.id) or (p.status is PostStatus.posted and p.url)
+        ]  # fmt: skip
+        if live:
+            raise IllegalTransition(f"clip {clip_id} stays posted: post {', '.join(live)} is live (a url or a metrics snapshot)")
+        return store.update_clip(clip_id, state=S.scheduled)
 
 
 def _discard_unsent_posts(store: Store, clip_id: str) -> None:

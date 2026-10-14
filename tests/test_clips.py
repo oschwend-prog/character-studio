@@ -328,6 +328,62 @@ def test_a_refused_transition_deletes_no_post():
     assert [x.id for x in store.list_posts(clip_id=clip.id)] == [p["due"].id]
 
 
+# ---- posted -> scheduled: the one exception, for `studio publish confirm` only -----------------------------------
+
+
+def posted_clip_with_posts(**posts: dict):
+    """A ``posted`` clip and one post per name in ``posts``; {name: Post}."""
+    store, clip, made = scheduled_clip_with_posts(**posts)
+    transition(store, clip.id, S.posted)
+    return store, clip, made
+
+
+def test_transition_still_refuses_posted_to_scheduled():
+    """The table is untouched: ``posted`` is final for ``transition``; only ``unpost_clip`` may reopen a clip."""
+    store, clip, _ = posted_clip_with_posts(sent={"status": "posted", "platform_post_id": "pz-1"})
+    with pytest.raises(IllegalTransition, match="final"):
+        transition(store, clip.id, S.scheduled)
+    assert S.posted not in ALLOWED and store.get_clip(clip.id).state is S.posted
+
+
+def test_unpost_clip_sends_a_posted_clip_whose_posts_never_went_live_back_to_scheduled():
+    store, clip, p = posted_clip_with_posts(
+        broken={"status": "failed", "error": "Postiz could not publish it"},  # the post confirm just failed
+        unconfirmed={"status": "posted", "platform_post_id": "pz-2"},  # posted, no url and no snapshot yet: not known to be live
+    )
+    assert clips.unpost_clip(store, clip.id).state is S.scheduled
+    assert store.get_clip(clip.id).state is S.scheduled
+    assert {x.id for x in store.list_posts(clip_id=clip.id)} == {p["broken"].id, p["unconfirmed"].id}  # no post is touched
+
+
+@pytest.mark.parametrize("how", ["a url", "a metrics snapshot on a posted post", "a metrics snapshot on a failed post"])
+def test_unpost_clip_refuses_a_clip_with_a_post_that_is_live(how):
+    store, clip, p = posted_clip_with_posts(
+        broken={"status": "failed"},
+        other={"status": "posted", "platform_post_id": "pz-2", **({"url": "https://www.instagram.com/reel/x/"} if how == "a url" else {})},
+    )
+    if how != "a url":
+        store.add_snapshot(Snapshot(post_id=p["other" if "posted post" in how else "broken"].id, views=10))
+    with pytest.raises(IllegalTransition, match="live"):
+        clips.unpost_clip(store, clip.id)
+    assert store.get_clip(clip.id).state is S.posted
+
+
+@pytest.mark.parametrize("state", [S.planned, S.mastered, S.scheduled, S.rejected, S.dropped])
+def test_unpost_clip_only_takes_a_posted_clip(state):
+    store, clip = fresh()
+    store.update_clip(clip.id, state=state)  # seeding the starting state, not under test
+    with pytest.raises(IllegalTransition, match="posted"):
+        clips.unpost_clip(store, clip.id)
+    assert store.get_clip(clip.id).state is state
+
+
+def test_unpost_clip_of_an_unknown_clip_is_a_key_error():
+    with pytest.raises(KeyError):
+        clips.unpost_clip(make_store(), "no-such-clip")
+
+
+
 # ---- set_fields (non-state fields, written directly) ------------------------------------------
 
 

@@ -12,6 +12,12 @@ roster included, ``studio.publish.reach.load_reach``).
 ``--dry-run`` claims and writes nothing, needs neither Storage nor Postiz, and prints what would go (with each post's reach pack).
 With the kill switch on, ``due`` claims nothing and prints ``"paused": true``.
 
+``studio publish confirm`` asks Postiz (``postiz posts:list``, one call) whether each post it accepted was really published: a
+``PUBLISHED`` post gets its url, an ``ERROR`` one becomes ``failed`` (and, when it never went out, its clip goes back to ``scheduled``
+so ``resolve --retry`` can send it again), the rest is asked about again next time (see ``studio.publish.confirm``). The publish and
+metrics workflows run it; it prints a JSON summary and exits 0 whatever Postiz did (a Postiz error is reported in the summary's
+``error``), 1 only when a database write failed, 2 for a missing ``DATABASE_URL`` / ``POSTIZ_API_KEY`` / ``postiz`` CLI.
+
 ``studio publish resolve <post>`` settles a ``needs_check`` / ``failed`` post by hand, with exactly one
 of ``--live --platform-post-id ID [--url U]``, ``--retry [--at ISO]``, ``--drop --reason-file F`` (see
 ``studio.publish.resolve``; ``--drop`` also takes a ``scheduled`` post whose clip is no longer ``scheduled``);
@@ -36,6 +42,7 @@ from studio.publish.base import (
     preview_due,
     publish_due,
 )
+from studio.publish.confirm import confirm_posts
 from studio.publish.postiz import PostizError, PostizPublisher
 from studio.publish.reach import load_reach
 from studio.publish.resolve import resolve_drop, resolve_live, resolve_retry
@@ -86,6 +93,23 @@ def due_command(
     summary = publish_due(store, storage, PostizPublisher(), now, reach=reach)
     emit(summary)
     if summary["errors"]:
+        raise typer.Exit(1)
+
+
+@app.command("confirm")
+def confirm_command() -> None:
+    """Ask Postiz whether the posts it accepted were really published: fill the url of a PUBLISHED one, fail an ERROR one."""
+    store = open_store()
+    if not load().postiz_api_key:
+        fail(
+            "POSTIZ_API_KEY is not set. Run through bin/studio (it reads the Keychain item "
+            "cs-postiz-api-key) or export it."
+        )
+    if which("postiz") is None:
+        fail("the postiz CLI is not on PATH. Install it with: npm i -g postiz")
+    summary = confirm_posts(store, PostizPublisher(), now_london())
+    emit(summary)
+    if summary["write_errors"]:
         raise typer.Exit(1)
 
 

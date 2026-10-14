@@ -13,7 +13,10 @@ import pytest
 
 WORKFLOWS = Path(__file__).resolve().parents[1] / ".github" / "workflows"
 GATE = "if: steps.gate.outputs.configured == 'true'"
+GATE_ALWAYS = "if: always() && steps.gate.outputs.configured == 'true'"  # `studio publish confirm` after the publish step: even when it failed
 SECRETS = ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "POSTIZ_API_KEY")
+CONFIRM = "uv run studio publish confirm"  # ask Postiz whether the posts it accepted were really published (publish and metrics run it)
+CONFIRM_SECRETS = {"DATABASE_URL", "POSTIZ_API_KEY"}  # it reads the database and Postiz; it touches no storage
 
 # The Postiz CLI version the workflows install (the exact one `npm view postiz version` reported on
 # 2026-10-05). VERIFY at go-live (docs/launch/go-live.md step 3): bump it deliberately, never `latest`.
@@ -74,18 +77,24 @@ def test_the_first_step_checks_database_url_and_every_other_step_waits_for_it(na
     assert 'echo "secrets not configured — skipping"' in gate
     assert 'echo "configured=false" >> "$GITHUB_OUTPUT"' in gate
     assert "exit 1" not in gate  # missing secrets are not a failure
-    assert rest and all(GATE in block for block in rest), "a step would run without the secrets"
+    assert rest and all(
+        GATE in block or (GATE_ALWAYS in block and f"run: {CONFIRM}" in block) for block in rest
+    ), "a step would run without the secrets"
 
 
 @pytest.mark.parametrize("name", SPEC)
 def test_secrets_reach_only_the_gate_and_the_command_that_needs_them(name):
     blocks = steps(name)
-    command = blocks[-1]
-    assert SPEC[name][1] in command
+    command = next(block for block in blocks if f"run: {SPEC[name][1]}" in block)
     for secret in SECRETS:
         assert f"{secret}: ${{{{ secrets.{secret} }}}}" in command
-    for block in blocks[1:-1]:  # checkout, setup-uv, setup-node, npm: no secrets in their environment
-        assert "secrets." not in block
+    confirm = [block for block in blocks if f"run: {CONFIRM}" in block]
+    assert len(confirm) == (1 if name in ("publish", "metrics") else 0)
+    for block in confirm:  # the confirm step gets the two secrets it needs and nothing else
+        assert set(re.findall(r"secrets\.([A-Z_]+)", block)) == CONFIRM_SECRETS
+    for block in blocks[1:]:  # checkout, setup-uv, setup-node, npm: no secrets in their environment
+        if block is not command and block not in confirm:
+            assert "secrets." not in block
     assert "env:" not in text(name).split("    steps:")[0].split("jobs:")[1]  # no job-level env
     assert set(re.findall(r"secrets\.([A-Z_]+)", text(name))) <= set(SECRETS)
 
@@ -280,6 +289,33 @@ def test_publish_is_started_by_the_database_timers_dispatch_and_keeps_the_schedu
     assert "jsonb_build_object('event_type', 'publish')" in migration
     # a dispatch carries no payload the job needs: the command is the same for every trigger and nothing reads client_payload
     assert "client_payload" not in "\n".join(line for line in t.splitlines() if not line.lstrip().startswith("#"))
+
+
+# ---- publish and metrics: `studio publish confirm` (did Postiz really publish what it accepted?) ----------------------------
+
+
+def test_publish_confirms_after_publishing_even_when_the_publish_step_did_nothing_or_failed():
+    """A post is `posted` once Postiz accepts it and Postiz can still fail (Franz, 2026-10-13: state ERROR): the confirm step runs
+    last, with always(), so it also runs after a failed or empty publish step. It is not continue-on-error: a failed database
+    write must show. A Postiz hiccup exits 0 on its own."""
+    blocks = steps("publish")
+    confirm = blocks[-1]
+    assert confirm.startswith("name: Confirm what Postiz published") and GATE_ALWAYS in confirm
+    assert f"run: {CONFIRM}" in confirm and "continue-on-error" not in confirm
+    assert text("publish").index("run: uv run studio publish due") < text("publish").index(f"run: {CONFIRM}")
+    assert text("publish").count(f"run: {CONFIRM}") == 1
+    install = f"run: npm i -g postiz@{POSTIZ_VERSION}"
+    assert text("publish").index(install) < text("publish").index(f"run: {CONFIRM}")  # the Postiz CLI is there first
+
+
+def test_metrics_confirms_before_pulling_and_never_fails_the_job_for_it():
+    blocks = steps("metrics")
+    confirm, pull = blocks[-2], blocks[-1]
+    assert confirm.startswith("name: Confirm what Postiz published") and f"run: {CONFIRM}" in confirm
+    assert GATE in confirm and "continue-on-error: true" in confirm
+    assert "run: uv run studio metrics pull" in pull
+    assert text("metrics").count(f"run: {CONFIRM}") == 1
+    assert text("metrics").index(f"npm i -g postiz@{POSTIZ_VERSION}") < text("metrics").index(f"run: {CONFIRM}")
 
 
 # ---- studio-hits: the cloud hits job (terminal v3 spec section 10, plan Task 6) ------------------------------------------------------

@@ -32,7 +32,9 @@
 
 The posts are scheduled for *now*: the publish job (every 15 minutes in the evening window) decides when a post is due, Postiz
 just sends it. ``posted`` in our database therefore means "Postiz accepted it", and the
-``platform_post_id`` is the Postiz post id (what ``postiz analytics:post`` takes).
+``platform_post_id`` is the Postiz post id (what ``postiz analytics:post`` takes). Postiz then publishes to the platform on its own
+and can fail there (a post of 13 Oct 2026 showed ``state: "ERROR"`` in Postiz while we said ``posted``), so ``list_posts`` reads
+Postiz's own record (``postiz posts:list``) and ``studio.publish.confirm`` uses it to fill the url or fail the post.
 
 The CLI prints a status line before its JSON (``✅ File uploaded successfully!``); the JSON is
 picked out of stdout, with or without that line. Credentials are the CLI's own: ``POSTIZ_API_KEY``
@@ -120,6 +122,7 @@ _DEFINITE_REJECTION = re.compile(r"API Error \((?!408\)|409\))4\d\d\)")
 
 UPLOAD_TIMEOUT_S = 900
 CREATE_TIMEOUT_S = 180
+LIST_TIMEOUT_S = 120
 _OUTPUT_CHARS = 500
 _CHUNK = 1024 * 1024
 _FETCH_TIMEOUT = httpx.Timeout(30.0, read=600.0)
@@ -263,6 +266,37 @@ class PostizPublisher:
         uploaded = self._upload_media(media_url)
         when = self._clock() + STORY_DELAY
         return self._create([AI_DISCLOSURE], integration_id, uploaded, dict(INSTAGRAM_STORY_SETTINGS), when)
+
+    def list_posts(self, start: datetime, end: datetime) -> list[dict[str, Any]]:
+        """``postiz posts:list --startDate <start> --endDate <end>``: the posts Postiz holds in that range (``start`` / ``end`` aware).
+
+        The CLI prints ``📋 Posts:`` and then ``{"posts": [{"id", "state", "releaseURL", "error", "publishDate", "integration": {...}}]}``.
+        ``state`` is ``QUEUE`` until Postiz has sent the post, then ``PUBLISHED`` (with its ``releaseURL``) or ``ERROR``. Read-only:
+        it creates and changes nothing. ``PostizError`` when the CLI cannot be run, times out, exits non-zero or prints no ``posts``
+        list; the caller (``studio.publish.confirm``) turns that into a warning, never a crash."""
+        if start.tzinfo is None or end.tzinfo is None:
+            raise ValueError("list_posts needs aware datetimes")
+        argv = [
+            self._exe, "posts:list",
+            "--startDate", start.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "--endDate", end.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ]  # fmt: skip
+        try:
+            proc = self._call(argv, LIST_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            raise PostizError(f"postiz posts:list timed out after {LIST_TIMEOUT_S} s") from None
+        except OSError as e:
+            raise PostizError(f"could not run postiz posts:list: {e}") from None
+        if proc.returncode != 0:
+            raise PostizError(f"postiz posts:list failed (exit {proc.returncode}): {_tail(proc)}")
+        try:
+            payload = _json_in(proc.stdout or "")
+        except ValueError:
+            raise PostizError(f"postiz posts:list printed no JSON: {_tail(proc)}") from None
+        posts = payload.get("posts") if isinstance(payload, dict) else None
+        if not isinstance(posts, list):
+            raise PostizError(f"postiz posts:list printed no posts list: {_tail(proc)}")
+        return [post for post in posts if isinstance(post, dict)]
 
     def _upload_media(self, media_url: str) -> str:
         """Fetch the file into a private temp folder, ``postiz upload`` it, delete the folder; the path Postiz returned."""

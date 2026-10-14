@@ -20,12 +20,13 @@ import httpx
 import pytest
 from typer.testing import CliRunner
 
-from studio import experiments, publish
+from studio import experiments, health, publish
 from studio.cli import app
 from studio.config import LONDON
 from studio.models import Account, Character, Clip, ClipState, Favorite, Platform, Post, PostStatus, Snapshot
 from studio.publish import base, postiz
 from studio.publish.base import PublishResult, Publisher, UncertainPublish, preview_due, publish_due
+from studio.publish.confirm import confirm_posts
 from studio.publish.reach import MAX_COLLABORATORS, NO_REACH, Reach, ReachConfig, load_reach
 from studio.publish.postiz import (
     INSTAGRAM_SETTING_KEYS,
@@ -921,13 +922,14 @@ def test_preview_flags_what_a_real_run_would_refuse(rig):
 
 UPLOAD_OUT = '✅ File uploaded successfully!\n{"id": "m1", "path": "https://uploads.postiz.test/abc.mp4"}\n'
 CREATE_OUT = '✅ Post created successfully!\n[{"postId": "pz-post-9", "integration": "int-bis-tt"}]\n'
+LIST_OUT = '📋 Posts:\n{"posts": []}\n'
 
 
 class FakeRun:
     """A stand-in for ``subprocess.run`` that records argv and answers per subcommand."""
 
-    def __init__(self, upload=(0, UPLOAD_OUT, ""), create=(0, CREATE_OUT, ""), raises=None):
-        self.answers = {"upload": upload, "posts:create": create}
+    def __init__(self, upload=(0, UPLOAD_OUT, ""), create=(0, CREATE_OUT, ""), raises=None, posts_list=(0, LIST_OUT, "")):
+        self.answers = {"upload": upload, "posts:create": create, "posts:list": posts_list}
         self.raises = raises or {}
         self.calls: list[list[str]] = []
         self.kwargs: list[dict[str, Any]] = []
@@ -2708,3 +2710,330 @@ def test_cli_due_with_a_mistyped_trial_reels_key_stops_before_anything_is_claime
     assert r.exit_code == 2 and "franz.unimpresed" in r.stderr and "typo" in r.stderr
     assert cli.get(p).status is PostStatus.scheduled
     assert invoke("due", "--dry-run").exit_code == 2
+
+
+# ---- `studio publish confirm`: did Postiz really publish what it accepted? ----------------------------------------------
+#
+# `posted` means "Postiz accepted the create call"; Postiz then publishes asynchronously and can fail (Franz's post of 13 Oct 2026
+# shows state ERROR, error null, releaseURL null while the database said posted). `posts:list` is the truth: PUBLISHED fills the url,
+# ERROR fails the post (and gives an unpublished clip back to the retry path), anything else waits.
+
+REEL_URL = "https://www.instagram.com/reel/DebtOLxCOCr/"
+
+
+def listed(postiz_id: str, state: str, *, url: str | None = None, error: Any = None, integration: str = "int-bis-ig") -> dict[str, Any]:
+    """One entry of ``postiz posts:list`` (the fields the real output has; ``releaseId`` is not read)."""
+    return {
+        "id": postiz_id, "content": "the right eye is ice-blue", "publishDate": "2026-10-06T18:00:41.000Z",
+        "releaseURL": url, "releaseId": "18117440876064812" if url else None, "state": state, "error": error,
+        "integration": {"id": integration, "providerIdentifier": "instagram-standalone", "name": "Biscuit"},
+    }  # fmt: skip
+
+
+def postiz_lists(*entries: dict[str, Any]) -> FakeRun:
+    """A ``postiz`` whose ``posts:list`` prints ``entries`` after the status line the CLI starts with."""
+    return FakeRun(posts_list=(0, "📋 Posts:\n" + json.dumps({"posts": list(entries)}, indent=2), ""))
+
+
+def confirm(rig: Rig, run: FakeRun, now: datetime = NOW) -> dict[str, Any]:
+    return confirm_posts(rig.store, PostizPublisher(run), now)
+
+
+def listing_calls(run: FakeRun) -> list[list[str]]:
+    return [c for c in run.calls if c[1] == "posts:list"]
+
+
+def accepted(rig: Rig, handle: str = "@biscuit.tt", *, postiz_id: str = "pz-1", clip: Clip | None = None, **fields: Any) -> Post:
+    """A post the publisher recorded as posted: Postiz accepted it, nothing has confirmed it (no url, as ``publish_due`` leaves it)."""
+    clip = clip or rig.clip(rig.account(handle).character_slug, ClipState.posted)
+    return rig.post(handle, clip=clip, status="posted", platform_post_id=postiz_id, claimed_at=SLOT, **fields)
+
+
+def test_a_published_post_gets_its_url_and_keeps_its_postiz_id(rig):
+    post = accepted(rig, postiz_id="cmv6lo8ex105lle0yjgca19z2")
+    run = postiz_lists(listed("cmv6lo8ex105lle0yjgca19z2", "PUBLISHED", url=REEL_URL))
+    out = confirm(rig, run)
+    got = rig.get(post)
+    assert (got.status, got.url, got.platform_post_id, got.error) == (
+        PostStatus.posted, REEL_URL, "cmv6lo8ex105lle0yjgca19z2", None,
+    )
+    assert out == {
+        "confirmed": [{"post_id": post.id, "platform_post_id": "cmv6lo8ex105lle0yjgca19z2", "url": REEL_URL}],
+        "failed": [], "needs_check": [], "waiting": [], "error": None, "write_errors": [],
+    }  # fmt: skip
+    assert rig.store.get_clip(post.clip_id).state is ClipState.posted
+
+
+def test_one_posts_list_call_answers_every_post_and_covers_their_dates(rig):
+    early = accepted(rig, "@biscuit.tt", postiz_id="pz-a", when=SLOT - timedelta(days=3))
+    late = accepted(rig, "@reginald.tt", postiz_id="pz-b")
+    run = postiz_lists(listed("pz-a", "PUBLISHED", url="https://t.test/a"), listed("pz-b", "PUBLISHED", url="https://t.test/b"))
+    out = confirm(rig, run)
+    assert [c["post_id"] for c in out["confirmed"]] == [early.id, late.id]
+    (call,) = listing_calls(run)
+    when = {flag: datetime.strptime(call[call.index(flag) + 1], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc) for flag in ("--startDate", "--endDate")}
+    assert when["--startDate"] <= (SLOT - timedelta(days=3)).astimezone(timezone.utc)
+    assert when["--endDate"] >= NOW.astimezone(timezone.utc)
+    assert [c[1] for c in run.calls] == ["posts:list"]  # nothing else was run
+
+
+def test_only_posted_posts_with_an_id_and_no_url_from_the_last_14_days_are_asked_about(rig):
+    ask = accepted(rig, postiz_id="pz-ask", when=NOW - timedelta(days=13, hours=23))
+    accepted(rig, "@reginald.tt", postiz_id="pz-url", url="https://t.test/known")  # already confirmed
+    accepted(rig, "@biscuit.tt", postiz_id="pz-old", when=NOW - timedelta(days=14, hours=1))  # too old to ask about
+    rig.post("@biscuit.tt", status="posted", claimed_at=SLOT, when=NOW - timedelta(days=1))  # no Postiz id at all
+    rig.post("@biscuit.tt", status="needs_check", claimed_at=SLOT, platform_post_id="pz-nc", when=NOW - timedelta(days=2))
+    rig.post("@biscuit.tt", status="scheduled", platform_post_id="pz-sc", when=NOW - timedelta(days=2))
+    run = postiz_lists(listed("pz-ask", "PUBLISHED", url="https://t.test/ask"))
+    out = confirm(rig, run)
+    assert [c["post_id"] for c in out["confirmed"]] == [ask.id]
+    assert out["waiting"] == out["failed"] == out["needs_check"] == []
+
+
+def test_a_post_that_errored_fails_with_a_plain_line_and_its_clip_can_be_retried(cli):
+    clip = cli.clip("biscuit", ClipState.posted)
+    post = accepted(cli, postiz_id="cmv6zlc2p18yile0ytewaa4ci", clip=clip)
+    run = postiz_lists(listed("cmv6zlc2p18yile0ytewaa4ci", "ERROR"))
+    out = confirm(cli, run)
+    got = cli.get(post)
+    assert got.status is PostStatus.failed and got.url is None
+    assert got.error == (
+        "Postiz could not publish it on tiktok (state ERROR, Postiz post cmv6zlc2p18yile0ytewaa4ci): "
+        f"check the channel in Postiz, then `studio publish resolve {post.id} --retry`"
+    )
+    assert out["failed"] == [{
+        "post_id": post.id, "platform_post_id": "cmv6zlc2p18yile0ytewaa4ci", "state": "ERROR", "error": got.error, "clip_reopened": True,
+    }]  # fmt: skip
+    assert got.platform_post_id is None  # it never went out: like any post that never was live, it can also be dropped
+    assert cli.store.get_clip(clip.id).state is ClipState.scheduled
+    # the existing path takes it from here: resolve --retry, then the next publish run sends it again and the clip is posted
+    r = invoke("resolve", post.id, "--retry")
+    assert r.exit_code == 0, r.output
+    assert cli.get(post).status is PostStatus.scheduled and cli.get(post).error is None
+    pub = FakePublisher()
+    cli.run(pub)
+    assert len(pub.calls) == 1
+    assert cli.get(post).status is PostStatus.posted and cli.get(post).platform_post_id == "pz-1"
+    assert cli.store.get_clip(clip.id).state is ClipState.posted
+
+
+def test_an_errored_post_can_also_be_dropped_and_its_clip_rejected(cli):
+    post = accepted(cli)
+    confirm(cli, postiz_lists(listed("pz-1", "ERROR")))
+    reason = cli.tmp / "reason.txt"
+    reason.write_text("the channel is broken, not worth another try")
+    r = invoke("resolve", post.id, "--drop", "--reason-file", str(reason))
+    assert r.exit_code == 0, r.output
+    assert cli.store.list_posts(id=post.id) == [] and cli.store.get_clip(post.clip_id).state is ClipState.rejected
+
+
+def test_the_error_detail_postiz_gives_is_kept_short_in_the_line(rig):
+    post = accepted(rig)
+    detail = "Instagram said:   the media\nwas rejected " + "x" * 400
+    confirm(rig, postiz_lists(listed("pz-1", "ERROR", error=detail)))
+    error = rig.get(post).error
+    assert "state ERROR, Postiz post pz-1: Instagram said: the media was rejected xxx" in error
+    assert "\n" not in error and len(error) < 300 and error.endswith(f"then `studio publish resolve {post.id} --retry`")
+
+
+def test_an_errored_post_with_a_metrics_snapshot_fails_but_its_clip_stays_posted(rig):
+    post = accepted(rig, postiz_id="pz-seen")
+    rig.store.add_snapshot(Snapshot(post_id=post.id, views=120))  # the platform showed it once: it was live
+    out = confirm(rig, postiz_lists(listed("pz-seen", "ERROR")))
+    got = rig.get(post)
+    assert got.status is PostStatus.failed and "Postiz could not publish it" in got.error
+    assert got.platform_post_id == "pz-seen"  # it was live (a snapshot): resolve keeps treating it so
+    assert rig.store.get_clip(post.clip_id).state is ClipState.posted
+    assert out["failed"][0]["clip_reopened"] is False
+
+
+def test_an_errored_post_whose_sibling_is_live_leaves_the_clip_posted(tmp_path):
+    rig = Rig(tmp_path, instagram=True)
+    clip = rig.clip("biscuit", ClipState.posted)
+    live = accepted(rig, "@biscuit.tt", postiz_id="pz-tt", clip=clip, url="https://www.tiktok.com/@biscuit/video/1")
+    broken = accepted(rig, "@biscuit.ig", postiz_id="pz-ig", clip=clip)
+    out = confirm(rig, postiz_lists(listed("pz-ig", "ERROR")))
+    assert rig.get(broken).status is PostStatus.failed and rig.get(live).status is PostStatus.posted
+    assert rig.store.get_clip(clip.id).state is ClipState.posted and out["failed"][0]["clip_reopened"] is False
+
+
+def test_both_posts_of_a_clip_erroring_in_one_run_reopen_the_clip_once(tmp_path):
+    rig = Rig(tmp_path, instagram=True)
+    clip = rig.clip("biscuit", ClipState.posted)
+    a = accepted(rig, "@biscuit.tt", postiz_id="pz-tt", clip=clip)
+    b = accepted(rig, "@biscuit.ig", postiz_id="pz-ig", clip=clip)
+    out = confirm(rig, postiz_lists(listed("pz-tt", "ERROR"), listed("pz-ig", "ERROR")))
+    assert rig.get(a).status is PostStatus.failed and rig.get(b).status is PostStatus.failed
+    assert rig.store.get_clip(clip.id).state is ClipState.scheduled
+    assert [f["clip_reopened"] for f in out["failed"]] == [True, False]
+
+
+@pytest.mark.parametrize("state", ["QUEUE", "DRAFT", "queue", "SOMETHING_NEW"])
+def test_a_post_still_in_another_state_is_left_alone_and_asked_about_again(rig, state):
+    post = accepted(rig)
+    run = postiz_lists(listed("pz-1", state))
+    out = confirm(rig, run)
+    assert out["waiting"] == [{"post_id": post.id, "platform_post_id": "pz-1", "state": state, "reason": f"Postiz says {state}"}]
+    assert out["confirmed"] == out["failed"] == out["needs_check"] == [] and out["error"] is None
+    assert rig.get(post) == post and rig.store.get_clip(post.clip_id).state is ClipState.posted
+    confirm(rig, run)  # a later run asks again
+    assert len(listing_calls(run)) == 2
+
+
+def test_a_published_post_without_a_release_url_waits_for_one(rig):
+    post = accepted(rig)
+    out = confirm(rig, postiz_lists(listed("pz-1", "PUBLISHED", url=None)))
+    assert [w["post_id"] for w in out["waiting"]] == [post.id] and "releaseURL" in out["waiting"][0]["reason"]
+    assert rig.get(post).url is None and rig.get(post).status is PostStatus.posted
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        (1, "", "Request failed: API Error (500): boom"),
+        (0, "📋 Posts:\nnot json at all", ""),
+        (0, '📋 Posts:\n{"unexpected": 1}', ""),
+        (0, "", ""),
+    ],
+    ids=["non-zero exit", "bad json", "no posts list", "no output"],
+)
+def test_a_postiz_failure_never_raises_and_is_reported(rig, answer):
+    post = accepted(rig)
+    out = confirm(rig, FakeRun(posts_list=answer))
+    assert out["error"] and "posts:list" in out["error"]
+    assert out["confirmed"] == out["failed"] == out["needs_check"] == out["waiting"] == [] and out["write_errors"] == []
+    assert rig.get(post) == post
+
+
+@pytest.mark.parametrize("raised", [subprocess.TimeoutExpired("postiz", 120), FileNotFoundError("postiz")], ids=["timeout", "no binary"])
+def test_a_postiz_that_times_out_or_is_missing_never_raises(rig, raised):
+    post = accepted(rig)
+    out = confirm(rig, FakeRun(raises={"posts:list": raised}))
+    assert out["error"] and rig.get(post) == post
+
+
+def test_a_post_missing_from_postiz_for_more_than_24_hours_after_its_slot_needs_a_check(rig):
+    post = accepted(rig, postiz_id="pz-gone")
+    run = postiz_lists(listed("pz-other", "PUBLISHED", url="https://t.test/other"))
+    out = confirm(rig, run, SLOT + timedelta(hours=24, minutes=1))
+    got = rig.get(post)
+    assert got.status is PostStatus.needs_check and got.platform_post_id == "pz-gone"
+    assert "pz-gone" in got.error and "24 hours" in got.error and "does not list" in got.error
+    assert out["needs_check"] == [{"post_id": post.id, "platform_post_id": "pz-gone", "error": got.error}]
+    assert rig.store.get_clip(post.clip_id).state is ClipState.posted  # it may be live: nothing else moves
+
+
+def test_a_post_missing_from_postiz_within_24_hours_of_its_slot_just_waits(rig):
+    post = accepted(rig, postiz_id="pz-gone")
+    out = confirm(rig, postiz_lists(), SLOT + timedelta(hours=24))  # exactly 24 h is not more than 24 h
+    assert rig.get(post) == post
+    assert out["waiting"] == [{
+        "post_id": post.id, "platform_post_id": "pz-gone", "state": None, "reason": "Postiz does not list it (yet)",
+    }]  # fmt: skip
+
+
+def test_a_second_run_changes_nothing_and_asks_postiz_nothing(rig):
+    ok = accepted(rig, "@biscuit.tt", postiz_id="pz-ok")
+    bad = accepted(rig, "@reginald.tt", postiz_id="pz-bad")
+    run = postiz_lists(listed("pz-ok", "PUBLISHED", url=REEL_URL), listed("pz-bad", "ERROR"))
+    first = confirm(rig, run)
+    assert len(first["confirmed"]) == 1 and len(first["failed"]) == 1
+    before = (rig.get(ok), rig.get(bad), rig.store.get_clip(ok.clip_id), rig.store.get_clip(bad.clip_id))
+    second = confirm(rig, run)
+    assert second == {
+        "confirmed": [], "failed": [], "needs_check": [], "waiting": [], "error": None, "write_errors": [],
+    }  # fmt: skip
+    assert (rig.get(ok), rig.get(bad), rig.store.get_clip(ok.clip_id), rig.store.get_clip(bad.clip_id)) == before
+    assert len(listing_calls(run)) == 1  # nothing left to ask about: no second call
+
+
+class UrlLostStore(MemoryStore):
+    """Loses the write that records a url, as a database that went away between two posts would."""
+
+    lost: set[str] = set()
+
+    def update_post(self, id, /, **kw):
+        if id in self.lost and "url" in kw:
+            raise RuntimeError("db went away")
+        return super().update_post(id, **kw)
+
+
+def test_a_failed_database_write_is_reported_and_does_not_stop_the_others(tmp_path):
+    rig = Rig(tmp_path)
+    rig.store = UrlLostStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    lost = accepted(rig, "@biscuit.tt", postiz_id="pz-lost")
+    kept = accepted(rig, "@reginald.tt", postiz_id="pz-kept")
+    rig.store.lost = {lost.id}
+    run = postiz_lists(listed("pz-lost", "PUBLISHED", url="https://t.test/lost"), listed("pz-kept", "PUBLISHED", url="https://t.test/kept"))
+    out = confirm(rig, run)
+    assert [e["post_id"] for e in out["write_errors"]] == [lost.id] and "db went away" in out["write_errors"][0]["error"]
+    assert [c["post_id"] for c in out["confirmed"]] == [kept.id]
+    assert rig.get(lost).url is None and rig.get(kept).url == "https://t.test/kept"
+
+
+def test_a_confirm_failed_post_shows_up_in_studio_health_with_its_error(rig):
+    post = accepted(rig, postiz_id="cmv6zlc2p18yile0ytewaa4ci")
+    assert health.check(rig.store, NOW) == []  # posted: nothing to report yet
+    confirm(rig, postiz_lists(listed("cmv6zlc2p18yile0ytewaa4ci", "ERROR")))
+    (line,) = health.check(rig.store, NOW)
+    assert line.startswith(f"post {post.id} on @biscuit.tt is failed: Postiz could not publish it on tiktok (state ERROR")
+    assert f"studio publish resolve {post.id} --retry" in line  # the whole fix survives health's 300-character cut
+    # a post gone from Postiz is reported too
+    other = accepted(rig, "@reginald.tt", postiz_id="pz-gone")
+    later = SLOT + timedelta(hours=25)
+    confirm(rig, postiz_lists(), later)
+    assert any(f"post {other.id} on @reginald.tt is needs_check" in problem for problem in health.check(rig.store, later))
+
+
+# ---- the command ------------------------------------------------------------------------------------------------------------
+
+
+def test_cli_confirm_prints_the_json_and_exits_0(cli, monkeypatch):
+    post = accepted(cli, postiz_id="pz-9")
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: PostizPublisher(postiz_lists(listed("pz-9", "PUBLISHED", url=REEL_URL))))
+    r = invoke("confirm")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert [c["post_id"] for c in out["confirmed"]] == [post.id] and out["error"] is None
+    assert cli.get(post).url == REEL_URL
+    assert "pz-key-DO-NOT-LEAK" not in r.output
+
+
+def test_cli_confirm_exits_0_when_postiz_fails_and_says_so(cli, monkeypatch):
+    post = accepted(cli)
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: PostizPublisher(FakeRun(posts_list=(1, "", "API Error (503)"))))
+    r = invoke("confirm")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["error"] and cli.get(post).status is PostStatus.posted
+
+
+def test_cli_confirm_exits_1_when_a_database_write_failed(cli, monkeypatch):
+    accepted(cli)
+
+    def broken(*args, **kw):
+        raise RuntimeError("db went away")
+
+    monkeypatch.setattr(cli.store, "update_post", broken)
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: PostizPublisher(postiz_lists(listed("pz-1", "PUBLISHED", url=REEL_URL))))
+    r = invoke("confirm")
+    assert r.exit_code == 1 and json.loads(r.stdout)["write_errors"]
+
+
+def test_cli_confirm_without_a_key_a_binary_or_a_database_is_a_caller_error(cli, monkeypatch):
+    monkeypatch.delenv("POSTIZ_API_KEY")
+    r = invoke("confirm")
+    assert r.exit_code == 2 and "POSTIZ_API_KEY" in r.stderr
+    monkeypatch.setenv("POSTIZ_API_KEY", "k")
+    monkeypatch.setattr(publish, "which", lambda name: None)
+    r = invoke("confirm")
+    assert r.exit_code == 2 and "postiz" in r.stderr and "npm" in r.stderr
+
+
+def test_cli_confirm_without_database_url_is_a_caller_error(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    r = invoke("confirm")
+    assert r.exit_code == 2 and "DATABASE_URL" in r.stderr
+
+
+def test_confirm_is_in_the_publish_help():
+    assert "confirm" in CliRunner().invoke(app, ["publish", "--help"]).output

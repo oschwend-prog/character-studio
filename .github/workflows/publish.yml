@@ -17,6 +17,11 @@
 #
 # The Postiz CLI is pinned to the exact version go-live was verified with (postiz@2.0.16): its output format
 # is what studio.publish.postiz and studio.metrics parse. Bump it deliberately, never `latest`.
+#
+# After the publish step, `studio publish confirm` asks Postiz (one `postiz posts:list`) whether the posts it accepted were really
+# published: a post is `posted` as soon as Postiz accepts it, and Postiz can still fail afterwards (Franz's post of 2026-10-13 was
+# state ERROR). It runs even when the publish step had nothing to do or failed (`always()`), and a Postiz hiccup never fails the job:
+# it is reported in the JSON it prints and the step exits 0. Only a failed database write exits 1. It needs no storage key.
 name: publish
 
 on:
@@ -78,3 +83,9 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
         run: uv run studio publish due
+      - name: Confirm what Postiz published
+        if: always() && steps.gate.outputs.configured == 'true'
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
+        run: uv run studio publish confirm
