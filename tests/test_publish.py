@@ -25,7 +25,7 @@ from studio.cli import app
 from studio.config import LONDON
 from studio.models import Account, Character, Clip, ClipState, Favorite, Platform, Post, PostStatus, Snapshot
 from studio.publish import base, postiz
-from studio.publish.base import PublishResult, Publisher, UncertainPublish, preview_due, publish_due
+from studio.publish.base import PublishResult, Publisher, UncertainPublish, post_story, preview_due, publish_due
 from studio.publish.confirm import confirm_posts
 from studio.publish.reach import MAX_COLLABORATORS, NO_REACH, Reach, ReachConfig, load_reach
 from studio.publish.postiz import (
@@ -1978,6 +1978,37 @@ def test_a_story_is_never_posted_twice(tmp_path):
     assert len(pub.calls) == 1 and pub.stories == [] and rig.get(post).status is PostStatus.posted
     assert rig.store.get_clip(clip.id).features["story"] == earlier  # untouched
     assert summary["stories"][0]["status"] == "skipped" and "already" in summary["stories"][0]["reason"]
+
+
+def test_a_skipped_story_record_never_blocks_a_story(tmp_path):
+    """Owner 2026-10-14: Franz's first Reel went out while Stories were off ("skipped" recorded). That record sent nothing, so
+    the Reel sent again later (`publish resolve --retry`) still gets its Story."""
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig, story={"post_id": "earlier", "status": "skipped", "reason": "stories are off"})
+    pub = FakePublisher()
+    summary = rig.run(pub, reach=STORIES)
+    assert len(pub.stories) == 1 and summary["stories"][0]["status"] == "posted"
+    assert rig.store.get_clip(clip.id).features["story"]["status"] == "posted"
+
+
+def test_publish_story_posts_the_story_of_a_live_reel_once(tmp_path):
+    """`studio publish story`: a Reel that went out without its Story (Stories were off) gets it later, once."""
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig)
+    rig.run(FakePublisher(), reach=ReachConfig(stories=False))
+    assert rig.store.get_clip(clip.id).features["story"]["status"] == "skipped"
+    pub = FakePublisher()
+    out = post_story(rig.store, rig.storage, pub, clip.id, NOW + timedelta(hours=1), reach=STORIES)
+    assert out["status"] == "posted" and len(pub.stories) == 1 and pub.calls == []
+    again = post_story(rig.store, rig.storage, pub, clip.id, NOW + timedelta(hours=2), reach=STORIES)
+    assert again["status"] == "skipped" and "already" in again["reason"] and len(pub.stories) == 1
+
+
+def test_publish_story_refuses_a_clip_without_a_live_reel(tmp_path):
+    rig = reach_rig(tmp_path)
+    clip, _ = ig_reel(rig)  # scheduled: nothing went out yet
+    with pytest.raises(ValueError, match="no posted Instagram Reel"):
+        post_story(rig.store, rig.storage, FakePublisher(), clip.id, NOW, reach=STORIES)
 
 
 class StoryClaimFlakyStore(MemoryStore):

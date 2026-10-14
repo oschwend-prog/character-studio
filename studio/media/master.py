@@ -112,7 +112,10 @@ publishing and the terminal sign), sets ``clip.master_path`` and writes the mast
 ``upload_master``; ``master build`` writes nothing on a clip). A file that misses the spec is not
 uploaded (exit 1, the JSON lists the problems); the clip's state is left to ``clip set --state``.
 
-**The labelled Story video** (task 8 fix 1: a Story shows no caption, so its AI disclosure must be in the picture). With
+**The Story video** (task 8 fix 1 burned ``captions.AI_LABEL`` into it, because a Story shows no caption; **owner 2026-10-14: no
+bar in the middle of the screen any more**: Instagram's own AI label, which the publisher asks for on every Story
+(``publish_story(ai_label=True)``) and which shows under the account name, is the disclosure, so the Story video is the master
+itself, copied; the paragraph below keeps its history). With
 ``config/scan.json`` ``reach.stories`` on (``stories_enabled``, the switch the publisher reads; off by default) ``master build``
 also writes ``<stem>-story.mp4`` next to the master (``story_file``, ``render_story``): the finished master with
 ``captions.AI_LABEL`` burned in, white on a semi-transparent dark pill in the lower third (``overlays.STORY_LABEL_BAND``, y
@@ -739,14 +742,19 @@ def stories_enabled() -> bool:
         return False
 
 
-def render_story(master: Path, out: Path, work: Path, preset: str = "slow") -> Path:
-    """The Story video of the finished ``master``: the same picture and sound with the AI label burned in
-    (``overlays.story_label_png`` of ``captions.AI_LABEL``: a Story shows no caption). The sound is copied as it is; the picture
-    is encoded like the master's (H.264 High, ~15 Mbps). ``MasterError`` when ffmpeg fails."""
-    label = _boxed(overlays.story_label_png(AI_LABEL, work / "story_label.png"))
-    graph = f"{overlay_filter('0:v', 1, 'lb', label)};[lb]format=yuv420p[story]"  # its own pass: the master's graph is unchanged
+def render_story(master: Path, out: Path, work: Path, preset: str = "slow", *, label: bool = False) -> Path:
+    """The Story video of the finished ``master``. Owner 2026-10-14: the master itself, copied (no bar in the middle of the
+    screen: Instagram's own AI label under the name, which ``publish_story(ai_label=True)`` asks for, is the disclosure).
+    ``label`` True keeps the old look: the same picture and sound with the AI label burned in (``overlays.story_label_png`` of
+    ``captions.AI_LABEL``), the sound copied, the picture encoded like the master's (H.264 High, ~15 Mbps). ``MasterError`` when
+    ffmpeg fails."""
+    if not label:
+        shutil.copyfile(master, out)
+        return out
+    label_png = _boxed(overlays.story_label_png(AI_LABEL, work / "story_label.png"))
+    graph = f"{overlay_filter('0:v', 1, 'lb', label_png)};[lb]format=yuv420p[story]"  # its own pass: the master's graph is unchanged
     _ffmpeg(
-        "-i", master, "-i", label.png, "-filter_complex", graph, "-map", "[story]", "-map", "0:a?",
+        "-i", master, "-i", label_png.png, "-filter_complex", graph, "-map", "[story]", "-map", "0:a?",
         "-c:v", "libx264", "-profile:v", "high", "-preset", preset,
         "-b:v", "15M", "-maxrate", "18M", "-bufsize", "30M", "-r", FPS, "-c:a", "copy", "-movflags", "+faststart", out,
     )  # fmt: skip

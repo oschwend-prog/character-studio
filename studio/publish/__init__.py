@@ -40,6 +40,7 @@ from studio.publish.base import (
     Publisher,
     UncertainPublish,
     preview_due,
+    post_story,
     publish_due,
 )
 from studio.publish.confirm import confirm_posts
@@ -93,6 +94,29 @@ def due_command(
     summary = publish_due(store, storage, PostizPublisher(), now, reach=reach)
     emit(summary)
     if summary["errors"]:
+        raise typer.Exit(1)
+
+
+@app.command("story")
+def story_command(
+    clip: Annotated[str, typer.Argument(help="The clip whose live Instagram Reel gets its Story now.")],
+) -> None:
+    """Post the Story of a clip whose Instagram Reel is live but went out without one (Stories were off, or its Story video did
+    not exist yet). The same rules as the Story after a Reel: never a second one. Prints the Story line; exit 1 when it failed."""
+    store = open_store()
+    if not load().postiz_api_key:
+        fail(
+            "POSTIZ_API_KEY is not set. Run through bin/studio (it reads the Keychain item "
+            "cs-postiz-api-key) or export it."
+        )
+    if which("postiz") is None:
+        fail("the postiz CLI is not on PATH. Install it with: npm i -g postiz")
+    try:
+        out = post_story(store, open_storage(), PostizPublisher(), clip, now_london())
+    except (KeyError, ValueError) as e:
+        fail(str(e))
+    emit(out)
+    if out.get("status") in ("failed", "needs_check"):
         raise typer.Exit(1)
 
 

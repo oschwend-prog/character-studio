@@ -412,10 +412,37 @@ def _story_marker(store: Store, clip_id: str, marker: dict[str, Any], *, claim: 
         clip = store.get_clip(clip_id)
         if clip is None:
             raise KeyError(clip_id)
-        if claim and clip.features.get("story") is not None:
+        existing = clip.features.get("story")
+        sent = existing is not None and not (isinstance(existing, dict) and existing.get("status") == "skipped")
+        if claim and sent:  # a "skipped" record sent nothing (Stories were off, say): it never blocks a Story
             return False
         store.update_clip(clip_id, features={**clip.features, "story": marker})
         return True
+
+
+def post_story(
+    store: Store, storage: Storage, publisher: Publisher, clip_id: str, now: datetime, *, reach: ReachConfig | None = None
+) -> dict[str, Any]:
+    """The Story of a clip whose Instagram Reel is already live but went out without one (``studio publish story``): posted while
+    Stories were off, or before its Story video existed (owner 2026-10-14, Franz's first Reel). The very rules of the Story that
+    follows a Reel (``plan_post``: Stories on, a Story video, not a silent master, not a Trial Reel, never a second one;
+    ``_follow_with_story`` claims it the same way). ``KeyError`` for an unknown clip, ``ValueError`` when it has no posted
+    Instagram Reel (its Story follows the Reel, never stands alone)."""
+    require_aware(now, "post_story(now)")
+    config = load_reach() if reach is None else reach
+    clip = store.get_clip(clip_id)
+    if clip is None:
+        raise KeyError(clip_id)
+    accounts = {a.id: a for a in store.accounts()}
+    reels = [
+        p for p in store.list_posts(clip_id=clip_id)
+        if p.status is PostStatus.posted and p.account_id in accounts and accounts[p.account_id].platform is Platform.instagram
+    ]  # fmt: skip
+    if not reels:
+        raise ValueError(f"clip {clip_id} has no posted Instagram Reel: a Story only follows its Reel")
+    post, account = reels[0], accounts[reels[0].account_id]
+    plan = plan_post(clip, account, accounts.values(), config, live=_live_characters(store))
+    return _follow_with_story(store, storage, publisher, post, clip, account, plan, now)
 
 
 def _follow_with_story(

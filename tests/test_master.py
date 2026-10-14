@@ -713,21 +713,31 @@ def test_the_story_label_is_legible_inside_the_story_safe_zone_and_clear_of_the_
         overlays.story_label_png("  ", tmp_path / "x.png")
 
 
-def test_a_built_master_comes_with_its_labelled_story_video(tmp_path):
-    """With Stories on the master build also writes the Story video next to the master (``<stem>-story.mp4``): the same picture
-    and sound with the AI label burned in; the master itself carries no label."""
+def test_a_built_master_comes_with_its_story_video_a_copy_of_the_master(tmp_path):
+    """With Stories on the master build also writes the Story video next to the master (``<stem>-story.mp4``). Owner 2026-10-14:
+    no bar in the middle of the screen: the Story is the master itself (Instagram's own AI label under the name discloses it)."""
     dance = flat_video(tmp_path / "dance.mp4", 2)
     spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
     out = build_master(spec, story=True)
     story = master.story_file(out)
     assert story == tmp_path / "master-story.mp4" and story.is_file()
+    assert story.read_bytes() == out.read_bytes()  # the master, copied: no label, no second encode
+
+
+def test_the_old_labelled_story_look_is_still_there_on_request(tmp_path):
+    """``render_story(label=True)`` keeps the task-8 look (the AI label burned in, the master stays clean)."""
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=[])
+    out = build_master(spec, story=False)
+    (tmp_path / "w").mkdir()
+    story = master.render_story(out, tmp_path / "labelled.mp4", tmp_path / "w", label=True)
     m, s = probe(out), probe(story)
     assert (s.width, s.height, s.fps, s.video_profile) == (1080, 1920, 30.0, "High") and s.has_audio
-    assert s.duration_s == pytest.approx(m.duration_s, abs=0.05) and s.lufs == pytest.approx(m.lufs, abs=0.3)
+    assert s.duration_s == pytest.approx(m.duration_s, abs=0.05)
     (tmp_path / "s").mkdir(), (tmp_path / "m").mkdir()
     in_story, in_master = frame_at(story, 1.0, tmp_path / "s"), frame_at(out, 1.0, tmp_path / "m")
     assert bright_pixels(in_story, STORY_BAND, floor=235) > 1500  # the label's white text
-    assert bright_pixels(in_master, STORY_BAND, floor=235) == 0  # the Reel's master stays clean: its caption carries the line
+    assert bright_pixels(in_master, STORY_BAND, floor=235) == 0
 
 
 def _story_spy(monkeypatch):

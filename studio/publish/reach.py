@@ -193,7 +193,7 @@ def plan_post(
     skip: str | None
     if not config.stories:
         skip = STORIES_OFF
-    elif features.get("story") is not None:
+    elif features.get("story") is not None and _story_status(features["story"]) != "skipped":  # a skipped one sent nothing
         skip = f"a Story of this clip is already recorded ({_story_status(features['story'])}): never a second one"
     elif features.get("music") == "in_app":
         skip = SILENT_STORY
