@@ -22,7 +22,7 @@ from studio import budget, drop
 from studio.cli import app
 from studio.config import LONDON
 from studio.drop import DropError
-from studio.higgsfield_api import HiggsfieldError
+from studio.higgsfield_api import HiggsfieldError, UnexpectedResponse
 from studio.models import Account, Body, Character, Clip, ClipState, Favorite, LedgerEntry, Mode, Post, PostStatus, Settings
 from studio.store import MemoryStore
 
@@ -510,11 +510,10 @@ def test_makes_asked_for_but_not_yet_reserved_count_against_the_cap_and_the_bala
 
 
 @pytest.mark.parametrize("hf, why", [
-    (None, "no Higgsfield key"),
-    (FakeHF(HiggsfieldError("the balance call answered HTTP 404", 404)), "balance could not be read"),
-    (FakeHF(RuntimeError("boom")), "balance could not be read"),
+    (None, "no Higgsfield key"),  # nothing could be submitted without the key: a make would only wait for it
+    (FakeHF(RuntimeError("boom")), "balance could not be read"),  # a bug in the read is not Higgsfield's answer: fail closed
 ])
-def test_a_balance_that_cannot_be_read_is_waiting_never_a_guess(hf, why):
+def test_no_key_or_a_bug_in_the_balance_read_waits(hf, why):
     store = world("franz")
     pid = ready(store, "franz", 70)
     out = drop.auto_make(store, NOW, hf=hf, scan={})
@@ -522,10 +521,127 @@ def test_a_balance_that_cannot_be_read_is_waiting_never_a_guess(hf, why):
     assert store.get_favorite(pid).proposal["drop"]["state"] == "ready"
 
 
+@pytest.mark.parametrize("error", [
+    HiggsfieldError("the balance call answered HTTP 404", 404),  # Higgsfield documents no balance route
+    UnexpectedResponse("balance: no credits in the answer: {}", 200),
+    HiggsfieldError("the balance call failed (ConnectError)"),
+])
+def test_a_balance_that_cannot_be_read_is_unknown_not_short_so_one_make_is_tried_as_a_probe(error):
+    """Higgsfield's docs describe no balance route: an unreadable balance must not stop the studio for ever. It asks for ONE make per
+    run (the earliest slot's); a refusal for credits at submit (HTTP 403) is what then holds it (tests/test_drop.py)."""
+    store = world("franz", "reginald", "lenny")
+    for slug in ("franz", "reginald", "lenny"):
+        ready(store, slug, 70)
+    out = run(store, hf=FakeHF(error))
+    assert requested(out) == {"lenny": store.list_favorites(character_slug="lenny")[0].id}  # Lenny 12:30 is the first slot
+    assert out["requested"][0]["probe"] is True and out["waiting"] is None
+    assert set(skipped(out)) == {"franz", "reginald"} and all("one make at a time" in why for why in skipped(out).values())
+
+
+def test_the_probe_of_each_run_is_the_next_character_and_a_known_balance_is_no_probe():
+    store = world("franz", "reginald", "lenny")
+    for slug in ("franz", "reginald", "lenny"):
+        ready(store, slug, 70)
+    unknown = FakeHF(HiggsfieldError("HTTP 404", 404))
+    first = run(store, hf=unknown)
+    second = run(store, hf=unknown, now=NOW + timedelta(hours=2))
+    third = run(store, hf=unknown, now=NOW + timedelta(hours=4))
+    assert [list(requested(o)) for o in (first, second, third)] == [["lenny"], ["franz"], ["reginald"]]
+    known = world("franz", "reginald", "lenny")
+    for slug in ("franz", "reginald", "lenny"):
+        ready(known, slug, 70)
+    out = run(known, hf=FakeHF(5000))  # a readable balance that covers them: all three, no probe
+    assert set(requested(out)) == {"franz", "reginald", "lenny"} and all("probe" not in r for r in out["requested"])
+
+
+def test_a_readable_balance_that_is_short_still_waits_and_asks_for_no_probe():
+    store = world("franz", "reginald")
+    ready(store, "franz", 70), ready(store, "reginald", 70)
+    out = run(store, hf=FakeHF(10))
+    assert out["requested"] == [] and "Higgsfield has 10" in out["waiting"]
+
+
+def test_an_unknown_balance_still_meets_the_cap_and_the_kill_switch_first():
+    store = world("franz", monthly_cap_credits=50)  # a clip costs 91
+    ready(store, "franz", 70)
+    out = run(store, hf=FakeHF(HiggsfieldError("HTTP 404", 404)))
+    assert out["requested"] == [] and "monthly cap" in out["waiting"]
+    store2 = world("franz", kill_switch=True)
+    ready(store2, "franz", 70)
+    out = run(store2, hf=FakeHF(HiggsfieldError("HTTP 404", 404)))
+    assert out["requested"] == [] and "kill switch" in out["waiting"]
+
+
 def test_an_unreadable_balance_is_not_mentioned_when_nobody_needs_a_clip():
     store = world("franz")  # no drop at all
     out = run(store, hf=FakeHF(HiggsfieldError("HTTP 404", 404)))
     assert out["waiting"] is None and "no ready drop" in skipped(out)["franz"]
+
+
+# ---- Higgsfield said not enough credits (HTTP 403 at submit): wait 12 hours, then probe again -------------------------------------------
+
+
+def stamp(store, pick_id: str, hours_ago: float, **over) -> None:
+    """What a studio make that Higgsfield refused for credits leaves on its drop (``drop._refused_for_credits``)."""
+    f = store.get_favorite(pick_id)
+    at = (NOW - timedelta(hours=hours_ago)).isoformat()
+    store.update_favorite(pick_id, proposal={**f.proposal, "drop": {**f.proposal["drop"], "credits_refused_at": at, **over}})
+
+
+def test_a_refusal_for_credits_in_the_last_12_hours_holds_every_character_and_names_it():
+    store = world("franz", "reginald")
+    refused, other = ready(store, "franz", 70), ready(store, "reginald", 70)
+    stamp(store, refused, 3)  # 06:00 today
+    out = run(store, hf=FakeHF(HiggsfieldError("HTTP 404", 404)))
+    assert out["requested"] == [] and out["waiting"] == (
+        "waiting for credits: Higgsfield said not enough credits at Wed 14 Oct 06:00; next try after Wed 14 Oct 18:00"
+    )
+    assert set(skipped(out)) == {"franz", "reginald"} and store.get_favorite(other).proposal["drop"]["state"] == "ready"
+    rich = run(store, hf=FakeHF(5000))  # a readable balance does not lift it: the account just said no
+    assert rich["requested"] == [] and "Higgsfield said not enough credits" in rich["waiting"]
+
+
+def test_after_12_hours_it_probes_again_one_make_at_a_time():
+    store = world("franz", "reginald")
+    refused, other = ready(store, "franz", 70), ready(store, "reginald", 70)
+    stamp(store, refused, drop.CREDITS_REFUSED_HOLD_H + 0.1)
+    out = run(store, hf=FakeHF(HiggsfieldError("HTTP 404", 404)))
+    assert len(out["requested"]) == 1 and out["requested"][0]["probe"] is True and out["waiting"] is None
+    assert drop.CREDITS_REFUSED_HOLD_H == 12 and other
+    store2 = world("franz")  # just inside the 12 hours: still held
+    only = ready(store2, "franz", 70)
+    stamp(store2, only, 11.9)
+    assert run(store2, hf=FakeHF(HiggsfieldError("HTTP 404", 404)))["waiting"].startswith("waiting for credits: Higgsfield said not enough")
+
+
+def test_the_newest_refusal_counts_a_skipped_drops_counts_and_a_stamp_after_now_does_not_free_anyone():
+    store = world("franz")
+    old, newer, hidden = ready(store, "franz", 70), ready(store, "franz", 60), ready(store, "franz", 50)
+    stamp(store, old, 30)
+    stamp(store, newer, 5)  # 04:00
+    stamp(store, hidden, 20)
+    store.update_favorite(hidden, status="skipped")
+    out = run(store, hf=FakeHF(5000))
+    assert "at Wed 14 Oct 04:00; next try after Wed 14 Oct 16:00" in out["waiting"]
+    skewed = world("franz")
+    pid = ready(skewed, "franz", 70)
+    stamp(skewed, pid, -1)  # a clock a little ahead of ours: still a fresh refusal
+    assert "Higgsfield said not enough credits" in run(skewed, hf=FakeHF(5000))["waiting"]
+
+
+def test_a_garbled_refusal_stamp_is_ignored():
+    store = world("franz")
+    pid = ready(store, "franz", 70)
+    stamp(store, pid, 1, credits_refused_at="yesterday")
+    assert requested(run(store, hf=FakeHF(5000))) == {"franz": pid}
+
+
+def test_the_refusal_hold_is_not_mentioned_when_nobody_needs_a_clip():
+    store = world("franz")
+    pid = ready(store, "franz", 70)
+    stamp(store, pid, 1)
+    ask(store, pid, "owner")  # his own make covers the slot: nothing to wait for
+    assert run(store, hf=FakeHF(5000))["waiting"] is None
 
 
 # ---- dry run, idempotence, the switch -----------------------------------------------------------------------------------------------

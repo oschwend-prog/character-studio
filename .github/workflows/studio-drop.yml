@@ -36,11 +36,15 @@
 # starts with `studio drop auto-make` on worker 1 only (the first matrix entry, `strategy.job-index == 0`), BEFORE the pending count, so
 # what it asks for is counted and made by that same sweep (the next one at the latest). For each live character whose next posting slot
 # is within the horizon (config/scan.json `auto_make`, 30 h) and has nothing in the pipeline, it asks for ONE of his ready drops, exactly as
-# the owner's Make it does but marked `make_requested.by` studio; it stays inside the monthly credit cap and Higgsfield's balance (a free
-# read, so the step holds the Higgsfield key) and never runs with the kill switch on. Short of credits it only prints why and exits 0:
-# that is every sweep until the top-up, so it is quiet. It changes no account mode: a made clip still waits for the owner's one tap. It
-# is idempotent (the asked-for make covers the slot), so every sweep, also after GitHub's schedule skipped some, fills the gaps. A
-# failure of the step is an error annotation, never a stopped sweep. Off: `auto_make.enabled` false in config/scan.json.
+# the owner's Make it does but marked `make_requested.by` studio; it stays inside the monthly credit cap and never runs with the kill
+# switch on. Credits: Higgsfield documents NO balance route, so the step's best-effort balance read (it holds the Higgsfield key) may
+# fail, and an unreadable balance is unknown, not short: then ONE make per run is a probe (the other characters follow on later
+# sweeps). Higgsfield's answer is the submit's: HTTP 403 = short of credits, nothing charged. A studio make refused that way goes back to
+# ready (not failed, its reservation released) with a stamp, and auto-make then waits 12 hours before it probes again. Short of
+# credits it only prints why and exits 0: that is every sweep until the top-up, so it is quiet. It changes no account mode: a made
+# clip still waits for the owner's one tap. It is idempotent (the asked-for make covers the slot), so every sweep, also after GitHub's
+# schedule skipped some, fills the gaps. A failure of the step is an error annotation, never a stopped sweep. Off: `auto_make.enabled`
+# false in config/scan.json.
 name: studio-drop
 
 on:

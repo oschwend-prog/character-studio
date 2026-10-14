@@ -21,11 +21,11 @@ from typer.testing import CliRunner
 
 from studio import budget, clips, drop, gemini, sources
 from studio.cli import app
-from studio.config import now_london
+from studio.config import LONDON, now_london
 from studio.drop import DropError, add_drop, attach_file, drop_window, make_drop, pending, process_drop, validate_adjust
 from studio.favorites import next_favorites
 from studio.gemini import GeminiBlocked, GeminiError
-from studio.higgsfield_api import PollTimeout, RequestStatus, Submitted, SubmitUncertain
+from studio.higgsfield_api import HiggsfieldError, PollTimeout, RequestStatus, Submitted, SubmitUncertain
 from studio.media.qa import probe
 from studio.models import Body, Character, Clip, ClipState, Favorite, Mode, Settings
 from studio.storage import LocalStorage, StorageError
@@ -970,6 +970,9 @@ def test_make_it_swaps_qas_masters_and_waits_for_the_owners_ok(world, portrait, 
     assert len(hf.submits) == 1
 
 
+WEDNESDAY = datetime(2026, 10, 14, 9, 0, tzinfo=LONDON)  # the default cadence: Reginald Tue/Wed/Thu 19:30
+
+
 class Balance:
     """What ``studio drop auto-make`` asks Higgsfield for: the balance."""
 
@@ -982,14 +985,12 @@ class Balance:
 
 def studio_asks(store, storage, portrait):
     """What the sweep's ``studio drop auto-make`` does: Reginald (live, with an account, slot 19:30 today) gets his ready drop asked for."""
-    from studio.config import LONDON
     from studio.models import Account
 
     store.upsert_character(Character(slug="reginald", name="Reginald", status="live", bodies=[Body.biped]))
     store.add_account(Account(character_slug="reginald", platform="instagram", handle="@reginald", postiz_integration_id="pz-reginald"))
     pid = ready_drop(store, storage, portrait)
-    wednesday = datetime(2026, 10, 14, 9, 0, tzinfo=LONDON)  # the default cadence: Reginald Tue/Wed/Thu 19:30
-    out = drop.auto_make(store, wednesday, hf=Balance(5000), scan={})
+    out = drop.auto_make(store, WEDNESDAY, hf=Balance(5000), scan={})
     assert [r["pick_id"] for r in out["requested"]] == [pid], out
     return pid
 
@@ -1032,6 +1033,80 @@ def test_the_studios_request_is_accepted_by_the_cli_and_a_forged_one_is_not(monk
         r = CliRunner().invoke(app, ["drop", "make", pid])
         assert r.exit_code == 2 and "no Make it from the owner or the studio" in r.output
         assert pending(store) == []
+
+
+NO_CREDITS = '{"detail": "Insufficient credits"}'
+
+
+def hf_refusal(status, body=NO_CREDITS):
+    """What ``HiggsfieldClient.submit_object_swap`` raises for a refused submit (a 4xx: nothing was created or charged)."""
+    return HiggsfieldError(f"Higgsfield refused the submit: HTTP {status}: {body}", status)
+
+
+def test_a_studio_make_that_higgsfield_refuses_for_credits_goes_back_to_ready_and_is_not_failed(world, portrait, gen_out):
+    """HTTP 403 at submit is "not enough credits" and nothing is charged: the studio's own request is taken back (the drop is ready
+    again, ``make_requested`` gone), the reservation is released, and the drop carries the stamp ``auto-make`` waits 12 hours on."""
+    store, storage = world
+    pid = studio_asks(store, storage, portrait)
+    at = WEDNESDAY + timedelta(hours=1)
+    hf = FakeHF(gen_out, submit_errors=[hf_refusal(403)])
+    out = make(store, storage, pid, hf, FakeGemini(), now=at)
+    assert out.ok and out.state == "ready" and out.detail["credits_refused"] is True and "not enough credits" in out.reason
+    pick = store.get_favorite(pid)
+    d = pick.proposal["drop"]
+    assert d["state"] == "ready" and pick.status == "approved" and "make_requested" not in pick.proposal
+    assert d["credits_refused_at"] == at.isoformat() and "Insufficient credits" in d["credits_refused_reason"] and d["reason"] == out.reason
+    assert d["at"] == at.isoformat() and "make" not in d and "job" not in d and "adjust" not in d  # no make record, lease given back
+    assert d["score"] and d["credits"] and d["window"]  # the check's results are all still there
+    (clip,) = store.list_clips()
+    assert clip.state is ClipState.dropped and "not enough credits" in clip.reject_reason
+    ledger = store.ledger_month(at.strftime("%Y-%m"))
+    assert [e.kind for e in ledger] == ["reserve", "release"] and budget.committed(store, at.strftime("%Y-%m")) == 0  # the cap is as before
+    assert len(hf.submits) == 1 and pending(store) == []
+    # ... and the studio waits: no new request for 12 hours, whatever the balance says
+    waiting = drop.auto_make(store, at + timedelta(hours=1), hf=Balance(5000), scan={})
+    assert waiting["requested"] == [] and waiting["waiting"].startswith("waiting for credits: Higgsfield said not enough credits at ")
+    probe = drop.auto_make(store, at + timedelta(hours=12, minutes=1), hf=Balance(5000), scan={})
+    assert [r["pick_id"] for r in probe["requested"]] == [pid]
+
+
+def test_the_owners_make_that_higgsfield_refuses_for_credits_still_ends_failed_with_the_reason(world, portrait, gen_out):
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)
+    hf = FakeHF(gen_out, submit_errors=[hf_refusal(403)])
+    out = make(store, storage, pid, hf, FakeGemini())
+    assert not out.ok and out.state == "failed" and out.reason.startswith("Higgsfield refused the job: ") and "403" in out.reason
+    pick = store.get_favorite(pid)
+    d = pick.proposal["drop"]
+    assert d["state"] == "failed" and pick.proposal["make_requested"]["by"] == "owner" and "credits_refused_at" not in d
+    assert [e.kind for e in store.ledger_month(NOW.strftime("%Y-%m"))] == ["reserve", "release"]
+    (clip,) = store.list_clips()
+    assert clip.state is ClipState.dropped
+
+
+def test_a_studio_make_refused_for_another_reason_ends_failed_as_before(world, portrait, gen_out):
+    store, storage = world
+    pid = studio_asks(store, storage, portrait)
+    out = make(store, storage, pid, FakeHF(gen_out, submit_errors=[hf_refusal(400, '{"detail": "bad image"}')]), FakeGemini(), now=WEDNESDAY)
+    assert not out.ok and out.state == "failed" and out.reason.startswith("Higgsfield refused the job: ")
+    d = store.get_favorite(pid).proposal["drop"]
+    assert d["state"] == "failed" and "credits_refused_at" not in d
+    assert store.get_favorite(pid).proposal["make_requested"]["by"] == "studio"  # a failed studio make: auto-make holds him a day (its own rule)
+
+
+def test_the_sweep_does_not_go_red_for_a_studio_make_refused_for_credits(monkeypatch, tmp_path, portrait, gen_out):
+    store, storage = make_store(), LocalStorage(tmp_path / "s")
+    pid = studio_asks(store, storage, portrait)
+    hf = FakeHF(gen_out, submit_errors=[hf_refusal(403)])
+    monkeypatch.setattr(drop, "open_store", lambda: store)
+    monkeypatch.setattr(drop, "open_storage", lambda: storage)
+    monkeypatch.setattr(drop.HiggsfieldClient, "from_env", classmethod(lambda cls, *a, **k: hf))
+    monkeypatch.setattr(drop.gemini.GeminiClient, "from_env", classmethod(lambda cls, *a, **k: FakeGemini()))
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    out = json.loads(r.output)
+    assert r.exit_code == 0 and out["results"][0]["state"] == "ready" and out["results"][0]["credits_refused"] is True
+    assert store.get_favorite(pid).proposal["drop"]["state"] == "ready"
 
 
 def test_the_next_drop_of_the_character_rotates_the_engagement_line(world, portrait, gen_out, fast_master):

@@ -30,13 +30,14 @@ followed). Error messages never carry the key.
 does not exist or belongs to another account"). A status read creates and spends nothing, so a 404 for a request that cannot exist
 means the key was accepted, and a 401 that it was not (``studio drop check-keys``).
 
-**What is left on the account?** ``balance`` reads the credits the account still has, for free (``studio drop auto-make`` asks
-before it requests a clip: owner decision 2026-10-14, "the studio makes them", within the credits the account really holds). A
-read creates and spends nothing. UNVERIFIED: Higgsfield's REST docs describe no balance route that this repo has seen (the MCP's
-``balance`` tool is the owner's way), so ``BALANCE_PATH`` is a best guess; ``parse_balance`` accepts a few usual field names and
-guesses nothing else. Whatever goes wrong (a 404, another shape, no answer) raises ``HiggsfieldError`` and the caller treats the
-balance as unknown: auto-make then waits and says why in its JSON, it never makes a clip on a guess. If the route is another one,
-change ``BALANCE_PATH`` and nothing else.
+**What is left on the account?** Higgsfield's docs (docs.higgsfield.ai, checked 14 Oct 2026) document NO balance endpoint. ``balance``
+is a best-effort free read that creates and spends nothing (``studio drop auto-make`` asks before it requests a clip, owner decision
+2026-10-14, "the studio makes them"): ``BALANCE_PATH`` is a guess, UNVERIFIED, and ``parse_balance`` accepts a few usual field names
+and guesses nothing else. Whatever goes wrong (a 404, another shape, no answer) raises ``HiggsfieldError`` and the caller treats the
+balance as UNKNOWN, not short: auto-make then tries one make at a time. The real answer is the submit's: the errors page says an
+account short of credits gets HTTP 403 ("Insufficient credits", body ``{"detail": ...}``) and billing says a refused or failed request
+is not charged, so ``HiggsfieldError.status`` 403 on a submit means "no credits" and nothing was spent (``studio.drop`` handles it).
+If a balance route is ever documented, change ``BALANCE_PATH`` and nothing else.
 
 Tests drive the client with an ``httpx.MockTransport``; nothing here is called without the owner's keys.
 """

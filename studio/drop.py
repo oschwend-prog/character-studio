@@ -131,9 +131,17 @@ for ONE of his ready drops (``request_make``), written exactly as ``request_job`
 of his from generating to scheduled that has no post yet or a post on that slot's London day (``_covering_clip``); a studio make that
 failed in the last day holds him until the owner looks. The drop is the best score (ties: the oldest; no score last), except one clip
 in every 4 (test A, ``explore_turn``), which is the best drop below the median of his checked scores, the pool the clip's ``explore_pick``
-tag is judged by at Make it. It is priced at the check's price and must fit the monthly cap, Higgsfield's balance
-(``HiggsfieldClient.balance``, a free read) and the credits already spoken for; the kill switch, the cap or too few credits ask for
-nothing and print why as ``waiting`` with exit 0 (a normal state until the owner tops up: never a red run). An unreadable balance waits too.
+tag is judged by at Make it. It is priced at the check's price and must fit the monthly cap and the credits already spoken for.
+**Credits** (Higgsfield documents NO balance route; its errors page says a submit from an account short of credits answers HTTP 403
+"Insufficient credits", and billing charges nothing for a refused request): the balance read (``HiggsfieldClient.balance``, best effort)
+is exact when it works, and a readable balance below the price waits. When it cannot be read the balance is UNKNOWN, not short:
+at most ONE make is asked for per run, the earliest slot's, as a probe (the other characters follow on later sweeps). A probe, or any
+make the studio asked for, that Higgsfield refuses with 403 is not a failure (``_refused_for_credits``): the drop goes back to
+``ready``, the studio's ``make_requested`` is taken back, the reservation is released and the drop is stamped ``credits_refused_at``;
+the owner's own Make it keeps ending ``failed`` with the reason. While any drop carries a stamp from the last
+``CREDITS_REFUSED_HOLD_H`` (12) hours auto-make asks for nothing, whatever the balance read says, and after that it probes again. The
+kill switch, the cap, too few credits and a fresh stamp ask for nothing and print why as ``waiting`` with exit 0 (a normal state until
+the owner tops up: never a red run); no key in the run waits too.
 It is idempotent and changes no account mode: a made clip still waits for the owner's one tap. Off: ``auto_make.enabled`` false.
 
 **Make** (``make_drop``, paid, ONLY after a Make it, the owner's or the studio's): refused unless ``proposal['make_requested']`` is
@@ -1682,6 +1690,31 @@ def _give_up(store: Store, pick: Favorite, clip: Clip | None, now: datetime, rea
     return Outcome(pick.id, "failed", reason, ok=False, detail={"clip_id": clip.id if clip else None})
 
 
+def _refused_for_credits(store: Store, pick: Favorite, clip: Clip, now: datetime, error: Exception) -> Outcome:
+    """Higgsfield refused the submit of a make the STUDIO asked for with HTTP 403, its answer for an account short of credits
+    (docs.higgsfield.ai errors page); nothing was created or charged. That is no failure of the drop: it goes back to ``ready``
+    (``make`` record gone, the clip dropped, the studio's ``make_requested`` taken back, the pick ``approved``) exactly as
+    ``_reserve`` returns a drop the cap refused, and the drop is stamped ``credits_refused_at`` (+ ``credits_refused_reason``,
+    Higgsfield's own words) with the one line the card shows as its ``reason``. ``auto-make`` waits ``CREDITS_REFUSED_HOLD_H``
+    hours on any such stamp, then probes again. The reservation was released by the caller, like any refused submit. Not ``red``:
+    the sweep stays green. The owner's own Make it keeps ``_give_up``'s ``failed`` (he sees why and taps it again)."""
+    until = now + timedelta(hours=CREDITS_REFUSED_HOLD_H)
+    line = f"Higgsfield said not enough credits at {_london_words(now)}; the studio asks again after {_london_words(until)}"
+    if S.dropped in clips.ALLOWED.get(store.get_clip(clip.id).state, set()):
+        clips.transition(store, clip.id, S.dropped, reject_reason=line[:300])
+    fresh = store.get_favorite(pick.id)
+    drop = drop_of(fresh)
+    drop.pop("make", None)
+    drop.update(
+        state="ready", reason=line, at=now.isoformat(), credits_refused_at=now.isoformat(),
+        credits_refused_reason=" ".join(str(error).split())[:200],
+    )
+    proposal = {**fresh.proposal, "drop": drop}
+    proposal.pop("make_requested", None)
+    mark_favorite(store, pick.id, "approved", proposal=proposal)
+    return Outcome(pick.id, "ready", line, detail={"clip_id": clip.id, "credits_refused": True})
+
+
 def make_drop(
     store: Store,
     storage: Storage,
@@ -1965,6 +1998,8 @@ def _submit(store: Store, storage: Storage, pick: Favorite, clip: Clip, child: S
     except HiggsfieldError as e:  # a refusal: nothing was created, nothing was charged
         budget.release(store, clip.id, now)
         clips.transition(store, clip.id, S.gen_failed, qa={"error": str(e)[:300]})
+        if e.status == 403 and make_requested_by(store.get_favorite(pick.id)) == "studio":  # not enough credits: see the function
+            return _refused_for_credits(store, pick, store.get_clip(clip.id), now, e)
         return _give_up(store, pick, store.get_clip(clip.id), now, f"Higgsfield refused the job: {str(e)[:160]}")
     _record_make(store, pick, now, request_id=sub.request_id, status_url=sub.status_url, status=sub.status)
     clips.set_fields(store, clip.id, hf_job_id=sub.request_id)
@@ -2435,6 +2470,7 @@ def _auto_retry(media: Any) -> bool:
 AUTO_MAKE_DEFAULTS = {"enabled": True, "horizon_hours": 30}  # config/scan.json ``auto_make``
 AUTO_MAKE_MAX_HORIZON_H = 168  # a week: further ahead than that, a slot is not "coming"
 STUDIO_FAILED_HOLD_H = 24  # a make the studio asked for that failed holds its character this long: the owner looks first
+CREDITS_REFUSED_HOLD_H = 12  # after Higgsfield said "not enough credits" (HTTP 403 at submit) auto-make waits this long, then probes again
 WATCHED_CLIP_STATES = (  # a clip in one of these may cover a slot (``_covering_clip``); planned, rejected and dropped never do
     S.generating, S.gen_failed, S.generated, S.qa_failed, S.qa_passed, S.mastered, S.awaiting_approval, S.approved, S.scheduled, S.posted,
 )
@@ -2464,23 +2500,33 @@ def auto_make_config(scan: Mapping[str, Any]) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class Balance:
-    """What Higgsfield says is left (``credits``), or why it could not be read (``problem``): never both, never a guess."""
+    """What Higgsfield says is left (``credits``), or why it could not be read (``problem``): never both, never a guess.
+
+    An unreadable balance is UNKNOWN, not short. ``can_probe`` says whether a make may still be tried to find out: yes when Higgsfield
+    answered but not with a balance (no balance route is documented, so this is the usual case: a 404, another shape, an error), no
+    when nothing could be submitted anyway (no key in this run) or the read itself broke (a bug is not Higgsfield's answer)."""
 
     credits: int | None
     problem: str | None = None
+    can_probe: bool = False
 
 
 def read_balance(hf: Any) -> Balance:
-    """Higgsfield's free balance read (``HiggsfieldClient.balance``). Whatever goes wrong (no key, a refusal, another shape, no
-    answer) is a ``problem``, not an error: auto-make then waits and says why."""
+    """Higgsfield's best-effort balance read (``HiggsfieldClient.balance``; Higgsfield documents no balance route, see
+    ``studio.higgsfield_api``). A readable balance is exact. A ``HiggsfieldError`` (a refusal, a 404, another shape, no answer;
+    ``UnexpectedResponse`` included) leaves it unknown and ``can_probe``: auto-make then tries ONE make per run, and Higgsfield's
+    own HTTP 403 "insufficient credits" at submit is the real answer (``_refused_for_credits``). No key, or any other exception,
+    leaves it unknown and waits."""
     if hf is None:
         return Balance(None, "no Higgsfield key in this run (HF_KEY): its balance is unknown")
     try:
         credits = hf.balance()
-    except Exception as e:  # noqa: BLE001 - a read that fails for any reason leaves the balance unknown, which waits
+    except HiggsfieldError as e:
+        return Balance(None, f"Higgsfield's balance could not be read ({type(e).__name__}: {' '.join(str(e).split())[:140]})", True)
+    except Exception as e:  # noqa: BLE001 - not Higgsfield's answer but a fault in the read: unknown, and nothing is tried on it
         return Balance(None, f"Higgsfield's balance could not be read ({type(e).__name__}: {' '.join(str(e).split())[:140]})")
     if isinstance(credits, bool) or not isinstance(credits, int) or credits < 0:
-        return Balance(None, f"Higgsfield's balance could not be read (it answered {credits!r})")
+        return Balance(None, f"Higgsfield's balance could not be read (it answered {credits!r})", True)
     return Balance(credits)
 
 
@@ -2586,18 +2632,32 @@ def _studio_failure(picks: list[Favorite], now: datetime) -> Favorite | None:
     return None
 
 
+def _credits_refusal(drops: list[Favorite], now: datetime) -> datetime | None:
+    """When Higgsfield last said "not enough credits" within ``CREDITS_REFUSED_HOLD_H`` hours, else None: the newest
+    ``drop.credits_refused_at`` stamp of any drop (``_refused_for_credits`` writes it; a skipped drop's counts, the account is
+    one; a time that is no aware ISO time is ignored). A stamp a little in the future (a clock ahead of ours) is still fresh."""
+    latest: datetime | None = None
+    for f in drops:
+        at = _moment(f.proposal["drop"].get("credits_refused_at"))
+        if at is not None and now - at < timedelta(hours=CREDITS_REFUSED_HOLD_H) and (latest is None or at > latest):
+            latest = at
+    return latest
+
+
 @dataclass
 class _Want:
-    """One request the plan makes."""
+    """One request the plan makes. ``probe``: the balance was unknown, so this make is the try that finds out (one per run)."""
 
     character: str
     pick_id: str
     slot: datetime
     credits: int
     explore: bool
+    probe: bool = False
 
     def json(self) -> dict[str, Any]:
-        return {"character": self.character, "pick_id": self.pick_id, "slot": self.slot.isoformat(), "credits": self.credits, "explore": self.explore}
+        out = {"character": self.character, "pick_id": self.pick_id, "slot": self.slot.isoformat(), "credits": self.credits, "explore": self.explore}
+        return {**out, "probe": True} if self.probe else out
 
 
 def _london_words(at: datetime) -> str:
@@ -2615,9 +2675,14 @@ def plan_auto_make(
     (``choose_ready_drop``) and priced at the check's price; it must fit the monthly cap
     and Higgsfield's balance, counting what is already spoken for: the ledger (settled and reserved), the makes asked for that have not reserved yet
     (``making`` without ``make.reserved``) and, in the slot order, what this plan asks for before him. A character that does not
-    fit waits, and the first such reason is the plan's ``waiting``."""
+    fit waits, and the first such reason is the plan's ``waiting``. In that order the gates are: the cap; a refusal for credits
+    within ``CREDITS_REFUSED_HOLD_H`` hours (``_credits_refusal``: Higgsfield said no, nothing is tried before the hold is over);
+    a readable balance below the price; and a balance that cannot be read (``Balance.can_probe``: unknown, not short), which asks
+    for at most ONE make per run, the earliest slot's, as a probe, the others following on later sweeps."""
     settings = store.get_settings()
-    picks = [f for f in store.list_favorites() if is_drop(f.proposal) and f.status != "skipped"]
+    all_drops = [f for f in store.list_favorites() if is_drop(f.proposal)]
+    picks = [f for f in all_drops if f.status != "skipped"]
+    refusal = _credits_refusal(all_drops, now)
     promised = 0
     for f in picks:
         d = f.proposal["drop"]
@@ -2645,6 +2710,7 @@ def plan_auto_make(
             continue
         slotted.append((slot, c.slug))
     spent = 0  # what this plan has already asked for (it counts against the cap and the balance for the next character)
+    probed = False  # with the balance unknown, ONE make is tried per run
     for slot, slug in sorted(slotted):
         mine = [f for f in picks if f.character_slug == slug]
         asked = next((f for f in mine if make_requested(f) and f.proposal["drop"].get("state") in ("making", "ready")), None)
@@ -2668,16 +2734,26 @@ def plan_auto_make(
         reason = None
         if held + spent + price > cap:
             reason = f"the monthly cap would be passed ({held + spent} + {price} > {cap})"
-        elif balance.credits is None:
+        elif refusal is not None:  # the account itself said no lately: nothing is tried until the hold is over, whatever a read says
+            reason = (
+                f"Higgsfield said not enough credits at {_london_words(refusal)}; "
+                f"next try after {_london_words(refusal + timedelta(hours=CREDITS_REFUSED_HOLD_H))}"
+            )
+        elif balance.credits is not None:
+            if balance.credits - promised - spent < price:
+                reason = f"Higgsfield has {balance.credits} credits ({promised + spent} already spoken for), a clip costs {price}"
+        elif not balance.can_probe:
             reason = balance.problem
-        elif balance.credits - promised - spent < price:
-            reason = f"Higgsfield has {balance.credits} credits ({promised + spent} already spoken for), a clip costs {price}"
+        elif probed:  # the balance is unknown: this run has made its one try, the next character follows on a later sweep
+            skipped.append({"character": slug, "reason": "Higgsfield's balance is unknown, so one make at a time is tried: his turn comes on a later sweep"})
+            continue
         if reason is not None:
             skipped.append({"character": slug, "reason": reason})
             waiting = waiting or f"waiting for credits: {reason}"
             continue
+        probed = probed or balance.credits is None
         spent += price
-        wants.append(_Want(slug, pick.id, slot, price, explore))
+        wants.append(_Want(slug, pick.id, slot, price, explore, probe=balance.credits is None))
     return wants, skipped, waiting
 
 
@@ -2712,9 +2788,11 @@ def auto_make(
     [{character, reason}], "waiting": reason | None}`` (plus ``dry_run`` true for a dry run, which writes nothing, and ``enabled``
     false when ``config/scan.json`` ``auto_make.enabled`` switches it off).
 
-    The kill switch, the monthly cap and Higgsfield's balance ask for nothing and set ``waiting``: a normal state until the owner
-    tops up, never an error. The balance is read first and outside the lock (``read_balance``; a read that fails leaves it unknown,
-    which waits, never guesses), then the plan is drawn and written under the settings row lock (the one ``budget.reserve`` takes),
+    The kill switch, the monthly cap, a readable balance below the price and a refusal for credits within the last 12 hours
+    (``CREDITS_REFUSED_HOLD_H``) ask for nothing and set ``waiting``: a normal state until the owner tops up, never an error. A
+    balance that cannot be read is unknown, not short (Higgsfield documents no balance route): one make per run is asked for as a
+    probe (``probe`` true in its row), and Higgsfield's 403 at submit is the answer (``_refused_for_credits``). The balance is read
+    first and outside the lock (``read_balance``), then the plan is drawn and written under the settings row lock (the one ``budget.reserve`` takes),
     so two runs never ask for two drops of one character. It is idempotent: a second run finds the asked-for make covering the slot.
     ``ValueError`` for a naive ``now``, a broken ``auto_make`` config or a broken test registry (the caller fixes those)."""
     now = require_aware(now or now_london(), "auto_make(now)")
