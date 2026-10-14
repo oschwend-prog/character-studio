@@ -1036,6 +1036,9 @@ def pull_command(
             )
     emit({**out, **filing})
     if out["calls"] == 0 and out["errors"]:
+        if out.get("stopped") == "out_of_credits":  # the account's credits, not a broken job: a warning, never a red run every day
+            typer.echo("::warning::ScrapeCreators is out of credits: no hits are pulled until it is topped up", err=True)
+            return
         raise typer.Exit(1)
 
 

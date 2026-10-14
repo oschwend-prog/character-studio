@@ -482,6 +482,22 @@ def test_cli_pull_without_the_key_exits_0_with_a_notice(cli_store, monkeypatch):
     assert "::notice::" in r.stderr and cli_store.list_hits() == []
 
 
+def test_cli_pull_out_of_credits_is_a_warning_not_a_red_run(cli_store, monkeypatch):
+    # 13-14 Oct the hits job went red every day for an account with no credits left (HTTP 402 on the first call): that is the
+    # owner's top-up, not a broken job. A refused key or any other first-call failure still exits 1.
+    api = FakeAPI()
+    api.answer(TT_TREND, 402)  # the very first call: no credits left
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    r = CliRunner().invoke(app, ["hits", "pull"])
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert out["stopped"] == "out_of_credits" and out["calls"] == 0 and "::warning::" in r.stderr
+    api = FakeAPI()
+    api.answer(TT_TREND, 401)  # a refused key: still red
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 1
+
+
 def test_cli_pull_dry_run_prints_the_plan_and_calls_nothing(cli_store, monkeypatch):
     monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: pytest.fail("no client in a dry run")))
     r = CliRunner().invoke(app, ["hits", "pull", "--dry-run"])
