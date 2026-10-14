@@ -27,6 +27,7 @@ from studio.models import Account, Character, Clip, ClipState, Favorite, Platfor
 from studio.publish import base, postiz
 from studio.publish.base import PublishResult, Publisher, UncertainPublish, post_story, preview_due, publish_due
 from studio.publish.confirm import confirm_posts
+from studio.publish.reshare import preview_reshare, reshare_stories
 from studio.publish.reach import MAX_COLLABORATORS, NO_REACH, Reach, ReachConfig, load_reach
 from studio.publish.postiz import (
     INSTAGRAM_SETTING_KEYS,
@@ -3068,3 +3069,509 @@ def test_cli_confirm_without_database_url_is_a_caller_error(monkeypatch):
 
 def test_confirm_is_in_the_publish_help():
     assert "confirm" in CliRunner().invoke(app, ["publish", "--help"]).output
+
+
+# ---- the daily re-share (owner 2026-10-14): the Story of an older Reel, once per account per London day --------------------------
+
+RESHARE_NOW = datetime(2026, 10, 6, 20, 0, tzinfo=LONDON)  # inside the 11:00-22:00 London window; a Tuesday
+REEL_URL = "https://www.instagram.com/reel/abc/"
+
+
+def reshare_rig(tmp_path: Path) -> Rig:
+    """Biscuit AND Reginald are live Instagram characters (Biscuit is "designing" in ``reach_rig``): two accounts to re-share for."""
+    rig = reach_rig(tmp_path)
+    rig.store.add_character(Character(slug="biscuit", name="Biscuit", status="live"))
+    return rig
+
+
+def second_rig(tmp_path: Path) -> Rig:
+    """A second, separate ``reshare_rig`` inside the same test."""
+    (tmp_path / "second").mkdir()
+    return reshare_rig(tmp_path / "second")
+
+
+def live_reel(
+    rig: Rig, hours: float = 30, *, views: int | None = None, handle: str = "@biscuit.ig", url: str | None = REEL_URL,
+    story_video: bool = True, status: PostStatus = PostStatus.posted, now: datetime = RESHARE_NOW, **features: Any,
+) -> tuple[Clip, Post]:
+    """A clip posted as an Instagram Reel ``hours`` before ``now``: confirmed live (``url``), with its Story video and, when
+    ``views`` is given, one metrics reading of that many views."""
+    account = rig.account(handle)
+    clip = rig.store.update_clip(rig.clip(account.character_slug, ClipState.posted).id, features=dict(features))
+    if story_video:
+        clip = rig.with_story_video(clip)
+    posted = now - timedelta(hours=hours)
+    post = rig.post(
+        handle, clip=clip, when=posted, status=status, claimed_at=posted, platform_post_id=f"pz-{clip.id}", url=url,
+    )  # fmt: skip
+    if views is not None:
+        rig.store.add_snapshot(Snapshot(post_id=post.id, captured_at=now - timedelta(hours=1), views=views))
+    return rig.store.get_clip(clip.id), post
+
+
+def reshare(rig: Rig, pub: FakePublisher | None = None, now: datetime = RESHARE_NOW, reach: ReachConfig = STORIES) -> dict[str, Any]:
+    return reshare_stories(rig.store, rig.storage, pub or FakePublisher(), now, reach=reach)
+
+
+def reshares(rig: Rig, clip: Clip) -> list[dict[str, Any]]:
+    return rig.store.get_clip(clip.id).features.get("story_reshares", [])
+
+
+def test_the_most_viewed_eligible_reel_is_re_shared_as_a_story_of_its_story_video(tmp_path):
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 30, views=100)
+    best, best_post = live_reel(rig, 40, views=5000)
+    live_reel(rig, 50, views=300)
+    pub = FakePublisher()
+
+    out = reshare(rig, pub)
+
+    [story] = pub.stories
+    assert story == {
+        "integration_id": "int-bis-ig", "media_url": rig.storage.signed_url("clips", best.features["story_path"]), "ai_label": True,
+    }  # fmt: skip
+    assert pub.calls == []  # a Story, never another Reel
+    [entry] = out["reshared"]
+    assert (entry["account"], entry["clip_id"], entry["post_id"], entry["views"], entry["status"]) == (
+        "@biscuit.ig", best.id, best_post.id, 5000, "posted",
+    )  # fmt: skip
+    assert entry["platform_post_id"] == "story-1" and out["errors"] == []
+    [record] = reshares(rig, best)
+    assert record == {"at": RESHARE_NOW.isoformat(), "post_id": best_post.id, "status": "posted", "platform_post_id": "story-1"}
+    assert [e for e in out["skipped"] if e["account"] == "@biscuit.ig"] == []
+
+
+def test_the_latest_reading_counts_and_a_reel_without_one_has_zero_views(tmp_path):
+    rig = reshare_rig(tmp_path)
+    older, older_post = live_reel(rig, 60, views=10)
+    rig.store.add_snapshot(Snapshot(post_id=older_post.id, captured_at=RESHARE_NOW - timedelta(minutes=5), views=400))
+    live_reel(rig, 30, views=300)
+    assert reshare(rig)["reshared"][0]["clip_id"] == older.id  # 400 (its latest reading) beats 300
+
+    rig2 = second_rig(tmp_path)
+    only, _ = live_reel(rig2, 30)  # no snapshot yet: 0 views, still eligible
+    [entry] = reshare(rig2)["reshared"]
+    assert entry["clip_id"] == only.id and entry["views"] == 0
+
+
+def test_a_tie_goes_to_the_more_recent_reel(tmp_path):
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 90, views=700)
+    newer, _ = live_reel(rig, 40, views=700)
+    live_reel(rig, 60, views=700)
+    assert reshare(rig)["reshared"][0]["clip_id"] == newer.id
+
+
+@pytest.mark.parametrize(
+    "why, make",
+    [
+        ("not confirmed live (no url)", dict(url=None)),
+        ("not confirmed live (blank url)", dict(url="  ")),
+        ("under 20 hours old", dict(hours=19.9)),
+        ("more than 14 days old", dict(hours=14 * 24 + 0.1)),
+        ("no story video", dict(story_video=False)),
+        ("a silent in_app master", dict(music="in_app")),
+        ("a Trial Reel", dict(trial_reel=True)),
+        ("posted but needing a check", dict(status=PostStatus.needs_check)),
+        ("failed", dict(status=PostStatus.failed)),
+        ("not posted yet", dict(status=PostStatus.scheduled)),
+    ],
+)
+def test_an_ineligible_reel_is_never_re_shared_however_many_views_it_has(tmp_path, why, make):
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, **{"hours": 30, "views": 99999, **make})
+    plain, _ = live_reel(rig, 30, views=1)
+    out = reshare(rig)
+    assert [e["clip_id"] for e in out["reshared"]] == [plain.id], why
+
+
+def test_the_age_limits_are_inclusive_at_20_hours_and_14_days(tmp_path):
+    rig = reshare_rig(tmp_path)
+    fresh, _ = live_reel(rig, 20, views=1)
+    assert reshare(rig)["reshared"][0]["clip_id"] == fresh.id
+    rig2 = second_rig(tmp_path)
+    old, _ = live_reel(rig2, 14 * 24, views=1)
+    assert reshare(rig2)["reshared"][0]["clip_id"] == old.id
+
+
+def test_a_tiktok_post_is_never_re_shared_and_only_an_instagram_reel_counts(tmp_path):
+    rig = reshare_rig(tmp_path)
+    clip = rig.with_story_video(rig.clip("biscuit", ClipState.posted))
+    posted = RESHARE_NOW - timedelta(hours=30)
+    tt = rig.post(
+        "@biscuit.tt", clip=clip, when=posted, status=PostStatus.posted, claimed_at=posted, platform_post_id="tt-1",
+        url="https://tiktok.test/v",
+    )  # fmt: skip
+    rig.store.add_snapshot(Snapshot(post_id=tt.id, captured_at=posted, views=10**6))
+    pub = FakePublisher()
+    out = reshare(rig, pub)
+    assert pub.stories == [] and out["reshared"] == []
+    assert any(e["account"] == "@biscuit.ig" and "no eligible" in e["reason"] for e in out["skipped"])
+
+
+def test_each_account_gets_one_and_a_second_run_the_same_day_does_nothing(tmp_path):
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 30, views=10)
+    live_reel(rig, 40, views=50)
+    reg, _ = live_reel(rig, 30, views=7, handle="reginald.thebutler")
+    pub = FakePublisher()
+
+    first = reshare(rig, pub)
+    assert sorted(e["account"] for e in first["reshared"]) == ["@biscuit.ig", "reginald.thebutler"]
+    assert sorted(s["integration_id"] for s in pub.stories) == ["int-bis-ig", "int-reg-ig"]
+
+    again = reshare(rig, pub, RESHARE_NOW + timedelta(hours=1))
+    assert again["reshared"] == [] and len(pub.stories) == 2
+    assert {s["account"] for s in again["skipped"]} == {"@biscuit.ig", "reginald.thebutler"}
+    assert all("already re-shared today" in s["reason"] for s in again["skipped"])
+    assert len(reshares(rig, reg)) == 1
+
+
+def test_the_one_a_day_counts_re_shares_of_every_clip_of_the_account(tmp_path):
+    rig = reshare_rig(tmp_path)
+    first, _ = live_reel(rig, 30, views=500)
+    live_reel(rig, 40, views=100)
+    pub = FakePublisher()
+    reshare(rig, pub, RESHARE_NOW.replace(hour=12))
+    out = reshare(rig, pub, RESHARE_NOW.replace(hour=19))  # the other clip is eligible, the account is done for the day
+    assert out["reshared"] == [] and len(pub.stories) == 1
+    assert len(reshares(rig, first)) == 1
+
+
+def test_the_day_is_the_london_day_not_the_utc_day(tmp_path):
+    """A re-share at 00:30 BST on the 6th is 23:30 UTC on the 5th: still the 6th in London, so it used the 6th's one. One at
+    23:30 BST on the 5th is the 5th, so the 6th is free again (the clip itself still rests its 72 hours)."""
+    rig = reshare_rig(tmp_path)
+    shared, post = live_reel(rig, 30, views=500)
+    other, _ = live_reel(rig, 40, views=100)
+    midnight = datetime(2026, 10, 6, 0, 30, tzinfo=LONDON)
+    rig.store.update_clip(
+        shared.id, features={**shared.features, "story_reshares": [{"at": midnight.isoformat(), "post_id": post.id, "status": "posted"}]}
+    )
+    assert reshare(rig)["reshared"] == []  # today already has its re-share
+    yesterday = datetime(2026, 10, 5, 23, 30, tzinfo=LONDON)
+    rig.store.update_clip(
+        shared.id, features={**shared.features, "story_reshares": [{"at": yesterday.isoformat(), "post_id": post.id, "status": "posted"}]}
+    )
+    [entry] = reshare(rig)["reshared"]
+    assert entry["clip_id"] == other.id
+
+
+@pytest.mark.parametrize("hours, again", [(71.9, False), (72, True), (100, True)])
+def test_a_clip_is_not_re_shared_again_within_72_hours(tmp_path, hours, again):
+    rig = reshare_rig(tmp_path)
+    best, post = live_reel(rig, 200, views=900)
+    other, _ = live_reel(rig, 100, views=10)
+    before = RESHARE_NOW - timedelta(hours=hours)
+    rig.store.update_clip(
+        best.id, features={**best.features, "story_reshares": [{"at": before.isoformat(), "post_id": post.id, "status": "posted"}]}
+    )
+    [entry] = reshare(rig)["reshared"]
+    assert entry["clip_id"] == (best.id if again else other.id)
+    assert len(reshares(rig, best)) == (2 if again else 1)  # a list: each re-share is added, none replaced
+
+
+def test_a_failed_re_share_also_starts_the_72_hours_so_a_broken_clip_does_not_block_the_rest(tmp_path):
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 30, views=900)
+    other, _ = live_reel(rig, 40, views=10)
+    reshare(rig, FakePublisher(story_fail=RuntimeError("API Error (400): bad video")))
+    [entry] = reshare(rig, FakePublisher(), RESHARE_NOW + timedelta(days=1))["reshared"]
+    assert entry["clip_id"] == other.id  # the best clip failed yesterday: it rests, the next one goes
+
+
+@pytest.mark.parametrize("hour, minute, expect", [(10, 59, False), (11, 0, True), (21, 59, True), (22, 0, False), (3, 0, False)])
+def test_only_between_11_and_22_london(tmp_path, hour, minute, expect):
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 30, views=5)
+    pub = FakePublisher()
+    out = reshare(rig, pub, RESHARE_NOW.replace(hour=hour, minute=minute))
+    assert (len(pub.stories) == 1) is expect and bool(out["reshared"]) is expect
+    if not expect:
+        assert out["skipped"] and "11:00" in out["skipped"][0]["reason"] and "22:00" in out["skipped"][0]["reason"]
+
+
+def test_the_window_is_london_time_not_utc(tmp_path):
+    """22:30 BST is 21:30 UTC: too late in London, however early it looks in UTC."""
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 30, views=5)
+    late = datetime(2026, 10, 6, 21, 30, tzinfo=timezone.utc)  # 22:30 London (BST)
+    assert reshare(rig, FakePublisher(), late)["reshared"] == []
+    early = datetime(2026, 10, 6, 9, 30, tzinfo=timezone.utc)  # 10:30 London: not yet
+    assert reshare(rig, FakePublisher(), early)["reshared"] == []
+    ok = datetime(2026, 10, 6, 10, 30, tzinfo=timezone.utc)  # 11:30 London
+    assert len(reshare(rig, FakePublisher(), ok)["reshared"]) == 1
+
+
+def test_with_stories_off_nothing_is_re_shared(tmp_path):
+    rig = reshare_rig(tmp_path)
+    clip, _ = live_reel(rig, 30, views=5)
+    pub = FakePublisher()
+    out = reshare(rig, pub, reach=ReachConfig(stories=False))
+    assert pub.stories == [] and out["reshared"] == [] and "stories are off" in out["skipped"][0]["reason"]
+    assert reshares(rig, clip) == []
+
+
+def test_the_kill_switch_stops_re_shares_too(tmp_path):
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 30, views=5)
+    rig.store.set_settings(kill_switch=True)
+    pub = FakePublisher()
+    out = reshare(rig, pub)
+    assert pub.stories == [] and "kill switch" in out["skipped"][0]["reason"]
+
+
+def test_only_live_characters_with_a_postiz_integration_are_re_shared(tmp_path):
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 30, views=5, handle="reginald.thebutler")
+    rig.store.add_character(Character(slug="reginald", name="Reginald", status="retired"))
+    pub = FakePublisher()
+    assert reshare(rig, pub)["reshared"] == [] and pub.stories == []  # not live: out of scope
+
+    rig2 = second_rig(tmp_path)
+    live_reel(rig2, 30, views=5)
+    rig2.store.update_account(rig2.account("@biscuit.ig").id, postiz_integration_id=None)
+    out = reshare(rig2, pub)
+    assert pub.stories == [] and any(s["account"] == "@biscuit.ig" and "integration" in s["reason"] for s in out["skipped"])
+
+
+def test_a_failed_re_share_is_recorded_and_not_retried_that_day(tmp_path):
+    rig = reshare_rig(tmp_path)
+    clip, post = live_reel(rig, 30, views=5)
+    live_reel(rig, 40, views=1)  # another clip is waiting: it must not be tried either
+    pub = FakePublisher(story_fail=RuntimeError("API Error (400): story refused"))
+
+    out = reshare(rig, pub)
+
+    [entry] = out["reshared"]
+    assert entry["status"] == "failed" and "story refused" in entry["error"] and out["errors"] == []
+    [record] = reshares(rig, clip)
+    assert (record["post_id"], record["status"]) == (post.id, "failed") and "story refused" in record["error"]
+    reshare(rig, pub, RESHARE_NOW + timedelta(hours=2))
+    assert len(pub.stories) == 1  # not again that day, on this clip or the other
+
+
+def test_an_uncertain_re_share_is_needs_check_and_never_sent_again_that_day(tmp_path):
+    rig = reshare_rig(tmp_path)
+    clip, _ = live_reel(rig, 30, views=5)
+    pub = FakePublisher(story_fail=UncertainPublish("postiz posts:create timed out after 180 s: the post may exist"))
+    out = reshare(rig, pub)
+    assert out["reshared"][0]["status"] == "needs_check" and reshares(rig, clip)[0]["status"] == "needs_check"
+    reshare(rig, pub, RESHARE_NOW + timedelta(hours=1))
+    assert len(pub.stories) == 1
+
+
+def test_a_re_share_never_touches_the_reels_story_marker_or_the_reel(tmp_path):
+    rig = reshare_rig(tmp_path)
+    marker = {"post_id": "x", "status": "posted", "at": "2026-10-05T14:00:00+01:00", "platform_post_id": "story-0"}
+    clip, post = live_reel(rig, 30, views=5, story=marker)
+    reshare(rig)
+    after = rig.store.get_clip(clip.id)
+    assert after.features["story"] == marker and after.state is ClipState.posted
+    assert {k: v for k, v in after.features.items() if k != "story_reshares"} == clip.features
+    assert rig.get(post) == post  # the Reel's row is exactly as it was
+    reshare(rig, FakePublisher(story_fail=RuntimeError("boom")), RESHARE_NOW + timedelta(days=4))
+    assert rig.store.get_clip(clip.id).features["story"] == marker
+
+
+def test_a_dry_run_writes_nothing_and_needs_no_publisher_or_storage(tmp_path):
+    rig = reshare_rig(tmp_path)
+    clip, post = live_reel(rig, 30, views=5)
+    before = rig.store.get_clip(clip.id)
+    out = preview_reshare(rig.store, RESHARE_NOW, reach=STORIES)
+    assert [(e["account"], e["clip_id"], e["post_id"], e["views"]) for e in out["would_reshare"]] == [
+        ("@biscuit.ig", clip.id, post.id, 5)
+    ]  # fmt: skip
+    assert out["reshared"] == [] and out["errors"] == [] and out["dry_run"] is True
+    assert rig.store.get_clip(clip.id) == before
+    assert preview_reshare(rig.store, RESHARE_NOW.replace(hour=9), reach=STORIES)["would_reshare"] == []
+
+
+class CompetingRunStore(MemoryStore):
+    """Another runner re-shares a different clip of the account while this one is about to claim: it held the settings row lock
+    first, so its record is there by the time this run gets the lock (the first ``get_settings`` inside a transaction)."""
+
+    competing: tuple[str, dict[str, Any]] | None = None
+    in_tx = False
+
+    @contextmanager
+    def transaction(self):
+        self.in_tx = True
+        try:
+            with super().transaction() as tx:
+                yield tx
+        finally:
+            self.in_tx = False
+
+    def get_settings(self):
+        if self.competing is not None and self.in_tx:
+            clip_id, entry = self.competing
+            self.competing = None
+            clip = self.get_clip(clip_id)
+            self.update_clip(clip_id, features={**clip.features, "story_reshares": [entry]})
+        return super().get_settings()
+
+
+def test_two_runs_never_both_claim_the_days_re_share(tmp_path):
+    """The claim re-reads the account's clips under the settings row lock, so a runner that planned a pick a moment before
+    another one claimed the day finds it taken and sends nothing."""
+    rig = reshare_rig(tmp_path)
+    rig.store = CompetingRunStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    best, _ = live_reel(rig, 30, views=900)
+    other, other_post = live_reel(rig, 40, views=10)
+    rig.store.competing = (other.id, {"at": RESHARE_NOW.isoformat(), "post_id": other_post.id, "status": "posted"})
+    pub = FakePublisher()
+    out = reshare(rig, pub)
+    assert pub.stories == [] and out["reshared"] == [] and reshares(rig, best) == []
+    assert any("already re-shared today" in s["reason"] for s in out["skipped"])
+
+
+class ReshareClaimFlakyStore(MemoryStore):
+    """Loses the write that claims a re-share on the clip."""
+
+    def update_clip(self, id, /, **kw):
+        if any(e.get("status") == "posting" for e in (kw.get("features") or {}).get("story_reshares", [])):
+            raise RuntimeError("db went away")
+        return super().update_clip(id, **kw)
+
+
+def test_no_re_share_is_sent_when_its_claim_cannot_be_written(tmp_path):
+    rig = reshare_rig(tmp_path)
+    rig.store = ReshareClaimFlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    clip, _ = live_reel(rig, 30, views=5)
+    pub = FakePublisher()
+    out = reshare(rig, pub)
+    assert pub.stories == [] and out["reshared"] == []
+    assert [e["clip_id"] for e in out["errors"]] == [clip.id] and "db went away" in out["errors"][0]["error"]
+
+
+class ReshareRecordFlakyStore(MemoryStore):
+    """Writes the claim, loses the outcome."""
+
+    def update_clip(self, id, /, **kw):
+        if any(e.get("status") == "posted" for e in (kw.get("features") or {}).get("story_reshares", [])):
+            raise RuntimeError("db went away")
+        return super().update_clip(id, **kw)
+
+
+def test_a_lost_outcome_write_leaves_the_claim_so_it_is_not_sent_twice(tmp_path):
+    rig = reshare_rig(tmp_path)
+    rig.store = ReshareRecordFlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    clip, _ = live_reel(rig, 30, views=5)
+    pub = FakePublisher()
+    out = reshare(rig, pub)
+    assert len(pub.stories) == 1 and out["reshared"][0]["status"] == "posted"
+    assert out["errors"] and "db went away" in out["errors"][0]["error"]
+    assert [e["status"] for e in reshares(rig, clip)] == ["posting"]
+    reshare(rig, pub, RESHARE_NOW + timedelta(hours=1))
+    assert len(pub.stories) == 1
+
+
+def test_the_re_share_claim_and_its_outcome_are_written_under_the_settings_row_lock(tmp_path):
+    """Like the Reel's Story marker: each write asks ``get_settings`` first inside its transaction (``FOR UPDATE`` on Postgres)."""
+    rig = reshare_rig(tmp_path)
+    live_reel(rig, 30, views=5)
+    store = rig.store
+    depth, events = 0, []
+    real_tx, real_settings, real_update = store.transaction, store.get_settings, store.update_clip
+
+    @contextmanager
+    def tx():
+        nonlocal depth
+        with real_tx() as t:
+            depth += 1
+            try:
+                yield t
+            finally:
+                depth -= 1
+
+    def settings():
+        events.append(("lock", depth))
+        return real_settings()
+
+    def update_clip(id, /, **kw):
+        if "story_reshares" in (kw.get("features") or {}):
+            events.append(("reshare", depth))
+        return real_update(id, **kw)
+
+    store.transaction, store.get_settings, store.update_clip = tx, settings, update_clip
+    reshare(rig)
+    inside = [e for e in events if e[1] >= 1]
+    assert inside == [("lock", 1), ("reshare", 1), ("lock", 1), ("reshare", 1)]  # the claim, then the outcome: each locked first
+
+
+def cli_reel(rig: Rig) -> Clip:
+    """The CLI rig has TikTok accounts only: give Biscuit a live Instagram account and one eligible Reel."""
+    rig.store.add_character(Character(slug="biscuit", name="Biscuit", status="live"))
+    rig.store.upsert_account(Account(character_slug="biscuit", platform="instagram", handle="@biscuit.ig", postiz_integration_id="int-bis-ig"))
+    return live_reel(rig, 30, views=5, now=NOW)[0]
+
+
+def test_the_cli_reshare_prints_the_json_and_exits_0(cli, monkeypatch):
+    cli_reel(cli)
+    pub = FakePublisher()
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: pub)
+    monkeypatch.setattr(publish, "load_reach", lambda: STORIES)
+    r = invoke("reshare")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)
+    assert [e["account"] for e in out["reshared"]] == ["@biscuit.ig"] and out["errors"] == [] and len(pub.stories) == 1
+    assert "pz-key-DO-NOT-LEAK" not in r.output
+
+
+def test_the_cli_reshare_dry_run_needs_neither_storage_nor_postiz_and_writes_nothing(cli, monkeypatch):
+    clip = cli_reel(cli)
+    monkeypatch.delenv("POSTIZ_API_KEY")
+    monkeypatch.setattr(publish, "which", lambda name: None)
+    monkeypatch.setattr(publish, "open_storage", lambda: pytest.fail("storage was opened"))
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: pytest.fail("a publisher was made"))
+    monkeypatch.setattr(publish, "load_reach", lambda: STORIES)
+    r = invoke("reshare", "--dry-run")
+    assert r.exit_code == 0, r.output
+    assert [e["clip_id"] for e in json.loads(r.stdout)["would_reshare"]] == [clip.id]
+    assert cli.store.get_clip(clip.id).features.get("story_reshares") is None
+
+
+def test_the_cli_reshare_exits_1_when_a_database_write_failed(tmp_path, monkeypatch):
+    rig = reshare_rig(tmp_path)
+    rig.store = ReshareClaimFlakyStore(characters=rig.store.characters(), accounts=rig.store.accounts())
+    live_reel(rig, 30, views=5, now=NOW)
+    monkeypatch.setattr(publish, "open_store", lambda: rig.store)
+    monkeypatch.setattr(publish, "open_storage", lambda: rig.storage)
+    monkeypatch.setattr(publish, "now_london", lambda: NOW)
+    monkeypatch.setenv("POSTIZ_API_KEY", "k")
+    monkeypatch.setattr(publish, "which", lambda name: f"/usr/local/bin/{name}")
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: FakePublisher())
+    monkeypatch.setattr(publish, "load_reach", lambda: STORIES)
+    r = invoke("reshare")
+    assert r.exit_code == 1 and json.loads(r.stdout)["errors"]
+
+
+def test_the_cli_reshare_without_a_key_or_a_binary_is_a_caller_error(cli, monkeypatch):
+    monkeypatch.setattr(publish, "load_reach", lambda: STORIES)
+    monkeypatch.delenv("POSTIZ_API_KEY")
+    r = invoke("reshare")
+    assert r.exit_code == 2 and "POSTIZ_API_KEY" in r.stderr
+    monkeypatch.setenv("POSTIZ_API_KEY", "k")
+    monkeypatch.setattr(publish, "which", lambda name: None)
+    r = invoke("reshare")
+    assert r.exit_code == 2 and "postiz" in r.stderr and "npm" in r.stderr
+
+
+def test_the_cli_reshare_without_database_url_is_a_caller_error(monkeypatch):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    r = invoke("reshare")
+    assert r.exit_code == 2 and "DATABASE_URL" in r.stderr
+
+
+def test_the_cli_reshare_with_a_bad_reach_config_is_a_caller_error(cli, monkeypatch):
+    def broken():
+        raise ValueError("config/scan.json reach.stories must be true or false")
+
+    monkeypatch.setattr(publish, "load_reach", broken)
+    monkeypatch.setattr(publish, "PostizPublisher", lambda: pytest.fail("a publisher was made"))
+    assert invoke("reshare").exit_code == 2 and invoke("reshare", "--dry-run").exit_code == 2
+
+
+def test_reshare_is_in_the_publish_help():
+    assert "reshare" in CliRunner().invoke(app, ["publish", "--help"]).output

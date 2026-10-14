@@ -13,6 +13,10 @@
 # Before the pull, `studio publish confirm` asks Postiz (one `postiz posts:list`) whether the posts it accepted were really published,
 # so a post Postiz failed is not pulled for metrics as if it were live. It never fails this job (continue-on-error, and a Postiz
 # hiccup exits 0 anyway); publish.yml runs it too, right after every publish run.
+#
+# After the confirm and before the pull, `studio publish reshare` (owner 2026-10-14) posts, once per London day per Instagram account
+# and only between 11:00 and 22:00 London, the Story of the account's most-viewed Reel of the last 14 days (never a second Reel).
+# It needs the storage keys (it signs the Story video); it never fails this job (continue-on-error), and a Postiz hiccup exits 0.
 name: metrics
 
 on:
@@ -61,6 +65,15 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
         run: uv run studio publish confirm
+      - name: Re-share the best recent Reel as a Story
+        if: steps.gate.outputs.configured == 'true'
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
+        run: uv run studio publish reshare
       - name: Pull metrics
         if: steps.gate.outputs.configured == 'true'
         env:

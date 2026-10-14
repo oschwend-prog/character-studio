@@ -18,6 +18,12 @@ so ``resolve --retry`` can send it again), the rest is asked about again next ti
 metrics workflows run it; it prints a JSON summary and exits 0 whatever Postiz did (a Postiz error is reported in the summary's
 ``error``), 1 only when a database write failed, 2 for a missing ``DATABASE_URL`` / ``POSTIZ_API_KEY`` / ``postiz`` CLI.
 
+``studio publish reshare`` is the daily re-share (owner 2026-10-14): once per London day per Instagram account, between 11:00 and 22:00,
+the Story of the account's most-viewed Reel from the last 14 days (see ``studio.publish.reshare``), never a second Reel. The metrics
+workflow runs it after ``confirm``. It prints ``{"reshared", "skipped", "errors"}`` and exits 0 whatever Postiz did, 1 only when a
+database write failed, 2 for a missing ``DATABASE_URL`` / ``POSTIZ_API_KEY`` / ``postiz`` CLI or a broken reach pack config.
+``--dry-run`` writes nothing and needs neither Storage nor Postiz: the pick is printed under ``would_reshare``.
+
 ``studio publish resolve <post>`` settles a ``needs_check`` / ``failed`` post by hand, with exactly one
 of ``--live --platform-post-id ID [--url U]``, ``--retry [--at ISO]``, ``--drop --reason-file F`` (see
 ``studio.publish.resolve``; ``--drop`` also takes a ``scheduled`` post whose clip is no longer ``scheduled``);
@@ -46,6 +52,7 @@ from studio.publish.base import (
 from studio.publish.confirm import confirm_posts
 from studio.publish.postiz import PostizError, PostizPublisher
 from studio.publish.reach import load_reach
+from studio.publish.reshare import preview_reshare, reshare_stories
 from studio.publish.resolve import resolve_drop, resolve_live, resolve_retry
 
 __all__ = [
@@ -56,7 +63,9 @@ __all__ = [
     "UncertainPublish",
     "app",
     "preview_due",
+    "preview_reshare",
     "publish_due",
+    "reshare_stories",
 ]
 
 app = typer.Typer(
@@ -117,6 +126,37 @@ def story_command(
         fail(str(e))
     emit(out)
     if out.get("status") in ("failed", "needs_check"):
+        raise typer.Exit(1)
+
+
+@app.command("reshare")
+def reshare_command(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Claim and write nothing; print which Reel would be re-shared as a Story."),
+    ] = False,
+) -> None:
+    """The daily re-share: once per London day per Instagram account, the Story of its most-viewed recent Reel (11:00-22:00
+    London, Stories on, at most one a day). Prints JSON: reshared, skipped (with the reason), errors; exit 1 when a write failed."""
+    store = open_store()
+    try:
+        reach = load_reach()  # read before anything is claimed: a broken switch stops the run with nothing touched
+    except ValueError as e:
+        fail(str(e))
+    if dry_run:
+        emit(preview_reshare(store, now_london(), reach=reach))
+        return
+    storage = open_storage()
+    if not load().postiz_api_key:
+        fail(
+            "POSTIZ_API_KEY is not set. Run through bin/studio (it reads the Keychain item "
+            "cs-postiz-api-key) or export it."
+        )
+    if which("postiz") is None:
+        fail("the postiz CLI is not on PATH. Install it with: npm i -g postiz")
+    summary = reshare_stories(store, storage, PostizPublisher(), now_london(), reach=reach)
+    emit(summary)
+    if summary["errors"]:
         raise typer.Exit(1)
 
 
