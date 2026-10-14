@@ -63,8 +63,11 @@ key header reads the model's card and generates nothing (``studio drop check-key
 body, past the ``_BODY_CHARS`` an error keeps. ``quota_window`` reads the whole body when the error is raised: ``GeminiQuota``
 (a ``GeminiError``) carries ``window`` ``"day"`` or ``"minute"`` and its message starts with the tag (``QUOTA_TAGS``), so
 ``studio.drop`` tells a per-minute limit (the next sweep asks again) from the day's quota (after the 08:00 London reset). A 429 that
-names neither stays a plain ``GeminiError``. A day-window 429 is raised before the waits (it does not clear in 65 s; the
-fallback models, with their own daily quotas, are still asked); every other busy answer is asked again after each wait.
+names neither stays a plain ``GeminiError``. **How often a busy answer is asked again** (14 Oct: a 503 storm asked each model 4
+times, 12 requests a check, and spent the free tier's day of 20 per model in 7 minutes): ``generateContent`` asks each model ONCE;
+a busy answer (``BUSY_STATUSES``) or a timeout hands over to the next model at once; when none answered, the first busy model whose
+limit can clear (not a day-window 429) is asked once more after ``GENERATE_LAST_WAIT_S``. So at most models + 1 requests per answer.
+Uploads and file polls still wait ``BUSY_WAITS_S`` (they spend no generate quota).
 
 Tests drive the client with an ``httpx.MockTransport``.
 """
@@ -97,8 +100,12 @@ FILE_ACTIVE_TIMEOUT_S = 180.0
 FILE_POLL_S = 3.0
 _TIMEOUT = httpx.Timeout(180.0, connect=15.0)
 _BODY_CHARS = 300
-BUSY_STATUSES = frozenset({429, 500, 502, 503, 504})  # "busy, try later": asked again after a wait, never a 4xx refusal
-BUSY_WAITS_S = (5.0, 15.0, 45.0)  # the first live drop (2026-10-06) stopped on one 503 "high demand"
+BUSY_STATUSES = frozenset({429, 500, 502, 503, 504})  # "busy, try later": the next model (or a wait), never a 4xx refusal
+BUSY_WAITS_S = (5.0, 15.0, 45.0)  # the first live drop (2026-10-06) stopped on one 503 "high demand" (uploads and file polls)
+# generateContent is NOT asked again on the same model: 13-14 Oct a 503 storm took 4 requests per model, 12 per check, and so the
+# free tier's whole day (20 a model) in 7 minutes. A busy model hands over to the next one at once; when every model was busy, the
+# first one that can clear (not a day's quota) is asked once more after this wait: at most models + 1 requests per answer.
+GENERATE_LAST_WAIT_S = 30.0
 FALLBACK_MODELS = ("gemini-3.7-flash", "gemini-3.5-flash")  # asked in turn when the model stays busy or times out (stable Flash ids, 2026-10-06)
 FALLBACK_SKIP_STATUSES = frozenset({400, 404})  # a fallback that does not take this request: the next one is asked
 # An HTTP 429 names its limit in the quota id after about 400 characters of text ("GenerateRequestsPerMinute...", "...PerDay..."), past
@@ -269,11 +276,11 @@ class GeminiClient:
             return GeminiQuota(message, window)
         return GeminiError(message, response.status_code)
 
-    def _call(self, method: str, url: str, **kw: Any) -> httpx.Response:
-        """One request; a busy answer (``BUSY_STATUSES``) is asked again after each wait of ``BUSY_WAITS_S``, except a 429 that names
-        the day's quota (``quota_window``): that one does not clear in a minute, so it is raised at once, before the waits (the
-        next model, with its own daily quota, is still asked by ``_generate``)."""
-        for wait in (*BUSY_WAITS_S, None):
+    def _call(self, method: str, url: str, *, waits: Sequence[float] = BUSY_WAITS_S, **kw: Any) -> httpx.Response:
+        """One request; a busy answer (``BUSY_STATUSES``) is asked again after each of ``waits`` (``BUSY_WAITS_S``: uploads and file
+        polls; ``_generate`` passes none and moves to the next model instead), except a 429 that names the day's quota
+        (``quota_window``): that one does not clear in a minute, so it is raised at once."""
+        for wait in (*waits, None):
             try:
                 response = self._client.request(method, url, **kw)
             except httpx.TimeoutException as e:
@@ -403,26 +410,42 @@ class GeminiClient:
             "contents": [{"role": "user", "parts": [part, {"text": prompt}]}],
             "generationConfig": {"responseMimeType": "application/json", "responseJsonSchema": dict(schema), "temperature": 0.4},
         }
-        busy: GeminiError | None = None  # the first model that stayed busy through every wait
+        busy: GeminiError | None = None  # the first model that answered busy
         timeout: GeminiTimeout | None = None  # the first model that timed out
+        again: str | None = None  # the first busy model whose limit can clear (not the day's quota): the last try asks it
+
+        def ask(model: str) -> httpx.Response:
+            return self._call(
+                "POST", f"{API_ROOT}/v1beta/models/{model}:generateContent", waits=(),
+                headers={**self._headers(), "Content-Type": "application/json"}, json=body,
+            )
+
         for model in (self.model, *(m for m in FALLBACK_MODELS if m != self.model)):
             try:
-                response = self._call(
-                    "POST", f"{API_ROOT}/v1beta/models/{model}:generateContent",
-                    headers={**self._headers(), "Content-Type": "application/json"}, json=body,
-                )
+                response = ask(model)
             except GeminiTimeout as e:
-                timeout = timeout or e  # a timeout is not asked again after a wait (it took minutes): the next model is asked
+                timeout = timeout or e  # a timeout is not asked again (it took minutes): the next model is asked
                 continue
             except GeminiError as e:
-                handed_over = busy is not None or timeout is not None  # the chosen model stayed busy or timed out: fallbacks in turn
+                handed_over = busy is not None or timeout is not None  # the chosen model was busy or timed out: fallbacks in turn
                 if e.status in BUSY_STATUSES:
                     busy = busy or e
+                    if again is None and not (isinstance(e, GeminiQuota) and e.window == "day"):
+                        again = model
                     continue
                 if handed_over and e.status in FALLBACK_SKIP_STATUSES:
                     continue
                 raise
             return parse_answer(_json_object(response, "generateContent"))
+        if again is not None:  # every model was busy or timed out: one last try of the first that can clear, after one wait
+            self._sleep(GENERATE_LAST_WAIT_S)
+            try:
+                return parse_answer(_json_object(ask(again), "generateContent"))
+            except GeminiTimeout:
+                pass
+            except GeminiError as e:
+                if e.status not in BUSY_STATUSES:
+                    raise
         if busy is not None:  # busy is the better news than a timeout: the first busy answer is what fails
             raise busy
         assert timeout is not None

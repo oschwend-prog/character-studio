@@ -18,7 +18,6 @@ import pytest
 
 from studio import gemini
 from studio.gemini import (
-    BUSY_WAITS_S,
     FALLBACK_MODELS,
     DEFAULT_MODEL,
     Character,
@@ -438,20 +437,26 @@ def test_an_http_error_never_shows_the_key(clip):
         deconstruct(client(Fake(httpx.ConnectError("no route"))), clip, REGINALD)
 
 
-def test_a_busy_model_is_asked_again_after_a_wait(clip):
-    # the first live drop (2026-10-06) stopped on one HTTP 503 "high demand": a busy answer is retried, a refusal is not
+def test_a_busy_model_hands_over_at_once_and_only_the_last_try_waits(clip):
+    # the first live drop (2026-10-06) stopped on one HTTP 503 "high demand": a busy answer is retried, a refusal is not. But
+    # 13-14 Oct a 503 storm took 4 requests per model (12 per check) and so the free day's 20 per model in 7 minutes: now each
+    # model is asked once, and only when every one was busy is the first asked once more, after one wait
     waits: list[float] = []
     fake = Fake((503, "high demand"), (429, "rate limited"), (200, answer(GOOD)))
     c = GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append)
     assert deconstruct(c, clip, REGINALD)["caption"]["title"] == GOOD["caption"]["title"]
-    assert waits == list(BUSY_WAITS_S[:2])
+    assert waits == [] and _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS]
     models = 1 + len(FALLBACK_MODELS)
-    fake = Fake(*[(503, "high demand")] * ((len(BUSY_WAITS_S) + 1) * models))
+    fake = Fake(*[(503, "high demand")] * models, (200, answer(GOOD)))  # every model busy: the last try answers
+    waits.clear()
+    assert deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)["hooks"]
+    assert waits == [gemini.GENERATE_LAST_WAIT_S] and _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS, DEFAULT_MODEL]
+    fake = Fake(*[(503, "high demand")] * (models + 1))
     waits.clear()
     with pytest.raises(GeminiError) as info:
         deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
-    assert info.value.status == 503 and waits == list(BUSY_WAITS_S) * models  # every model gets its own waits
-    assert len(fake.requests) == (len(BUSY_WAITS_S) + 1) * models
+    assert info.value.status == 503 and waits == [gemini.GENERATE_LAST_WAIT_S]
+    assert len(fake.requests) == models + 1  # at most one request per model and the last try: 4, where 12 went before
     fake = Fake((400, "bad request"))
     with pytest.raises(GeminiError):
         deconstruct(client(fake), clip, REGINALD)
@@ -459,16 +464,14 @@ def test_a_busy_model_is_asked_again_after_a_wait(clip):
 
 
 def test_a_model_that_stays_busy_hands_over_to_the_fallbacks_in_turn(clip):
-    busy = [(503, "high demand")] * (len(BUSY_WAITS_S) + 1)
-    fake = Fake(*busy, (404, "no such model"), (200, answer(GOOD)))
+    fake = Fake((503, "high demand"), (404, "no such model"), (200, answer(GOOD)))
     out = deconstruct(client(fake), clip, REGINALD)
     assert out["caption"]["title"] == GOOD["caption"]["title"]
-    models = [r.url.path.split("/models/")[1].split(":")[0] for r in fake.requests]
-    assert models == [DEFAULT_MODEL] * len(busy) + list(FALLBACK_MODELS)
-    fake = Fake(*busy, *busy, *busy)  # everyone busy: the first busy answer is what fails
+    assert _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS]
+    fake = Fake((503, "high demand"), (502, "bad gateway"), (500, "internal"), (500, "internal"))  # everyone busy, the last try too
     with pytest.raises(GeminiError) as info:
         deconstruct(client(fake), clip, REGINALD)
-    assert info.value.status == 503 and len(fake.requests) == len(busy) * (1 + len(FALLBACK_MODELS))
+    assert info.value.status == 503 and len(fake.requests) == 2 + len(FALLBACK_MODELS)  # the first busy answer is what fails
 
 
 def _models(fake: Fake) -> list[str]:
@@ -498,19 +501,21 @@ def test_when_every_model_times_out_each_is_asked_once_and_the_error_says_so(cli
 
 
 def test_a_timeout_and_a_busy_model_mix_down_the_list(clip):
-    busy = [(503, "high demand")] * (len(BUSY_WAITS_S) + 1)
+    busy = [(503, "high demand")]
     # the chosen model busy, the first fallback times out, the last answers
     fake = Fake(*busy, httpx.ReadTimeout("slow"), (200, answer(GOOD)))
     assert deconstruct(client(fake), clip, REGINALD)["hooks"]
-    assert _models(fake) == [DEFAULT_MODEL] * len(busy) + list(FALLBACK_MODELS)
+    assert _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS]
     # the chosen model times out, a fallback does not take the request (404): the next one is asked
     fake = Fake(httpx.ReadTimeout("slow"), (404, "no such model"), (200, answer(GOOD)))
     assert deconstruct(client(fake), clip, REGINALD)["hooks"]
-    # a timeout first, then a model that stays busy, then a timeout: the busy answer is what fails (it is the better news)
-    fake = Fake(httpx.ReadTimeout("slow"), *busy, httpx.ReadTimeout("slow"))
+    # a timeout first, then a busy model (asked again as the last try), then a timeout: the busy answer is what fails (it is the
+    # better news)
+    fake = Fake(httpx.ReadTimeout("slow"), *busy, httpx.ReadTimeout("slow"), *busy)
     with pytest.raises(GeminiError) as info:
         deconstruct(client(fake), clip, REGINALD)
     assert info.value.status == 503 and not isinstance(info.value, gemini.GeminiTimeout)
+    assert _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS, FALLBACK_MODELS[0]]
 
 
 def test_a_refusal_after_a_timeout_is_not_handed_on(clip):
@@ -805,7 +810,7 @@ def _raises_after_429(clip, body) -> tuple[GeminiError, Fake, list[float]]:
     """The error a deconstruct ends with when every model answers ``body`` with a 429, the requests made and the waits slept."""
     models = 1 + len(FALLBACK_MODELS)
     waits: list[float] = []
-    fake = Fake(*[(429, body)] * ((len(BUSY_WAITS_S) + 1) * models))  # enough for a 429 asked again after each wait, model by model
+    fake = Fake(*[(429, body)] * (models + 1))  # one per model and the last try
     with pytest.raises(GeminiError) as info:
         deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
     return info.value, fake, waits
@@ -823,11 +828,10 @@ def _raises_after_429(clip, body) -> tuple[GeminiError, Fake, list[float]]:
 def test_a_429_is_classified_from_the_whole_body_and_the_error_starts_with_the_tag(clip, quota_ids, window):
     err, fake, waits = _raises_after_429(clip, google_429(*quota_ids))
     assert isinstance(err, gemini.GeminiQuota) and err.window == window and err.status == 429
-    models = 1 + len(FALLBACK_MODELS)
-    if window == "day":  # a day's quota does not clear in a minute: raised before the waits, the other models still asked
+    if window == "day":  # a day's quota does not clear in a minute: no last try, the other models still asked
         assert waits == [] and _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS]
-    else:  # a rate limit does: each model is asked again after each wait
-        assert waits == list(BUSY_WAITS_S) * models and len(fake.requests) == (len(BUSY_WAITS_S) + 1) * models
+    else:  # a rate limit does: each model once, then the chosen one once more after one wait
+        assert waits == [gemini.GENERATE_LAST_WAIT_S] and _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS, DEFAULT_MODEL]
     assert str(err).startswith(f"[{gemini.QUOTA_TAGS[window]}] Gemini answered HTTP 429: ")  # drop.py keeps the first 140 characters
     assert gemini.QUOTA_TAGS == {"day": "quota:day", "minute": "quota:minute"}
     assert quota_ids[0] not in str(err) and KEY not in str(err)  # the 300-character body cut the quota id off: the tag is what is left
@@ -841,7 +845,7 @@ def test_a_429_that_names_no_window_stays_a_plain_error(clip):
     ):
         err, fake, waits = _raises_after_429(clip, body)
         assert type(err) is GeminiError and err.status == 429 and str(err).startswith("Gemini answered HTTP 429: "), body
-        assert waits == list(BUSY_WAITS_S) * (1 + len(FALLBACK_MODELS))  # no window named: asked again after every wait, as before
+        assert waits == [gemini.GENERATE_LAST_WAIT_S] and len(fake.requests) == 2 + len(FALLBACK_MODELS)  # no window: it can clear
 
 
 @pytest.mark.parametrize(
@@ -874,12 +878,12 @@ def test_quota_violations_reads_nothing_from_other_bodies(text):
     assert gemini.quota_violations(text) == []
 
 
-def test_a_429_that_is_not_the_last_answer_is_still_asked_again(clip):
-    # the tag changes what is raised, never how often Gemini is asked: a 429 is busy, asked again after each wait
+def test_a_rate_limited_model_hands_over_to_the_next_at_once(clip):
+    # a per-minute 429 is busy: the next model (its own limits) is asked at once, no wait
     waits: list[float] = []
     fake = Fake((429, google_429("GenerateRequestsPerMinutePerProjectPerModel-FreeTier")), (200, answer(GOOD)))
     c = GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append)
-    assert deconstruct(c, clip, REGINALD)["hooks"] and waits == [BUSY_WAITS_S[0]]
+    assert deconstruct(c, clip, REGINALD)["hooks"] and waits == [] and _models(fake) == [DEFAULT_MODEL, FALLBACK_MODELS[0]]
 
 
 # ---- one hook per arm of the hook bandit (test B), instead of three free hooks (task 15 concern 1) -------------------------------
@@ -985,10 +989,12 @@ def test_a_day_window_429_skips_the_waits_but_the_fallback_models_are_still_aske
     fake = Fake((429, day), (200, answer(GOOD)))
     out = deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
     assert out["caption"]["title"] == GOOD["caption"]["title"] and waits == [] and _models(fake) == [DEFAULT_MODEL, FALLBACK_MODELS[0]]
-    # a day quota on the chosen model, a rate limit on the next one: only the rate limit is waited out; the first error is what fails
+    # a day quota on the chosen model, a rate limit on the next one: only the rate-limited one gets the last try; the first error is
+    # what fails
     minute = google_429("GenerateRequestsPerMinutePerProjectPerModel-FreeTier")
     waits.clear()
-    fake = Fake((429, day), *[(429, minute)] * (len(BUSY_WAITS_S) + 1), *[(429, day)] * len(FALLBACK_MODELS[1:]))
+    fake = Fake((429, day), (429, minute), *[(429, day)] * len(FALLBACK_MODELS[1:]), (429, minute))
     with pytest.raises(gemini.GeminiQuota) as info:
         deconstruct(GeminiClient(KEY, transport=httpx.MockTransport(fake), sleep=waits.append), clip, REGINALD)
-    assert info.value.window == "day" and waits == list(BUSY_WAITS_S)
+    assert info.value.window == "day" and waits == [gemini.GENERATE_LAST_WAIT_S]
+    assert _models(fake) == [DEFAULT_MODEL, *FALLBACK_MODELS, FALLBACK_MODELS[0]]
