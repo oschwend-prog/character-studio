@@ -2597,10 +2597,10 @@ def test_the_dry_run_names_why_a_story_would_be_skipped(tmp_path):
     assert "in_app" in row["reach"]["story"]
 
 
-def test_the_committed_reach_config_has_every_switch_off_and_every_key_a_real_handle():
+def test_the_committed_reach_config_has_trial_reels_off_stories_on_and_every_key_a_real_handle():
     cfg = load_reach()  # also checks that each trial_reels key is an Instagram handle of the roster (finding 8)
     assert cfg.trial_reels == {"franz.unimpressed": False, "reginald.thebutler": False, "lennygold.agent": False}
-    assert cfg.stories is False  # a Story only with its labelled video, and only once the owner switches Stories on
+    assert cfg.stories is True  # the owner switched Stories on 2026-10-14 after seeing the first labelled Story
     scan = json.loads((Path(base.__file__).resolve().parents[2] / "config" / "scan.json").read_text())
     assert "never switched on by the build" in scan["reach"]["_doc"]
 
