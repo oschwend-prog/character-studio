@@ -10,7 +10,7 @@ on TikTok + Instagram Reels, with a terminal to approve, track spend and see res
 - Dev: `uv run pytest -q`. Python 3.12 (uv), typer, psycopg 3, pydantic 2, ffmpeg 8 (no drawtext: overlays are PIL PNGs).
 
 ## Global Constraints
-- Repo `~/Claude/Projects/character-studio`, private GitHub `oschwend-prog/character-studio`. Commit email = GitHub no-reply. Every commit ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- Repo `~/Claude/Projects/character-studio`, GitHub `oschwend-prog/character-studio` (public since 8 Oct, owner's choice: free Actions minutes; nothing secret in files or logs). Commit email = GitHub no-reply. Every commit ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - Media never in git (`renders/`, `inbox/`, `*.mp4`, `*.png` outside `assets/`). Media lives in Supabase Storage.
 - Secrets never in files. Local: Keychain items `cs-database-url`, `cs-supabase-url`, `cs-supabase-service-key`, `cs-postiz-api-key` (read by `bin/studio`). CI: GitHub secrets. Terminal: Vercel env `VITE_SUPABASE_*`.
 - Master: 1080x1920, 30 fps, H.264 High, ~15 Mbps, AAC 320k 48 kHz, -14 LUFS +/-1, true peak <= -1 dBFS, 6-16 s (owner 2026-10-05, prefers longer: classics (tier iconic) 12-15 s, other clips 8-10 s, 16 s the hard max; eye loops 6-8 s). A silent master (`music: in_app`, the owner adds the song in the Instagram app) skips the loudness rule for silence only.
