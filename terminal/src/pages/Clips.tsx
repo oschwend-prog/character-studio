@@ -1,31 +1,30 @@
-// Clips (terminal v2, owner 2026-10-07: "the terminal should be structured around the clips I download and put into a folder"; this
-// replaces "In the works"; v3 2026-10-07: "show per character what clips are a good choice ... rank them"; redesign 2026-10-15:
-// "too long, my clips buried, too many buttons and text": his clips first, one line of intro, the rest folded). At the top one
-// line when Higgsfield is out of credits (lib/credits.ts), the Add clips box (DropBox), then one of two views, kept in the address.
-// By character (the default, `#/clips`, `#/clips?c=franz` opens on his section): a sticky row of jump chips (one per live
-// character: what needs him, else how many are ready), a section per live character, Needs you first, his Ready clips ranked by
-// score as cards to watch, with the Add toggle and the Make bar, his "Worth saving" hits, then what is on its way and done in a
-// fold (RankedClips); under them "Hot right now" (the cloud hits job's general lane, Hits.tsx) and "How the score works", both
-// closed folds. All clips (`#/clips?v=all`): every clip he dropped, one card each (ClipCard, Task 11), with its
-// one-word status, the studio's ★ suggestion and the character menu, the price and Make it (DropsTable); the chips filter it (All,
-// Pick a character, Ready, Making, Done, Blocked or failed), newest drop first, and the filter lives in the address too
-// (`#/clips?v=all&f=problems`; an address with only `f` is All clips as well). A clip that is made moves on to Videos.
-import { CircleAlert } from 'lucide-react';
+// New clips (terminal v2 "Clips", owner 2026-10-07: "the terminal should be structured around the clips I download and put into a
+// folder"; v3 2026-10-07: "show per character what clips are a good choice ... rank them"; redesign 2026-10-15: "share source of
+// clips on top - we have the folder plus social media scan ? then i should be able to view video on page and decide for which
+// character and how to generate. after that the video moves to production stage ... call section also new clips or available
+// clips as these are all pre generation ... a structured and easy to understand page"). Top to bottom: one line when Higgsfield is
+// out of credits (lib/credits.ts); Sources (the clips folder, a link or videos added here, the daily social scan: Sources.tsx);
+// Available clips, every clip not made yet under one filter kept in the address as `?c=` (All, Needs a character, one chip per live
+// character; `#/clips?c=franz` opens on his), each card watchable with Who, How and ＋ Add (AvailableClips in RankedClips.tsx);
+// the production line (what left for Videos › Making and what waits for his OK there); How the score works, folded; the Make bar
+// (sticky once a clip is added). `#/clips?v=all` is All clips: every clip he dropped, made ones too, one card each (DropsTable),
+// the chips filter it (All, Pick a character, Ready, Making, Done, Blocked or failed) and the filter lives in the address too
+// (`#/clips?v=all&f=problems`; an address with only `f` is All clips as well).
+import { ArrowLeft, ArrowRight, CircleAlert } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { DropBox } from '../components/DropBox';
 import { DropsTable } from '../components/DropsTable';
-import { HotRightNow } from '../components/Hits';
 import { MakeBar, useTicks } from '../components/MakeBar';
-import { RankedClips, useRankOrder } from '../components/RankedClips';
-import { ViewSwitch } from '../components/ViewSwitch';
+import { AvailableClips } from '../components/RankedClips';
+import { Sources } from '../components/Sources';
 import { Skeleton } from '../components/ui';
 import {
   CLIP_FILTERS, CLIP_FILTER_EMPTY, clipChip, filterClips, newestFirst, parseClipFilter, type ClipFilter,
 } from '../lib/clipstatus';
-import { clipsByCharacter, clipsViewQuery, filterAddressQuery, jumpCount, parseClipsView, type ClipsView } from '../lib/clipsview';
+import { filterAddressQuery, parseClipsView } from '../lib/clipsview';
 import { creditsOut } from '../lib/credits';
 import { href, parseHash, useNow } from '../lib/hooks';
 import { liveSelection } from '../lib/makebar';
+import { parseAvailableFilter, productionCounts, type AvailableFilter } from '../lib/newclips';
 import { activeRoster, orderRoster } from '../lib/roster';
 import { useStudio } from '../lib/store';
 import { inTracker } from '../lib/tracker';
@@ -58,22 +57,16 @@ function useClipFilter(): [ClipFilter, (f: ClipFilter) => void] {
   return [filter, choose];
 }
 
-const VIEWS: ReadonlyArray<{ id: ClipsView; label: string }> = [
-  { id: 'character', label: 'By character' },
-  { id: 'all', label: 'All clips' },
-];
-/** Scroll to a character's section, clear of the sticky top bar and the jump chips (both measured: the top bar grows with the
- * phone's safe area). */
-function scrollToSection(slug: string) {
-  const el = document.getElementById(`clips-${slug}`);
+/** Scroll to the available clips, clear of the sticky top bar (measured: it grows with the phone's safe area). */
+function scrollToList() {
+  const el = document.getElementById('avail');
   if (!el) return;
-  const above = (document.querySelector('.topbar')?.getBoundingClientRect().height ?? 64)
-    + (document.querySelector('.char-jump')?.getBoundingClientRect().height ?? 0);
+  const above = document.querySelector('.topbar')?.getBoundingClientRect().height ?? 64;
   window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - above - 8) });
 }
 
-/** The view and the query of the address, followed on every hashchange (the switch, a link from Today, the back button). */
-function useClipsAddress(): { view: ClipsView; query: string } {
+/** The view and the query of the address, followed on every hashchange (a link from Today, the back button). */
+function useClipsAddress(): { view: ReturnType<typeof parseClipsView>; query: string } {
   const read = () => parseHash(window.location.hash).query;
   const [query, setQuery] = useState(read);
   useEffect(() => {
@@ -91,9 +84,9 @@ export function Clips() {
   const { view, query } = useClipsAddress();
   const focus = view === 'character' ? new URLSearchParams(query).get('c') : null;
   const loaded = data != null;
-  // `#/clips?c=franz` (a row of the glance, "All of his clips"): the page opens on his section
+  // `#/clips?c=franz` (a row of the glance, "All of his clips"): the list opens on his filter, scrolled to
   useEffect(() => {
-    if (focus && loaded) scrollToSection(focus);
+    if (focus && loaded) scrollToList();
   }, [focus, loaded]);
   if (!data) {
     return (
@@ -109,9 +102,9 @@ export function Clips() {
   return (
     <div className="page stack">
       <div>
-        <h1 className="h1">Clips</h1>
+        <h1 className="h1">New clips</h1>
         <p className="small muted" style={{ margin: '6px 0 0' }}>
-          Your saved videos, checked for free and ranked per character. ＋ Add the best, then make them.
+          Not made yet. Watch each one, pick who and how, then make it: it moves on to Videos.
         </p>
       </div>
       {credits && (
@@ -119,69 +112,86 @@ export function Clips() {
           <CircleAlert size={16} aria-hidden="true" /> {credits.line}
         </p>
       )}
-      <DropBox />
-      <ViewSwitch
-        label="Show the clips"
-        value={view}
-        options={VIEWS}
-        // the address at the moment of the tap (a filter chip rewrites it without a hashchange)
-        to={(id) => href('clips', undefined, Object.fromEntries(new URLSearchParams(clipsViewQuery(parseHash(window.location.hash).query, id))))}
-      />
       {view === 'character' ? (
-        <ByCharacter rows={all} now={now} creditsNote={credits ? 'Higgsfield is out of credits: a make fails until you top up.' : null} />
+        <NewClips rows={all} now={now} focus={focus} creditsNote={credits ? 'Higgsfield is out of credits: a make fails until you top up.' : null} />
       ) : (
-        <DropsTable
-          rows={rows}
-          summaryRows={all}
-          roster={activeRoster(data.characters)}
-          budget={data.budget}
-          now={now}
-          empty={CLIP_FILTER_EMPTY[filter]}
-          toolbar={
-            <div className="chips" role="group" aria-label="Show clips">
-              {CLIP_FILTERS.map((o) => (
-                <button key={o.id} type="button" className="chip" aria-pressed={filter === o.id} onClick={() => setFilter(o.id)}>
-                  {o.label}
-                </button>
-              ))}
-            </div>
-          }
-        />
+        <>
+          <a className="link back-link" href={href('clips')}>
+            <ArrowLeft size={14} aria-hidden="true" /> New clips
+          </a>
+          <DropsTable
+            rows={rows}
+            summaryRows={all}
+            roster={activeRoster(data.characters)}
+            budget={data.budget}
+            now={now}
+            empty={CLIP_FILTER_EMPTY[filter]}
+            toolbar={
+              <div className="chips" role="group" aria-label="Show clips">
+                {CLIP_FILTERS.map((o) => (
+                  <button key={o.id} type="button" className="chip" aria-pressed={filter === o.id} onClick={() => setFilter(o.id)}>
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            }
+          />
+        </>
       )}
     </div>
   );
 }
 
 /**
- * By character (spec 6): the jump chips, a section per live character with his clips ranked and his "Worth saving" hits, then
- * "Hot right now" (spec 10: the general lane's top 10 hits, any character) and the score's rules folded, and the Make bar. Nothing is ticked at first; a tick that
- * is no longer Ready (made, removed, checked again) drops out of the bar by itself.
+ * The New clips view: Sources, the available clips under their filter (bound to `?c=`: a tap rewrites the address in place, a
+ * link while the page is open moves the filter), the production line, the score's rules folded, and the Make bar. Nothing is
+ * ticked at first; a tick that is no longer Ready (made, removed, checked again) drops out of the bar by itself.
  */
-function ByCharacter({ rows, now, creditsNote }: { rows: ReadonlyArray<TrackerRow>; now: number; creditsNote: string | null }) {
+function NewClips({ rows, now, focus, creditsNote }: {
+  rows: ReadonlyArray<TrackerRow>;
+  now: number;
+  focus: string | null;
+  creditsNote: string | null;
+}) {
   const { data } = useStudio();
   const { ticked, toggle, untick, clear } = useTicks();
-  const order = useRankOrder();
   const live = useMemo(() => orderRoster((data?.characters ?? []).filter((c) => c.status === 'live')), [data]);
+  const slugs = live.map((c) => c.slug).join(',');
+  const [filter, setFilter] = useState<AvailableFilter>(() => parseAvailableFilter(focus, slugs.split(',')));
+  // the address moves the filter on every hashchange (the tab, a link, the back button), also after a chip rewrote it in place
+  useEffect(() => {
+    const on = () => setFilter(parseAvailableFilter(new URLSearchParams(parseHash(window.location.hash).query).get('c'), slugs.split(',')));
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, [slugs]);
+  const choose = (next: AvailableFilter) => {
+    setFilter(next);
+    try {
+      window.history.replaceState(null, '', href('clips', undefined, next === 'all' ? {} : { c: next }));
+    } catch {
+      // the address could not be rewritten: the filter still works, it is just not in the link
+    }
+    if ((document.getElementById('avail')?.getBoundingClientRect().top ?? 0) < 0) scrollToList();
+  };
   if (!data) return null;
   const makeable = new Set(rows.filter((r) => clipChip(r) === 'ready').map((r) => r.pick_id));
   const selected = liveSelection(ticked, makeable);
-  const { groups } = clipsByCharacter(rows, live, order);
+  const prod = productionCounts(rows);
   return (
     <div className="make-scope stack">
-      {groups.length > 1 && (
-        <nav className="char-jump" aria-label="Jump to a character">
-          {groups.map((g) => {
-            const count = jumpCount(g);
-            return (
-              <button key={g.slug} type="button" className={`chip ${g.slug}`} onClick={() => scrollToSection(g.slug)}>
-                {g.name} <span className={`num jump-count${count.needsYou ? ' jump-needs' : ''}`}>{count.text}</span>
-              </button>
-            );
-          })}
-        </nav>
-      )}
-      <RankedClips rows={rows} characters={live} ticked={ticked} onTick={toggle} now={now} />
-      <HotRightNow now={now} />
+      <Sources rows={rows} characters={live} now={now} />
+      <AvailableClips rows={rows} characters={live} filter={filter} onFilter={choose} ticked={ticked} onTick={toggle} now={now} />
+      <div className="production-line">
+        <span>
+          <b>In production</b> <span className="num">{prod.making}</span> being made · <span className="num">{prod.toApprove}</span> to approve
+        </span>
+        <a className="link" href={href('videos')}>
+          Videos <ArrowRight size={14} aria-hidden="true" />
+        </a>
+      </div>
+      <a className="link quiet-link" href={href('clips', undefined, { v: 'all' })}>
+        Every clip, made ones too <ArrowRight size={14} aria-hidden="true" />
+      </a>
       <details className="worth how">
         <summary>
           <h2 className="pick-group-head">How the score works</h2>

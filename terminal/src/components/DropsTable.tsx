@@ -238,7 +238,7 @@ function WithStar({ text }: { text: string }) {
 /** The character menu of a clip (★ on the recommended one, "Use <him>" for a Pick a character clip): also Clips by character's
  * Needs you. */
 export function CharacterCell({
-  row, menu, confirm, working, onChoose, idPrefix = 'dt-char',
+  row, menu, confirm, working, onChoose, idPrefix = 'dt-char', why = true,
 }: {
   row: TrackerRow;
   menu: CharacterMenu;
@@ -247,8 +247,10 @@ export function CharacterCell({
   onChoose(slug: string): void;
   /** Its ids' prefix: the player sheet draws the same menu while the card's is in the page. */
   idPrefix?: string;
+  /** The ★ line under the menu (why the studio recommends him); New clips' Ready cards leave it out: the ★ in the menu says it. */
+  why?: boolean;
 }) {
-  const line = recommendationLine(menu, row.character_slug);
+  const line = why ? recommendationLine(menu, row.character_slug) : null;
   const id = `${idPrefix}-${row.pick_id}`;
   return (
     <span className="stack" style={{ gap: 4 }}>

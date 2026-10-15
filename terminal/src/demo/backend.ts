@@ -618,6 +618,7 @@ export class DemoBackend implements Backend {
       slug: 'biscuit', star: dog('the dachshund on the kitchen floor'), seconds: 9, start: 1.5, duration: 14.2,
       hooks: ['kitchen is my stage', 'chef’s kiss, but with paws', 'the spin was not planned'], gadgets: ['gold chain'],
     }, 'ready', {
+      folder_hash: 'demo-folder-1', // it came through the iCloud clips folder
       own_footage: true, recommended: { slug: 'franz', reason: 'a dachshund in a kitchen: Franz, now that Biscuit is retired' },
       score: demoScore(6, 9, 'a kitchen spin on the beat: a moment dog owners share'),
     }); // the owner's own recording

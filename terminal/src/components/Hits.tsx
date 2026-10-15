@@ -1,6 +1,6 @@
-// The cloud hits job on Clips › By character (terminal v3, spec section 10): "Hot right now" under the character sections, a closed
-// fold (owner 2026-10-15: his own clips first, a shorter page; it was a panel above them until then) (the general lane's top 10: hot whatever their topic, any character may take one) and, in each character's section, "Worth saving"
-// (his top 5 new hits). A hit is a big card (ClipCard, Task 11): the thumbnail (the stored platform link, a neutral tile when it is
+// The cloud hits job on New clips (terminal v3, spec section 10), inside the Sources' "Social scan" fold (owner 2026-10-15: the
+// sources on top, then the clips): "Hot right now" (the general lane's top 10: hot whatever their topic, any character may take
+// one), then per live character a closed "Worth saving" fold (his top 5 new hits). A hit is a big card (ClipCard, Task 11): the thumbnail (the stored platform link, a neutral tile when it is
 // missing or has expired; a tap on it opens the post on its platform in a new tab, to watch it), how hot it is (0-100), the
 // caption, one line why, views, reach and when, who posted it where; Use this clip (add_drop of its link, set_hit_status dropped,
 // then request_job process: the cloud fetches that one post and checks it for free, starting now; on a general hit a small choice
@@ -59,18 +59,15 @@ export function HotRightNow({ now }: { now: number }) {
   const hot = hotNow((data?.hits ?? []).filter((h) => !hidden.has(h.hit_id)), HOT_LIMIT);
   const takers = hitTakers(data?.characters ?? []);
   return (
-    <details className="worth hot">
-      <summary>
-        <h2 className="pick-group-head" id="hot-title">
-          <Flame size={14} aria-hidden="true" /> Hot right now <span className="count">{hot.length}</span>
-        </h2>
-        <span className="small muted worth-sum">viral this week, any character</span>
-      </summary>
+    <div className="hot-block">
+      <h3 className="pick-group-head" id="hot-title">
+        <Flame size={14} aria-hidden="true" /> Hot right now <span className="count">{hot.length}</span>
+      </h3>
       {hot.length === 0 ? (
         <p className="small muted hot-empty">Nothing hot right now. {NEXT_PULL}</p>
       ) : (
         <>
-          <p className="hint worth-hint">Viral and rising on TikTok and Instagram: any character can take one. {SCORE_LINE}</p>
+          <p className="hint" style={{ margin: 0 }}>Viral and rising on TikTok and Instagram: any character can take one. {SCORE_LINE}</p>
           <ClipGrid listRef={list} className={`hit-list hot-list${all ? ' all' : ''}`} label="Hot right now, best first">
             {hot.map((h) => (
               <HitCard key={h.hit_id} hit={h} now={now} takers={takers} onHide={hide} onUnhide={unhide} onGone={refocus} />
@@ -83,7 +80,7 @@ export function HotRightNow({ now }: { now: number }) {
           )}
         </>
       )}
-    </details>
+    </div>
   );
 }
 

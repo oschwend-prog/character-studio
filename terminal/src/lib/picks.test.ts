@@ -610,6 +610,6 @@ describe('the tab bar (terminal v2, owner 2026-10-07: five sections in the order
     expect(TABS.filter((t) => 'later' in t)).toEqual([]); // the viral scan's "later" mark moved into More
     // nothing removed: the Scan page (Long list), Budget and every page stay; the artist page (#/artist/<slug>) is the one route without a tab
     expect(new Set(TABS.map((t) => t.route))).toEqual(new Set(ROUTES.filter((r) => r !== 'artist')));
-    expect(TABS.map((t) => t.label)).toEqual(['Today', 'Clips', 'Videos', 'Characters', 'More']);
+    expect(TABS.map((t) => t.label)).toEqual(['Today', 'New clips', 'Videos', 'Characters', 'More']);
   });
 });

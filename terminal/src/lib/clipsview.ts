@@ -156,12 +156,6 @@ export function makeTheseIds(
 }
 
 /** His section's one line of counts: "4 ready +2 need your choice · 1 on its way"; "nothing yet" for a character with no clip. */
-/** A jump chip's count at the top of By character (owner 2026-10-15): what needs him first, else how many are ready, else none. */
-export function jumpCount(g: Pick<CharacterClips, 'ready' | 'needsYou'>): { text: string; needsYou: boolean } {
-  if (g.needsYou.length) return { text: `${g.needsYou.length} need${g.needsYou.length === 1 ? 's' : ''} you`, needsYou: true };
-  return { text: g.ready.length ? `${g.ready.length} ready` : 'none ready', needsYou: false };
-}
-
 export function sectionSummary(g: CharacterClips): string {
   const parts = [
     g.ready.length || g.needsYou.length ? readyWithChoice(g.ready.length, g.needsYou.length) : '',

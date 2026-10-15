@@ -38,7 +38,8 @@ function readDuration(file: File): Promise<number | null> {
   });
 }
 
-export function DropBox() {
+/** `embedded`: a row of the New clips page's Sources panel (owner 2026-10-15), not a panel of its own. */
+export function DropBox({ embedded = false }: { embedded?: boolean } = {}) {
   const { backend, data, run, refresh, toast } = useStudio();
   const ids = useId();
   const roster = useMemo(() => activeRoster(data?.characters), [data?.characters]);
@@ -105,9 +106,13 @@ export function DropBox() {
 
   const shown = uploads.filter((u) => u.state.phase !== 'done' || busy);
   return (
-    <section className="panel drop-box" aria-labelledby={`${ids}-title`}>
+    <section className={embedded ? 'source-row drop-box embedded' : 'panel drop-box'} aria-labelledby={`${ids}-title`}>
       <div className="drop-head">
-        <h2 className="h2" id={`${ids}-title`}>Drop a video</h2>
+        {embedded ? (
+          <h3 className="source-title" id={`${ids}-title`}><Link2 size={16} aria-hidden="true" /> Add a link or videos</h3>
+        ) : (
+          <h2 className="h2" id={`${ids}-title`}>Drop a video</h2>
+        )}
         <div className="seg" role="group" aria-label="For which character">
           <button type="button" aria-pressed={chosen === RECOMMEND} onClick={() => setCharacter(RECOMMEND)} title="The studio picks the character after the free check">
             <span aria-hidden="true">★</span> Recommend

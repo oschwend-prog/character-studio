@@ -12,7 +12,7 @@ describe('the five sections', () => {
 
   it('lists the tabs in the order of the work, with no "later" mark on any of them', () => {
     expect(TABS.map((t) => t.route)).toEqual(['today', 'clips', 'videos', 'characters', 'more']);
-    expect(TABS.map((t) => t.label)).toEqual(['Today', 'Clips', 'Videos', 'Characters', 'More']);
+    expect(TABS.map((t) => t.label)).toEqual(['Today', 'New clips', 'Videos', 'Characters', 'More']);
     expect(TABS.some((t) => 'later' in t)).toBe(false);
     // every route except the artist page has its tab
     expect(new Set(TABS.map((t) => t.route))).toEqual(new Set(ROUTES.filter((r) => r !== 'artist')));

@@ -1,28 +1,29 @@
-// The saved clips ranked per character (terminal v3, spec 5.2 and 6). A section per live character: "Needs you" first (clips the
-// studio filed under him that wait for a character choice), then his Ready clips ranked 1, 2, 3... by score with the score, the
-// one-line reason, the price and a Top pick badge on the first three scored ones (an unscored clip is "not scored yet"), then
-// what is on its way and done in one closed fold (owner 2026-10-15: a shorter page), the blocked and failed in one closed row. Every clip is a big card you can tap to watch
-// (ClipCard, Task 11, owner 2026-10-08). Each Ready card has the Make toggle ("＋ Add" / "✓ In your list": the same tick the
-// MakeBar below adds up, and it asks before anything is spent) and, under More, "Use for another character" (a version for a
-// like-for-like character, free: studio.copy_drop). Under his Ready clips, "Worth saving": his top 5 new hits of the daily cloud
-// pull (spec 10, Hits.tsx). A clip not made yet has the Keep toggle under More (retention never deletes a kept clip). `compact` is
-// Today's "Make these": his top 3 Ready clips and, when he has one, an Explore clip (one suggestion in four, learning test A).
+// The saved clips ranked (terminal v3, spec 5.2 and 6). Two lists. `AvailableClips` is the New clips page's (owner 2026-10-15):
+// every clip not made yet under one filter (All, Needs a character, one chip per live character), Needs a character first, then
+// Ready ranked 1, 2, 3... by score with the score, the one-line reason, the price and a Top pick badge on the first three scored
+// ones (an unscored clip is "not scored yet"), Who (the character menu), How (what Make it makes) with Adjust, and ＋ Add (the tick
+// the Make bar adds up; nothing is spent before its confirm); then what is being checked, the blocked and failed in one closed row.
+// A made clip has left: Videos › Making. Every clip is a big card you can tap to watch (ClipCard, Task 11, owner 2026-10-08); under
+// More, "Use for another character" (a version for a like-for-like character, free: studio.copy_drop), Keep and the original post.
+// `RankedClips` is Today's "Make these": his top 3 Ready clips and, when he has one, an Explore clip (one suggestion in four,
+// learning test A).
 import { ArrowRight, CircleAlert } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { cardPrice, originalLink, playableFor } from '../lib/clipcard';
 import { CHIP_CLASS, CHIP_LABEL, characterConfirm, clipChip } from '../lib/clipstatus';
-import { cantUseLine, clipsByCharacter, isTopPick, readyWithChoice, sectionSummary, versionsLine } from '../lib/clipsview';
-import { characterChoice, characterMenu, dropCredits, dropLine, dropTitle, sectionLabel, effectiveDrop } from '../lib/drop';
+import { cantUseLine, clipsByCharacter, isTopPick, readyWithChoice, versionsLine } from '../lib/clipsview';
+import { PART_LABEL, characterChoice, characterMenu, dropCredits, dropLine, dropTitle, sectionLabel, effectiveDrop } from '../lib/drop';
 import { keepable } from '../lib/hits';
 import { href } from '../lib/hooks';
+import { SOURCE_WORDS, availableClips, clipSource, type AvailableFilter } from '../lib/newclips';
 import { reuseTargets, scoreOf, suggestedClips } from '../lib/ranking';
 import { activeRoster, nameOf, type RosterEntry } from '../lib/roster';
 import { useStudio } from '../lib/store';
-import type { TrackerRow } from '../lib/types';
+import type { DropAdjust, TrackerRow } from '../lib/types';
 import { rankOrderFor, scoreTestOf, type RankOrder } from '../lib/weekly';
+import { AdjustSheet } from './AdjustSheet';
 import { ClipCard, ClipGrid, MakeToggle, OriginalLink, dropPicture } from './ClipCard';
 import { CharacterCell } from './DropsTable';
-import { WorthSaving } from './Hits';
 import { KeepToggle } from './KeepToggle';
 import { Avatar, Spinner } from './ui';
 
@@ -47,7 +48,7 @@ const scoreReason = (row: TrackerRow): string | null => {
 };
 
 export function RankedClips({
-  rows, characters, ticked, onTick, now, compact = false,
+  rows, characters, ticked, onTick, compact = false,
 }: {
   /** The dropped clips to show (rows with a drop card; the Clips page's list). */
   rows: ReadonlyArray<TrackerRow>;
@@ -60,7 +61,7 @@ export function RankedClips({
 }) {
   const { data } = useStudio();
   const order = useRankOrder();
-  const { groups, others, deciding } = clipsByCharacter(rows, characters, order);
+  const { groups } = clipsByCharacter(rows, characters, order);
   const names = new Map((data?.characters ?? []).map((c) => [c.slug, c.name]));
 
   if (!characters.length) {
@@ -114,123 +115,106 @@ export function RankedClips({
     );
   }
 
-  return (
-    <div className="stack ranked">
-      {deciding.length > 0 && (
-        <section className="pick-sec" id="clips-recommend" aria-labelledby="clips-recommend-name">
-          <header className="pick-sec-head">
-            <h2 className="h2" id="clips-recommend-name"><span aria-hidden="true">★ </span>Recommend</h2>
-            <span className="small muted num sec-count">{deciding.length === 1 ? '1 clip' : `${deciding.length} clips`}</span>
-          </header>
-          <p className="small muted" style={{ margin: 0 }}>
-            Chosen after the check: once the studio has looked at the clip, it goes to the character who fits.
-          </p>
-          <ClipGrid label="Clips waiting for the check to choose a character">
-            {deciding.map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={null} />)}
-          </ClipGrid>
-        </section>
-      )}
-      {groups.map((g) => (
-        <CharacterSection key={g.slug} group={g} rows={data?.tracker ?? rows} names={names} ticked={ticked} onTick={onTick} now={now} />
-      ))}
-      {others.length > 0 && (
-        <p className="small muted" style={{ margin: 0 }}>
-          {others.length === 1 ? '1 clip has' : `${others.length} clips have`} no live character (none chosen yet, or a paused one):{' '}
-          <a href={href('clips', undefined, { v: 'all' })}>see All clips</a>.
-        </p>
-      )}
-    </div>
-  );
+  return null; // the Clips page lists its clips with AvailableClips (owner 2026-10-15); RankedClips is Today's Make these
 }
 
-function CharacterSection({
-  group: g, rows, names, ticked, onTick, now,
+/**
+ * The New clips page's list (owner 2026-10-15: "view video on page and decide for which character and how to generate"): every clip
+ * not made yet, one list under a filter (All, Needs a character, one chip per live character; `?c=` in the address), Needs a
+ * character first, then Ready best first (each card: watch it, Who, How with Adjust, the price and ＋ Add), then what is being
+ * checked, the blocked and failed in one closed row. A clip whose Make it was sent leaves the list: Videos › Making has it.
+ */
+export function AvailableClips({
+  rows, characters, filter, onFilter, ticked, onTick, now,
 }: {
-  group: ReturnType<typeof clipsByCharacter>['groups'][number];
   rows: ReadonlyArray<TrackerRow>;
-  names: ReadonlyMap<string, string>;
+  /** The live characters, in the owner's order: one chip each. */
+  characters: ReadonlyArray<{ slug: string; name: string }>;
+  filter: AvailableFilter;
+  onFilter(f: AvailableFilter): void;
   ticked: ReadonlySet<string>;
   onTick(id: string, on: boolean): void;
   now: number;
 }) {
   const { data } = useStudio();
+  const order = useRankOrder();
   const roster = activeRoster(data?.characters);
-  const empty = !g.needsYou.length && !g.ready.length && !g.onTheWay.length && !g.done.length && !g.problems.length;
-  const DONE_SHOWN = 5;
+  const names = new Map((data?.characters ?? []).map((c) => [c.slug, c.name]));
+  const hitUrls = new Set((data?.hits ?? []).map((h) => h.url));
+  const a = availableClips(rows, characters, filter, order);
+  const chips: Array<{ id: AvailableFilter; label: string; needs?: boolean }> = [
+    { id: 'all', label: 'All' },
+    ...(a.counts.needs ? [{ id: 'needs', label: 'Needs a character', needs: true }] : []),
+    ...characters.map((c) => ({ id: c.slug, label: c.name })),
+  ];
+  const nothing = !a.needsWho.length && !a.ready.length && !a.checking.length && !a.problems.length;
   return (
-    <section className={`pick-sec ${g.slug}`} id={`clips-${g.slug}`} aria-labelledby={`clips-${g.slug}-name`}>
-      <header className="pick-sec-head">
-        <Avatar slug={g.slug} name={g.name} size={40} />
-        <h2 className="h2" id={`clips-${g.slug}-name`}>
-          <a className="name-link" href={href('artist', g.slug)}>{g.name}</a>
-        </h2>
-        <span className="small muted num sec-count">{sectionSummary(g)}</span>
+    <section className="avail stack" id="avail" aria-labelledby="avail-title">
+      <header className="avail-head">
+        <h2 className="h2" id="avail-title">Available clips <span className="count">{a.counts.all}</span></h2>
+        <span className="small muted">best first</span>
       </header>
+      <nav className="char-jump" aria-label="Show the clips of">
+        {chips.map((c) => (
+          <button
+            key={c.id} type="button" className="chip" aria-pressed={filter === c.id}
+            onClick={(e) => {
+              e.currentTarget.scrollIntoView({ inline: 'nearest', block: 'nearest' }); // a chip half off the row comes into view
+              onFilter(c.id);
+            }}
+          >
+            {c.label} <span className={`num jump-count${c.needs ? ' jump-needs' : ''}`}>{a.counts[c.id] ?? 0}</span>
+          </button>
+        ))}
+      </nav>
 
-      {empty && (
+      {nothing && (
         <p className="small muted pick-sec-empty">
-          No clips for {g.name} yet. Save a video to the clips folder, add one above or use one of his hits below: each is checked for
-          free.
+          {filter === 'all' ? 'No clips waiting. Save a video to the clips folder, add a link above or use a hit from the social scan.'
+            : 'Nothing here. Choose All to see every clip.'}
         </p>
       )}
 
-      {g.needsYou.length > 0 && (
+      {a.needsWho.length > 0 && (
         <div className="pick-group">
-          <h3 className="pick-group-head">Needs you <span className="count">{g.needsYou.length}</span></h3>
-          <p className="hint" style={{ margin: 0 }}>The studio filed these under {g.name}. Keep him (free) or choose another character.</p>
-          <ClipGrid label={`Needs your choice of character, ${g.needsYou.length}`}>
-            {g.needsYou.map((r) => <NeedsYouCard key={r.pick_id} row={r} roster={roster} />)}
+          <h3 className="pick-group-head">Needs a character <span className="count">{a.needsWho.length}</span></h3>
+          <ClipGrid label={`Clips that need a character, ${a.needsWho.length}`}>
+            {a.needsWho.map((r) => (clipChip(r) === 'pick'
+              ? <NeedsYouCard key={r.pick_id} row={r} roster={roster} />
+              : <QuietCard key={r.pick_id} row={r} now={now} versions={null} />))}
           </ClipGrid>
         </div>
       )}
 
-      {g.ready.length > 0 ? (
+      {a.ready.length > 0 && (
         <div className="pick-group">
-          <h3 className="pick-group-head">Ready to make, best first <span className="count">{g.ready.length}</span></h3>
-          <ClipGrid label={`${g.name}’s clips ready to make, best first`}>
-            {g.ready.map((r, i) => (
+          <h3 className="pick-group-head">Ready to make <span className="count">{a.ready.length}</span></h3>
+          <ClipGrid label="Clips ready to make, best first">
+            {a.ready.map((r, i) => (
               <ReadyCard key={r.pick_id} row={r} rank={i + 1} top={isTopPick(r, i)} ticked={ticked.has(r.pick_id)} onTick={onTick}
-                versions={versionsLine(r, rows, names)} />
+                versions={versionsLine(r, data?.tracker ?? rows, names)} roster={roster} source={SOURCE_WORDS[clipSource(r, hitUrls)]}
+/>
             ))}
           </ClipGrid>
         </div>
-      ) : (
-        !empty && <p className="small muted pick-sec-empty">Nothing ready to make for {g.name}.</p>
       )}
 
-      <WorthSaving slug={g.slug} name={g.name} now={now} />
-
-      {g.onTheWay.length + g.done.length > 0 && (
-        <details className="worth later">
-          <summary>
-            <h3 className="pick-group-head">On the way and done <span className="count">{g.onTheWay.length + g.done.length}</span></h3>
-            <span className="small muted worth-sum">{laterLine(g.onTheWay.length, g.done.length)}</span>
-          </summary>
-          {g.onTheWay.length > 0 && (
-            <ClipGrid label={`${g.name}’s clips on the way`}>
-              {g.onTheWay.map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
-            </ClipGrid>
-          )}
-          {g.done.length > 0 && (
-            <ClipGrid label={`${g.name}’s clips done`}>
-              {g.done.slice(0, DONE_SHOWN).map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
-            </ClipGrid>
-          )}
-          {g.done.length > DONE_SHOWN && (
-            <a className="link worth-more" href={href('clips', undefined, { v: 'all', f: 'done' })}>
-              {g.done.length - DONE_SHOWN} more done in All clips <ArrowRight size={14} aria-hidden="true" />
-            </a>
-          )}
-        </details>
+      {a.checking.length > 0 && (
+        <div className="pick-group">
+          <h3 className="pick-group-head">Being checked <span className="count">{a.checking.length}</span></h3>
+          <ClipGrid label="Clips being checked">
+            {a.checking.map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, data?.tracker ?? rows, names)} />)}
+          </ClipGrid>
+        </div>
       )}
 
-      {g.problems.length > 0 && (
+      {a.problems.length > 0 && (
         <details className="cant-use">
           <summary>
-            <CircleAlert size={15} aria-hidden="true" /> {cantUseLine(g.problems.length)}
+            <CircleAlert size={15} aria-hidden="true" /> {cantUseLine(a.problems.length)}
           </summary>
           <ul className="cant-use-list">
-            {g.problems.map((r) => (
+            {a.problems.map((r) => (
               <li key={r.pick_id}>
                 <b>{dropTitle(r)}</b>
                 <span className="error-text">{dropLine(r.drop_card!, now, Boolean(r.owner_clip_path))}</span>
@@ -242,18 +226,21 @@ function CharacterSection({
           </a>
         </details>
       )}
+
+      {a.others > 0 && filter === 'all' && (
+        <p className="small muted" style={{ margin: 0 }}>
+          {a.others === 1 ? '1 clip has' : `${a.others} clips have`} no live character (none chosen yet, or a paused one):{' '}
+          <a href={href('clips', undefined, { v: 'all' })}>see All clips</a>.
+        </p>
+      )}
     </section>
   );
 }
 
-/** The closed fold's summary: "1 on its way · 3 done" (the zero side left out). */
-const laterLine = (onTheWay: number, done: number) =>
-  [onTheWay ? `${onTheWay} on ${onTheWay === 1 ? 'its' : 'their'} way` : '', done ? `${done} done` : ''].filter(Boolean).join(' · ');
-
 /** A Ready clip: its card with the rank, Top pick, score and reason, price and section, and the Make toggle (the tick the Make bar
  * adds up); the versions line; under More, "Use for another character", Keep and the original post (not in compact). */
 function ReadyCard({
-  row, rank, top, explore = false, ticked, onTick, versions, compact = false,
+  row, rank, top, explore = false, ticked, onTick, versions, compact = false, roster, source,
 }: {
   row: TrackerRow;
   rank: number | null; // null for the Explore clip: its real rank is lower, and the card says why it is there
@@ -263,8 +250,14 @@ function ReadyCard({
   onTick(id: string, on: boolean): void;
   versions: string | null;
   compact?: boolean;
+  /** New clips (owner 2026-10-15): the card decides who and how. With the roster, Who (the character menu: another one checks it
+   * again in his voice, free) and How (what Make it makes, with Adjust: the section, his part, the gadgets, the hook). */
+  roster?: ReadonlyArray<RosterEntry>;
+  /** Where the clip came from (lib/newclips.ts SOURCE_WORDS). */
+  source?: string;
 }) {
-  const { data } = useStudio();
+  const { data, backend, run, busy } = useStudio();
+  const [adjusting, setAdjusting] = useState(false);
   const d = row.drop_card!;
   const title = dropTitle(row);
   const priced = d.credits != null;
@@ -272,25 +265,67 @@ function ReadyCard({
   const e = effectiveDrop(d, d.adjust ?? {});
   const original = originalLink(row.url)?.url ?? null;
   const more = !compact && (keepable(row) || original != null || reuseTargets(row, data?.characters ?? [], data?.tracker ?? []).length > 0);
+  const key = `drop-${row.pick_id}`;
+  const charKey = `char-${row.pick_id}`;
+  const menu = roster ? characterMenu(row, roster) : null;
+  const choose = (slug: string) => {
+    if (!menu || !roster || characterChoice(menu, row.character_slug, slug) === 'none') return;
+    const name = roster.find((c) => c.slug === slug)?.name ?? slug;
+    void run(charKey, () => backend.setDropCharacter(row.pick_id, slug), `${name}: checking it again in his voice (free)`);
+  };
+  const make = (adjust: DropAdjust) =>
+    run(key, () => backend.requestJob(row.pick_id, 'make', adjust), `Make it: ${row.character_name ?? 'he'} is on his way (about ${dropCredits(d, adjust)} credits)`);
   return (
-    <ClipCard
-      id={`${compact ? 'c' : 'f'}-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
-      rank={rank} top={top} explore={explore} score={scoreOf(row)} scoreTitle={SCORE_TITLE} checkScore reason={scoreReason(row)}
-      price={cardPrice(credits, d.window ? e.length_s : null)}
-      sheetPrice={credits != null ? `about ${credits} credits${d.window ? ` · ${sectionLabel(e.start_s, e.length_s)}` : ''}` : 'priced by the check'}
-      extra={versions && <span className="small muted">{versions}</span>}
-      ticked={ticked} dataChar={row.character_slug ?? 'none'} original={original}
-      action={({ describedBy }) => (
-        <MakeToggle ticked={ticked} disabled={!priced} onToggle={(on) => onTick(row.pick_id, on)} describedBy={describedBy} />
+    <>
+      <ClipCard
+        id={`${compact ? 'c' : 'f'}-${row.pick_id}`} title={title} picture={dropPicture(row, title)} playable={playableFor(row)}
+        rank={rank} top={top} explore={explore} score={scoreOf(row)} scoreTitle={SCORE_TITLE} checkScore reason={scoreReason(row)}
+        price={cardPrice(credits, d.window ? e.length_s : null)}
+        sheetPrice={credits != null ? `about ${credits} credits${d.window ? ` · ${sectionLabel(e.start_s, e.length_s)}` : ''}` : 'priced by the check'}
+        extra={(versions || source || roster) && (
+          <>
+            {roster && <span className="small muted cc-how">How: {PART_LABEL[e.part].toLowerCase()} part · {sectionLabel(e.start_s, e.length_s)}</span>}
+            {source && <span className="small muted">{source}</span>}
+            {versions && <span className="small muted">{versions}</span>}
+          </>
+        )}
+        ticked={ticked} dataChar={row.character_slug ?? 'none'} original={original}
+        action={({ describedBy, where }) => (
+          <>
+            {menu && (
+              <div className="needs-choice">
+                <CharacterCell row={row} menu={menu} confirm={null} working={busy.has(charKey) || busy.has(key)} onChoose={choose}
+                  idPrefix={where === 'sheet' ? 'pl-who' : 'av-who'} why={false} />
+              </div>
+            )}
+            <MakeToggle ticked={ticked} disabled={!priced} onToggle={(on) => onTick(row.pick_id, on)} describedBy={describedBy} />
+          </>
+        )}
+        links={roster && priced ? (
+          <button type="button" className="cc-textlink" disabled={busy.has(key)} onClick={() => setAdjusting(true)}>
+            Adjust how
+          </button>
+        ) : undefined}
+        more={more ? (
+          <>
+            <ReuseMenu row={row} title={title} />
+            <KeepToggle row={row} />
+            <OriginalLink url={row.url} />
+          </>
+        ) : undefined}
+      />
+      {adjusting && (
+        <AdjustSheet
+          row={row}
+          onClose={() => setAdjusting(false)}
+          onMake={async (adjust) => {
+            const ok = await make(adjust);
+            if (ok) setAdjusting(false);
+          }}
+          working={busy.has(key)}
+        />
       )}
-      more={more ? (
-        <>
-          <ReuseMenu row={row} title={title} />
-          <KeepToggle row={row} />
-          <OriginalLink url={row.url} />
-        </>
-      ) : undefined}
-    />
+    </>
   );
 }
 

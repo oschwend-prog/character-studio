@@ -472,6 +472,8 @@ export interface DropCard {
    * to Ready; `reason` carries the studio's line. lib/credits.ts reads it. */
   credits_refused_at?: string | null;
   credits_refused_reason?: string | null;
+  /** The clips folder's fingerprint of the file (studio/clipfolder.py): set on a clip that came from the iCloud folder. */
+  folder_hash?: string | null;
   /** The make record while a Make it runs (studio/drop.py _record_make): only when it was sent is read here. */
   make?: { submitted_at?: string | null } | null;
   /** Filed by the hits job on its own (migration 0016, studio.hits.auto_file); absent on everything else. */

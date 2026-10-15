@@ -11,7 +11,7 @@ export interface TabSpec {
 
 export const TABS: ReadonlyArray<TabSpec> = [
   { route: 'today', label: 'Today' },
-  { route: 'clips', label: 'Clips' },
+  { route: 'clips', label: 'New clips' }, // owner 2026-10-15: pre-generation only (was Clips)
   { route: 'videos', label: 'Videos' },
   { route: 'characters', label: 'Characters' },
   { route: 'more', label: 'More' },
