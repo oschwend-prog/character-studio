@@ -119,7 +119,7 @@ export function DropBox() {
           ))}
         </div>
       </div>
-      <label className={`btn primary block drop-pick${busy ? ' disabled' : ''}`}>
+      <label className={`btn line block drop-pick${busy ? ' disabled' : ''}`}>
         <Upload aria-hidden="true" /> Choose videos
         <input type="file" accept="video/*" multiple className="sr-only" onChange={onFiles} disabled={busy} aria-describedby={`${ids}-help`} />
       </label>

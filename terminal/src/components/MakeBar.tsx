@@ -3,7 +3,7 @@
 // of the month's cap and after. Only "Yes, make" asks Make it, for each clip one by one (useMakeMany), and the bar then shows each
 // clip's own result: one refusal never hides the others. The steps are lib/makebar.ts's reducer, so a stray tap cannot skip the
 // confirm.
-import { Check, X } from 'lucide-react';
+import { Check, CircleAlert, X } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useMakeMany } from '../lib/actions';
 import { dropCredits, dropTitle } from '../lib/drop';
@@ -40,7 +40,7 @@ const clipName = (r: TrackerRow | undefined, id: string) =>
   r ? `${dropTitle(r)}${r.character_slug ? ` (${r.character_name ?? nameOf(r.character_slug)})` : ''}` : `clip ${id.slice(0, 8)}`;
 
 export function MakeBar({
-  rows, selected, budget, onSent, onClear,
+  rows, selected, budget, onSent, onClear, note = null,
 }: {
   /** Every row the ticks may point at: their prices and names. */
   rows: ReadonlyArray<TrackerRow>;
@@ -50,6 +50,8 @@ export function MakeBar({
   /** The clips Make it was sent for: the screen unticks them. */
   onSent(ids: string[]): void;
   onClear(): void;
+  /** One line over the buttons when a make is likely to fail (Higgsfield out of credits, lib/credits.ts); the bar still works. */
+  note?: string | null;
 }) {
   const { busy } = useStudio();
   const makeMany = useMakeMany();
@@ -134,6 +136,11 @@ export function MakeBar({
 
   const bar = total.count > 0 ? (
     <div className="make-bar on" role="group" aria-label="Make the clips in your list" tabIndex={-1} ref={barRef}>
+      {note && (
+        <span className="make-note">
+          <CircleAlert size={14} aria-hidden="true" /> {note}
+        </span>
+      )}
       <span className="small num make-count">
         {total.count} in your list · about {formatCredits(total.credits)}
       </span>
@@ -146,14 +153,7 @@ export function MakeBar({
         </button>
       </div>
     </div>
-  ) : (
-    <div className="make-bar idle" tabIndex={-1} ref={barRef}>
-      <span className="small muted">Nothing in your list. Tap ＋ Make this on the clips you want made: the total shows here, and nothing is spent before you confirm.</span>
-      <button type="button" className="btn primary" disabled>
-        {makeBarLabel(total)}
-      </button>
-    </div>
-  );
+  ) : null; // nothing in the list: no bar (owner 2026-10-15: less on the page; the cards' ＋ Add and "How the score works" say it)
   // the sheet keeps its place whatever the bar shows (sent clips are unticked while the results are open)
   return (
     <>

@@ -18,8 +18,8 @@ describe('MakeToggle', () => {
     }
   });
 
-  it('shows "Make this" and then "In your list", the mark hidden from a screen reader', () => {
-    expect(html(false)).toContain('<span class="cc-mark" aria-hidden="true">＋</span> Make this');
+  it('shows "Add" and then "In your list", the mark hidden from a screen reader', () => {
+    expect(html(false)).toContain('<span class="cc-mark" aria-hidden="true">＋</span> Add');
     expect(html(true)).toContain('<span class="cc-mark" aria-hidden="true">✓</span> In your list');
   });
 });

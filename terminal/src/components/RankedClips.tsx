@@ -1,8 +1,8 @@
 // The saved clips ranked per character (terminal v3, spec 5.2 and 6). A section per live character: "Needs you" first (clips the
 // studio filed under him that wait for a character choice), then his Ready clips ranked 1, 2, 3... by score with the score, the
 // one-line reason, the price and a Top pick badge on the first three scored ones (an unscored clip is "not scored yet"), then
-// what is on its way and done, the blocked and failed folded into one closed row. Every clip is a big card you can tap to watch
-// (ClipCard, Task 11, owner 2026-10-08). Each Ready card has the Make toggle ("＋ Make this" / "✓ In your list": the same tick the
+// what is on its way and done in one closed fold (owner 2026-10-15: a shorter page), the blocked and failed in one closed row. Every clip is a big card you can tap to watch
+// (ClipCard, Task 11, owner 2026-10-08). Each Ready card has the Make toggle ("＋ Add" / "✓ In your list": the same tick the
 // MakeBar below adds up, and it asks before anything is spent) and, under More, "Use for another character" (a version for a
 // like-for-like character, free: studio.copy_drop). Under his Ready clips, "Worth saving": his top 5 new hits of the daily cloud
 // pull (spec 10, Hits.tsx). A clip not made yet has the Keep toggle under More (retention never deletes a kept clip). `compact` is
@@ -198,29 +198,30 @@ function CharacterSection({
         !empty && <p className="small muted pick-sec-empty">Nothing ready to make for {g.name}.</p>
       )}
 
-      <WorthSaving slug={g.slug} name={g.name} readyCount={g.ready.length} now={now} />
+      <WorthSaving slug={g.slug} name={g.name} now={now} />
 
-      {g.onTheWay.length > 0 && (
-        <div className="pick-group">
-          <h3 className="pick-group-head">On the way <span className="count">{g.onTheWay.length}</span></h3>
-          <ClipGrid label={`${g.name}’s clips on the way`}>
-            {g.onTheWay.map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
-          </ClipGrid>
-        </div>
-      )}
-
-      {g.done.length > 0 && (
-        <div className="pick-group">
-          <h3 className="pick-group-head">Done <span className="count">{g.done.length}</span></h3>
-          <ClipGrid label={`${g.name}’s clips done`}>
-            {g.done.slice(0, DONE_SHOWN).map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
-          </ClipGrid>
+      {g.onTheWay.length + g.done.length > 0 && (
+        <details className="worth later">
+          <summary>
+            <h3 className="pick-group-head">On the way and done <span className="count">{g.onTheWay.length + g.done.length}</span></h3>
+            <span className="small muted worth-sum">{laterLine(g.onTheWay.length, g.done.length)}</span>
+          </summary>
+          {g.onTheWay.length > 0 && (
+            <ClipGrid label={`${g.name}’s clips on the way`}>
+              {g.onTheWay.map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
+            </ClipGrid>
+          )}
+          {g.done.length > 0 && (
+            <ClipGrid label={`${g.name}’s clips done`}>
+              {g.done.slice(0, DONE_SHOWN).map((r) => <QuietCard key={r.pick_id} row={r} now={now} versions={versionsLine(r, rows, names)} />)}
+            </ClipGrid>
+          )}
           {g.done.length > DONE_SHOWN && (
-            <a className="link" href={href('clips', undefined, { v: 'all', f: 'done' })}>
-              {g.done.length - DONE_SHOWN} more in All clips <ArrowRight size={14} aria-hidden="true" />
+            <a className="link worth-more" href={href('clips', undefined, { v: 'all', f: 'done' })}>
+              {g.done.length - DONE_SHOWN} more done in All clips <ArrowRight size={14} aria-hidden="true" />
             </a>
           )}
-        </div>
+        </details>
       )}
 
       {g.problems.length > 0 && (
@@ -244,6 +245,10 @@ function CharacterSection({
     </section>
   );
 }
+
+/** The closed fold's summary: "1 on its way · 3 done" (the zero side left out). */
+const laterLine = (onTheWay: number, done: number) =>
+  [onTheWay ? `${onTheWay} on ${onTheWay === 1 ? 'its' : 'their'} way` : '', done ? `${done} done` : ''].filter(Boolean).join(' · ');
 
 /** A Ready clip: its card with the rank, Top pick, score and reason, price and section, and the Make toggle (the tick the Make bar
  * adds up); the versions line; under More, "Use for another character", Keep and the original post (not in compact). */

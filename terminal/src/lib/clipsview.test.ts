@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   cantUseLine, clipsByCharacter, clipsViewQuery, filterAddressQuery, isDeciding, isTopPick, makeTheseIds, needYourChoice, parseClipsView,
-  readyWithChoice, sectionSummary, versionsLine,
+  jumpCount, readyWithChoice, sectionSummary, versionsLine,
 } from './clipsview';
 import type { DropCard, DropState, TrackerRow } from './types';
 
@@ -188,5 +188,15 @@ describe('a Recommend drop the check has not placed yet (owner 2026-10-12: the u
     expect(isDeciding(placed)).toBe(false);
     expect(isDeciding(ownersChoice)).toBe(false);
     expect(isDeciding(row('franz', null))).toBe(false);
+  });
+});
+
+describe('jumpCount', () => {
+  const rows = (n: number) => Array.from({ length: n }, () => ({}) as TrackerRow);
+  it('says what needs him first, else how many are ready', () => {
+    expect(jumpCount({ needsYou: rows(1), ready: rows(4) })).toEqual({ text: '1 needs you', needsYou: true });
+    expect(jumpCount({ needsYou: rows(2), ready: [] })).toEqual({ text: '2 need you', needsYou: true });
+    expect(jumpCount({ needsYou: [], ready: rows(3) })).toEqual({ text: '3 ready', needsYou: false });
+    expect(jumpCount({ needsYou: [], ready: [] })).toEqual({ text: 'none ready', needsYou: false });
   });
 });

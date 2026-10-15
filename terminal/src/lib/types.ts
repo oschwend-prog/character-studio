@@ -468,6 +468,12 @@ export interface DropCard {
   copy_of?: string | null;
   /** The owner's Keep (set_drop_keep, migration 0016): retention never deletes a kept clip's file. Absent = not kept. */
   keep?: boolean;
+  /** Higgsfield refused a make the studio asked for: not enough credits (studio/drop.py _refused_for_credits). The drop went back
+   * to Ready; `reason` carries the studio's line. lib/credits.ts reads it. */
+  credits_refused_at?: string | null;
+  credits_refused_reason?: string | null;
+  /** The make record while a Make it runs (studio/drop.py _record_make): only when it was sent is read here. */
+  make?: { submitted_at?: string | null } | null;
   /** Filed by the hits job on its own (migration 0016, studio.hits.auto_file); absent on everything else. */
   auto_filed?: boolean;
   /** The hit the job filed it from: its id and lane (a character's slug, or `general`). */

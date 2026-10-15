@@ -280,12 +280,12 @@ a { color: var(--ice); text-underline-offset: 3px; text-decoration-thickness: 1p
 .input:focus, .textarea:focus { outline: none; border-color: var(--ice); box-shadow: 0 0 0 1px var(--ice); }
 .input::placeholder, .textarea::placeholder { color: var(--ink-3); }
 .input[aria-invalid='true'] { border-color: var(--red); }
-.hint { font-size: 12.5px; color: var(--ink-2); }
+.hint { font-size: 13px; color: var(--ink-2); }
 .error-text { font-size: 13px; color: var(--red); }
 
 .seg { display: inline-flex; padding: 3px; gap: 3px; border-radius: var(--r); background: var(--board); box-shadow: inset 0 0 0 1px var(--rule-strong); }
 .seg button {
-  min-height: 38px; padding: 0 12px; border: 0; border-radius: 3px; background: transparent; color: var(--ink-2); cursor: pointer;
+  min-height: 44px; padding: 0 12px; border: 0; border-radius: 3px; background: transparent; color: var(--ink-2); cursor: pointer;
   font-size: 13px; font-weight: 640; font-stretch: 82%; letter-spacing: 0.05em; text-transform: uppercase;
 }
 .seg button[aria-pressed='true'] { background: var(--tile); color: var(--ink); box-shadow: inset 0 0 0 1px var(--rule-strong); }
@@ -856,7 +856,7 @@ a.ll-title:hover { text-decoration: underline; }
 
 /* ---- "Drop a video": the box at the top of In the works, the drop cards, the Adjust sheet --------------- */
 .thumb-tile.plat-drop { --plat: var(--ice); }
-.drop-box { padding: 14px; display: flex; flex-direction: column; gap: 12px; border-left: 3px solid var(--amber); }
+.drop-box { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
 .drop-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
 .drop-head .h2 { margin: 0; }
 .drop-pick { cursor: pointer; min-height: 48px; }
@@ -1106,12 +1106,12 @@ a.ll-title:hover { text-decoration: underline; }
 .glance-key > summary:hover { color: var(--ink); }
 .glance-key > p { margin: 0; }
 
-/* ---- the cloud hits job (terminal v3 spec 10): "Hot right now" above the sections, "Worth saving" in each, Keep on a clip card -- */
-.hot { display: flex; flex-direction: column; gap: 8px; padding: 12px 12px 6px; border-left: 4px solid var(--amber); }
-.hot-head { display: flex; flex-direction: column; gap: 4px; }
-.hot-head .h2 { display: inline-flex; align-items: center; gap: 6px; }
-.hot-head .h2 svg { color: var(--amber); }
+/* ---- the cloud hits job (terminal v3 spec 10): "Hot right now" under the sections and "Worth saving" in each, both folds; Keep -- */
+.worth.hot > summary .pick-group-head { display: inline-flex; align-items: center; gap: 6px; flex: none; white-space: nowrap; }
+.worth.hot > summary svg { color: var(--ink-3); }
 .hot-empty, .worth-empty { margin: 0; padding-bottom: 6px; }
+.worth > .hot-more { margin-bottom: 12px; }
+.worth.how > .worth-hint, .worth > .worth-more { margin-bottom: 12px; }
 .hot-more { align-self: flex-start; margin-bottom: 4px; text-decoration: underline; text-underline-offset: 3px; }
 .hit-who { overflow-wrap: anywhere; }
 .hit-why { color: var(--ice); }
@@ -1211,6 +1211,8 @@ button.cc-pic, a.cc-pic { cursor: pointer; }
 .cc-score.faint { align-items: center; padding-top: 0; font-size: 11px; color: var(--ink-2); }
 .cc-of { color: var(--ink-2); }
 .cc-badges .tag.action { background: var(--amber); color: var(--amber-ink); }
+/* Top pick is a rank, not something waiting on him: an ink plate, amber stays for what needs him (owner 2026-10-15) */
+.cc-badges .tag.cc-top { background: var(--ink); color: var(--board); }
 .cc-explore { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .cc-body { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; padding: 10px 10px 8px; }
 .cc-title {
@@ -1324,3 +1326,21 @@ button.cc-pic, a.cc-pic { cursor: pointer; }
 
 /* ---- Totals for all videos (owner 2026-10-15): the strip on Characters → All videos; the `kv` grid, nothing new but its wrapper ---- */
 .totals { display: flex; flex-direction: column; gap: 8px; }
+
+/* ---- Clips redesign (owner 2026-10-15): the credits line, the jump chips, the Make bar's note ---------------------------------- */
+.credits-out {
+  display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border-radius: var(--r);
+  background: var(--red-track); color: var(--ink); font-size: 13.5px; line-height: 1.35;
+}
+.credits-out svg { flex: none; margin-top: 1px; color: var(--red); }
+.char-jump {
+  position: sticky; top: calc(var(--safe-t) + 50px); z-index: 10; /* under the top bar: 50 px + the safe area */ display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  margin: 0 calc(-1 * var(--gutter)); padding: 8px var(--gutter); background: color-mix(in srgb, var(--board) 92%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); border-bottom: 1px solid var(--rule);
+}
+.char-jump::-webkit-scrollbar { display: none; }
+.char-jump .chip { min-height: 40px; display: inline-flex; align-items: center; gap: 6px; color: var(--ink); font-weight: 640; }
+.char-jump .jump-count { font-weight: 500; color: var(--ink-2); }
+.char-jump .jump-needs { color: var(--amber); }
+.make-note { display: flex; align-items: center; gap: 6px; flex: 1 0 100%; font-size: 13px; color: var(--ink); }
+.make-note svg { flex: none; color: var(--red); }

@@ -4,6 +4,7 @@
 // studio recommends one (★, drop_card.recommended), and only the section we use is judged for text and watermarks
 // (drop_card.avoid). Pure functions over v_tracker rows (drop_card, migration 0012) and the owner's Adjust; no browser. The
 // rules mirror studio.drop (validate_adjust, estimate) and request_job in migration 0012: the database and the CLI check them.
+import { NO_CREDITS_LINE, creditsRefusedAt } from './credits';
 import { nameOf, type RosterEntry } from './roster';
 import { CLIP_MAX_SECONDS, canonicalVideoUrl, estimateCredits } from './rules';
 import type { DropAdjust, DropAvoid, DropCard, DropCrop, DropState, OwnerPresence, TrackerRow } from './types';
@@ -282,6 +283,7 @@ export function isStaleUpload(d: Pick<DropCard, 'state' | 'at'>, now: number, at
 
 /** The one line under a card's title, by state (the database's own reason wins when it gave one). */
 export function dropLine(d: DropCard, now: number, attached = false): string {
+  if (d.state === 'failed' && creditsRefusedAt(d)) return NO_CREDITS_LINE; // Higgsfield's raw 403, in plain words
   if (d.reason) return d.reason;
   switch (d.state) {
     case 'uploading':
@@ -315,7 +317,7 @@ export function dropLink(input: string): { ok: true; url: string } | { ok: false
   }
 }
 
-export const DROP_HELP = `Videos from your phone (up to ${CLIP_MAX_SECONDS} s and 200 MB each) or a TikTok, Instagram or YouTube link. Each one is checked for free; nothing is generated until you tap Make it.`;
+export const DROP_HELP = `Up to ${CLIP_MAX_SECONDS} s and 200 MB each, or a TikTok, Instagram or YouTube link. Checked for free; nothing is spent until you Make it.`;
 
 /** The local progress of one dropped file in the box (before its card exists in the database). */
 export type UploadPhase =

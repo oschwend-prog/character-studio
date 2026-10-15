@@ -140,7 +140,7 @@ describe('the card’s picture and lines', () => {
   });
 
   it('has one Make toggle with two plain states', () => {
-    expect(MAKE_TOGGLE.off).toEqual({ mark: '＋', text: 'Make this' });
+    expect(MAKE_TOGGLE.off).toEqual({ mark: '＋', text: 'Add' });
     expect(MAKE_TOGGLE.on).toEqual({ mark: '✓', text: 'In your list' });
   });
 

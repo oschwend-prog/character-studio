@@ -296,8 +296,8 @@ export function OriginalLink({ url, label = 'Open original' }: { url: string | n
   );
 }
 
-/** The ready card's action: the same tick the Make bar adds up ("＋ Make this" / "✓ In your list"); nothing is spent before its
- * confirm. A plain button whose accessible name is its visible text ("Make this" / "In your list"; the mark is `aria-hidden`), so
+/** The ready card's action: the same tick the Make bar adds up ("＋ Add" / "✓ In your list"; "Make this" until 2026-10-15); nothing is spent
+ * before its confirm. A plain button whose accessible name is its visible text ("Add" / "In your list"; the mark is `aria-hidden`), so
  * what a screen reader says is what the eye reads (Task 11 ruling: no stable `aria-label`, no `aria-pressed`). */
 export function MakeToggle({ ticked, disabled, onToggle, describedBy }: {
   ticked: boolean;

@@ -1,5 +1,5 @@
-// The cloud hits job on Clips › By character (terminal v3, spec section 10): "Hot right now" above the character sections (the
-// general lane's top 10: hot whatever their topic, any character may take one) and, in each character's section, "Worth saving"
+// The cloud hits job on Clips › By character (terminal v3, spec section 10): "Hot right now" under the character sections, a closed
+// fold (owner 2026-10-15: his own clips first, a shorter page; it was a panel above them until then) (the general lane's top 10: hot whatever their topic, any character may take one) and, in each character's section, "Worth saving"
 // (his top 5 new hits). A hit is a big card (ClipCard, Task 11): the thumbnail (the stored platform link, a neutral tile when it is
 // missing or has expired; a tap on it opens the post on its platform in a new tab, to watch it), how hot it is (0-100), the
 // caption, one line why, views, reach and when, who posted it where; Use this clip (add_drop of its link, set_hit_status dropped,
@@ -59,19 +59,18 @@ export function HotRightNow({ now }: { now: number }) {
   const hot = hotNow((data?.hits ?? []).filter((h) => !hidden.has(h.hit_id)), HOT_LIMIT);
   const takers = hitTakers(data?.characters ?? []);
   return (
-    <section className="panel hot" aria-labelledby="hot-title">
-      <div className="hot-head">
-        <h2 className="h2" id="hot-title">
-          <Flame size={15} aria-hidden="true" /> Hot right now
+    <details className="worth hot">
+      <summary>
+        <h2 className="pick-group-head" id="hot-title">
+          <Flame size={14} aria-hidden="true" /> Hot right now <span className="count">{hot.length}</span>
         </h2>
-        <span className="small muted">
-          Viral and rising on TikTok and Instagram this week: any character can take one. {SCORE_LINE} Tap a picture to watch it.
-        </span>
-      </div>
+        <span className="small muted worth-sum">viral this week, any character</span>
+      </summary>
       {hot.length === 0 ? (
         <p className="small muted hot-empty">Nothing hot right now. {NEXT_PULL}</p>
       ) : (
         <>
+          <p className="hint worth-hint">Viral and rising on TikTok and Instagram: any character can take one. {SCORE_LINE}</p>
           <ClipGrid listRef={list} className={`hit-list hot-list${all ? ' all' : ''}`} label="Hot right now, best first">
             {hot.map((h) => (
               <HitCard key={h.hit_id} hit={h} now={now} takers={takers} onHide={hide} onUnhide={unhide} onGone={refocus} />
@@ -84,19 +83,19 @@ export function HotRightNow({ now }: { now: number }) {
           )}
         </>
       )}
-    </section>
+    </details>
   );
 }
 
 /**
- * His "Worth saving" (spec 10): his top 5 new hits, in a fold that is open when fewer than 3 of his clips are ready to make (he is
- * running low) and closed otherwise (his own clips come first); the summary, a group head like his others, says how many.
+ * His "Worth saving" (spec 10): his top 5 new hits, in a closed fold (owner 2026-10-15: his own clips first, a shorter page; until
+ * then it was open when fewer than 3 of his clips were ready); the summary, a group head like his others, says how many.
  */
-export function WorthSaving({ slug, name, readyCount, now }: { slug: string; name: string; readyCount: number; now: number }) {
+export function WorthSaving({ slug, name, now }: { slug: string; name: string; now: number }) {
   const { data } = useStudio();
   const { hidden, hide, unhide } = useHidden();
   const [list, refocus] = useListFocus();
-  const [open, setOpen] = useState(readyCount < 3);
+  const [open, setOpen] = useState(false);
   const hits = worthSaving((data?.hits ?? []).filter((h) => !hidden.has(h.hit_id)), slug, WORTH_LIMIT);
   const him: RosterEntry = { slug, name };
   return (

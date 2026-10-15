@@ -18,6 +18,7 @@ import {
   isDropCard, recommendationLine, retryAdjust, sectionLabel, trimmedLabel, type CharacterMenu,
 } from '../lib/drop';
 import { isDeciding } from '../lib/clipsview';
+import { creditsRefusedAt } from '../lib/credits';
 import { formatCredits } from '../lib/format';
 import { href } from '../lib/hooks';
 import { scoreOf } from '../lib/ranking';
@@ -168,7 +169,8 @@ function DropItem({ row, roster, now }: { row: TrackerRow; roster: ReadonlyArray
               </button>
             )}
             {main === 'retry-make' && (
-              <button type="button" className="btn primary block" disabled={working || changing} aria-busy={working} onClick={() => void make(retryAdjust(d))}>
+              // not lit when Higgsfield had no credits: the same tap fails again until the owner tops up (owner 2026-10-15)
+              <button type="button" className={`btn ${creditsRefusedAt(d) ? 'line' : 'primary'} block`} disabled={working || changing} aria-busy={working} onClick={() => void make(retryAdjust(d))}>
                 {working && <Spinner />} Try again · <span className="num">about {dropCredits(d, d.adjust ?? {})}</span>
               </button>
             )}

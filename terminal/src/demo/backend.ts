@@ -627,6 +627,9 @@ export class DemoBackend implements Backend {
     }, 'ready', {
       recommended: { slug: 'reginald', reason: 'an office-corridor shimmy: Reginald’s deadpan service' },
       score: demoScore(8, 7, 'the office shimmy everyone did this month, played straight'),
+      // the studio's auto-make asked for it and Higgsfield said not enough credits (studio/drop.py _refused_for_credits): back to Ready
+      credits_refused_at: atMin(20), credits_refused_reason: 'Higgsfield refused the submit: HTTP 403: {"detail": "Insufficient credits"}',
+      reason: 'Higgsfield said not enough credits 20 minutes ago; the studio asks again in 12 hours',
     });
     readyDrop(6, 'reginald', 90, 'Two friends film a dance in a car park; a watermark sits in the corner.', {
       slug: 'reginald', star: person('the man on the left'), seconds: 8, start: 0, duration: 11, hooks: ['a', 'b', 'c'], gadgets: [],

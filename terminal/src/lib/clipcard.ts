@@ -162,7 +162,7 @@ export function cardPrice(credits: number | null | undefined, seconds: number | 
 
 /** The ready card's one action: a toggle of the same tick the Make bar adds up (nothing is spent before its confirm). */
 export const MAKE_TOGGLE = {
-  off: { mark: '＋', text: 'Make this' },
+  off: { mark: '＋', text: 'Add' },
   on: { mark: '✓', text: 'In your list' },
 } as const;
 
