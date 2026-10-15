@@ -1733,7 +1733,8 @@ def cream_bbox(img: Image.Image, box: tuple[int, int, int, int], tol: int = 12) 
 
 def test_a_character_masters_in_its_kit(tmp_path):
     """Franz (owner 2026-10-07, "cream card, bold and bouncy"): the cream pill slams in (1.15x -> 1.00x over 0.15 s, so it is on
-    screen and oversized from the very first frame), the picture is warmer, the clip keeps its length."""
+    screen and oversized from the second frame on; the first is the settled pill, the cover), the picture is warmer, the clip
+    keeps its length."""
     dance = flat_video(tmp_path / "dance.mp4", 2)
     plain = build_master(spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[],
                                   hook2=["Absolutely not."], hook2_until_s=1.8, out=tmp_path / "plain.mp4"))  # fmt: skip
@@ -1741,8 +1742,9 @@ def test_a_character_masters_in_its_kit(tmp_path):
                                 hook2=["Absolutely not."], hook2_until_s=1.8, character="franz"))  # fmt: skip
     assert probe(out, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
     wide = (0, 1200, 1080, 1700)  # the pill's band with room for the 1.15x slam
-    assert count_near(frame_at(out, 0.0, tmp_path), wide, CREAM) > 5000, "slam: opaque from the first frame (no fade-in)"
-    slammed, settled = (cream_bbox(frame_at(out, t, tmp_path), wide) for t in (0.0, 1.0))
+    f0, f1 = first_frames(out, tmp_path, 2)
+    assert count_near(f0, wide, CREAM) > 5000 and count_near(f1, wide, CREAM) > 5000, "slam: opaque from the first frame (no fade-in)"
+    slammed, settled = cream_bbox(f1, wide), cream_bbox(frame_at(out, 1.0, tmp_path), wide)
     ratio = (slammed[2] - slammed[0]) / (settled[2] - settled[0])
     assert 1.10 <= ratio <= 1.20, f"1.15x at the start, 1.00x once settled (got {ratio:.3f})"
     assert abs((slammed[0] + slammed[2]) - (settled[0] + settled[2])) <= 4, "slams about the pill's centre"
@@ -1779,14 +1781,15 @@ def test_franzs_kit_punches_in_then_settles(tmp_path, synth_video):
 
 
 def test_a_kit_can_fade_and_rise_in_and_push_in(tmp_path):
-    """fade_rise + push_in stay valid kit options (Franz used them until 2026-10-07): the caption starts at 20% opacity, so no
-    full cream card shows at 0 s, and the full one does later."""
+    """fade_rise + push_in stay valid kit options (Franz used them until 2026-10-07): after the cover frame (the whole card, see
+    ``test_the_first_frame_is_the_cover...``) the caption starts at 20% opacity, so no full cream card shows at 0.05 s, and the
+    full one does later."""
     dance = flat_video(tmp_path / "dance.mp4", 2)
     fade_kit = {**kit("franz"), "entrance": "fade_rise", "hook_edit": "push_in"}
     out = build_master(spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[],
                                 hook2=["Absolutely not."], hook2_until_s=1.8, style=fade_kit))  # fmt: skip
     assert probe(out, loudness=False).duration_s == pytest.approx(2.0, abs=0.05)
-    assert count_near(frame_at(out, 0.0, tmp_path), PILL_BOX, CREAM) == 0, "20% at the start"
+    assert count_near(frame_at(out, 0.05, tmp_path), PILL_BOX, CREAM) == 0, "20% at the start"
     assert count_near(frame_at(out, 1.0, tmp_path), PILL_BOX, CREAM) > 5000, "the cream card, full"
 
 
@@ -1802,6 +1805,149 @@ def test_the_djs_kit_pops_word_by_word_and_flashes_on_the_drop(tmp_path):
     bright = lambda t: ImageStat.Stat(frame_at(out, t, tmp_path).convert("L").crop((0, 400, 1080, 1000))).mean[0]  # noqa: E731
     assert bright(0.7) > bright(1.5) + 60, "the white flash on the drop"
     assert bright(0.6) < bright(1.5) + 5, "not before it"
+
+
+# ---- the cover frame (owner 2026-10-15): the master's first frame is Instagram's cover in the profile grid ----------------------
+
+COVER_BOX = (0, 1200, 1080, 1700)  # the pill's band with room for the 1.15x slam and the rise
+COVER_HOOK = ["Absolutely not, my dear fellow."]  # five words: the word pop needs five steps
+
+
+def first_frames(video: Path, tmp: Path, n: int) -> list[Image.Image]:
+    """The first ``n`` frames of ``video``, by number (``frame_at`` seeks by time)."""
+    ffmpeg("-i", str(video), "-frames:v", str(n), str(tmp / "first_%02d.png"))
+    return [Image.open(tmp / f"first_{i:02d}.png").convert("RGB") for i in range(1, n + 1)]
+
+
+def band_diff(a: Image.Image, b: Image.Image, box: tuple[int, int, int, int] = COVER_BOX, floor: int = 40) -> int:
+    """How many pixels of ``box`` differ between two frames by more than ``floor`` levels of luma."""
+    return sum(ImageChops.difference(a.crop(box), b.crop(box)).convert("L").histogram()[floor + 1 :])
+
+
+def cover_master(tmp_path: Path, entrance: str, hook=COVER_HOOK) -> Path:
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=hook, hook2_until_s=1.8,
+                    style={"entrance": entrance})  # fmt: skip
+    return build_master(spec)
+
+
+@pytest.mark.parametrize("entrance", ["fade_rise", "slam", "word_pop"])
+def test_the_first_frame_is_the_cover_the_whole_hook_and_only_the_first_frame(tmp_path, entrance):
+    """Owner 2026-10-15: Instagram takes the video's first frame as the cover in the profile grid, and a master starts mid-entrance
+    (a faded card, an oversized slam, the first word alone). Frame 0 is the whole pill as it settles; the second frame is the
+    entrance as before, and so is the picture at 0.1 s."""
+    out = cover_master(tmp_path, entrance)
+    f0, f1, f2 = first_frames(out, tmp_path, 3)
+    settled, early, bare = (frame_at(out, t, tmp_path) for t in (1.5, 0.1, 1.9))
+    ink = band_diff(settled, bare)
+    assert ink > 5000, "the pill is there once settled, gone after the hook"
+    assert band_diff(f0, settled) < ink * 0.02, "frame 0 is the settled pill, all its words"
+    assert band_diff(f1, settled) > ink * 0.04, "the second frame is the entrance, as before"
+    assert band_diff(f2, settled) > ink * 0.04, "and the third"
+    assert band_diff(early, settled) > ink * 0.04, f"{entrance} is still on its way at 0.1 s"
+    report = probe(out)
+    assert report.duration_s == pytest.approx(2.0, abs=0.05) and (report.width, report.height, report.fps) == (1080, 1920, 30)
+
+
+@pytest.mark.parametrize("entrance", ["fade_rise", "slam", "word_pop"])
+def test_the_cover_frame_changes_neither_the_length_nor_the_sound(tmp_path, entrance):
+    """The same build with no entrance (so no cover frame to add): the same length and the same loudness."""
+    ref_dir, dir_ = tmp_path / "ref", tmp_path / "cover"
+    ref_dir.mkdir(), dir_.mkdir()
+    ref, got = probe(cover_master(ref_dir, "none")), probe(cover_master(dir_, entrance))
+    assert got.duration_s == pytest.approx(ref.duration_s, abs=0.001) and got.duration_s == pytest.approx(2.0, abs=0.05)
+    assert got.lufs == pytest.approx(ref.lufs, abs=0.05) and abs(got.lufs - (-14)) <= 1
+    assert got.true_peak == pytest.approx(ref.true_peak, abs=0.05)
+    assert [p for p in check_master(got) if not p.startswith(("bitrate", "duration"))] == []  # a flat 2 s clip: short, and all but free
+
+
+def test_a_master_without_a_hook_is_unchanged_and_so_is_one_whose_hook_needs_no_cover(tmp_path, monkeypatch):
+    """No hook lines: no pill, no cover, the very graph of a kit with no entrance. An entrance of ``none`` shows the whole pill
+    from frame 0 already: nothing is added there either."""
+    dance, beat = flat_video(tmp_path / "dance.mp4", 2), tone(tmp_path / "beat.wav", 3)
+
+    def graph(entrance: str, hook: list[str]) -> str:
+        spec = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=hook, hook2_until_s=1.8, style={"entrance": entrance})
+        return graphs_of(spec, monkeypatch)[0]
+
+    cover = "enable='gte(t,0)*lt(t,0.0166667)'"  # the first frame (t = 0) only, not the second (t = 1/30)
+    assert graph("slam", []) == graph("none", []) and graph("slam", []).count("overlay=") == 1, "just the bug"
+    assert cover not in graph("none", COVER_HOOK), "the pill is whole on frame 0 already"
+    slammed = graph("slam", COVER_HOOK)
+    assert slammed.count(cover) == 1 and re.search(r"\[1:v\]overlay=x=\d+:y=\d+:" + re.escape(cover), slammed), "one extra overlay"
+    out = cover_master(tmp_path, "slam", hook=[])
+    f0, f1 = first_frames(out, tmp_path, 2)
+    assert band_diff(f0, f1, box=(0, 0, 1080, 1920)) == 0 and band_diff(f0, frame_at(out, 1.0, tmp_path)) == 0, "no pill anywhere"
+
+
+@pytest.mark.parametrize("kind", ["fade_rise", "slam", "word_pop"])
+def test_with_cover_frame_puts_the_settled_caption_on_frame_zero_and_moves_the_steps_past_it(tmp_path, kind):
+    hook = ["Wait for the drop."]
+    png, dj = entrance_pill(tmp_path, "dj", hook)
+    frames = master.entrance_frames(png, kind, 0.0, 4.0, tmp_path, beats=[0.0, 0.5, 1.0, 1.5], lines=hook, style=dj)
+    covered = master.with_cover_frame(frames)
+    cover, rest = covered[0], covered[1:]
+    settled = frames[-1]
+    assert (cover.png, cover.x, cover.y) == (settled.png, settled.x, settled.y), "the pill the hook settles on"
+    assert (cover.start, cover.end, cover.half_open) == (0.0, master.COVER_END_S, True) and 0 < master.COVER_END_S < 1 / master.FPS
+    assert rest[-1] == settled, "the settled step is untouched"
+    assert [(r.start, r.end) for r in rest] == [(max(f.start, master.COVER_END_S), f.end) for f in frames], "same steps, same ends"
+    assert all(r.png == f.png and r.half_open == f.half_open for r, f in zip(rest, frames, strict=True))
+
+
+def test_with_cover_frame_drops_a_step_that_lived_on_frame_zero_only_and_covers_a_late_caption_too(tmp_path):
+    p = [tmp_path / f"{i}.png" for i in range(3)]
+    steps = [master.Overlay(p[0], 0.0, 0.01, half_open=True), master.Overlay(p[1], 0.01, 0.3, half_open=True),
+             master.Overlay(p[2], 0.3, 2.0)]  # fmt: skip
+    covered = master.with_cover_frame(steps)
+    assert [(o.png, o.start, o.end) for o in covered] == [
+        (p[2], 0.0, master.COVER_END_S), (p[1], master.COVER_END_S, 0.3), (p[2], 0.3, 2.0),
+    ]  # fmt: skip
+    whole = [master.Overlay(p[2], 0.0, 2.0)]
+    assert master.with_cover_frame(whole) == whole, "already whole on frame 0: nothing to add"
+    late = [master.Overlay(p[2], 0.8, 2.0)]  # a hook that only comes in after the close-up intro
+    assert master.with_cover_frame(late) == [master.Overlay(p[2], 0.0, master.COVER_END_S, half_open=True), *late]
+
+
+def test_a_kit_that_slams_its_pill_in_covers_with_the_pill_it_settles_on(tmp_path):
+    """Franz and Lenny slam their pill in (1.15x -> 1.00x over 0.15 s): frame 0 is the 1.00x one, same place, same size."""
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    out = build_master(spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 3), closeup=None, hook1=[], hook2=["Absolutely not."],
+                                hook2_until_s=1.8, character="franz"))  # fmt: skip
+    (f0,) = first_frames(out, tmp_path, 1)
+    wide, settled = (0, 1200, 1080, 1700), frame_at(out, 1.0, tmp_path)
+    assert cream_bbox(f0, wide) == pytest.approx(cream_bbox(settled, wide), abs=2), "frame 0 is the settled card, not the 1.15x one"
+    assert count_near(f0, PILL_BOX, CREAM) == pytest.approx(count_near(settled, PILL_BOX, CREAM), rel=0.02)
+
+
+def test_a_word_pop_master_of_reginald_opens_on_the_whole_hook_not_on_its_first_word(tmp_path, monkeypatch):
+    """14 Oct: a Reginald master's first frame showed the pill reading just 'The'. Now the whole hook is on frame 0; nothing shows
+    until the first beat (0.3 s + the 0.4 s pause), and the words then pop on the beat as before."""
+    beats_of(monkeypatch, [0.3, 0.8, 1.3, 1.8, 2.3, 2.8])
+    dance, beat = flat_video(tmp_path / "dance.mp4", 3), tone(tmp_path / "beat.wav", 4)
+    spec = spec_for(tmp_path, dance, beat, closeup=None, hook1=[], hook2=["The butler did not do it."], hook2_until_s=2.8,
+                    character="reginald", edits={"word_pop": True})  # fmt: skip
+    out = build_master(spec)
+    assert spec.applied["hook_entrance"] == "word_pop" and probe(out, loudness=False).duration_s == pytest.approx(3.4, abs=0.05)
+    f0, f1 = first_frames(out, tmp_path, 2)
+    settled, before_beat, first_word = (frame_at(out, t, tmp_path) for t in (3.0, 0.3, 0.75))
+    ink = band_diff(settled, frame_at(out, 3.3, tmp_path))
+    assert ink > 3000
+    assert band_diff(f0, settled) < ink * 0.02, "all six words on frame 0"
+    assert band_diff(f1, settled) > ink * 0.5 and band_diff(before_beat, settled) > ink * 0.5, "empty until the first beat, as before"
+    assert 0 < band_diff(first_word, settled) and band_diff(first_word, f0) > ink * 0.05, "then the words pop one by one"
+
+
+def test_a_close_up_master_opens_on_its_whole_hook_too(tmp_path):
+    """With the close-up intro the first pill is hook1's; it is whole on frame 0 even when its kit slams it in."""
+    dance = flat_video(tmp_path / "dance.mp4", 2)
+    spec = spec_for(tmp_path, dance, tone(tmp_path / "beat.wav", 4), hook1=COVER_HOOK, hook2=["my eyes don't match.", "my moves do."],
+                    style={"entrance": "slam"})  # fmt: skip
+    out = build_master(spec)
+    f0, f1 = first_frames(out, tmp_path, 2)
+    settled = frame_at(out, 0.6, tmp_path)
+    ink = band_diff(settled, frame_at(out, 2.0, tmp_path))
+    assert ink > 5000 and band_diff(f0, settled) < ink * 0.02 and band_diff(f1, settled) > ink * 0.04
 
 
 def test_spec_from_json_takes_the_character_and_a_style():

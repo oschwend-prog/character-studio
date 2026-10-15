@@ -56,7 +56,7 @@ master. The hook windows and the bug are already on the finished timeline.
 
 The picture's steps run concat -> zoom hits -> slowmo -> zoom pulses -> hook edit -> tone -> pause -> overlays, so the captions
 are never zoomed or graded. Without a kit (no character, a character without one, or an empty one) the graph is the one from
-before the kits, byte for byte.
+before the kits, byte for byte (but for the cover frame below, when the first pill is not on screen at frame 0).
 
 **Edits of the learning tests G and H** (``MasterSpec.edits``, ``{"zoom_pulses": bool, "word_pop": bool}``; plan sections 3.9 and
 3.10; ``edits_from_arms`` reads them from a clip's ``test_arms`` keys ``zoom`` and ``word_pop``). Both follow the beat of the
@@ -78,6 +78,16 @@ Nothing else changes for a clip with both edits off (the graph is the unedited o
 beat (a silent ``in_app`` master, or nothing the analysis hears), the master renders without it: ``zoom_pulses`` 0, the kit's own
 entrance, ``beats`` 0. The analysis leaves a master with ``beats`` 0 out of BOTH arms, and an arm that is on but whose edit did
 not happen (``zoom_pulses`` 0, or ``hook_entrance`` not ``word_pop``, with a beat found) out of the treated arm.
+
+**The cover frame** (owner 2026-10-15; ``with_cover_frame``, ``COVER_END_S``; always on). Postiz cannot upload a custom Reel cover, so
+Instagram takes the video's FIRST frame (Graph API ``thumb_offset`` 0) as the cover in the profile grid (a 3:4 crop, 1080x1440 about
+the centre) and in the feed, and new visitors judge an account by that grid. A master starts mid-animation (the hook pill slams,
+fades or pops in word by word), so its first frame used to show no pill, a faded or oversized one, or the first word alone. The
+first frame (t = 0 only) now shows the first hook pill as it settles, all its lines and in the character's pill style, with
+everything else that is on screen then (the two-dot bug, a title card): one extra overlay in the same graph, its window ending half
+a frame in. From the second frame on nothing changes: the entrance steps are the same, their windows only moved past frame 0 so no
+step shows under the cover, and so are the zoom pulses; the length and the sound are not touched. A pill that is already whole on
+frame 0 (entrance ``none``, from 0) gets no extra overlay, and a master without hook lines is unchanged.
 
 CLI: ``studio master build --spec <json> [--clip <id>]`` builds, runs the master QA and prints JSON; it
 exits 1 when the master has QA problems (the JSON says which) and 2 for anything the caller must fix.
@@ -179,6 +189,7 @@ _EPS = 1e-6
 PAUSE_S = 0.4  # Reginald's pause: the first frame held this long, in silence
 FADE_RISE_S, FADE_RISE_FRAMES, FADE_RISE_FROM, FADE_RISE_PX = 0.4, 5, 0.2, 24  # over 0.4 s: 20% -> 100%, 24 px low -> in place
 SLAM_S, SLAM_FRAMES, SLAM_FROM = 0.15, 4, 1.15  # over 0.15 s: 1.15x -> 1.00x
+COVER_END_S = 0.5 / FPS  # the cover frame (the first, t = 0) ends half a frame in: never on the second (t = 1/FPS), whatever the rounding
 WORD_POP_STEP_S = 0.25  # words with no beat left pop this far apart
 WORD_POP_HOLD_S = 0.5  # the whole hook is on screen at least this long
 PUSH_IN_ZOOM, PUSH_IN_S = 1.06, 1.5  # 1.00 -> 1.06 over the first 1.5 s, then held
@@ -871,6 +882,23 @@ def entrance_frames(
     raise ValueError(f"unknown entrance {kind!r} (one of {', '.join(seed.STYLE_ENTRANCES)})")
 
 
+def with_cover_frame(frames: Sequence[Overlay]) -> list[Overlay]:
+    """Make the master's first frame the hook's cover (module docstring, "The cover frame"). ``frames`` are the first caption's
+    overlays (``entrance_frames``); the last is the caption settled. Returns the settled caption alone on frame 0 (``COVER_END_S``,
+    half-open), then the steps as they were, moved past it (a step that lived on frame 0 only is dropped) so that no entrance
+    frame shows under the cover. A caption that is whole on frame 0 already (one overlay, from 0) comes back as it was."""
+    settled = frames[-1]
+    if len(frames) == 1 and settled.start < COVER_END_S:
+        return list(frames)
+    cover = dataclasses.replace(settled, start=0.0, end=COVER_END_S, half_open=True)
+    later = []
+    for step in frames:
+        start = max(step.start, COVER_END_S)
+        if step.end is None or (step.end > start if step.half_open else step.end >= start):
+            later.append(dataclasses.replace(step, start=start))
+    return [cover, *later]
+
+
 def _beat_grid(spec: MasterSpec, content_s: float, work: Path) -> tuple[list[float], float]:
     """``(beats, the drop)`` of the master's sound, in seconds of the picture before any pause: what the DJ's word pop and flash
     follow. Measured on the beat from ``audio_offset_s`` (``analyze.estimate_beat`` / ``drop_time_s``); a silent master has no
@@ -980,8 +1008,9 @@ def build_master(spec: MasterSpec, *, story: bool | None = None) -> Path:
         first_entrance = "word_pop" if popped else entrance
         for j, (lines, name, start, end) in enumerate(pills):
             png = overlays.pill_png(lines, work / name, style=pill)
-            if j == 0:  # the kit's entrance (test H: the word pop) is how the first caption comes in
-                shown += entrance_frames(png, first_entrance, start, end, work, beats=[b + lead for b in beats], lines=lines, style=pill)
+            if j == 0:  # the kit's entrance (test H: the word pop) is how the first caption comes in, after the cover frame
+                frames = entrance_frames(png, first_entrance, start, end, work, beats=[b + lead for b in beats], lines=lines, style=pill)
+                shown += with_cover_frame(frames)
             else:
                 shown.append(_boxed(png, start, end))
         for i, pop in enumerate(e for e in items if isinstance(e, TextPop)):
