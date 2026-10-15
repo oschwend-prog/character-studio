@@ -183,6 +183,18 @@ stops at ``making`` ("waiting for the Higgsfield key"); ``drop make <pick> --pre
 the MCP Object swap, and ``drop make <pick> --generated-file F --credits N`` goes on from the downloaded output (the frame QA by
 hand with ``--qa-file``).
 
+**A make by hand races the cloud sweep** (14 Oct 19:41): the render takes 5-10 minutes with no ``studio`` process alive, so
+``drop['job']`` (held only while a process runs) is gone, and a sweep that came by took the ``making`` drop for an open one, submitted
+it to the API wallet (empty: HTTP 403) and reset it to ``ready``. So a by-hand call (``--prepare``, ``--generated-file``,
+``--qa-file``) keeps ``drop['hand_lease'] = {"by": "hand", "at", "until"}`` (``HAND_LEASE_MINUTES``, 45) while a render is owed, i.e.
+the drop is ``making`` and its clip ``generating`` (``_settle_hand_lease``; ``request_make(hand=True)`` takes it in the same write
+that asks for the make). Every cloud path leaves a drop with a valid lease alone: ``pending`` does not list it, ``make_drop`` (the
+sweep's and the terminal's Make it dispatch) answers ``busy`` before it reads, reserves or submits anything, and ``_submit``'s
+refusal handler (the 403 one, ``_refused_for_credits``) resets nothing; ``auto_make`` never reaches it (a drop with a make asked
+for covers its character). The hand-over (``--generated-file``: the clip is ``generated``) and the end of the make clear it; a failed
+frame check's one re-roll renews it (``--prepare`` follows); an expired lease is ignored, so a forgotten ``--prepare`` never blocks a
+drop for good.
+
 **Are the keys good?** ``studio drop check-keys`` asks Higgsfield (a status read of a random request id) and Gemini (a model read)
 for free and prints ``{"higgsfield": "ok|invalid: ..|error: ..|missing: ..", "gemini": ...}``, never the keys (the workflow's manual
 ``job: check-keys`` runs it with the GitHub secrets); exit 1 unless both are ``ok``.
@@ -278,6 +290,7 @@ CROP_PAD = 0.03  # Gemini's boxes are approximate: the crop goes this far past t
 WINDOW_STEP_S = 0.5
 SLACK_S = 0.15
 LEASE_MINUTES = 70  # longer than the job's 60-minute timeout (studio-drop.yml): a lease never expires under a live run, so no second worker takes over a paid make
+HAND_LEASE_MINUTES = 45  # a by-hand make: the MCP render takes 5-10 minutes, the frame check and the hand-over a few more; a forgotten prepare frees the drop after this
 SIGNED_URL_S = 6 * 3600
 HOOK_ON_SCREEN_S = 4.0
 HOOK_LINE_CHARS = 22
@@ -427,6 +440,51 @@ def release(store: Store, pick_id: str, job: str) -> None:
     if isinstance(held, Mapping) and held.get("by") == job:
         drop.pop("job")
         store.update_favorite(pick.id, proposal={**pick.proposal, "drop": drop})
+
+
+# ---- a make by hand: the lease the cloud respects while the MCP renders -----------------------------------------------------------
+
+
+def hand_lease_until(drop: Mapping[str, Any], now: datetime) -> datetime | None:
+    """When the by-hand lease on this drop ends, or None: ``proposal['drop']['hand_lease']`` is ``{"by": "hand", "at", "until"}``
+    (``_hand_lease``, written by ``request_make(hand=True)`` and ``_settle_hand_lease``), and counts only on a ``making`` drop and until its ``until`` (aware ISO time): an expired, malformed or
+    naive one is ignored, so a forgotten ``--prepare`` never blocks a drop for good. Unlike ``drop['job']`` it is held across
+    processes: the render takes minutes, with no ``studio`` process alive, and every cloud path (``pending``, ``make_drop``,
+    ``_submit``) leaves a drop that carries one."""
+    held = drop.get("hand_lease")
+    if drop.get("state") != "making" or not isinstance(held, Mapping):
+        return None
+    until = _moment(held.get("until"))
+    return until if until is not None and now < until else None
+
+
+def _hand_lease(now: datetime) -> dict[str, str]:
+    return {"by": "hand", "at": now.isoformat(), "until": (now + timedelta(minutes=HAND_LEASE_MINUTES)).isoformat()}
+
+
+def _settle_hand_lease(store: Store, pick_id: str, now: datetime) -> None:
+    """After a by-hand call (``--prepare``, ``--generated-file``, ``--qa-file``): the lease is held while a render is owed by hand,
+    i.e. the drop is ``making`` and its clip is ``generating`` (the prepared inputs, or the one re-roll a failed frame check
+    reserves: ``--prepare`` follows), and renewed by every such call. The hand-over (the clip is ``generated``) or any end of the
+    make (made, failed, back to ready) clears it."""
+    pick = store.get_favorite(pick_id)
+    if pick is None or not is_drop(pick.proposal):
+        return
+    drop = drop_of(pick)
+    clip_id = (drop.get("make") or {}).get("clip_id")
+    clip = store.get_clip(clip_id) if clip_id else None
+    owed = drop.get("state") == "making" and clip is not None and clip.state is S.generating
+    if owed:
+        _update(store, pick, now, hand_lease=_hand_lease(now))
+    elif "hand_lease" in drop:
+        _update(store, pick, now, hand_lease=None)
+
+
+def _hand_busy(pick_id: str, until: datetime) -> Outcome:
+    return Outcome(
+        pick_id, "making", f"being made by hand until {_london_words(until)}: the cloud leaves it alone",
+        detail={"busy": True, "hand_lease_until": until.isoformat()},
+    )
 
 
 # ---- the character -----------------------------------------------------------------------------------------------------------
@@ -1948,9 +2006,14 @@ def make_drop(
     characters_dir: Path | str = seed.DEFAULT_CHARACTERS_DIR,
 ) -> Outcome:
     """Make a dropped video the owner approved (see the module doc). ``KeyError`` for an unknown pick; ``DropError`` when it may
-    not be made (no Make it, not ``making``, by-hand options that do not fit); ``BudgetRefused`` is recorded, not raised."""
+    not be made (no Make it, not ``making``, by-hand options that do not fit); ``BudgetRefused`` is recorded, not raised.
+
+    A call with ``prepare``, ``generated_file`` or ``qa_answer`` is the by-hand make (the MCP renders in between, the app wallet):
+    it keeps the drop's by-hand lease (``_settle_hand_lease``) while a render is owed. Any other call is the cloud's: a drop with a
+    valid by-hand lease (``hand_lease_until``) is busy for it, before anything is read, reserved, submitted or reset."""
     now = now or now_london()
     job = job or job_id()
+    by_hand = prepare or generated_file is not None or qa_answer is not None
     if generated_credits is not None and generated_file is None:
         raise DropError("--credits only goes with --generated-file (what that job cost)")
     pick = _load(store, pick_id)
@@ -1961,6 +2024,8 @@ def make_drop(
         )
     if drop["state"] != "making":
         raise DropError(f"pick {pick_id} is {drop['state']}: a make runs on a drop the owner sent with Make it (making)")
+    if not by_hand and (until := hand_lease_until(drop, now)) is not None:
+        return _hand_busy(pick_id, until)
     for key in ("source_id", "window", "star", "credits"):
         if not drop.get(key):
             raise DropError(f"pick {pick_id}: the check never finished ({key} missing): process it first")
@@ -1979,6 +2044,8 @@ def make_drop(
             made = drop_of(fresh).get("state") != "making"  # else the owner took Make it back: nobody made anything
             text = "another run already made this video" if made else "this video is no longer waiting to be made"
             return Outcome(pick_id, drop_of(fresh).get("state"), text, detail={"busy": True})
+        if not by_hand and (until := hand_lease_until(drop_of(fresh), now)) is not None:
+            return _hand_busy(pick_id, until)  # a by-hand --prepare finished since this run was listed
         return _make(
             store, storage, pick_id, hf, gemini_client, prepare, generated_file, generated_credits, qa_answer, now,
             poll_timeout_s, preset, characters_dir,
@@ -1988,6 +2055,8 @@ def make_drop(
     except Exception as e:  # a crash mid-way: recorded; the next run resumes where the clip is (never a blind resubmit)
         return _stopped(store, pick_id, now, e)
     finally:
+        if by_hand:
+            _settle_hand_lease(store, pick_id, now)
         release(store, pick_id, job)
 
 
@@ -2215,6 +2284,8 @@ def _submit(store: Store, storage: Storage, pick: Favorite, clip: Clip, child: S
         _update(store, pick, now, reason=reason)
         return Outcome(pick.id, "making", reason, ok=False)
     except HiggsfieldError as e:  # a refusal: nothing was created, nothing was charged
+        if (until := hand_lease_until(drop_of(store.get_favorite(pick.id)), now)) is not None:
+            return _hand_busy(pick.id, until)  # a by-hand make took the drop while this submit was out: its render stands, nothing is reset
         budget.release(store, clip.id, now)
         clips.transition(store, clip.id, S.gen_failed, qa={"error": str(e)[:300]})
         if e.status == 403 and make_requested_by(store.get_favorite(pick.id)) == "studio":  # not enough credits: see the function
@@ -2603,7 +2674,8 @@ def pending(
 ) -> list[dict[str, str]]:
     """The drops a run should take, oldest first: ``checking`` (and an ``uploading`` one whose file is attached) -> process,
     ``making`` with a Make it (the owner's, or the studio's auto-make) -> make; ``waiting`` links only with ``include_waiting`` (the Mac: the cloud could not
-    fetch them). A pick another run holds (a live lease) is left out.
+    fetch them). A pick another run holds (a live lease) is left out, and so is a drop being made by hand (a valid
+    ``hand_lease``, ``hand_lease_until``).
 
     An auto-filed drop (``drop.auto_filed``, the hits job's) is never the Mac's: with ``include_waiting`` it is left out of the
     checks (its make, after the owner's Make it, stays). For the cloud (no ``include_waiting``) a WAITING one is ``expire`` from
@@ -2626,6 +2698,8 @@ def pending(
         held = d.get("job")
         if isinstance(held, Mapping) and (since := _moment(held.get("at"))) is not None and now - since < timedelta(minutes=LEASE_MINUTES):
             continue
+        if hand_lease_until(d, now) is not None:
+            continue  # being made by hand (the MCP render of a by-hand make): the cloud leaves it alone until the hand-over
         state = d.get("state")
         auto = d.get("auto_filed") is True
         if state == "waiting" and auto:
@@ -2976,13 +3050,15 @@ def plan_auto_make(
     return wants, skipped, waiting
 
 
-def request_make(store: Store, pick_id: str, now: datetime, *, slot: datetime, explore: bool) -> Favorite:
+def request_make(store: Store, pick_id: str, now: datetime, *, slot: datetime, explore: bool, hand: bool = False) -> Favorite:
     """Ask for the make of a ready drop as the studio: what ``studio.request_job(pick, 'make')`` (migration 0012) writes for the
     owner, with no Adjust (the check's own choices) and the studio's name on it: the drop goes ``making`` (``requested.make``
     stamped, the reason cleared) and ``proposal['make_requested']`` is ``{"at", "by": "studio", "slot", "explore"}`` (the slot it
     is for and whether it is test A's Explore pick, for the record). Nothing is dispatched: the sweep that asked takes it up next.
-    ``KeyError`` for an unknown pick; ``DropError`` for a drop that is not ``ready`` any more or already has a make requested (the
-    owner may have tapped Make it a moment ago: his request stands)."""
+    ``hand`` (a by-hand make, from the app wallet through the MCP): the by-hand lease is taken in the same write, so no sweep takes
+    the drop between this call and ``drop make --prepare`` (which renews it). ``KeyError`` for an unknown pick; ``DropError`` for a
+    drop that is not ``ready`` any more or already has a make requested (the owner may have tapped Make it a moment ago: his
+    request stands)."""
     pick = store.get_favorite(pick_id)
     if pick is None:
         raise KeyError(pick_id)
@@ -2993,6 +3069,8 @@ def request_make(store: Store, pick_id: str, now: datetime, *, slot: datetime, e
         raise DropError(f"pick {pick_id}: a make is already requested")
     d.pop("adjust", None)
     d.update(state="making", reason=None, at=now.isoformat(), requested={**(d.get("requested") or {}), "make": now.isoformat()})
+    if hand:
+        d["hand_lease"] = _hand_lease(now)
     record = {"at": now.isoformat(), "by": "studio", "slot": slot.isoformat(), "explore": explore}
     return mark_favorite(store, pick_id, pick.status, proposal={**pick.proposal, "drop": d, "make_requested": record})
 

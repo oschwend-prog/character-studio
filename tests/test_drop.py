@@ -3779,3 +3779,145 @@ def test_an_edit_the_master_did_not_report_writes_nothing(world, portrait, gen_o
     _, specs, clip = make_reporting(world, portrait, gen_out, monkeypatch, synth_video, None)
     assert specs[-1].edits is not None and specs[-1].applied == {}  # a build that says nothing (a fake, an older master)
     assert not clips.EDIT_FEATURES & clip.features.keys()
+
+
+# ---- a make by hand races the cloud sweep (14 Oct 19:41): the lease the cloud respects while the MCP renders ---------------------
+
+
+def prepared_by_hand(store, storage, portrait, *, now=NOW):
+    """The by-hand start: the owner's Make it, then ``drop make <pick> --prepare`` (the MCP render follows, 5-10 minutes)."""
+    pid = ready_drop(store, storage, portrait)
+    tap_make(store, pid)
+    out = make(store, storage, pid, None, None, prepare=True, now=now)
+    assert out.state == "making" and out.detail["inputs"]["clip_id"]
+    return pid, out.detail["inputs"]["clip_id"]
+
+
+def test_a_by_hand_prepare_takes_a_lease_the_cloud_respects(world, portrait):
+    store, storage = world
+    pid, clip_id = prepared_by_hand(store, storage, portrait)
+    lease = store.get_favorite(pid).proposal["drop"]["hand_lease"]
+    assert lease == {"by": "hand", "at": NOW.isoformat(), "until": (NOW + timedelta(minutes=drop.HAND_LEASE_MINUTES)).isoformat()}
+    assert pending(store, now=NOW + timedelta(minutes=5)) == []  # the sweep does not list it ...
+    g = FakeGemini()
+    out = make(store, storage, pid, NeverHF(), g, now=NOW + timedelta(minutes=5))  # ... and a make that was listed earlier is busy
+    assert out.ok and out.detail["busy"] and out.state == "making" and "by hand" in out.reason and g.calls == []
+    assert out.detail["hand_lease_until"] == lease["until"]
+    d = store.get_favorite(pid).proposal["drop"]  # nothing moved: still the prepared make, reservation kept, no lease of a worker left
+    assert d["state"] == "making" and d["make"]["clip_id"] == clip_id and "status_url" not in d["make"] and "job" not in d
+    assert store.get_clip(clip_id).state is ClipState.generating
+    assert [e.kind for e in store.ledger_month(NOW.strftime("%Y-%m"))] == ["reserve"]
+
+
+def test_the_sweep_leaves_a_drop_being_made_by_hand_alone(monkeypatch, tmp_path, portrait):
+    store, storage = sweep_world(monkeypatch, tmp_path)
+    pid, clip_id = prepared_by_hand(store, storage, portrait)
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == {"ran": 0, "results": []}  # not listed
+    stale = [{"pick_id": pid, "job": "make", "state": "making"}]  # what a sweep listed a moment before the prepare would run
+    monkeypatch.setattr(drop, "pending", lambda *a, **kw: stale)
+    r = CliRunner().invoke(app, ["drop", "sweep"])
+    assert r.exit_code == 0, r.output  # busy is no failure of the sweep
+    (row,) = json.loads(r.output)["results"]
+    assert row["job"] == "make" and row["busy"] is True and row["ok"] is True and row["state"] == "making"
+    assert store.get_clip(clip_id).state is ClipState.generating and store.get_favorite(pid).proposal["drop"]["state"] == "making"
+
+
+def test_auto_make_leaves_a_drop_being_made_by_hand_and_asks_for_nothing_else_of_his(world, portrait):
+    """The by-hand make (``request_make(hand=True)``) covers its character: auto-make asks for neither it nor his other ready drop."""
+    from studio.models import Account
+
+    store, storage = world
+    store.upsert_character(Character(slug="reginald", name="Reginald", status="live", bodies=[Body.biped]))
+    store.add_account(Account(character_slug="reginald", platform="instagram", handle="@reginald", postiz_integration_id="pz-reginald"))
+    mine = ready_drop(store, storage, portrait)
+    other = ready_drop(store, storage, portrait)
+    drop.request_make(store, mine, WEDNESDAY, slot=WEDNESDAY.replace(hour=19, minute=30), explore=False, hand=True)
+    d = store.get_favorite(mine).proposal["drop"]
+    assert d["state"] == "making" and d["hand_lease"]["until"] == (WEDNESDAY + timedelta(minutes=45)).isoformat()
+    assert pending(store, now=WEDNESDAY) == []  # taken in the same write: no gap before --prepare
+    before = store.get_favorite(mine)
+    out = drop.auto_make(store, WEDNESDAY + timedelta(minutes=1), hf=Balance(5000), scan={})
+    assert out["requested"] == [] and out["skipped"] == [{"character": "reginald", "reason": f"a make is already requested for pick {mine}"}]
+    assert store.get_favorite(mine) == before and "make_requested" not in store.get_favorite(other).proposal
+    assert store.get_favorite(other).proposal["drop"]["state"] == "ready"
+
+
+def test_the_hand_over_clears_the_lease_and_so_does_the_end_of_the_make(world, portrait, gen_out, fast_master):
+    store, storage = world
+    pid, clip_id = prepared_by_hand(store, storage, portrait)
+    later = NOW + timedelta(minutes=8)  # the render took a while
+    waiting = make(store, storage, pid, None, None, generated_file=gen_out, generated_credits=95, now=later)
+    assert "--qa-file" in waiting.reason  # the output is in; the frames are for hand
+    assert store.get_clip(clip_id).state is ClipState.generated
+    assert "hand_lease" not in store.get_favorite(pid).proposal["drop"]  # the hand-over cleared it ...
+    assert [p["job"] for p in pending(store, now=later)] == ["make"]  # ... so the cloud may take what is left (it only reads the frames)
+    done = make(store, storage, pid, None, None, generated_file=gen_out, qa_answer={"pass": True, "problems": [], "visual": "eyes right"}, now=later)
+    assert done.state == "made" and "hand_lease" not in store.get_favorite(pid).proposal["drop"]
+
+
+def test_a_failed_hand_check_keeps_the_lease_for_the_one_re_roll(world, portrait, gen_out):
+    store, storage = world
+    pid, clip_id = prepared_by_hand(store, storage, portrait)
+    later = NOW + timedelta(minutes=8)
+    out = make(store, storage, pid, None, None, generated_file=gen_out, generated_credits=95, qa_answer={"pass": False, "problems": ["a man is still dancing"]}, now=later)
+    assert not out.ok and "re-roll" in out.reason
+    assert store.get_clip(clip_id).state is ClipState.generating  # the re-roll is reserved and owed by hand (--prepare follows)
+    assert store.get_favorite(pid).proposal["drop"]["hand_lease"]["until"] == (later + timedelta(minutes=45)).isoformat()
+    assert pending(store, now=later + timedelta(minutes=1)) == []  # the cloud does not submit it to the empty API wallet meanwhile
+
+
+def test_an_expired_lease_is_ignored_so_a_forgotten_prepare_never_blocks_the_drop(world, portrait, gen_out, fast_master):
+    store, storage = world
+    pid, clip_id = prepared_by_hand(store, storage, portrait)
+    after = NOW + timedelta(minutes=drop.HAND_LEASE_MINUTES, seconds=1)
+    assert [p["job"] for p in pending(store, now=after)] == ["make"]
+    hf = FakeHF(gen_out)
+    out = make(store, storage, pid, hf, FakeGemini(QA_PASS), now=after)  # the cloud takes the abandoned make over, from where the clip is
+    assert out.state == "made" and len(hf.submits) == 1 and store.get_clip(clip_id).state is ClipState.awaiting_approval
+    assert drop.hand_lease_until(store.get_favorite(pid).proposal["drop"], after) is None  # (the stale key is inert on a made drop)
+
+
+@pytest.mark.parametrize(
+    "lease",
+    [
+        {"by": "hand", "until": "2026-10-14T20:00:00"},  # no zone: not a time we can compare
+        {"by": "hand", "until": "soon"}, {"by": "hand"}, "yes", None, 7,
+    ],
+)
+def test_a_malformed_lease_is_ignored(lease):
+    d = {"state": "making", "hand_lease": lease}
+    assert drop.hand_lease_until(d, NOW) is None
+
+
+def test_a_lease_counts_only_on_a_making_drop_until_it_runs_out():
+    until = NOW + timedelta(minutes=10)
+    lease = {"by": "hand", "at": NOW.isoformat(), "until": until.isoformat()}
+    assert drop.hand_lease_until({"state": "making", "hand_lease": lease}, NOW) == until
+    assert drop.hand_lease_until({"state": "making", "hand_lease": lease}, until) is None  # the instant it runs out
+    assert drop.hand_lease_until({"state": "ready", "hand_lease": lease}, NOW) is None  # a drop sent back to ready is free
+    assert drop.hand_lease_until({"state": "failed", "hand_lease": lease}, NOW) is None
+
+
+def test_the_credits_refusal_never_resets_a_drop_a_by_hand_make_took_meanwhile(world, portrait, gen_out):
+    """The 403 handler (``_submit``): were the by-hand lease taken while a cloud submit was out, the refusal resets nothing: no
+    ``ready``, no dropped clip, no released reservation, the studio's request stands."""
+    store, storage = world
+    pid = studio_asks(store, storage, portrait)
+
+    class TakenByHand(FakeHF):
+        def submit_object_swap(self, **kw):
+            f = store.get_favorite(pid)
+            store.update_favorite(pid, proposal={**f.proposal, "drop": {**f.proposal["drop"], "hand_lease": drop._hand_lease(NOW)}})
+            return super().submit_object_swap(**kw)
+
+    hf = TakenByHand(gen_out, submit_errors=[hf_refusal(403)])
+    out = make(store, storage, pid, hf, FakeGemini(), now=NOW)
+    assert out.ok and out.detail["busy"] and out.state == "making"
+    pick = store.get_favorite(pid)
+    d = pick.proposal["drop"]
+    assert d["state"] == "making" and pick.proposal["make_requested"]["by"] == "studio" and "credits_refused_at" not in d
+    (clip,) = store.list_clips()
+    assert clip.state is ClipState.generating
+    assert [e.kind for e in store.ledger_month(NOW.strftime("%Y-%m"))] == ["reserve"]  # the reservation is kept for the hand render
