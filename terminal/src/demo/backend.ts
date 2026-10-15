@@ -940,21 +940,32 @@ export class DemoBackend implements Backend {
     return [...sums.values()].sort((a, b) => b.day.localeCompare(a.day) || a.character_slug.localeCompare(b.character_slug));
   }
 
-  /** The accounts' daily totals (`studio metrics accounts`, runs of kind account_daily), SYNTHETIC: each Instagram account gets, for the last
-   * 7 London days, what his character's Reels gained that day (viewsDaily) plus a Stories-and-older-posts share worked out from the day, so
-   * the "Account per day" block shows a difference. Reach is about three quarters of the views; replies come with the Stories. */
+  /** The accounts' figures (`studio metrics accounts`, runs of kind account_daily), SYNTHETIC. Like the live Postiz reply, only reach is
+   * per day: each Instagram account gets, for each of the last 7 London days, a reach of about three quarters of what his character's
+   * Reels gained that day (viewsDaily) plus a Stories-and-older-posts share worked out from the day. The views, likes, comments and
+   * replies are ONE total over those 7 days, on today's row (the `window`, read 90 minutes ago), so the "Account per day" block shows a
+   * difference between the account and the Reels. */
   private accountDaily(now: number, viewsDaily: ViewsDay[]): AccountDay[] {
     const today = londonDayKey(now);
-    return Array.from({ length: 7 }, (_, i) => addDays(today, i - 6)).map((day, i) => {
+    const week = new Map<string, { views: number; replies: number }>(); // handle -> the 7 days added up
+    const days: AccountDay[] = Array.from({ length: 7 }, (_, i) => addDays(today, i - 6)).map((day, i) => {
       const accounts: AccountDay['accounts'] = {};
       for (const a of this.accounts.filter((x) => x.connected && x.platform === 'instagram')) {
         const reels = viewsDaily.filter((v) => v.character_slug === a.character_slug && v.day === day).reduce((s, v) => s + v.views, 0);
         const stories = 40 + ((i * 37 + a.character_slug.length * 11) % 90);
         const views = reels + stories;
-        accounts[a.handle] = { views, reach: Math.round(views * 0.74), replies: Math.round(stories / 14) };
+        accounts[a.handle] = { reach: Math.round(views * 0.74) };
+        const w = week.get(a.handle) ?? { views: 0, replies: 0 };
+        week.set(a.handle, { views: w.views + views, replies: w.replies + Math.round(stories / 14) });
       }
       return { day, accounts };
     });
+    const window: NonNullable<AccountDay['window']> = { days: 7, readAt: now - 90 * 60_000, accounts: {} };
+    for (const [handle, w] of week) {
+      window.accounts[handle] = { views: w.views, likes: Math.round(w.views * 0.05), comments: Math.round(w.views * 0.004), replies: w.replies };
+    }
+    days[days.length - 1].window = window;
+    return days;
   }
 
   // ---- Backend ------------------------------------------------------------------------------------

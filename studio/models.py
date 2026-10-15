@@ -73,9 +73,11 @@ class RunKind(StrEnum):
     publish = "publish"
     metrics = "metrics"
     hits = "hits"  # the cloud hits job's line (studio.hits.record_lunar_calls): the LunarCrush calls it made on a London day
-    # One row per London day (studio.metrics.pull_accounts, owner 2026-10-15): each live account's daily totals from Postiz
-    # (views, reach, ..., replies; Stories included), details {"day": "YYYY-MM-DD", "accounts": {handle: {views, ...}}}. Updated in
-    # place while the day's total grows. Health and the weekly review ignore it; the terminal's "Account per day" block reads it.
+    # One row per London day (studio.metrics.pull_accounts, owner 2026-10-15): each live account's figures from Postiz (Stories
+    # included). Only Reach is per day: details {"day": "YYYY-MM-DD", "accounts": {handle: {reach}}}. Views, likes, comments, shares,
+    # saves and replies are Instagram's ONE total over the last 7 days, kept on the row of the day they were read:
+    # details["window"] = {"days": 7, "read_at": ISO, "accounts": {handle: {views, likes, ...}}}. Updated in place on every changed
+    # read. Health and the weekly review ignore it; the terminal's "Account per day" block reads it.
     account_daily = "account_daily"
 
 

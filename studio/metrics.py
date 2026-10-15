@@ -56,13 +56,23 @@ store (the trial flag, ...) are ignored. Nullable values stay ``None``; a row wi
 or whose numbers equal the post's latest snapshot, writes nothing.
 
 **Account daily totals** (``studio metrics accounts``, owner 2026-10-15; ``pull_accounts``). Postiz gives no numbers for a single
-Story (``analytics:post <story id>`` prints ``[]``), but ``analytics:platform <integration id> -d 7`` prints the ACCOUNT's totals per
-day (Views, Reach, Likes, Comments, Shares, Saves, Replies), Stories included. For every live character's account with a Postiz
-integration the days are stored in ``studio.runs`` as kind ``account_daily``, one row per London day
-(``details = {"day", "accounts": {handle: {views, reach, ...}}}``, started_at = noon London of that day), updated in place: a later
-read of the same day overwrites it, an identical read writes nothing. No migration (``runs`` has no constraint on ``kind``). A Postiz
-failure never fails the job: it is a warning in the JSON (``postiz_errors``) and exit 0. The terminal's "Account per day" block
-(Artist page) lays these totals beside the views of his Reels so the difference (Stories, older posts) is visible.
+Story (``analytics:post <story id>`` prints ``[]``), but ``analytics:platform <integration id> -d 7`` prints the ACCOUNT's figures,
+Stories included. **They are not all per day** (verified live 2026-10-15): Reach is a daily series (one point per London day,
+Instagram's ``time_series`` metric), but Views, Likes, Comments, Shares, Saves and Replies come as ONE total over the whole ``-d``
+window, stamped with the day it was read (Instagram's ``total_value`` metrics). So a label with two or more points is a daily
+series, and a label with exactly one point is a **window total** (``AccountReading``); the first version stored the window total as
+"views on the day it was read", which was wrong. For every live character's account with a Postiz integration the figures are stored
+in ``studio.runs`` as kind ``account_daily``, one row per London day (started_at = noon London of that day), updated in place:
+
+- the daily series, in ``details = {"day", "accounts": {handle: {reach}}}`` (only daily fields, never a window one);
+- the 7-day window totals, on the row of the day they were read (today in London), in
+  ``details.window = {"days": 7, "read_at": <ISO>, "accounts": {handle: {views, likes, comments, shares, saves, replies}}}``.
+
+A later read of the same day overwrites them, an identical read writes nothing (``read_at`` stays). The rows the first version wrote
+(a window field under ``accounts``) are cleaned whenever their day's row is written. No migration (``runs`` has no constraint on
+``kind``). A Postiz failure never fails the job: it is a warning in the JSON (``postiz_errors``) and exit 0. The terminal's "Account
+per day" block (Artist page) shows the reach per day beside the views his Reels gained that day, and the newest window total as
+"Account views, last 7 days" with what his Reels gained in the same days, so the rest (Stories, older posts) is visible.
 
 CLI (``studio metrics ...``) prints JSON on stdout; exit 0 normally (``missing`` and ``abandoned`` posts
 included), exit 1 when a pull failed (the Action goes red; the window stays due, so the next run tries
@@ -145,13 +155,18 @@ POSTIZ_METRIC_LABELS: dict[str, tuple[str, ...]] = {
 # VERIFY at go-live (Task 16): cumulative totals vs per-day increments, on a real post of each platform.
 POSTIZ_SERIES_MODE = "latest"
 
-# ---- Postiz ``analytics:platform`` (the account's daily totals) -----------------------------------
-# ``postiz analytics:platform <integration id> -d 7`` prints the ACCOUNT's totals, one data point per London day and label:
-#   [{"label": "Views", "percentageChange": 0, "data": [{"total": "176", "date": "2026-10-15"}, ...]}, ...]
-# with the labels Reach, Likes, Views, Comments, Shares, Saves and Replies (an account may lack some). Unlike ``analytics:post`` this
-# includes the Stories, which Postiz cannot report one by one (``analytics:post <story id>`` prints ``[]``). Per field, the labels
-# (case-insensitive) that feed it, most preferred first; anything else is left out.
-ACCOUNT_DAYS = 7  # `postiz analytics:platform <integration id> -d 7`: the week the terminal shows
+# ---- Postiz ``analytics:platform`` (the account's figures) ----------------------------------------
+# ``postiz analytics:platform <integration id> -d 7`` prints the ACCOUNT's figures, one entry per label:
+#   [{"label": "Reach", "percentageChange": 0, "data": [{"total": "161", "date": "2026-10-13"}, {"total": "127", "date": "2026-10-14"}, ...]},
+#    {"label": "Views", "percentageChange": 0, "data": [{"total": "334", "date": "2026-10-15"}]}, ...]
+# with the labels Reach, Likes, Views, Comments, Shares, Saves and Replies (an account may lack some). Verified live 2026-10-15
+# (lennygold.agent, ``-d 7``): Reach has one point per day (a daily series); Views, Likes, Comments, Shares, Saves and Replies have ONE
+# point, the total over the whole window, dated the day it was read. A label with two or more points is therefore a daily series, a
+# label with exactly one point a window total (whatever its date). Reach is a daily series by nature (it has no window total here),
+# so a single reach point is still a day. Unlike ``analytics:post`` this includes the Stories, which Postiz cannot report one by one
+# (``analytics:post <story id>`` prints ``[]``). Per field, the labels (case-insensitive) that feed it, most preferred first; anything
+# else is left out.
+ACCOUNT_DAYS = 7  # `postiz analytics:platform <integration id> -d 7`: the window of the totals, and the week the terminal shows
 ACCOUNT_METRIC_LABELS: dict[str, tuple[str, ...]] = {
     "views": ("views", "video views", "plays"),
     "reach": ("reach",),
@@ -161,6 +176,9 @@ ACCOUNT_METRIC_LABELS: dict[str, tuple[str, ...]] = {
     "saves": ("saves",),
     "replies": ("replies",),
 }
+# The fields Instagram gives as one total over the window (``details.window``), not per day; the rows of the first version held
+# these under ``accounts``, and ``_store_account_day`` removes them from there.
+ACCOUNT_WINDOW_FIELDS: tuple[str, ...] = ("views", "likes", "comments", "shares", "saves", "replies")
 
 # ---- vidIQ ``instagram_owner_insights`` field mapping ---------------------------------------------
 # Key names tried per snapshot field, most preferred first. The tool reports "views/plays, shares,
@@ -702,42 +720,96 @@ def _daily_counts(data: Any) -> dict[str, int]:
     return out
 
 
-def parse_account_analytics(payload: Any) -> dict[str, dict[str, int]]:
-    """The days in a ``postiz analytics:platform`` reply: ``{"2026-10-15": {"views": 176, "reach": 130, ...}, ...}``, oldest day first.
+@dataclass(frozen=True)
+class AccountReading:
+    """What one ``analytics:platform`` reply holds: the daily series (``days``: ``{day: {field: n}}``, oldest day first) and the totals
+    over the whole ``-d`` window (``window``: ``{field: n}``)."""
 
-    The labels are mapped by ``ACCOUNT_METRIC_LABELS`` (case-insensitive; the totals may be strings). A label a day does not have,
-    or one with no usable number, is simply absent from that day: it is never filled with 0 (a real 0 is kept). A reply that is
-    not a list of labelled metrics, or holds none we know, gives ``{}``.
+    days: dict[str, dict[str, int]] = dataclasses.field(default_factory=dict)
+    window: dict[str, int] = dataclasses.field(default_factory=dict)
+
+    @property
+    def known(self) -> bool:
+        """True when the reply held at least one metric we know."""
+        return bool(self.days or self.window)
+
+
+def parse_account_analytics(payload: Any) -> AccountReading:
+    """The figures in a ``postiz analytics:platform`` reply, split by what they are: ``AccountReading(days={"2026-10-14": {"reach": 127}},
+    window={"views": 334, "likes": 1, ...})``.
+
+    The labels are mapped by ``ACCOUNT_METRIC_LABELS`` (case-insensitive; the totals may be strings). A label with two or more points is
+    a **daily series** (``days``, one number per day); a label with exactly one point is a **window total** (``window``) over the ``-d``
+    window, whatever the date that point carries (Instagram stamps it with the day it was read). Reach is the one field that is always
+    daily: it is Instagram's time series, so even a single reach point is a day. A label a reply does not have, or one with no usable
+    number, is simply absent: it is never filled with 0 (a real 0 is kept). A reply that is not a list of labelled metrics, or holds
+    none we know, gives an empty reading.
     """
     found: dict[str, Any] = {}
     for item in payload if isinstance(payload, list) else []:
         if isinstance(item, dict) and "label" in item:
             found.setdefault(_label(item["label"]), item.get("data"))
     days: dict[str, dict[str, int]] = {}
+    window: dict[str, int] = {}
     for field, labels in ACCOUNT_METRIC_LABELS.items():
         for label in labels:
             if counts := _daily_counts(found.get(label)):
-                for day, n in counts.items():
-                    days.setdefault(day, {})[field] = n
+                if len(counts) == 1 and field in ACCOUNT_WINDOW_FIELDS:
+                    window[field] = next(iter(counts.values()))
+                else:
+                    for day, n in counts.items():
+                        days.setdefault(day, {})[field] = n
                 break
-    return {day: days[day] for day in sorted(days)}
+    return AccountReading(days={day: days[day] for day in sorted(days)}, window=window)
+
+
+def _merge_window(old: Any, readings: dict[str, dict[str, int]], now: datetime) -> dict[str, Any]:
+    """The row's ``window`` after a read: a handle's fields are overwritten by the new reading, a field it does not have keeps its
+    earlier value, a handle not read this time stays as it was. ``read_at`` is the time of the read that changed something: an
+    identical read returns ``old`` untouched, so the row is not rewritten just because the clock moved."""
+    held = old.get("accounts") if isinstance(old, dict) else None
+    accounts: dict[str, dict[str, int]] = {h: dict(v) for h, v in held.items() if isinstance(v, dict)} if isinstance(held, dict) else {}
+    for handle, fields in readings.items():
+        accounts[handle] = {**accounts.get(handle, {}), **fields}
+    if isinstance(old, dict) and old.get("accounts") == accounts and old.get("days") == ACCOUNT_DAYS and isinstance(old.get("read_at"), str):
+        return old
+    return {"days": ACCOUNT_DAYS, "read_at": now.astimezone(LONDON).isoformat(timespec="seconds"), "accounts": accounts}
 
 
 def _store_account_day(
-    store: Store, row: Run | None, day: str, readings: dict[str, dict[str, int]], now: datetime
-) -> bool:  # fmt: skip
-    """Write one London day's readings (``{handle: fields}``) into its ``account_daily`` row, which is created on the first read of
-    the day and updated in place after that. A handle's fields are overwritten by the new reading, a field the new reading does not
-    have keeps its earlier value, a handle not read this time stays as it was. True when something was written (an identical
-    reading writes nothing, so the row and its ``finished_at`` stay)."""
+    store: Store,
+    row: Run | None,
+    day: str,
+    readings: dict[str, dict[str, int]],
+    now: datetime,
+    window: dict[str, dict[str, int]] | None = None,
+) -> bool:
+    """Write one London day into its ``account_daily`` row, which is created on the first read of the day and updated in place after
+    that. ``readings`` are the day's daily figures (``{handle: fields}``, ``accounts``), ``window`` the 7-day totals read today
+    (``{handle: fields}``, ``details.window``; only passed for today's row, and a past day's row keeps the window it had).
+
+    A handle's fields are overwritten by the new reading, a field the new reading does not have keeps its earlier value, a handle not
+    read this time stays as it was. **Cleaning:** the first version stored the window totals (views, likes, ...) under ``accounts``
+    as if they were that day's; whenever a row is written, those fields are dropped from ``accounts`` before the new reading is merged
+    (a handle left with nothing is dropped too). True when something was written (an identical reading writes nothing, so the row
+    and its ``finished_at`` stay)."""
     old = row.details.get("accounts") if row is not None and isinstance(row.details, dict) else None
-    accounts: dict[str, dict[str, int]] = {h: dict(v) for h, v in old.items() if isinstance(v, dict)} if isinstance(old, dict) else {}
+    accounts: dict[str, dict[str, int]] = {}
+    for handle, fields in old.items() if isinstance(old, dict) else ():
+        if isinstance(fields, dict) and (daily := {f: n for f, n in fields.items() if f not in ACCOUNT_WINDOW_FIELDS}):
+            accounts[handle] = daily
     for handle, fields in readings.items():
         accounts[handle] = {**accounts.get(handle, {}), **fields}
-    details = {"day": day, "accounts": accounts}
+    details: dict[str, Any] = {"day": day, "accounts": accounts}
+    held_window = row.details.get("window") if row is not None and isinstance(row.details, dict) else None
+    if window:
+        details["window"] = _merge_window(held_window, window, now)
+    elif isinstance(held_window, dict):
+        details["window"] = held_window
     if row is not None and row.details == details:
         return False
-    summary = f"Account totals for {day}: " + ", ".join(accounts)
+    handles = list(dict.fromkeys([*accounts, *details.get("window", {}).get("accounts", {})]))
+    summary = f"Account totals for {day}: " + ", ".join(handles)
     if row is not None:
         store.update_run(row.id, details=details, finished_at=now, summary=summary)
     else:
@@ -758,24 +830,31 @@ def pull_accounts(
     *,
     executable: str = "postiz",
 ) -> dict[str, Any]:
-    """Read the daily totals of every live character's account that has a Postiz integration and store them, one ``account_daily``
-    run row per London day (owner 2026-10-15; no migration: ``runs`` has no constraint on ``kind``). Returns a JSON-friendly summary.
+    """Read the figures of every live character's account that has a Postiz integration and store them, one ``account_daily`` run row
+    per London day (owner 2026-10-15; no migration: ``runs`` has no constraint on ``kind``). Returns a JSON-friendly summary.
 
-    Why. Instagram and Postiz give no numbers for a single Story, but ``postiz analytics:platform <integration id>`` gives the
-    account's totals per day, Stories included. Beside the Reels' own views (the per-post pulls) the terminal's "Account per day" block
+    Why. Instagram and Postiz give no numbers for a single Story, but ``postiz analytics:platform <integration id> -d 7`` gives the
+    account's figures, Stories included. Beside the Reels' own views (the per-post pulls) the terminal's "Account per day" block
     shows what Stories and older posts add.
 
-    Stored: ``details = {"day": "2026-10-15", "accounts": {"@handle": {"views": n, "reach": n, "likes": n, "comments": n,
-    "shares": n, "saves": n, "replies": n}}}``; a number the platform did not report is absent, never 0. The day is the data
-    point's own date, taken as the London day. The row's ``started_at`` is noon London of that day (so rows sort by day), its
-    ``finished_at`` the last time a read changed it. **Idempotent per (account, day):** a later read of the same day overwrites it
-    (the day's total grows through the day and a past day may settle), an identical read writes nothing, and a day that is no longer
-    in the reply is left as it was. A day after today (London) is never stored.
+    **Two shapes in one reply** (verified live 2026-10-15, see ``parse_account_analytics``): Reach is a daily series, the other labels
+    (Views, Likes, Comments, Shares, Saves, Replies) are ONE total over the 7-day window, dated the day it was read.
 
-    Summary keys: ``read`` (account, platform, days), ``skipped`` (a live character's account with no Postiz integration),
-    ``empty`` (the reply held no known metric), ``postiz_errors`` (the reply failed: a warning, never an exception, and the other
-    accounts are still read), ``written`` (day and the handles read), ``unchanged`` (days that already held this reading) and
-    ``write_errors`` (a day the database refused; the other days are still written).
+    Stored: the daily series as ``details = {"day": "2026-10-14", "accounts": {"@handle": {"reach": n}}}``, one row per data point's
+    own date (taken as the London day); the window totals on the row of today (London) as ``details["window"] = {"days": 7,
+    "read_at": "<ISO>", "accounts": {"@handle": {"views": n, "likes": n, "comments": n, "shares": n, "saves": n, "replies": n}}}``
+    (the row is created for the window alone when the day has no daily figure yet). A number the platform did not report is absent,
+    never 0. The row's ``started_at`` is noon London of its day (so rows sort by day), its ``finished_at`` the last time a read changed
+    it. **Idempotent per (account, day):** a later read of the same day overwrites it (the window total grows through the day, a past
+    day's reach may settle), an identical read writes nothing, and a day that is no longer in the reply is left as it was. A day after
+    today (London) is never stored. A row written by the first version (window fields under ``accounts``) is corrected when it is next
+    written.
+
+    Summary keys: ``read`` (account, platform, days with a daily figure, window fields), ``skipped`` (a live character's account
+    with no Postiz integration), ``empty`` (the reply held no known metric), ``postiz_errors`` (the reply failed: a warning, never an
+    exception, and the other accounts are still read), ``written`` (day and the handles read, plus ``window`` on the row that got
+    a window), ``unchanged`` (days that already held this reading) and ``write_errors`` (a day the database refused; the other days
+    are still written).
     """
     require_aware(now, "pull_accounts(now)")
     today = now.astimezone(LONDON).date()
@@ -784,6 +863,7 @@ def pull_accounts(
     }  # fmt: skip
     live = {c.slug for c in store.characters() if c.status == "live"}
     by_day: dict[str, dict[str, dict[str, int]]] = {}  # day -> handle -> that day's numbers
+    window: dict[str, dict[str, int]] = {}  # handle -> the 7-day totals read now
     for account in store.accounts():
         if account.character_slug not in live:
             continue
@@ -796,17 +876,23 @@ def pull_accounts(
             log.warning("account totals of %s not read: %s", account.handle, _short(e))
             out["postiz_errors"].append({"account": account.handle, "error": _short(e)})
             continue
-        days = {d: v for d, v in parse_account_analytics(payload).items() if date.fromisoformat(d) <= today}
-        if not days:
+        reading = parse_account_analytics(payload)
+        days = {d: v for d, v in reading.days.items() if date.fromisoformat(d) <= today}
+        if not days and not reading.window:
             log.warning("account totals of %s held no known metric", account.handle)
             out["empty"].append({"account": account.handle})
             continue
-        out["read"].append({"account": account.handle, "platform": account.platform.value, "days": len(days)})
+        out["read"].append(
+            {"account": account.handle, "platform": account.platform.value, "days": len(days), "window": list(reading.window)}
+        )
         for day, fields in days.items():
             by_day.setdefault(day, {})[account.handle] = fields
+        if reading.window:
+            window[account.handle] = reading.window
 
-    if not by_day:
+    if not by_day and not window:
         return out
+    wanted = sorted({*by_day, *([today.isoformat()] if window else [])})
     try:
         rows: dict[str, Run] = {}
         for r in store.list_runs(kind=RunKind.account_daily):  # the oldest row of a day is its row
@@ -815,10 +901,14 @@ def pull_accounts(
     except Exception as e:  # noqa: BLE001
         out["write_errors"].append({"error": _short(e)})
         return out
-    for day in sorted(by_day):
+    for day in wanted:
+        with_window = window if day == today.isoformat() else None
         try:
-            if _store_account_day(store, rows.get(day), day, by_day[day], now):
-                out["written"].append({"day": day, "accounts": list(by_day[day])})
+            if _store_account_day(store, rows.get(day), day, by_day.get(day, {}), now, with_window):
+                entry: dict[str, Any] = {"day": day, "accounts": list(dict.fromkeys([*by_day.get(day, {}), *(with_window or {})]))}
+                if with_window:
+                    entry["window"] = list(with_window)
+                out["written"].append(entry)
             else:
                 out["unchanged"].append(day)
         except Exception as e:  # noqa: BLE001 - one day's write must never stop the others
@@ -851,7 +941,8 @@ def pull_command() -> None:
 
 @app.command("accounts")
 def accounts_command() -> None:
-    """Store each live account's daily totals from Postiz (views, reach, replies, ...; Stories included), one row per London day.
+    """Store each live account's figures from Postiz (Stories included): the daily reach per London day, and the 7-day totals of
+    views, likes, comments, shares, saves and replies on today's row.
 
     Prints one JSON summary. A Postiz failure is a warning in the summary (``postiz_errors``) and exit 0; exit 1 only when the
     database refused a write; exit 2 for a missing ``POSTIZ_API_KEY`` or ``postiz`` binary."""

@@ -1,15 +1,18 @@
-// "Account per day" (owner 2026-10-15), on a character's page: the last 7 London days of what his accounts got (views, reach, replies;
-// Stories included) beside the views his Reels gained, so the difference (Stories, older posts) is visible. Postiz and Instagram give no
-// numbers for a single Story, only the account's daily totals (`studio metrics accounts`, every 6 hours). A table of exact numbers
-// with one small sparkline of the account's views (one series, one colour: his own, as on Today's views chart); the established
-// classes of the glance table, nothing restyled. Text stays in ink colours; the series colour is only on the line. Beside the sparkline
-// two figures: the account's views over the 7 days and the views of all his posts over all time (owner 2026-10-15; the latter from the
-// library's latest reading of each posted post, a post with no views left out of the sum, and it says how many posts it covers).
+// "Account per day" (owner 2026-10-15), on a character's page: the last 7 London days of his accounts' REACH beside the views his Reels
+// gained, and Instagram's own 7-day total of the account's views (Stories included) with what his Reels gained in the same days.
+// Verified live 2026-10-15: only reach is per day; views, likes, comments and replies are ONE total over the last 7 days. Postiz and
+// Instagram give no numbers for a single Story, only these account figures (`studio metrics accounts`, every 6 hours). A table of
+// exact numbers with one small sparkline of the account's reach per day (one series, one colour: his own, as on Today's views chart);
+// the established classes of the glance table, nothing restyled. Text stays in ink colours; the series colour is only on the line.
+// Beside the sparkline the stats: the account's views over the last 7 days (when it was read, what his Reels gained in the same days
+// and the rest, then likes, comments and replies of the window) and the views of all his posts over all time (owner 2026-10-15; the
+// latter from the library's latest reading of each posted post, a post with no views left out of the sum, and it says how many posts
+// it covers).
 import { useMemo } from 'react';
 import { seriesColor } from '../lib/glance';
 import { formatViews } from '../lib/format';
 import { useNow } from '../lib/hooks';
-import { accountPerDay, sparkSegments, type AccountLine, type AccountPerDayModel } from '../lib/accountday';
+import { accountPerDay, sparkSegments, type AccountLine, type AccountPerDayModel, type AccountWindowModel } from '../lib/accountday';
 import { useStudio } from '../lib/store';
 import { postedTotals, type MetricTotal } from '../lib/totals';
 import type { Character } from '../lib/types';
@@ -21,17 +24,15 @@ const SPARK_H = 36;
 const SPARK_PAD = 5; // room for the end marker (radius 4) and its ring
 
 export const ACCOUNT_STORY_LINE =
-  'Story views are in the account totals because Instagram and Postiz give no numbers for a single Story.';
+  'Account views are Instagram’s total for the last 7 days, Stories included: Instagram and Postiz give no numbers for a single Story and no views per day.';
 export const ACCOUNT_EMPTY =
   'No account numbers yet. The metrics job stores them every 6 hours once Postiz answers; the first reading shows here.';
 
-// Views, Reels and Rest (the comparison) come first, so on a narrow phone the table's own scroll hides reach and replies, not the difference.
+// Reach is per day, as Instagram gives it; the Reels are the views his posts gained that day. The account's views are one 7-day figure
+// (above the table), not a column.
 const COLUMNS: ReadonlyArray<{ key: keyof AccountLine; label: string; title: string }> = [
-  { key: 'views', label: 'Views', title: 'Views of the account that day, Stories included' },
-  { key: 'reels', label: 'Reels', title: 'Views his Reels gained between our readings, counted on the day we read them' },
-  { key: 'rest', label: 'Rest', title: 'Account views minus his Reels: Stories, older posts and what our readings did not catch' },
   { key: 'reach', label: 'Reach', title: 'Accounts reached that day' },
-  { key: 'replies', label: 'Replies', title: 'Replies (to Stories) that day' },
+  { key: 'reels', label: 'Reels', title: 'Views his Reels gained between our readings, counted on the day we read them' },
 ];
 
 /** The views of all his posted posts over all time: the sum, how many posts have the figure, and how many posts are posted. */
@@ -73,7 +74,7 @@ export function AccountPerDayCard({ name, slug, model, allTime }: { name: string
       <div className="panel ll-scroll" role="region" aria-label={`${name}: account per day, last 7 days`} tabIndex={0}>
         <table className="glance-table apd-table">
           <caption className="sr-only">
-            {name}’s accounts per London day, the last 7 days: views, the views his Reels gained, what is left, then reach and replies.
+            {name}’s accounts per London day, the last 7 days: the reach of the accounts, then the views his Reels gained.
           </caption>
           <thead>
             <tr>
@@ -98,16 +99,17 @@ export function AccountPerDayCard({ name, slug, model, allTime }: { name: string
           <tfoot>
             <tr>
               <th scope="row">7 days</th>
-              {COLUMNS.map((c) => (
-                <Cell key={c.key} value={model.total[c.key]} />
-              ))}
+              <td className="n num">
+                <span className="apd-none" title="Reach is not added across days: the same person can be reached on several days" aria-label="not added up">—</span>
+              </td>
+              <Cell value={model.reelsWeek} />
             </tr>
           </tfoot>
         </table>
       </div>
       <p className="small muted" style={{ margin: 0 }}>{ACCOUNT_STORY_LINE}</p>
       <p className="small muted" style={{ margin: 0 }}>
-        Reels counts the views his posts gained between our readings, on the day we read them; Rest is what is left of the account’s views: Stories, older posts.
+        Reach is per day. Reels counts the views his posts gained between our readings, on the day we read them; what is left of the account’s views after the Reels is Stories and older posts.
       </p>
     </Section>
   );
@@ -133,35 +135,55 @@ function AllTimeStat({ allTime }: { allTime: ReelsAllTime }) {
   );
 }
 
-/** The account's views per day: one line in his colour, 0 at the bottom, an 8 px marker (ringed in the panel colour) on the newest day,
- * and beside it the 7-day total of the account's views (with the Reels and the rest it is made of) and the all-time Reels views. */
+/** "Likes 1 · Comments 2 · Replies 0": the window's smaller figures, the ones that were reported (a real 0 is shown, a missing one is not). */
+export function windowSmallFigures(w: AccountWindowModel): string {
+  return ([['Likes', w.likes], ['Comments', w.comments], ['Replies', w.replies]] as const)
+    .flatMap(([label, n]) => (n == null ? [] : [`${label} ${formatViews(n)}`]))
+    .join(' · ');
+}
+
+/** The account's views over the last 7 days: Instagram's one total (Stories included), when it was read, and, when both are known and
+ * the rest is not below 0, what his Reels gained in the same days and what is left. Then the window's likes, comments and replies. */
+function WindowStat({ window: w }: { window: AccountWindowModel | null }) {
+  const small = w ? windowSmallFigures(w) : '';
+  return (
+    <div className="apd-stat">
+      <span className="label">Account views, last 7 days</span>
+      <span className="v">{w?.views == null ? <span className="apd-none" aria-label="not read">—</span> : formatViews(w.views)}</span>
+      {w?.readAgo && <span className="small muted">read {w.readAgo}</span>}
+      {w && w.reels != null && w.rest != null && (
+        <span className="small muted">Reels gained {formatViews(w.reels)} in the same 7 days · rest {formatViews(w.rest)} (Stories, older posts)</span>
+      )}
+      {small && <span className="small muted">{small}</span>}
+    </div>
+  );
+}
+
+/** The account's reach per day: one line in his colour, 0 at the bottom, an 8 px marker (ringed in the panel colour) on the newest day,
+ * and beside it the account's views of the last 7 days (with the Reels and the rest they are made of) and the all-time Reels views. */
 function Spark({ model, slug, allTime }: { model: AccountPerDayModel; slug: string; allTime?: ReelsAllTime }) {
-  const g = sparkSegments(model.views, SPARK_W, SPARK_H, SPARK_PAD);
+  const g = sparkSegments(model.reach, SPARK_W, SPARK_H, SPARK_PAD);
   const color = seriesColor(slug);
-  const said = model.rows.flatMap((r) => (r.views == null ? [] : [`${r.label} ${formatViews(r.views)}`])).join(', ');
+  const said = model.rows.flatMap((r) => (r.reach == null ? [] : [`${r.label} ${formatViews(r.reach)}`])).join(', ');
   return (
     <div className="apd-head">
-      <svg
-        className="apd-spark" width={SPARK_W} height={SPARK_H} viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} role="img"
-        aria-label={`Account views per day, last 7 days: ${said}`}
-      >
-        {g.segments.map((points, i) =>
-          points.includes(' ') ? (
-            <polyline key={i} points={points} fill="none" stroke={color} className="chart-line" />
-          ) : (
-            <circle key={i} cx={points.split(',')[0]} cy={points.split(',')[1]} r="2" fill={color} />
-          ),
-        )}
-        {g.last && <circle cx={g.last.x} cy={g.last.y} r="4" fill={color} stroke="var(--panel)" strokeWidth="2" />}
-      </svg>
-      <div className="apd-stats">
-        <div className="apd-stat">
-          <span className="label">Account views, 7 days</span>
-          <span className="v">{formatViews(model.total.views)}</span>
-          {model.total.reels != null && model.total.rest != null && (
-            <span className="small muted">Reels {formatViews(model.total.reels)} · rest {formatViews(model.total.rest)}</span>
+      {g.segments.length > 0 && (
+        <svg
+          className="apd-spark" width={SPARK_W} height={SPARK_H} viewBox={`0 0 ${SPARK_W} ${SPARK_H}`} role="img"
+          aria-label={`Account reach per day, last 7 days: ${said}`}
+        >
+          {g.segments.map((points, i) =>
+            points.includes(' ') ? (
+              <polyline key={i} points={points} fill="none" stroke={color} className="chart-line" />
+            ) : (
+              <circle key={i} cx={points.split(',')[0]} cy={points.split(',')[1]} r="2" fill={color} />
+            ),
           )}
-        </div>
+          {g.last && <circle cx={g.last.x} cy={g.last.y} r="4" fill={color} stroke="var(--panel)" strokeWidth="2" />}
+        </svg>
+      )}
+      <div className="apd-stats">
+        <WindowStat window={model.window} />
         {allTime && <AllTimeStat allTime={allTime} />}
       </div>
     </div>

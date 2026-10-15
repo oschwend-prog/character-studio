@@ -9,8 +9,9 @@
 // hit used or not for us, set_drop_keep is the clip card's Keep.
 // The weekly review (Task 16): the newest `weekly` row of studio.runs that carries a digest (one more read) feeds Today's "This week" card and the
 // score test's label on a clip's score.
-// "Account per day" (owner 2026-10-15): the accounts' daily totals, one `account_daily` row of studio.runs per London day
-// (`studio metrics accounts`, no migration), the newest 30 days, read once more for the character page's block.
+// "Account per day" (owner 2026-10-15): the accounts' figures, one `account_daily` row of studio.runs per London day (`studio metrics
+// accounts`, no migration): reach per day in details.accounts, Instagram's 7-day window totals in details.window on the day they were
+// read. The newest 30 days, read once more for the character page's block.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { isOwnerMediaPath } from './clipcard';

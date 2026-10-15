@@ -21,7 +21,7 @@ from studio import metrics
 from studio.cli import app
 from studio.config import LONDON
 from studio.metrics import ingest_ig_insights, outlier_x, pull
-from studio.models import Account, Character, Clip, Post, PostStatus, RunKind, Snapshot
+from studio.models import Account, Character, Clip, Post, PostStatus, Run, RunKind, RunStatus, Snapshot
 from studio.store import MemoryStore
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
@@ -1319,13 +1319,39 @@ def test_metrics_replaced_the_empty_skeleton():
 
 # ---- the account's daily totals (owner 2026-10-15, `studio metrics accounts`) -----------------------------------------------
 # Postiz gives no per-Story numbers (`analytics:post <story id>` is `[]`), but `analytics:platform <integration id>` returns the
-# ACCOUNT's daily totals, which include the Stories. They are stored in the `runs` table (kind `account_daily`, one row per London
-# day, no migration) and read by the terminal's "Account per day" block.
+# ACCOUNT's figures, which include the Stories. They are NOT all per day (verified live 2026-10-15): Reach is a daily series, the
+# other labels are ONE total over the `-d 7` window dated the day it was read. Both are stored in the `runs` table (kind
+# `account_daily`, one row per London day, no migration: the daily figures in `accounts`, the window on the reading day's row as
+# `window`) and read by the terminal's "Account per day" block.
+
+
+def live_reply(
+    reach: dict[str, int] | None = None, window: dict[str, int] | None = None, read_day: str = "2026-10-20"
+) -> list[dict[str, Any]]:  # fmt: skip
+    """The shape Postiz really returns for ``analytics:platform <id> -d 7``: Reach one point per day, every other label ONE point (the
+    total over the whole window) dated ``read_day``. ``window`` maps a label to its total."""
+    out: list[dict[str, Any]] = []
+    if reach is not None:
+        out.append({"label": "Reach", "percentageChange": 0, "data": [{"total": str(n), "date": d} for d, n in reach.items()]})
+    for label, n in (window or {}).items():
+        out.append({"label": label, "percentageChange": 0, "data": [{"total": str(n), "date": read_day}]})
+    return out
+
+
+# The exact reply read live for lennygold.agent at 05:40 London on 15 Oct 2026 (`-d 7`).
+LIVE_REACH = {
+    "2026-10-08": 0, "2026-10-09": 0, "2026-10-10": 0, "2026-10-11": 0, "2026-10-12": 0, "2026-10-13": 161, "2026-10-14": 127,
+}  # fmt: skip
+LIVE_WINDOW = {"Likes": 1, "Views": 334, "Comments": 2, "Shares": 0, "Saves": 0, "Replies": 0}
+LIVE = live_reply(LIVE_REACH, LIVE_WINDOW, "2026-10-15")
+LIVE_NOW = datetime(2026, 10, 15, 5, 40, tzinfo=LONDON)
+LIVE_TOTALS = {"views": 334, "likes": 1, "comments": 2, "shares": 0, "saves": 0, "replies": 0}
 
 
 def platform_analytics(days: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """A Postiz ``analytics:platform`` payload: one entry per label, one data point per day. ``days`` maps a date to the day's
-    ``{label: total}``; a label a day does not have is simply left out of that label's data points."""
+    ``{label: total}``; a label a day does not have is simply left out of that label's data points. A label that ends up with two or
+    more points is a daily series for the parser (a label with one point is a window total: use ``live_reply`` for the real shape)."""
     labels = sorted({label for day in days.values() for label in day})
     return [
         {
@@ -1343,12 +1369,33 @@ WEEK = {
 }
 
 
-def test_parse_account_analytics_reads_every_label_per_day():
-    got = metrics.parse_account_analytics(platform_analytics(WEEK))
-    assert got == {
+def test_parse_account_analytics_splits_the_live_reply_into_a_daily_series_and_window_totals():
+    got = metrics.parse_account_analytics(LIVE)
+    assert got.days == {d: {"reach": n} for d, n in LIVE_REACH.items()}  # Reach has a point per day: a series
+    assert got.window == LIVE_TOTALS  # every other label has ONE point: the total over the window, whatever its date (15 Oct)
+    assert got.known
+
+
+def test_parse_account_analytics_the_one_day_reply_has_a_reach_day_and_the_window_totals():
+    # `-d 1`, verified live: Reach one point dated yesterday, the others one point dated today
+    payload = live_reply({"2026-10-14": 127}, {"Views": 166, "Likes": 0, "Comments": 1, "Shares": 0, "Saves": 0, "Replies": 0}, "2026-10-15")
+    got = metrics.parse_account_analytics(payload)
+    assert got.days == {"2026-10-14": {"reach": 127}}  # a single reach point is still a day, never a total
+    assert got.window == {"views": 166, "likes": 0, "comments": 1, "shares": 0, "saves": 0, "replies": 0}
+
+
+def test_parse_account_analytics_a_label_with_two_or_more_points_is_a_daily_series():
+    got = metrics.parse_account_analytics(platform_analytics(WEEK))  # every label has a point on each of two days
+    assert got.window == {}
+    assert got.days == {
         "2026-10-19": {"views": 120, "reach": 90, "likes": 11, "comments": 2, "shares": 3, "saves": 4, "replies": 5},
         "2026-10-20": {"views": 176, "reach": 130, "likes": 15, "comments": 3, "shares": 4, "saves": 6, "replies": 7},
     }
+
+
+def test_parse_account_analytics_a_label_with_one_point_is_a_window_total_whatever_its_date():
+    old = metrics.parse_account_analytics(live_reply(None, {"Views": 50}, "2026-10-01"))  # not today's date: still the window total
+    assert old.window == {"views": 50} and old.days == {}
 
 
 def test_parse_account_analytics_takes_string_and_number_totals_and_any_case_of_the_label():
@@ -1357,18 +1404,23 @@ def test_parse_account_analytics_takes_string_and_number_totals_and_any_case_of_
         {"label": "reach", "data": [{"total": 130, "date": "2026-10-20"}]},
         {"label": "Replies", "data": [{"total": " 7 ", "date": "2026-10-20"}]},
     ]
-    assert metrics.parse_account_analytics(payload) == {"2026-10-20": {"views": 176, "reach": 130, "replies": 7}}
+    got = metrics.parse_account_analytics(payload)
+    assert got.days == {"2026-10-20": {"reach": 130}}
+    assert got.window == {"views": 176, "replies": 7}
 
 
 def test_parse_account_analytics_a_missing_label_is_absent_never_zero():
     payload = platform_analytics({"2026-10-20": {"Views": 5}, "2026-10-19": {"Views": 4, "Reach": 3}})
     got = metrics.parse_account_analytics(payload)
-    assert got["2026-10-20"] == {"views": 5}  # no Reach that day: not 0
-    assert got["2026-10-19"] == {"views": 4, "reach": 3}
+    assert got.days["2026-10-20"] == {"views": 5}  # no Reach that day: not 0
+    assert got.days["2026-10-19"] == {"views": 4, "reach": 3}
+    only_views = metrics.parse_account_analytics(live_reply(None, {"Views": 5}))
+    assert only_views.window == {"views": 5}  # no likes, no comments, ...: not 0
 
 
 def test_parse_account_analytics_a_real_zero_is_kept():
-    assert metrics.parse_account_analytics(platform_analytics({"2026-10-20": {"Views": 0}})) == {"2026-10-20": {"views": 0}}
+    assert metrics.parse_account_analytics(live_reply(None, {"Views": 0})).window == {"views": 0}
+    assert metrics.parse_account_analytics(live_reply({"2026-10-20": 0})).days == {"2026-10-20": {"reach": 0}}
 
 
 def test_parse_account_analytics_ignores_unknown_labels_bad_numbers_and_bad_dates():
@@ -1380,20 +1432,22 @@ def test_parse_account_analytics_ignores_unknown_labels_bad_numbers_and_bad_date
             {"total": "9", "date": "yesterday"},             # not a date
             {"total": "9"},                                  # no date
             "junk",                                          # not even a point
-            {"total": "8", "date": "2026-10-20T00:00:00.000Z"},  # a timestamp: its date counts
+            {"total": "8", "date": "2026-10-20T00:00:00.000Z"},  # a timestamp: its date counts; the one usable point = the window total
         ]},
     ]  # fmt: skip
-    assert metrics.parse_account_analytics(payload) == {"2026-10-20": {"views": 8}}
+    got = metrics.parse_account_analytics(payload)
+    assert got.window == {"views": 8} and got.days == {}
 
 
 def test_parse_account_analytics_a_repeated_day_takes_the_later_point():
-    payload = [{"label": "Views", "data": [{"total": "5", "date": "2026-10-20"}, {"total": "9", "date": "2026-10-20"}]}]
-    assert metrics.parse_account_analytics(payload) == {"2026-10-20": {"views": 9}}
+    payload = [{"label": "Reach", "data": [{"total": "5", "date": "2026-10-20"}, {"total": "9", "date": "2026-10-20"}]}]
+    assert metrics.parse_account_analytics(payload).days == {"2026-10-20": {"reach": 9}}
 
 
 @pytest.mark.parametrize("payload", [[], {}, None, "text", 42, {"missing": True}, [{"label": "Views"}], [{"label": "Views", "data": []}]])
-def test_parse_account_analytics_nothing_known_is_an_empty_dict(payload):
-    assert metrics.parse_account_analytics(payload) == {}
+def test_parse_account_analytics_nothing_known_is_an_empty_reading(payload):
+    got = metrics.parse_account_analytics(payload)
+    assert got == metrics.AccountReading(days={}, window={}) and not got.known
 
 
 class AccountRig:
@@ -1420,7 +1474,15 @@ class AccountRig:
         return self.store.list_runs(kind=RunKind.account_daily)
 
     def by_day(self) -> dict[str, dict[str, Any]]:
+        """The daily figures of each row: ``{day: {handle: fields}}``."""
         return {r.details["day"]: r.details["accounts"] for r in self.rows()}
+
+    def row(self, day: str):
+        return next(r for r in self.rows() if r.details["day"] == day)
+
+    def window(self, day: str) -> dict[str, Any] | None:
+        """The row's 7-day window, or None when it holds none."""
+        return self.row(day).details.get("window")
 
 
 @pytest.fixture
@@ -1470,22 +1532,124 @@ def test_pull_accounts_twice_the_same_reading_changes_nothing(arig):
     assert out["written"] == [] and sorted(out["unchanged"]) == ["2026-10-19", "2026-10-20"]
 
 
-def test_a_later_read_of_the_same_day_overwrites_it_the_days_total_grows(arig):
-    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-20": {"Views": 100, "Reach": 80}})), NOW)
-    first = arig.rows()[0]
-    later = {"2026-10-20": {"Views": 250, "Reach": 160, "Replies": 9}}
-    out = metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(later)), NOW + 6 * H)
+def test_the_live_reply_stores_reach_per_day_and_the_week_totals_on_the_reading_days_row(arig):
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=LIVE), LIVE_NOW)
+    handles = ["@franz.ig", "@franz.tt", "@reg.ig"]
+    # reach: one row per day it has a point for, only the daily field under `accounts`, no window on those rows
+    assert sorted(arig.by_day()) == ["2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11", "2026-10-12", "2026-10-13", "2026-10-14", "2026-10-15"]
+    for day, n in LIVE_REACH.items():
+        assert arig.by_day()[day] == {h: {"reach": n} for h in handles}
+        assert arig.window(day) is None
+    # the 7-day totals are NOT views "on the 15th": they sit on the row of the day they were read, as the window
+    today = arig.row("2026-10-15")
+    assert today.details == {
+        "day": "2026-10-15",
+        "accounts": {},  # no reach point for the day itself yet: nothing per day
+        "window": {"days": 7, "read_at": "2026-10-15T05:40:00+01:00", "accounts": {h: LIVE_TOTALS for h in handles}},
+    }
+    assert today.started_at == datetime(2026, 10, 15, 12, tzinfo=LONDON) and today.finished_at == LIVE_NOW
+    assert "views" not in str(arig.by_day())  # a window figure is never stored as a day's
+    assert out["written"][-1] == {"day": "2026-10-15", "accounts": handles, "window": handles}
+    assert [r["window"] for r in out["read"]] == [list(LIVE_TOTALS)] * 3 and [r["days"] for r in out["read"]] == [7] * 3
+    assert out["unchanged"] == [] and out["write_errors"] == [] and out["empty"] == []
+
+
+def test_a_reply_with_only_window_totals_still_creates_the_days_row_and_is_not_empty(arig):
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=live_reply(None, {"Views": 40}, "2026-10-20")), NOW)
+    assert out["empty"] == [] and [r["days"] for r in out["read"]] == [0, 0, 0]
+    assert arig.by_day() == {"2026-10-20": {}}
+    assert arig.window("2026-10-20")["accounts"] == {h: {"views": 40} for h in ("@franz.ig", "@franz.tt", "@reg.ig")}
+
+
+def test_a_row_written_by_the_first_version_is_cleaned_on_the_next_run(arig):
+    # the first version stored the window totals as that day's: `views: 334` etc. under `accounts` of the 15th
+    arig.store.add_run(Run(
+        kind=RunKind.account_daily, status=RunStatus.ok, started_at=datetime(2026, 10, 15, 12, tzinfo=LONDON), finished_at=LIVE_NOW,
+        summary="Account totals for 2026-10-15: @franz.ig",
+        details={"day": "2026-10-15", "accounts": {"@franz.ig": dict(LIVE_TOTALS), "@franz.tt": {**LIVE_TOTALS, "reach": 99}}},
+    ))  # fmt: skip
+    arig.store.add_run(Run(
+        kind=RunKind.account_daily, status=RunStatus.ok, started_at=datetime(2026, 10, 14, 12, tzinfo=LONDON), finished_at=LIVE_NOW,
+        summary="Account totals for 2026-10-14: @franz.ig",
+        details={"day": "2026-10-14", "accounts": {"@franz.ig": {"reach": 127}}},
+    ))  # fmt: skip
+    before = arig.row("2026-10-15").id
+    metrics.pull_accounts(arig.store, FakePostiz(default=LIVE), LIVE_NOW + 2 * H)
+    row = arig.row("2026-10-15")
+    assert row.id == before  # corrected in place, not a second row
+    assert row.details["accounts"] == {"@franz.tt": {"reach": 99}}  # no window field left; a real daily one kept; empty handles gone
+    assert row.details["window"]["accounts"]["@franz.ig"] == LIVE_TOTALS and row.details["window"]["days"] == 7
+    assert row.finished_at == LIVE_NOW + 2 * H
+    assert arig.by_day()["2026-10-14"]["@franz.ig"] == {"reach": 127}
+    assert len([r for r in arig.rows() if r.details["day"] == "2026-10-15"]) == 1
+
+
+def test_cleaning_drops_every_window_field_and_only_those(arig):
+    arig.store.add_run(Run(
+        kind=RunKind.account_daily, status=RunStatus.ok, started_at=datetime(2026, 10, 15, 12, tzinfo=LONDON), finished_at=LIVE_NOW,
+        summary="old", details={"day": "2026-10-15", "accounts": {"@franz.ig": {**LIVE_TOTALS, "reach": 7}, "@old.account": {"views": 5}}},
+    ))  # fmt: skip
+    metrics.pull_accounts(arig.store, FakePostiz(default=live_reply({"2026-10-15": 8}, {"Views": 1}, "2026-10-15")), LIVE_NOW)
+    # the old row: window fields gone from both handles (@old.account was left with nothing, so it is gone), reach re-read
+    assert arig.by_day()["2026-10-15"] == {"@franz.ig": {"reach": 8}, "@franz.tt": {"reach": 8}, "@reg.ig": {"reach": 8}}
+
+
+def test_an_identical_live_read_changes_nothing_and_read_at_stays(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=LIVE), LIVE_NOW)
+    before = [(r.id, r.details, r.finished_at) for r in arig.rows()]
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=LIVE), LIVE_NOW + 3 * H)
+    assert [(r.id, r.details, r.finished_at) for r in arig.rows()] == before  # nothing rewritten, `read_at` is the first read's
+    assert out["written"] == [] and len(out["unchanged"]) == 8
+    assert arig.window("2026-10-15")["read_at"] == "2026-10-15T05:40:00+01:00"
+
+
+def test_a_later_read_of_the_same_day_overwrites_the_window_total_it_grows(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=live_reply({"2026-10-20": 80}, {"Views": 100, "Replies": 2})), NOW)
+    first = arig.row("2026-10-20")
+    later = live_reply({"2026-10-20": 160}, {"Views": 250, "Replies": 9, "Likes": 4})
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=later), NOW + 6 * H)
     rows = arig.rows()
     assert len(rows) == 1 and rows[0].id == first.id  # updated in place: still one row for the day
-    assert rows[0].details["accounts"]["@franz.ig"] == {"views": 250, "reach": 160, "replies": 9}
+    assert rows[0].details["accounts"]["@franz.ig"] == {"reach": 160}
+    assert arig.window("2026-10-20") == {
+        "days": 7, "read_at": (NOW + 6 * H).astimezone(LONDON).isoformat(timespec="seconds"),
+        "accounts": {h: {"views": 250, "replies": 9, "likes": 4} for h in ("@franz.ig", "@franz.tt", "@reg.ig")},
+    }  # fmt: skip
     assert rows[0].finished_at == NOW + 6 * H
-    assert out["written"] == [{"day": "2026-10-20", "accounts": ["@franz.ig", "@franz.tt", "@reg.ig"]}]
+    assert out["written"] == [{"day": "2026-10-20", "accounts": ["@franz.ig", "@franz.tt", "@reg.ig"], "window": ["@franz.ig", "@franz.tt", "@reg.ig"]}]
 
 
-def test_a_field_the_later_read_does_not_report_keeps_its_earlier_value(arig):
-    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-20": {"Views": 100, "Replies": 4}})), NOW)
-    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-20": {"Views": 120}})), NOW + 6 * H)
-    assert arig.by_day()["2026-10-20"]["@franz.ig"] == {"views": 120, "replies": 4}  # never a guessed 0
+def test_a_window_field_the_later_read_does_not_report_keeps_its_earlier_value(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=live_reply(None, {"Views": 100, "Replies": 4})), NOW)
+    metrics.pull_accounts(arig.store, FakePostiz(default=live_reply(None, {"Views": 120})), NOW + 6 * H)
+    assert arig.window("2026-10-20")["accounts"]["@franz.ig"] == {"views": 120, "replies": 4}  # never a guessed 0
+
+
+def test_a_reach_the_later_read_does_not_report_keeps_its_earlier_value_and_a_window_field_never_lingers_under_accounts(arig):
+    first = {"2026-10-19": {"Reach": 7, "Replies": 1}, "2026-10-20": {"Reach": 100, "Replies": 4}}  # two points each: daily series
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(first)), NOW)
+    assert arig.by_day()["2026-10-20"]["@franz.ig"] == {"reach": 100, "replies": 4}  # a series of a window field is stored per day ...
+    only_views = live_reply(None, {"Views": 120})
+    metrics.pull_accounts(arig.store, FakePostiz(default=only_views), NOW + 6 * H)
+    # ... but a window field under `accounts` is what the cleaning removes, so it lasts only while a reading supplies it
+    assert arig.by_day()["2026-10-20"]["@franz.ig"] == {"reach": 100}  # reach, a real daily field, keeps its value (never a guessed 0)
+    assert arig.by_day()["2026-10-19"]["@franz.ig"] == {"reach": 7, "replies": 1}  # a row the reading does not touch is left as it was
+
+
+def test_the_window_goes_on_the_row_of_the_london_day_even_when_postiz_stamps_another_date(arig):
+    late = datetime(2026, 10, 20, 23, 30, tzinfo=timezone.utc)  # BST: already 00:30 on the 21st in London
+    metrics.pull_accounts(arig.store, FakePostiz(default=live_reply({"2026-10-20": 3}, {"Views": 9}, "2026-10-20")), late)  # stamped with the UTC date
+    assert sorted(arig.by_day()) == ["2026-10-20", "2026-10-21"]
+    assert arig.window("2026-10-21")["accounts"]["@franz.ig"] == {"views": 9} and arig.window("2026-10-20") is None
+
+
+def test_a_past_days_row_keeps_the_window_it_was_read_with(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=LIVE), LIVE_NOW)  # the 15th: reach up to the 14th, the window on the 15th
+    next_day = live_reply({**LIVE_REACH, "2026-10-15": 40}, {"Views": 500}, "2026-10-16")
+    metrics.pull_accounts(arig.store, FakePostiz(default=next_day), LIVE_NOW + 24 * H)
+    assert arig.by_day()["2026-10-15"]["@franz.ig"] == {"reach": 40}  # the 15th's reach arrived on the 16th ...
+    assert arig.window("2026-10-15")["accounts"]["@franz.ig"] == LIVE_TOTALS  # ... and its row still holds the window read on the 15th
+    assert arig.window("2026-10-16")["accounts"]["@franz.ig"] == {"views": 500}  # the 16th has its own
 
 
 def test_a_new_days_read_adds_its_row_and_older_days_stay_as_they_were(arig):
@@ -1503,13 +1667,15 @@ def test_a_new_days_read_adds_its_row_and_older_days_stay_as_they_were(arig):
 def test_each_accounts_own_reading_is_stored_under_its_own_handle(arig):
     # FakePostiz keys on argv[2], which is the integration id here
     fake = FakePostiz({
-        "int-franz-ig": platform_analytics({"2026-10-20": {"Views": 500}}),
-        "int-franz-tt": platform_analytics({"2026-10-20": {"Views": 70}}),
-        "int-reg-ig": platform_analytics({"2026-10-20": {"Views": 9}}),
+        "int-franz-ig": live_reply({"2026-10-20": 400}, {"Views": 500}),
+        "int-franz-tt": live_reply({"2026-10-20": 60}, {"Views": 70}),
+        "int-reg-ig": live_reply({"2026-10-20": 8}, {"Views": 9}),
     })  # fmt: skip
     metrics.pull_accounts(arig.store, fake, NOW)
     day = arig.by_day()["2026-10-20"]
-    assert (day["@franz.ig"]["views"], day["@franz.tt"]["views"], day["@reg.ig"]["views"]) == (500, 70, 9)
+    assert (day["@franz.ig"]["reach"], day["@franz.tt"]["reach"], day["@reg.ig"]["reach"]) == (400, 60, 8)
+    totals = arig.window("2026-10-20")["accounts"]
+    assert (totals["@franz.ig"]["views"], totals["@franz.tt"]["views"], totals["@reg.ig"]["views"]) == (500, 70, 9)
 
 
 def test_a_day_in_the_future_is_not_stored(arig):
@@ -1520,20 +1686,21 @@ def test_a_day_in_the_future_is_not_stored(arig):
 
 def test_the_london_day_decides_what_today_is(arig):
     late = datetime(2026, 10, 20, 23, 30, tzinfo=timezone.utc)  # BST: already 00:30 on the 21st in London
-    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-21": {"Views": 3}})), late)
-    assert sorted(arig.by_day()) == ["2026-10-21"]
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-21": {"Views": 3}, "2026-10-22": {"Views": 4}})), late)
+    assert sorted(arig.by_day()) == ["2026-10-21"]  # the 22nd is still in the future
 
 
 def test_a_postiz_failure_is_reported_not_raised_and_the_other_accounts_are_still_stored(arig):
     fake = FakePostiz({
         "int-franz-ig": ("exit", 1, "502 bad gateway"),
-        "int-franz-tt": platform_analytics({"2026-10-20": {"Views": 70}}),
+        "int-franz-tt": live_reply({"2026-10-20": 33}, {"Views": 70}),
         "int-reg-ig": subprocess.TimeoutExpired(["postiz"], 120),
     })  # fmt: skip
     out = metrics.pull_accounts(arig.store, fake, NOW)  # does not raise
     assert [e["account"] for e in out["postiz_errors"]] == ["@franz.ig", "@reg.ig"]
     assert "502 bad gateway" in out["postiz_errors"][0]["error"] and "timed out" in out["postiz_errors"][1]["error"]
-    assert arig.by_day() == {"2026-10-20": {"@franz.tt": {"views": 70}}}
+    assert arig.by_day() == {"2026-10-20": {"@franz.tt": {"reach": 33}}}
+    assert arig.window("2026-10-20")["accounts"] == {"@franz.tt": {"views": 70}}
     assert [r["account"] for r in out["read"]] == ["@franz.tt"]
 
 

@@ -673,7 +673,8 @@ export interface Snapshot {
   tracker: TrackerRow[];
   /** Views and follows per character and London day (v_views_daily, migration 0015); empty before it or before any measurement. */
   viewsDaily: ViewsDay[];
-  /** The accounts' daily totals from Postiz (runs of kind account_daily, `studio metrics accounts`; one per London day), oldest day first.
+  /** The accounts' figures from Postiz (runs of kind account_daily, `studio metrics accounts`; one per London day), oldest day first:
+   * the reach per day and, on the row of the day it was read, Instagram's 7-day window totals (views, likes, comments, replies).
    * Absent or empty before the first reading. Read by the character page's "Account per day" block (lib/accountday.ts). */
   accountDaily?: AccountDay[];
   /** The posting days and slot per character (`studio.settings.cadence`); empty when none is set. */

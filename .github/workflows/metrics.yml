@@ -18,9 +18,11 @@
 # and only between 11:00 and 22:00 London, the Story of the account's most-viewed Reel of the last 14 days (never a second Reel).
 # It needs the storage keys (it signs the Story video); it never fails this job (continue-on-error), and a Postiz hiccup exits 0.
 #
-# After the pull, `studio metrics accounts` (owner 2026-10-15) stores each live account's daily totals (`postiz analytics:platform`:
-# views, reach, replies, ...; Stories included, which Postiz cannot report one by one) as one `account_daily` run row per London day,
-# updated in place, for the terminal's "Account per day" block. It never fails this job (continue-on-error), and a Postiz hiccup exits 0.
+# After the pull, `studio metrics accounts` (owner 2026-10-15) stores each live account's figures (`postiz analytics:platform -d 7`;
+# Stories included, which Postiz cannot report one by one) as one `account_daily` run row per London day, updated in place, for the
+# terminal's "Account per day" block. Only reach is per day (details.accounts); views, likes, comments, shares, saves and replies are
+# Instagram's one total over the 7-day window, kept on the row of the day it was read (details.window). It never fails this job
+# (continue-on-error), and a Postiz hiccup exits 0.
 name: metrics
 
 on:
