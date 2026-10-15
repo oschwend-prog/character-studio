@@ -2,11 +2,13 @@
 // (his sheets, look and wardrobe, motion and signature move, catchphrase, voice, gadgets with their viral job, the swap rule; from
 // his bible through src/generated/artists.json) and how he is doing: all his videos grouped Live (posted, with views), Scheduled
 // and In the making, then at the bottom his accounts' results and autopilot (a panel per channel), his traits and the go-live
-// checklist (terminal v2, owner 2026-10-07). From what the terminal already loads. The established classes only: the Characters
+// checklist (terminal v2, owner 2026-10-07), and "Account per day" (owner 2026-10-15: his accounts' daily totals beside his Reels' views, so
+// what Stories add shows). From what the terminal already loads. The established classes only: the Characters
 // card's head, Section, the stage cards, the kv grid, the pipeline rows, the trait chips and the checklist rows.
 import { Check, ChevronLeft, ChevronRight, ExternalLink, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import generated from '../generated/artists.json';
+import { AccountPerDay } from '../components/AccountPerDay';
 import { ChannelPanel, Checklist } from '../components/ChannelPanel';
 import { TraitsCard } from '../components/TraitsCard';
 import { Avatar, Livery, OutlierBadge, PlatformCode, Section, Skeleton } from '../components/ui';
@@ -251,6 +253,7 @@ export function Artist({ slug }: { slug: string | null }) {
               </div>
             </Section>
           )}
+          <AccountPerDay character={character} />
           <TraitsCard character={character} />
           <Checklist character={character} />
         </>

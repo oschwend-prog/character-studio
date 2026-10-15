@@ -11,7 +11,7 @@ import json
 import logging
 import stat
 import subprocess
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -19,8 +19,9 @@ from typer.testing import CliRunner
 
 from studio import metrics
 from studio.cli import app
+from studio.config import LONDON
 from studio.metrics import ingest_ig_insights, outlier_x, pull
-from studio.models import Account, Character, Clip, Post, PostStatus, Snapshot
+from studio.models import Account, Character, Clip, Post, PostStatus, RunKind, Snapshot
 from studio.store import MemoryStore
 
 NOW = datetime(2026, 10, 20, 12, 0, tzinfo=timezone.utc)
@@ -1314,3 +1315,317 @@ def test_metrics_replaced_the_empty_skeleton():
     from studio import cli as cli_module
 
     assert "metrics" not in cli_module.SUBAPPS
+
+
+# ---- the account's daily totals (owner 2026-10-15, `studio metrics accounts`) -----------------------------------------------
+# Postiz gives no per-Story numbers (`analytics:post <story id>` is `[]`), but `analytics:platform <integration id>` returns the
+# ACCOUNT's daily totals, which include the Stories. They are stored in the `runs` table (kind `account_daily`, one row per London
+# day, no migration) and read by the terminal's "Account per day" block.
+
+
+def platform_analytics(days: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """A Postiz ``analytics:platform`` payload: one entry per label, one data point per day. ``days`` maps a date to the day's
+    ``{label: total}``; a label a day does not have is simply left out of that label's data points."""
+    labels = sorted({label for day in days.values() for label in day})
+    return [
+        {
+            "label": label,
+            "percentageChange": 0,
+            "data": [{"total": str(day[label]), "date": d} for d, day in days.items() if label in day],
+        }
+        for label in labels
+    ]
+
+
+WEEK = {
+    "2026-10-19": {"Views": 120, "Reach": 90, "Likes": 11, "Comments": 2, "Shares": 3, "Saves": 4, "Replies": 5},
+    "2026-10-20": {"Views": 176, "Reach": 130, "Likes": 15, "Comments": 3, "Shares": 4, "Saves": 6, "Replies": 7},
+}
+
+
+def test_parse_account_analytics_reads_every_label_per_day():
+    got = metrics.parse_account_analytics(platform_analytics(WEEK))
+    assert got == {
+        "2026-10-19": {"views": 120, "reach": 90, "likes": 11, "comments": 2, "shares": 3, "saves": 4, "replies": 5},
+        "2026-10-20": {"views": 176, "reach": 130, "likes": 15, "comments": 3, "shares": 4, "saves": 6, "replies": 7},
+    }
+
+
+def test_parse_account_analytics_takes_string_and_number_totals_and_any_case_of_the_label():
+    payload = [
+        {"label": "VIEWS", "data": [{"total": "176", "date": "2026-10-20"}]},
+        {"label": "reach", "data": [{"total": 130, "date": "2026-10-20"}]},
+        {"label": "Replies", "data": [{"total": " 7 ", "date": "2026-10-20"}]},
+    ]
+    assert metrics.parse_account_analytics(payload) == {"2026-10-20": {"views": 176, "reach": 130, "replies": 7}}
+
+
+def test_parse_account_analytics_a_missing_label_is_absent_never_zero():
+    payload = platform_analytics({"2026-10-20": {"Views": 5}, "2026-10-19": {"Views": 4, "Reach": 3}})
+    got = metrics.parse_account_analytics(payload)
+    assert got["2026-10-20"] == {"views": 5}  # no Reach that day: not 0
+    assert got["2026-10-19"] == {"views": 4, "reach": 3}
+
+
+def test_parse_account_analytics_a_real_zero_is_kept():
+    assert metrics.parse_account_analytics(platform_analytics({"2026-10-20": {"Views": 0}})) == {"2026-10-20": {"views": 0}}
+
+
+def test_parse_account_analytics_ignores_unknown_labels_bad_numbers_and_bad_dates():
+    payload = [
+        {"label": "Followers", "data": [{"total": "900", "date": "2026-10-20"}]},  # not a metric we store
+        {"label": "Views", "data": [
+            {"total": "n/a", "date": "2026-10-18"},          # not a number
+            {"total": "-4", "date": "2026-10-17"},           # negative
+            {"total": "9", "date": "yesterday"},             # not a date
+            {"total": "9"},                                  # no date
+            "junk",                                          # not even a point
+            {"total": "8", "date": "2026-10-20T00:00:00.000Z"},  # a timestamp: its date counts
+        ]},
+    ]  # fmt: skip
+    assert metrics.parse_account_analytics(payload) == {"2026-10-20": {"views": 8}}
+
+
+def test_parse_account_analytics_a_repeated_day_takes_the_later_point():
+    payload = [{"label": "Views", "data": [{"total": "5", "date": "2026-10-20"}, {"total": "9", "date": "2026-10-20"}]}]
+    assert metrics.parse_account_analytics(payload) == {"2026-10-20": {"views": 9}}
+
+
+@pytest.mark.parametrize("payload", [[], {}, None, "text", 42, {"missing": True}, [{"label": "Views"}], [{"label": "Views", "data": []}]])
+def test_parse_account_analytics_nothing_known_is_an_empty_dict(payload):
+    assert metrics.parse_account_analytics(payload) == {}
+
+
+class AccountRig:
+    """Franz (live) with an Instagram and a TikTok account, Reginald (live) with one Instagram account and one TikTok account
+    with no Postiz integration yet, and Lenny (not live) with an Instagram account that must not be read."""
+
+    def __init__(self) -> None:
+        self.store = MemoryStore(
+            characters=[
+                Character(slug="franz", name="Franz", status="live"),
+                Character(slug="reginald", name="Reginald", status="live"),
+                Character(slug="lenny", name="Lenny Gold", status="designing"),
+            ],
+            accounts=[
+                Account(character_slug="franz", platform="instagram", handle="@franz.ig", postiz_integration_id="int-franz-ig"),
+                Account(character_slug="franz", platform="tiktok", handle="@franz.tt", postiz_integration_id="int-franz-tt"),
+                Account(character_slug="reginald", platform="instagram", handle="@reg.ig", postiz_integration_id="int-reg-ig"),
+                Account(character_slug="lenny", platform="instagram", handle="@lenny.ig", postiz_integration_id="int-lenny-ig"),
+                Account(character_slug="reginald", platform="tiktok", handle="@reg.tt", postiz_integration_id=None),
+            ],
+        )  # fmt: skip
+
+    def rows(self) -> list:
+        return self.store.list_runs(kind=RunKind.account_daily)
+
+    def by_day(self) -> dict[str, dict[str, Any]]:
+        return {r.details["day"]: r.details["accounts"] for r in self.rows()}
+
+
+@pytest.fixture
+def arig() -> AccountRig:
+    return AccountRig()
+
+
+def test_account_daily_is_a_run_kind_of_its_own():
+    assert RunKind.account_daily == "account_daily"
+
+
+def test_pull_accounts_reads_each_live_account_with_an_integration_and_no_other(arig):
+    fake = FakePostiz(default=platform_analytics(WEEK))
+    out = metrics.pull_accounts(arig.store, fake, NOW)
+    # `postiz analytics:platform <integration id> -d 7` for the three live accounts that have one, in the store's order
+    assert fake.calls == [
+        ["postiz", "analytics:platform", "int-franz-ig", "-d", "7"],
+        ["postiz", "analytics:platform", "int-franz-tt", "-d", "7"],
+        ["postiz", "analytics:platform", "int-reg-ig", "-d", "7"],
+    ]
+    assert fake.kwargs[0]["timeout"] == metrics.ANALYTICS_TIMEOUT_S and fake.kwargs[0]["stdin"] == subprocess.DEVNULL
+    assert [r["account"] for r in out["read"]] == ["@franz.ig", "@franz.tt", "@reg.ig"]
+    assert out["skipped"] == [{"account": "@reg.tt", "reason": "no Postiz integration"}]  # Lenny is not live: not even listed
+    assert out["postiz_errors"] == [] and out["write_errors"] == []
+
+
+def test_pull_accounts_stores_one_run_row_per_london_day_with_every_account_under_its_handle(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(WEEK)), NOW)
+    rows = arig.rows()
+    assert sorted(r.details["day"] for r in rows) == ["2026-10-19", "2026-10-20"]  # one row per day, not per account
+    day = arig.by_day()["2026-10-20"]
+    assert set(day) == {"@franz.ig", "@franz.tt", "@reg.ig"}
+    assert day["@franz.ig"] == {"views": 176, "reach": 130, "likes": 15, "comments": 3, "shares": 4, "saves": 6, "replies": 7}
+    for r in rows:
+        assert r.kind is RunKind.account_daily and r.status.value == "ok"
+        # started_at is noon London of the metric's own day, so the rows sort by day; finished_at is the read
+        d = date.fromisoformat(r.details["day"])
+        assert r.started_at == datetime(d.year, d.month, d.day, 12, tzinfo=LONDON)
+        assert r.finished_at == NOW
+
+
+def test_pull_accounts_twice_the_same_reading_changes_nothing(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(WEEK)), NOW)
+    before = [(r.id, r.details, r.finished_at) for r in arig.rows()]
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(WEEK)), NOW + 6 * H)
+    assert [(r.id, r.details, r.finished_at) for r in arig.rows()] == before  # same rows, nothing rewritten
+    assert out["written"] == [] and sorted(out["unchanged"]) == ["2026-10-19", "2026-10-20"]
+
+
+def test_a_later_read_of_the_same_day_overwrites_it_the_days_total_grows(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-20": {"Views": 100, "Reach": 80}})), NOW)
+    first = arig.rows()[0]
+    later = {"2026-10-20": {"Views": 250, "Reach": 160, "Replies": 9}}
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(later)), NOW + 6 * H)
+    rows = arig.rows()
+    assert len(rows) == 1 and rows[0].id == first.id  # updated in place: still one row for the day
+    assert rows[0].details["accounts"]["@franz.ig"] == {"views": 250, "reach": 160, "replies": 9}
+    assert rows[0].finished_at == NOW + 6 * H
+    assert out["written"] == [{"day": "2026-10-20", "accounts": ["@franz.ig", "@franz.tt", "@reg.ig"]}]
+
+
+def test_a_field_the_later_read_does_not_report_keeps_its_earlier_value(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-20": {"Views": 100, "Replies": 4}})), NOW)
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-20": {"Views": 120}})), NOW + 6 * H)
+    assert arig.by_day()["2026-10-20"]["@franz.ig"] == {"views": 120, "replies": 4}  # never a guessed 0
+
+
+def test_a_new_days_read_adds_its_row_and_older_days_stay_as_they_were(arig):
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(WEEK)), NOW)
+    # the next day's read no longer holds the 19th: that day's row is left exactly as it was
+    next_day = {"2026-10-20": {"Views": 300}, "2026-10-21": {"Views": 40}}
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(next_day)), NOW + 24 * H)
+    got = arig.by_day()
+    assert sorted(got) == ["2026-10-19", "2026-10-20", "2026-10-21"]
+    assert got["2026-10-19"]["@franz.ig"]["views"] == 120
+    assert got["2026-10-20"]["@franz.ig"]["views"] == 300
+    assert got["2026-10-21"]["@reg.ig"] == {"views": 40}
+
+
+def test_each_accounts_own_reading_is_stored_under_its_own_handle(arig):
+    # FakePostiz keys on argv[2], which is the integration id here
+    fake = FakePostiz({
+        "int-franz-ig": platform_analytics({"2026-10-20": {"Views": 500}}),
+        "int-franz-tt": platform_analytics({"2026-10-20": {"Views": 70}}),
+        "int-reg-ig": platform_analytics({"2026-10-20": {"Views": 9}}),
+    })  # fmt: skip
+    metrics.pull_accounts(arig.store, fake, NOW)
+    day = arig.by_day()["2026-10-20"]
+    assert (day["@franz.ig"]["views"], day["@franz.tt"]["views"], day["@reg.ig"]["views"]) == (500, 70, 9)
+
+
+def test_a_day_in_the_future_is_not_stored(arig):
+    payload = platform_analytics({"2026-10-20": {"Views": 5}, "2026-10-21": {"Views": 0}, "2027-01-01": {"Views": 1}})
+    metrics.pull_accounts(arig.store, FakePostiz(default=payload), NOW)  # NOW is 20 Oct 13:00 London
+    assert sorted(arig.by_day()) == ["2026-10-20"]
+
+
+def test_the_london_day_decides_what_today_is(arig):
+    late = datetime(2026, 10, 20, 23, 30, tzinfo=timezone.utc)  # BST: already 00:30 on the 21st in London
+    metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics({"2026-10-21": {"Views": 3}})), late)
+    assert sorted(arig.by_day()) == ["2026-10-21"]
+
+
+def test_a_postiz_failure_is_reported_not_raised_and_the_other_accounts_are_still_stored(arig):
+    fake = FakePostiz({
+        "int-franz-ig": ("exit", 1, "502 bad gateway"),
+        "int-franz-tt": platform_analytics({"2026-10-20": {"Views": 70}}),
+        "int-reg-ig": subprocess.TimeoutExpired(["postiz"], 120),
+    })  # fmt: skip
+    out = metrics.pull_accounts(arig.store, fake, NOW)  # does not raise
+    assert [e["account"] for e in out["postiz_errors"]] == ["@franz.ig", "@reg.ig"]
+    assert "502 bad gateway" in out["postiz_errors"][0]["error"] and "timed out" in out["postiz_errors"][1]["error"]
+    assert arig.by_day() == {"2026-10-20": {"@franz.tt": {"views": 70}}}
+    assert [r["account"] for r in out["read"]] == ["@franz.tt"]
+
+
+@pytest.mark.parametrize("reply", ["this is not json", OSError("no such file")])
+def test_postiz_output_that_is_not_json_or_a_binary_that_cannot_run_is_reported_too(arig, reply):
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=reply), NOW)
+    assert len(out["postiz_errors"]) == 3 and out["written"] == [] and arig.rows() == []
+
+
+def test_a_reply_with_no_known_metric_is_listed_as_empty_and_writes_nothing(arig):
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=[]), NOW)  # what `analytics:post <story id>` prints
+    assert [e["account"] for e in out["empty"]] == ["@franz.ig", "@franz.tt", "@reg.ig"]
+    assert arig.rows() == [] and out["postiz_errors"] == []
+
+
+def test_a_failed_database_write_is_listed_and_the_other_days_are_still_written(arig, monkeypatch):
+    real = arig.store.add_run
+
+    def flaky(run):
+        if run.details["day"] == "2026-10-19":
+            raise RuntimeError("connection lost")
+        return real(run)
+
+    monkeypatch.setattr(arig.store, "add_run", flaky)
+    out = metrics.pull_accounts(arig.store, FakePostiz(default=platform_analytics(WEEK)), NOW)
+    assert [e["day"] for e in out["write_errors"]] == ["2026-10-19"] and "connection lost" in out["write_errors"][0]["error"]
+    assert sorted(arig.by_day()) == ["2026-10-20"]
+
+
+def test_pull_accounts_needs_an_aware_clock(arig):
+    with pytest.raises(ValueError):
+        metrics.pull_accounts(arig.store, FakePostiz(), datetime(2026, 10, 20, 12, 0))
+
+
+def test_no_live_characters_is_an_empty_summary(arig):
+    for c in arig.store.characters():
+        arig.store.upsert_character(Character(slug=c.slug, name=c.name, status="paused"))
+    fake = FakePostiz()
+    out = metrics.pull_accounts(arig.store, fake, NOW)
+    assert fake.calls == [] and out["read"] == [] and out["skipped"] == []
+
+
+# ---- the CLI ---------------------------------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def acli(monkeypatch):
+    rig = AccountRig()
+    monkeypatch.setattr(metrics, "open_store", lambda: rig.store)
+    monkeypatch.setattr(metrics, "now_london", lambda: NOW)
+    monkeypatch.setenv("POSTIZ_API_KEY", "pz-key-DO-NOT-LEAK")
+    monkeypatch.setattr(metrics, "which", lambda name: f"/usr/local/bin/{name}")
+    return rig
+
+
+def test_cli_help_lists_accounts():
+    assert "accounts" in run_cli("--help").output
+
+
+def test_cli_accounts_prints_one_json_summary_and_stores_the_days(acli, monkeypatch):
+    monkeypatch.setattr(subprocess, "run", FakePostiz(default=platform_analytics(WEEK)))
+    r = run_cli("accounts")
+    assert r.exit_code == 0, r.output
+    out = json.loads(r.stdout)  # one JSON document on stdout
+    assert [a["account"] for a in out["read"]] == ["@franz.ig", "@franz.tt", "@reg.ig"]
+    assert sorted(acli.by_day()) == ["2026-10-19", "2026-10-20"]
+    assert "DO-NOT-LEAK" not in r.output
+
+
+def test_cli_accounts_a_postiz_failure_is_exit_0_with_the_error_in_the_json(acli, monkeypatch):
+    monkeypatch.setattr(subprocess, "run", FakePostiz(default=("exit", 1, "boom")))
+    r = run_cli("accounts")
+    assert r.exit_code == 0, r.output
+    assert len(json.loads(r.stdout)["postiz_errors"]) == 3
+
+
+def test_cli_accounts_a_failed_write_is_exit_1(acli, monkeypatch):
+    monkeypatch.setattr(subprocess, "run", FakePostiz(default=platform_analytics(WEEK)))
+
+    def down(run):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(acli.store, "add_run", down)
+    r = run_cli("accounts")
+    assert r.exit_code == 1 and len(json.loads(r.stdout)["write_errors"]) == 2
+
+
+def test_cli_accounts_without_the_key_or_the_binary_is_a_caller_error(acli, monkeypatch):
+    monkeypatch.delenv("POSTIZ_API_KEY")
+    r = run_cli("accounts")
+    assert r.exit_code == 2 and "POSTIZ_API_KEY" in r.output
+    monkeypatch.setenv("POSTIZ_API_KEY", "k")
+    monkeypatch.setattr(metrics, "which", lambda name: None)
+    r = run_cli("accounts")
+    assert r.exit_code == 2 and "postiz" in r.output

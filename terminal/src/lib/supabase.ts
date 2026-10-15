@@ -9,12 +9,16 @@
 // hit used or not for us, set_drop_keep is the clip card's Keep.
 // The weekly review (Task 16): the newest `weekly` row of studio.runs that carries a digest (one more read) feeds Today's "This week" card and the
 // score test's label on a clip's score.
+// "Account per day" (owner 2026-10-15): the accounts' daily totals, one `account_daily` row of studio.runs per London day
+// (`studio metrics accounts`, no migration), the newest 30 days, read once more for the character page's block.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { isOwnerMediaPath } from './clipcard';
 import { HOT_LIMIT, WORTH_LIMIT, hitFromRow, hitLaneSlugs, mergeHitLanes } from './hits';
 import { orderRoster } from './roster';
 import { checkClipBasics, ownerClipPath } from './rules';
+import { parseAccountDays } from './accountday';
+import { LIBRARY_LOAD_LIMIT } from './totals';
 import { parseWeekly } from './weekly';
 import type { Backend, CadenceEntry, ChangeKind, ClipFile, DecideExtras, DropAdjust, Hit, HitStatus, Snapshot } from './types';
 
@@ -124,10 +128,10 @@ export class LiveBackend implements Backend {
 
   private async loadOnce(): Promise<Snapshot> {
     const sb = this.sb;
-    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings, hits, weekly] = await Promise.all([
+    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings, hits, weekly, accountDaily] = await Promise.all([
       sb.from('v_channels').select('*'),
       sb.from('v_queue').select('*').order('created_at'),
-      sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(300),
+      sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(LIBRARY_LOAD_LIMIT),
       sb.from('v_budget').select('*').maybeSingle(),
       // the daily-run row is left out: the owner turned the Mac's daily run off (12 Oct 2026), like `studio health` without
       // --daily-run; drop this filter when the daily run is on again
@@ -146,8 +150,10 @@ export class LiveBackend implements Backend {
       // "This week": the latest weekly review (the Monday cloud job's run; its details hold the digest and the score test). The newest
       // few rows, because the Mac skill may log a notes-only `weekly` row after it: the first one that carries a digest is the review.
       sb.from('runs').select('id,kind,started_at,finished_at,status,summary,details').eq('kind', 'weekly').order('started_at', { ascending: false }).limit(5),
+      // "Account per day": one row per London day (its started_at is noon London of that day), newest first
+      sb.from('runs').select('details').eq('kind', 'account_daily').order('started_at', { ascending: false }).limit(30),
     ]);
-    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings, weekly]) fail(r.error);
+    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings, weekly, accountDaily]) fail(r.error);
     if (!isMissingRelation(tracker.error)) fail(tracker.error);
     if (!isMissingRelation(viewsDaily.error)) fail(viewsDaily.error);
     if (!isMissingRelation(hits.error)) fail(hits.error);
@@ -176,6 +182,8 @@ export class LiveBackend implements Backend {
       characters: orderRoster((characters.data ?? []).map((r) => ({ ...r, setup: r.setup ?? {}, accounts: r.accounts ?? [] }))),
       runs: runs.data ?? [],
       weekly: (weekly.data ?? []).find((r) => parseWeekly(r) != null) ?? null,
+      // oldest first, so a stray second row of one day is read after the first
+      accountDaily: parseAccountDays([...(accountDaily.data ?? [])].reverse()),
       tracker: (tracker.error ? [] : tracker.data ?? []).map((r) =>
         normalise(r, ['views', 'outlier_x', 'velocity', 'credits_spent', 'latest_views']),
       ),

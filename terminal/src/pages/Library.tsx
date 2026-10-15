@@ -1,12 +1,16 @@
 // Library: every clip ever made, filterable by character, platform and state, with its outlier badge,
-// cost and where it went. Tap a row for the posts and their latest numbers.
+// cost and where it went. Tap a row for the posts and their latest numbers. A strip of totals (owner 2026-10-15) tops the list: the posted
+// videos for the character and platform filter and the sum of their latest views, likes, comments, shares and saves.
 import { ExternalLink } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { CharacterSwitcher, useCharacterChoice } from '../components/CharacterSwitcher';
 import { ClipPlayer } from '../components/ClipPlayer';
+import { TotalsStrip } from '../components/TotalsStrip';
 import { Livery, OutlierBadge, Skeleton } from '../components/ui';
 import { clipCode, formatCredits, formatViews, londonStamp, platformName } from '../lib/format';
+import { nameOf } from '../lib/roster';
 import { useStudio } from '../lib/store';
+import { LIBRARY_LOAD_LIMIT, postedTotals, scopeLine } from '../lib/totals';
 import type { LibraryClip } from '../lib/types';
 
 const STATES: { id: string; label: string; match: (s: string) => boolean }[] = [
@@ -54,6 +58,9 @@ export function Library({ focus, embedded = false }: { focus: string | null; emb
     );
   }, [data, character, platform, state]);
 
+  // the totals follow the character and platform chips (not the state chips: they are about posted videos), over the loaded clips
+  const totals = useMemo(() => postedTotals(data?.library ?? [], { character, platform }), [data, character, platform]);
+
   if (!data) {
     return (
       <div className={embedded ? 'stack' : 'page stack'} aria-busy="true">
@@ -76,6 +83,7 @@ export function Library({ focus, embedded = false }: { focus: string | null; emb
         <Chips label="Platform" value={platform} onChange={(v) => setPlatform(v)} options={[{ id: 'all', label: 'Any platform' }, { id: 'tiktok', label: 'TikTok' }, { id: 'instagram', label: 'Instagram' }]} />
         <Chips label="State" value={state} onChange={setState} options={STATES.map(({ id, label }) => ({ id, label }))} />
       </div>
+      <TotalsStrip totals={totals} scope={scopeLine(character, platform, nameOf)} capped={data.library.length >= LIBRARY_LOAD_LIMIT} />
       <div role="list" aria-label="Clips">
         {rows.length === 0 && (
           <div className="empty">

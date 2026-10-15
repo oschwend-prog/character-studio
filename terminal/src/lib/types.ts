@@ -2,6 +2,7 @@
 // 0010_tracker.sql, 0015_terminal_v3.sql: v_views_daily and the drop card's score and copy_of; 0016_hits.sql: v_hits and the drop
 // card's keep). Numbers that Postgres
 // returns as numeric/bigint may arrive as strings over PostgREST; `num()` in data.ts normalises them.
+import type { AccountDay } from './accountday';
 
 export type Platform = 'tiktok' | 'instagram';
 export type PostStatus = 'scheduled' | 'posting' | 'posted' | 'failed' | 'needs_check';
@@ -589,7 +590,7 @@ export interface ScanDetails {
 /** One line of the scheduled-run log (studio.runs). */
 export interface RunRow {
   id: string;
-  kind: 'daily' | 'weekly' | 'publish' | 'metrics' | string;
+  kind: 'daily' | 'weekly' | 'publish' | 'metrics' | 'account_daily' | string;
   started_at: string;
   finished_at: string | null;
   status: 'ok' | 'budget_stop' | 'error' | string;
@@ -672,6 +673,9 @@ export interface Snapshot {
   tracker: TrackerRow[];
   /** Views and follows per character and London day (v_views_daily, migration 0015); empty before it or before any measurement. */
   viewsDaily: ViewsDay[];
+  /** The accounts' daily totals from Postiz (runs of kind account_daily, `studio metrics accounts`; one per London day), oldest day first.
+   * Absent or empty before the first reading. Read by the character page's "Account per day" block (lib/accountday.ts). */
+  accountDaily?: AccountDay[];
   /** The posting days and slot per character (`studio.settings.cadence`); empty when none is set. */
   cadence: Record<string, CadenceEntry>;
   /** The new hits of the last 14 days, best first (v_hits, migration 0016): the general lane's top 10 and each live character's top

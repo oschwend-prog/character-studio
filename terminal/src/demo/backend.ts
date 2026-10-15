@@ -12,6 +12,7 @@ import { addDays, londonDayKey, londonWallToIso } from '../lib/format';
 import { orderRoster } from '../lib/roster';
 import { hitLaneSlugs, hitsByLane, offeredHits } from '../lib/hits';
 import { weekLabel } from '../lib/weekly';
+import type { AccountDay } from '../lib/accountday';
 import type {
   Backend, Budget, CadenceEntry, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, DropScore, Engagement, HealthRow, Hit, HitStatus, LibraryClip, OwnerMusic,
   Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow, ViewsDay,
@@ -939,6 +940,23 @@ export class DemoBackend implements Backend {
     return [...sums.values()].sort((a, b) => b.day.localeCompare(a.day) || a.character_slug.localeCompare(b.character_slug));
   }
 
+  /** The accounts' daily totals (`studio metrics accounts`, runs of kind account_daily), SYNTHETIC: each Instagram account gets, for the last
+   * 7 London days, what his character's Reels gained that day (viewsDaily) plus a Stories-and-older-posts share worked out from the day, so
+   * the "Account per day" block shows a difference. Reach is about three quarters of the views; replies come with the Stories. */
+  private accountDaily(now: number, viewsDaily: ViewsDay[]): AccountDay[] {
+    const today = londonDayKey(now);
+    return Array.from({ length: 7 }, (_, i) => addDays(today, i - 6)).map((day, i) => {
+      const accounts: AccountDay['accounts'] = {};
+      for (const a of this.accounts.filter((x) => x.connected && x.platform === 'instagram')) {
+        const reels = viewsDaily.filter((v) => v.character_slug === a.character_slug && v.day === day).reduce((s, v) => s + v.views, 0);
+        const stories = 40 + ((i * 37 + a.character_slug.length * 11) % 90);
+        const views = reels + stories;
+        accounts[a.handle] = { views, reach: Math.round(views * 0.74), replies: Math.round(stories / 14) };
+      }
+      return { day, accounts };
+    });
+  }
+
   // ---- Backend ------------------------------------------------------------------------------------
 
   /** The demo's cloud jobs, worked out lazily from the time (so tests drive them with the clock): a check requested over 2 s ago
@@ -1175,9 +1193,10 @@ export class DemoBackend implements Backend {
       Object.keys(NAMES).map((slug) => [slug, { days: CADENCE.map((d) => d.toLowerCase()), slot: SLOTS[slug] }]),
     );
 
+    const viewsDaily = this.viewsDaily(now);
     return {
       channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), tracker,
-      viewsDaily: this.viewsDaily(now), cadence, loadedAt: now, weekly: this.weeklyRun(now),
+      viewsDaily, accountDaily: this.accountDaily(now, viewsDaily), cadence, loadedAt: now, weekly: this.weeklyRun(now),
       // v_hits as the live loader asks it: the general lane's top 10 and each live character's top 5, best first, no status column
       hits: hitsByLane(offeredHits(this.hits, now), hitLaneSlugs(characters)).map(({ status: _s, ...h }) => {
         void _s;

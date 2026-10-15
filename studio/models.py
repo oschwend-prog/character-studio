@@ -73,6 +73,10 @@ class RunKind(StrEnum):
     publish = "publish"
     metrics = "metrics"
     hits = "hits"  # the cloud hits job's line (studio.hits.record_lunar_calls): the LunarCrush calls it made on a London day
+    # One row per London day (studio.metrics.pull_accounts, owner 2026-10-15): each live account's daily totals from Postiz
+    # (views, reach, ..., replies; Stories included), details {"day": "YYYY-MM-DD", "accounts": {handle: {views, ...}}}. Updated in
+    # place while the day's total grows. Health and the weekly review ignore it; the terminal's "Account per day" block reads it.
+    account_daily = "account_daily"
 
 
 class RunStatus(StrEnum):

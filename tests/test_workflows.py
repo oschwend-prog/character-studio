@@ -18,6 +18,7 @@ SECRETS = ("DATABASE_URL", "SUPABASE_URL", "SUPABASE_SERVICE_KEY", "POSTIZ_API_K
 CONFIRM = "uv run studio publish confirm"  # ask Postiz whether the posts it accepted were really published (publish and metrics run it)
 CONFIRM_SECRETS = {"DATABASE_URL", "POSTIZ_API_KEY"}  # it reads the database and Postiz; it touches no storage
 RESHARE = "uv run studio publish reshare"  # the daily re-share of the best recent Reel as a Story (metrics runs it, after confirm)
+ACCOUNTS = "uv run studio metrics accounts"  # the accounts' daily totals from Postiz (metrics runs it, last, after the pull)
 
 # The Postiz CLI version the workflows install (the exact one `npm view postiz version` reported on
 # 2026-10-05). VERIFY at go-live (docs/launch/go-live.md step 3): bump it deliberately, never `latest`.
@@ -97,8 +98,12 @@ def test_secrets_reach_only_the_gate_and_the_command_that_needs_them(name):
     assert len(reshare) == (1 if name == "metrics" else 0)
     for block in reshare:  # the re-share signs the Story video: it gets all four secrets, like the command it sits beside
         assert set(re.findall(r"secrets\.([A-Z_]+)", block)) == set(SECRETS)
+    accounts = [block for block in blocks if f"run: {ACCOUNTS}" in block]
+    assert len(accounts) == (1 if name == "metrics" else 0)
+    for block in accounts:  # the account totals get the pull step's own environment (owner 2026-10-15)
+        assert set(re.findall(r"secrets\.([A-Z_]+)", block)) == set(SECRETS)
     for block in blocks[1:]:  # checkout, setup-uv, setup-node, npm: no secrets in their environment
-        if block is not command and block not in confirm and block not in reshare:
+        if block is not command and block not in confirm and block not in reshare and block not in accounts:
             assert "secrets." not in block
     assert "env:" not in text(name).split("    steps:")[0].split("jobs:")[1]  # no job-level env
     assert set(re.findall(r"secrets\.([A-Z_]+)", text(name))) <= set(SECRETS)
@@ -335,7 +340,7 @@ def test_publish_confirms_after_publishing_even_when_the_publish_step_did_nothin
 
 def test_metrics_confirms_before_pulling_and_never_fails_the_job_for_it():
     blocks = steps("metrics")
-    confirm, pull = blocks[-3], blocks[-1]
+    confirm, pull = blocks[-4], blocks[-2]
     assert confirm.startswith("name: Confirm what Postiz published") and f"run: {CONFIRM}" in confirm
     assert GATE in confirm and "continue-on-error: true" in confirm
     assert "run: uv run studio metrics pull" in pull
@@ -348,7 +353,7 @@ def test_metrics_re_shares_a_story_between_the_confirm_and_the_pull_and_never_fa
     (which is what puts a url on a live Reel, and a failed one out of the running) and before the pull, with the Postiz CLI
     installed, gated on the secrets, and with continue-on-error: a Postiz hiccup must never turn the metrics job red."""
     blocks = steps("metrics")
-    confirm, reshare, pull = blocks[-3], blocks[-2], blocks[-1]
+    confirm, reshare, pull = blocks[-4], blocks[-3], blocks[-2]
     assert confirm.startswith("name: Confirm what Postiz published") and "run: uv run studio metrics pull" in pull
     assert reshare.startswith("name: Re-share the best recent Reel as a Story")
     assert f"run: {RESHARE}" in reshare and GATE in reshare and "continue-on-error: true" in reshare
@@ -358,6 +363,23 @@ def test_metrics_re_shares_a_story_between_the_confirm_and_the_pull_and_never_fa
     assert t.index(f"run: {CONFIRM}") < t.index(f"run: {RESHARE}") < t.index("run: uv run studio metrics pull")
     assert t.index(f"npm i -g postiz@{POSTIZ_VERSION}") < t.index(f"run: {RESHARE}")
     assert "studio publish reshare" in t.split("name: metrics")[0]  # the header comment says what the step is for
+
+
+def test_metrics_stores_the_accounts_daily_totals_after_the_pull_and_never_fails_the_job_for_it():
+    """Owner 2026-10-15: Postiz has no per-Story analytics, but `analytics:platform` gives the account's daily totals (Stories
+    included). The step is the last one, after the pull, with the Postiz CLI installed, gated on the secrets, with the pull step's
+    own environment and with continue-on-error: a Postiz hiccup must never turn the metrics job red."""
+    blocks = steps("metrics")
+    pull, accounts = blocks[-2], blocks[-1]
+    assert "run: uv run studio metrics pull" in pull
+    assert accounts.startswith("name: Store the accounts' daily totals")
+    assert f"run: {ACCOUNTS}" in accounts and GATE in accounts and "continue-on-error: true" in accounts
+    assert re.findall(r"(?m)^          ([A-Z_]+): ", accounts) == re.findall(r"(?m)^          ([A-Z_]+): ", pull)  # the pull step's env
+    t = text("metrics")
+    assert t.count(f"run: {ACCOUNTS}") == 1
+    assert t.index("run: uv run studio metrics pull") < t.index(f"run: {ACCOUNTS}")
+    assert t.index(f"npm i -g postiz@{POSTIZ_VERSION}") < t.index(f"run: {ACCOUNTS}")
+    assert "studio metrics accounts" in t.split("name: metrics")[0]  # the header comment says what the step is for
 
 
 # ---- studio-hits: the cloud hits job (terminal v3 spec section 10, plan Task 6) ------------------------------------------------------

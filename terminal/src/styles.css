@@ -1308,3 +1308,19 @@ button.cc-pic, a.cc-pic { cursor: pointer; }
 /* the score test's caution beside a clip's score (Task 16): small and muted, never louder than the score itself */
 .cc-score-note { color: var(--ink-2); line-height: 1.25; overflow-wrap: anywhere; }
 .player-score-note { margin-left: 6px; font-size: 12px; color: var(--ink-2); }
+
+/* ---- Account per day (owner 2026-10-15): the character page's block of the account's daily totals. It reuses the glance table and the
+   chart line; only the sparkline's row, the row heads and the total row are new. ------------------------------------------------ */
+.apd-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.apd-spark { display: block; flex: none; overflow: visible; }
+.apd-stats { display: flex; gap: 8px 24px; flex-wrap: wrap; }
+.apd-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.apd-stat .v, .totals-kv .v { font-size: 18px; font-weight: 640; font-stretch: 80%; font-variant-numeric: normal; } /* big standalone figures: proportional, not tabular */
+.apd-table th, .apd-table td { padding-left: 5px; padding-right: 5px; }
+.apd-table th[scope='row'] { text-align: left; font-weight: 500; color: var(--ink-2); background: var(--panel); }
+.apd-table .apd-today th, .apd-table .apd-today td { color: var(--ink); font-weight: 640; }
+.apd-table tfoot th, .apd-table tfoot td { background: var(--panel-2); border-top: 1px solid var(--rule-strong); border-bottom: 0; color: var(--ink); font-weight: 640; }
+.apd-none { color: var(--ink-3); }
+
+/* ---- Totals for all videos (owner 2026-10-15): the strip on Characters → All videos; the `kv` grid, nothing new but its wrapper ---- */
+.totals { display: flex; flex-direction: column; gap: 8px; }

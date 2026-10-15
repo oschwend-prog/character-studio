@@ -55,9 +55,18 @@ KPIs the weekly review reports, migration 0002; stored in the units vidIQ report
 store (the trial flag, ...) are ignored. Nullable values stay ``None``; a row with no usable metric,
 or whose numbers equal the post's latest snapshot, writes nothing.
 
+**Account daily totals** (``studio metrics accounts``, owner 2026-10-15; ``pull_accounts``). Postiz gives no numbers for a single
+Story (``analytics:post <story id>`` prints ``[]``), but ``analytics:platform <integration id> -d 7`` prints the ACCOUNT's totals per
+day (Views, Reach, Likes, Comments, Shares, Saves, Replies), Stories included. For every live character's account with a Postiz
+integration the days are stored in ``studio.runs`` as kind ``account_daily``, one row per London day
+(``details = {"day", "accounts": {handle: {views, reach, ...}}}``, started_at = noon London of that day), updated in place: a later
+read of the same day overwrites it, an identical read writes nothing. No migration (``runs`` has no constraint on ``kind``). A Postiz
+failure never fails the job: it is a warning in the JSON (``postiz_errors``) and exit 0. The terminal's "Account per day" block
+(Artist page) lays these totals beside the views of his Reels so the difference (Stories, older posts) is visible.
+
 CLI (``studio metrics ...``) prints JSON on stdout; exit 0 normally (``missing`` and ``abandoned`` posts
 included), exit 1 when a pull failed (the Action goes red; the window stays due, so the next run tries
-again), exit 2 for anything the caller must fix
+again) or, for ``accounts``, when a database write failed, exit 2 for anything the caller must fix
 (no ``DATABASE_URL``, ``POSTIZ_API_KEY`` or ``postiz`` binary, unreadable input).
 """
 
@@ -72,7 +81,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from shutil import which
 from typing import Annotated, Any
@@ -80,8 +89,8 @@ from typing import Annotated, Any
 import typer
 
 from studio.cli_support import emit, fail, open_store
-from studio.config import load, now_london
-from studio.models import Post, PostStatus, Snapshot
+from studio.config import LONDON, load, now_london
+from studio.models import Post, PostStatus, Run, RunKind, RunStatus, Snapshot
 from studio.publish.postiz import _json_in, _tail
 from studio.store import Store, require_aware
 
@@ -135,6 +144,23 @@ POSTIZ_METRIC_LABELS: dict[str, tuple[str, ...]] = {
 #   "sum":    the sum of all points (the points are per-day increments).
 # VERIFY at go-live (Task 16): cumulative totals vs per-day increments, on a real post of each platform.
 POSTIZ_SERIES_MODE = "latest"
+
+# ---- Postiz ``analytics:platform`` (the account's daily totals) -----------------------------------
+# ``postiz analytics:platform <integration id> -d 7`` prints the ACCOUNT's totals, one data point per London day and label:
+#   [{"label": "Views", "percentageChange": 0, "data": [{"total": "176", "date": "2026-10-15"}, ...]}, ...]
+# with the labels Reach, Likes, Views, Comments, Shares, Saves and Replies (an account may lack some). Unlike ``analytics:post`` this
+# includes the Stories, which Postiz cannot report one by one (``analytics:post <story id>`` prints ``[]``). Per field, the labels
+# (case-insensitive) that feed it, most preferred first; anything else is left out.
+ACCOUNT_DAYS = 7  # `postiz analytics:platform <integration id> -d 7`: the week the terminal shows
+ACCOUNT_METRIC_LABELS: dict[str, tuple[str, ...]] = {
+    "views": ("views", "video views", "plays"),
+    "reach": ("reach",),
+    "likes": ("likes",),
+    "comments": ("comments",),
+    "shares": ("shares",),
+    "saves": ("saves",),
+    "replies": ("replies",),
+}
 
 # ---- vidIQ ``instagram_owner_insights`` field mapping ---------------------------------------------
 # Key names tried per snapshot field, most preferred first. The tool reports "views/plays, shares,
@@ -442,8 +468,9 @@ def parse_post_analytics(payload: Any) -> dict[str, int | None]:
 # ---- pull -----------------------------------------------------------------------------------------
 
 
-def _fetch(postiz_run: Callable[..., Any], executable: str, postiz_post_id: str) -> Any:
-    argv = [executable, "analytics:post", postiz_post_id, "-d", str(ANALYTICS_DAYS)]
+def _analytics(postiz_run: Callable[..., Any], executable: str, command: str, target_id: str, days: int) -> Any:
+    """``postiz <command> <target_id> -d <days>`` (``analytics:post`` or ``analytics:platform``) and the JSON it prints."""
+    argv = [executable, command, target_id, "-d", str(days)]
     try:
         proc = postiz_run(
             argv,
@@ -454,15 +481,19 @@ def _fetch(postiz_run: Callable[..., Any], executable: str, postiz_post_id: str)
             stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
-        raise AnalyticsError(f"postiz analytics:post timed out after {ANALYTICS_TIMEOUT_S} s") from None
+        raise AnalyticsError(f"postiz {command} timed out after {ANALYTICS_TIMEOUT_S} s") from None
     except OSError as e:
         raise AnalyticsError(f"could not run postiz: {e}") from None
     if proc.returncode != 0:
-        raise AnalyticsError(f"postiz analytics:post failed (exit {proc.returncode}): {_tail(proc)}")
+        raise AnalyticsError(f"postiz {command} failed (exit {proc.returncode}): {_tail(proc)}")
     try:
         return _json_in(proc.stdout or "")
     except ValueError:
-        raise AnalyticsError(f"postiz analytics:post printed no JSON: {_tail(proc)}") from None
+        raise AnalyticsError(f"postiz {command} printed no JSON: {_tail(proc)}") from None
+
+
+def _fetch(postiz_run: Callable[..., Any], executable: str, postiz_post_id: str) -> Any:
+    return _analytics(postiz_run, executable, "analytics:post", postiz_post_id, ANALYTICS_DAYS)
 
 
 def _pull_window(
@@ -647,11 +678,159 @@ def ingest_ig_insights(
     return out
 
 
+# ---- the account's daily totals -------------------------------------------------------------------
+
+
+def _day_key(value: Any) -> str | None:
+    """A ``YYYY-MM-DD`` date from a data point's ``date`` (a plain date or an ISO timestamp: its first ten characters); else ``None``."""
+    try:
+        return date.fromisoformat(str(value or "").strip()[:10]).isoformat()
+    except ValueError:
+        return None
+
+
+def _daily_counts(data: Any) -> dict[str, int]:
+    """One metric's data points as ``{day: whole number}``. A point with no usable date or number is skipped; a day that repeats
+    takes the later point."""
+    out: dict[str, int] = {}
+    for point in data if isinstance(data, list) else []:
+        if not isinstance(point, dict):
+            continue
+        day, n = _day_key(point.get("date")), _count(point.get("total", point.get("value")))
+        if day is not None and n is not None:
+            out[day] = n
+    return out
+
+
+def parse_account_analytics(payload: Any) -> dict[str, dict[str, int]]:
+    """The days in a ``postiz analytics:platform`` reply: ``{"2026-10-15": {"views": 176, "reach": 130, ...}, ...}``, oldest day first.
+
+    The labels are mapped by ``ACCOUNT_METRIC_LABELS`` (case-insensitive; the totals may be strings). A label a day does not have,
+    or one with no usable number, is simply absent from that day: it is never filled with 0 (a real 0 is kept). A reply that is
+    not a list of labelled metrics, or holds none we know, gives ``{}``.
+    """
+    found: dict[str, Any] = {}
+    for item in payload if isinstance(payload, list) else []:
+        if isinstance(item, dict) and "label" in item:
+            found.setdefault(_label(item["label"]), item.get("data"))
+    days: dict[str, dict[str, int]] = {}
+    for field, labels in ACCOUNT_METRIC_LABELS.items():
+        for label in labels:
+            if counts := _daily_counts(found.get(label)):
+                for day, n in counts.items():
+                    days.setdefault(day, {})[field] = n
+                break
+    return {day: days[day] for day in sorted(days)}
+
+
+def _store_account_day(
+    store: Store, row: Run | None, day: str, readings: dict[str, dict[str, int]], now: datetime
+) -> bool:  # fmt: skip
+    """Write one London day's readings (``{handle: fields}``) into its ``account_daily`` row, which is created on the first read of
+    the day and updated in place after that. A handle's fields are overwritten by the new reading, a field the new reading does not
+    have keeps its earlier value, a handle not read this time stays as it was. True when something was written (an identical
+    reading writes nothing, so the row and its ``finished_at`` stay)."""
+    old = row.details.get("accounts") if row is not None and isinstance(row.details, dict) else None
+    accounts: dict[str, dict[str, int]] = {h: dict(v) for h, v in old.items() if isinstance(v, dict)} if isinstance(old, dict) else {}
+    for handle, fields in readings.items():
+        accounts[handle] = {**accounts.get(handle, {}), **fields}
+    details = {"day": day, "accounts": accounts}
+    if row is not None and row.details == details:
+        return False
+    summary = f"Account totals for {day}: " + ", ".join(accounts)
+    if row is not None:
+        store.update_run(row.id, details=details, finished_at=now, summary=summary)
+    else:
+        d = date.fromisoformat(day)
+        store.add_run(
+            Run(
+                kind=RunKind.account_daily, status=RunStatus.ok, started_at=datetime.combine(d, time(12, 0), tzinfo=LONDON),
+                finished_at=now, summary=summary, details=details,
+            )  # fmt: skip
+        )
+    return True
+
+
+def pull_accounts(
+    store: Store,
+    postiz_run: Callable[..., Any],
+    now: datetime,
+    *,
+    executable: str = "postiz",
+) -> dict[str, Any]:
+    """Read the daily totals of every live character's account that has a Postiz integration and store them, one ``account_daily``
+    run row per London day (owner 2026-10-15; no migration: ``runs`` has no constraint on ``kind``). Returns a JSON-friendly summary.
+
+    Why. Instagram and Postiz give no numbers for a single Story, but ``postiz analytics:platform <integration id>`` gives the
+    account's totals per day, Stories included. Beside the Reels' own views (the per-post pulls) the terminal's "Account per day" block
+    shows what Stories and older posts add.
+
+    Stored: ``details = {"day": "2026-10-15", "accounts": {"@handle": {"views": n, "reach": n, "likes": n, "comments": n,
+    "shares": n, "saves": n, "replies": n}}}``; a number the platform did not report is absent, never 0. The day is the data
+    point's own date, taken as the London day. The row's ``started_at`` is noon London of that day (so rows sort by day), its
+    ``finished_at`` the last time a read changed it. **Idempotent per (account, day):** a later read of the same day overwrites it
+    (the day's total grows through the day and a past day may settle), an identical read writes nothing, and a day that is no longer
+    in the reply is left as it was. A day after today (London) is never stored.
+
+    Summary keys: ``read`` (account, platform, days), ``skipped`` (a live character's account with no Postiz integration),
+    ``empty`` (the reply held no known metric), ``postiz_errors`` (the reply failed: a warning, never an exception, and the other
+    accounts are still read), ``written`` (day and the handles read), ``unchanged`` (days that already held this reading) and
+    ``write_errors`` (a day the database refused; the other days are still written).
+    """
+    require_aware(now, "pull_accounts(now)")
+    today = now.astimezone(LONDON).date()
+    out: dict[str, Any] = {
+        "read": [], "skipped": [], "empty": [], "postiz_errors": [], "written": [], "unchanged": [], "write_errors": [],
+    }  # fmt: skip
+    live = {c.slug for c in store.characters() if c.status == "live"}
+    by_day: dict[str, dict[str, dict[str, int]]] = {}  # day -> handle -> that day's numbers
+    for account in store.accounts():
+        if account.character_slug not in live:
+            continue
+        if not account.postiz_integration_id:
+            out["skipped"].append({"account": account.handle, "reason": "no Postiz integration"})
+            continue
+        try:
+            payload = _analytics(postiz_run, executable, "analytics:platform", account.postiz_integration_id, ACCOUNT_DAYS)
+        except Exception as e:  # noqa: BLE001 - a Postiz failure must never fail the job
+            log.warning("account totals of %s not read: %s", account.handle, _short(e))
+            out["postiz_errors"].append({"account": account.handle, "error": _short(e)})
+            continue
+        days = {d: v for d, v in parse_account_analytics(payload).items() if date.fromisoformat(d) <= today}
+        if not days:
+            log.warning("account totals of %s held no known metric", account.handle)
+            out["empty"].append({"account": account.handle})
+            continue
+        out["read"].append({"account": account.handle, "platform": account.platform.value, "days": len(days)})
+        for day, fields in days.items():
+            by_day.setdefault(day, {})[account.handle] = fields
+
+    if not by_day:
+        return out
+    try:
+        rows: dict[str, Run] = {}
+        for r in store.list_runs(kind=RunKind.account_daily):  # the oldest row of a day is its row
+            if isinstance(r.details, dict) and isinstance(r.details.get("day"), str):
+                rows.setdefault(r.details["day"], r)
+    except Exception as e:  # noqa: BLE001
+        out["write_errors"].append({"error": _short(e)})
+        return out
+    for day in sorted(by_day):
+        try:
+            if _store_account_day(store, rows.get(day), day, by_day[day], now):
+                out["written"].append({"day": day, "accounts": list(by_day[day])})
+            else:
+                out["unchanged"].append(day)
+        except Exception as e:  # noqa: BLE001 - one day's write must never stop the others
+            out["write_errors"].append({"day": day, "error": _short(e)})
+    return out
+
+
 # ---- CLI ------------------------------------------------------------------------------------------
 
 app = typer.Typer(
-    help="Pull post analytics from Postiz, ingest Instagram insights, compute outlier_x. Prints "
-    "JSON; exit 1 = a pull failed, exit 2 = something to fix.",
+    help="Pull post analytics from Postiz, store the accounts' daily totals, ingest Instagram insights, compute outlier_x. Prints "
+    "JSON; exit 1 = a pull or a write failed, exit 2 = something to fix.",
     no_args_is_help=True,
 )
 
@@ -667,6 +846,23 @@ def pull_command() -> None:
     summary = pull(store, subprocess.run, now_london())
     emit(summary)
     if summary["errors"]:
+        raise typer.Exit(1)
+
+
+@app.command("accounts")
+def accounts_command() -> None:
+    """Store each live account's daily totals from Postiz (views, reach, replies, ...; Stories included), one row per London day.
+
+    Prints one JSON summary. A Postiz failure is a warning in the summary (``postiz_errors``) and exit 0; exit 1 only when the
+    database refused a write; exit 2 for a missing ``POSTIZ_API_KEY`` or ``postiz`` binary."""
+    store = open_store()
+    if not load().postiz_api_key:
+        fail("POSTIZ_API_KEY is not set. Run through bin/studio (Keychain item cs-postiz-api-key).")
+    if which("postiz") is None:
+        fail("the postiz CLI is not on PATH (npm install -g postiz).")
+    summary = pull_accounts(store, subprocess.run, now_london())
+    emit(summary)
+    if summary["write_errors"]:
         raise typer.Exit(1)
 
 

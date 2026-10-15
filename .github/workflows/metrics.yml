@@ -17,6 +17,10 @@
 # After the confirm and before the pull, `studio publish reshare` (owner 2026-10-14) posts, once per London day per Instagram account
 # and only between 11:00 and 22:00 London, the Story of the account's most-viewed Reel of the last 14 days (never a second Reel).
 # It needs the storage keys (it signs the Story video); it never fails this job (continue-on-error), and a Postiz hiccup exits 0.
+#
+# After the pull, `studio metrics accounts` (owner 2026-10-15) stores each live account's daily totals (`postiz analytics:platform`:
+# views, reach, replies, ...; Stories included, which Postiz cannot report one by one) as one `account_daily` run row per London day,
+# updated in place, for the terminal's "Account per day" block. It never fails this job (continue-on-error), and a Postiz hiccup exits 0.
 name: metrics
 
 on:
@@ -82,3 +86,12 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
         run: uv run studio metrics pull
+      - name: Store the accounts' daily totals
+        if: steps.gate.outputs.configured == 'true'
+        continue-on-error: true
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          POSTIZ_API_KEY: ${{ secrets.POSTIZ_API_KEY }}
+        run: uv run studio metrics accounts
