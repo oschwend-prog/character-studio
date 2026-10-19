@@ -237,7 +237,7 @@ clip, never explain, no real names).
 | Pattern | What it does | Evidence | Fits |
 |---|---|---|---|
 | `ego-claim` | First person, proud, the clip proves it | "Pajamas on, attitude louder" 25.7M; "I learned some new dance moves…" 29.3M (LC) | Franz |
-| `when-relatable` | "When …" + a situation the viewer knows | ~4,800× (LC); 221.8× (VQ-O) | Franz, Lenny |
+| `when-relatable` | "When …" + a situation the viewer knows | ~4,800× (LC); 221.8× (VQ-O) | Franz, Lenny, Reginald (owner 16 Oct) |
 | `false-premise` | A calm label for a job, then the drop | "first day as an assassin" 1,392.8× (VQ-O) | Reginald |
 | `understatement` | Calm words under a wild moment | the unbothered-explosion hit (VQ-W) | Reginald |
 | `mid-deal` | Start mid-argument, the trend is the answer | Lenny's locked template; the calm-vs-chaos cut (VQ-W) | Lenny |

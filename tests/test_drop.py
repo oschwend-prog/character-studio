@@ -178,6 +178,23 @@ def fast_master(monkeypatch, synth_video):
     return specs
 
 
+# Reginald's check while test B is on: one hook per arm (false-premise, understatement, when-relatable since the owner's 16 Oct 2026,
+# trend-label), as the live registry (``experiments_on``) asks for.
+REGINALD_ARMS_LOOK = {
+    "hooks": ["The household is unaware.", "Breakfast is at eight.", "When the Duchess rings twice.", "Kindly do not tell the Duchess."],
+    "hook_patterns": ["understatement", "false-premise", "when-relatable", "trend-label"],
+}
+
+
+def registry_without_lead():
+    """The live registry without the owner's lead (``when-relatable`` first for Reginald's next 2 clips): the draw itself."""
+    from studio import experiments
+
+    data = json.loads(Path(experiments.EXPERIMENTS_PATH).read_text(encoding="utf-8"))
+    data["tests"]["B"].pop("lead", None)
+    return experiments.parse_experiments(data)
+
+
 def ready_drop(store, storage, clip, slug="reginald", **look):
     pid = drop_file(store, storage, clip, slug)
     out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(**look)), now=NOW, job="t")
@@ -292,18 +309,19 @@ def test_a_cover_or_watch_copy_that_fails_never_fails_the_check(world, portrait,
     def full(*a, **k):
         raise OSError("disk full")
 
-    monkeypatch.setattr(drop.clipwork, "preview_video", boom)
-    monkeypatch.setattr(drop.clipwork, "cover_frame", full)
-    drop.request_recheck(store, pid, NOW)
-    with caplog.at_level("WARNING", logger="studio.drop"):
-        out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
+    # a context, not monkeypatch.undo(): undo() would also put back the live test registry the autouse fixture switched off
+    with monkeypatch.context() as m:
+        m.setattr(drop.clipwork, "preview_video", boom)
+        m.setattr(drop.clipwork, "cover_frame", full)
+        drop.request_recheck(store, pid, NOW)
+        with caplog.at_level("WARNING", logger="studio.drop"):
+            out = process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
     d = store.get_favorite(pid).proposal["drop"]
     assert out.ok and out.state == d["state"] == "ready" and d["reason"] is None
     assert d.get("cover_path") is None and d.get("preview_video_path") is None  # null: never the last check's paths
     assert d["preview_path"] == f"owner/{pid}/preview.jpg" and d["credits"] > 0  # the rest of the check is as always
     assert "the watch copy" in caplog.text and "the cover" in caplog.text and "ffmpeg failed" in caplog.text
     # our Storage refusing them is no reason either
-    monkeypatch.undo()
     flaky = FlakyStorage(tmp_path / "flaky")
     other = drop_file(store, flaky, portrait)
     out = process_drop(store, flaky, other, gemini_client=FakeGemini(deconstruct()), now=NOW, job="t")
@@ -3590,7 +3608,7 @@ B_DAY = datetime(2026, 10, 13, 12, 0, tzinfo=drop.LONDON)  # a Tuesday: test B h
 def test_hook_arms_for_reads_the_bandits_arms_of_the_character(experiments_on):
     franz = drop.hook_arms_for("franz", B_DAY)
     assert franz == gemini.HookArms(("ego-claim", "when-relatable", "myth-bust", "trend-label"), needs_moment=("trend-label",))
-    assert drop.hook_arms_for("reginald", B_DAY).patterns == ("false-premise", "understatement", "trend-label")
+    assert drop.hook_arms_for("reginald", B_DAY).patterns == ("false-premise", "understatement", "when-relatable", "trend-label")
     assert drop.hook_arms_for("biscuit", B_DAY) is None  # no arms in the registry: three free hooks
     assert drop.hook_arms_for("franz", datetime(2026, 10, 11, 12, 0, tzinfo=drop.LONDON)) is None  # test B has not started
 
@@ -3607,16 +3625,16 @@ def test_no_arms_while_test_b_is_off_or_the_registry_is_broken(tmp_path, monkeyp
 
 def test_the_check_asks_one_gemini_call_for_one_hook_per_arm_and_stores_them_in_the_same_shape(world, portrait, experiments_on):
     store, storage = world
-    pid = drop_file(store, storage, portrait)  # Reginald: false-premise, understatement, trend-label (the clip has a moment name)
-    patterns = ["understatement", "trend-label", "false-premise"]
-    g = FakeGemini(deconstruct(hook_patterns=patterns))  # FakeGemini runs the check function: the arms are in it, or this raises
+    pid = drop_file(store, storage, portrait)  # Reginald: false-premise, understatement, when-relatable, trend-label (a moment name)
+    patterns = ["understatement", "trend-label", "false-premise", "when-relatable"]
+    g = FakeGemini(deconstruct(hooks=REGINALD_ARMS_LOOK["hooks"], hook_patterns=patterns))  # the check function runs: arms in it, or this raises
     out = process_drop(store, storage, pid, gemini_client=g, now=B_DAY, job="t")
     assert out.state == "ready" and len(g.calls) == 1
     d = store.get_favorite(pid).proposal["drop"]
-    assert d["hooks"] == deconstruct()["hooks"] and d["deconstruct"]["hook_patterns"] == patterns  # the stored shape: lists, same order
+    assert d["hooks"] == REGINALD_ARMS_LOOK["hooks"] and d["deconstruct"]["hook_patterns"] == patterns  # the stored shape: lists, same order
     assert d["hook"] == d["hooks"][0]
     props = g.calls[0]["schema"]["properties"]
-    assert props["hooks"]["minItems"] == props["hooks"]["maxItems"] == 3
+    assert props["hooks"]["minItems"] == props["hooks"]["maxItems"] == 4
     assert "ONE hook for each of these patterns: false-premise" in g.calls[0]["prompt"]
 
 
@@ -3654,7 +3672,9 @@ def test_a_first_answer_that_misses_an_arm_is_asked_again_and_a_second_miss_stil
     the check ends ready (not failed, not red) and the draw falls through to an arm that has one."""
     store, storage = world
     pid = drop_file(store, storage, portrait)
-    gap = deconstruct(hook_patterns=["understatement", "false-premise", "understatement"])  # no trend-label although the clip has a moment
+    gap = deconstruct(  # no trend-label although the clip has a moment
+        hooks=REGINALD_ARMS_LOOK["hooks"], hook_patterns=["understatement", "false-premise", "when-relatable", "understatement"],
+    )
     client, seen = answering_client(gap, gap)
     out = process_drop(store, storage, pid, gemini_client=client, now=B_DAY, job="t")
     assert out.ok and out.state == "ready" and len(seen) == 2  # asked once more, then taken as it is
@@ -3663,37 +3683,38 @@ def test_a_first_answer_that_misses_an_arm_is_asked_again_and_a_second_miss_stil
     assert d["state"] == "ready" and d["reason"] is None and d["hooks"] == gap["hooks"]
     look = d["deconstruct"]
     state = drop.learn.BanditState(readings={"reginald": 20})
-    registry = drop.experiments.load_experiments()
+    registry = registry_without_lead()
     chosen = {
         drop.learn.choose_hook(
             store, registry, "reginald", f"pick-{i}", look["hooks"], look["hook_patterns"], moment=True, now=B_DAY, state=state,
         ).pattern
         for i in range(60)
     }
-    assert chosen == {"understatement", "false-premise"}  # trend-label has no candidate: the others are drawn, never "no choice"
+    assert chosen == {"understatement", "false-premise", "when-relatable"}  # trend-label has no candidate: never "no choice"
 
 
 def test_an_answer_with_every_arm_is_taken_at_once_and_a_broken_shape_still_fails_the_check(world, portrait, experiments_on):
     store, storage = world
     pid = drop_file(store, storage, portrait)
-    good = deconstruct(hook_patterns=["understatement", "false-premise", "trend-label"])
+    good = deconstruct(**REGINALD_ARMS_LOOK)
     client, seen = answering_client(good)
     assert process_drop(store, storage, pid, gemini_client=client, now=B_DAY, job="t").state == "ready" and len(seen) == 1
     other = drop_file(store, storage, portrait)
-    short = deconstruct(hooks=["One.", "Two."], hook_patterns=["understatement", "false-premise"])  # 2 hooks where 3 are asked
+    short = deconstruct(hooks=["One.", "Two."], hook_patterns=["understatement", "false-premise"])  # 2 hooks where 4 are asked
     client, seen = answering_client(short, short)
     out = process_drop(store, storage, other, gemini_client=client, now=B_DAY, job="t")
-    assert out.state == "failed" and "hooks must be 3 lines" in out.reason and len(seen) == 2
+    assert out.state == "failed" and "hooks must be 4 lines" in out.reason and len(seen) == 2
 
 
 def test_a_bandit_draw_always_finds_a_candidate_when_the_check_wrote_one_hook_per_arm(world, portrait, experiments_on):
     """The point of the change: with one hook per arm every arm has a candidate, so no clip falls back to the check's first hook."""
     store, storage = world
     pid = drop_file(store, storage, portrait)
-    patterns = ["understatement", "trend-label", "false-premise"]
-    process_drop(store, storage, pid, gemini_client=FakeGemini(deconstruct(hook_patterns=patterns)), now=B_DAY, job="t")
+    patterns = ["understatement", "trend-label", "false-premise", "when-relatable"]
+    look = deconstruct(hooks=REGINALD_ARMS_LOOK["hooks"], hook_patterns=patterns)
+    process_drop(store, storage, pid, gemini_client=FakeGemini(look), now=B_DAY, job="t")
     look = store.get_favorite(pid).proposal["drop"]["deconstruct"]
-    registry = drop.experiments.load_experiments()
+    registry = registry_without_lead()  # the owner's lead would put when-relatable first every time: the draw itself here
     state = drop.learn.BanditState(readings={"reginald": 20})  # past the warm-up: a draw by the shares, not the fixed rotation
     chosen = {
         drop.learn.choose_hook(
@@ -3723,7 +3744,10 @@ def make_reporting(world, portrait, gen_out, monkeypatch, synth_video, applied):
         return Path(spec.out)
 
     monkeypatch.setattr(drop, "build_master", build)
-    pid = ready_drop(store, storage, portrait)
+    from studio import experiments
+
+    b_on = experiments.load_experiments().is_active("B", NOW)
+    pid = ready_drop(store, storage, portrait, **(REGINALD_ARMS_LOOK if b_on else {}))
     tap_make(store, pid)
     assert make(store, storage, pid, FakeHF(gen_out), FakeGemini(QA_PASS)).state == "made"
     return store, specs, store.get_clip(store.get_favorite(pid).clip_id)
@@ -3767,7 +3791,7 @@ def test_a_clip_without_the_two_coins_is_built_as_before_and_writes_no_edit_tags
 
 def test_a_silent_masters_clip_takes_no_position_and_is_built_without_edits(world, portrait, experiments_on):
     store, storage = world
-    pid = ready_drop(store, storage, portrait)
+    pid = ready_drop(store, storage, portrait, **REGINALD_ARMS_LOOK)
     f = store.get_favorite(pid)
     store.update_favorite(pid, proposal={**f.proposal, "owner_music": "in_app"})  # the owner adds the song in the app: silent master
     clip = drop._new_or_current_clip(store, store.get_favorite(pid), NOW)

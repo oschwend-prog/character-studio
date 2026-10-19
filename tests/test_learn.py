@@ -33,6 +33,7 @@ from studio.learn import (
     choose_hook,
     draw_shares,
     floor_share,
+    lead_of,
     mix_floor,
     sample_order,
     thompson_shares,
@@ -63,6 +64,26 @@ def c_on(tmp_path, monkeypatch):
 
 def bandit_test():
     return reg().test("B")
+
+
+def without_lead() -> dict[str, Any]:
+    """The repo's registry without the owner's lead (16 Oct 2026: "When ..." first for Franz and Reginald): the draw as the plan
+    describes it, for the tests of the draw itself."""
+    data = json.loads(REPO_REGISTRY.read_text())
+    data["tests"]["B"].pop("lead", None)
+    return data
+
+
+def reg_no_lead():
+    return parse_experiments(without_lead())
+
+
+@pytest.fixture
+def no_lead(tmp_path, monkeypatch):
+    """The make path on the repo's registry without the owner's lead (``without_lead``)."""
+    path = tmp_path / "experiments.json"
+    path.write_text(json.dumps(without_lead()))
+    monkeypatch.setattr(experiments, "EXPERIMENTS_PATH", path)
 
 
 # ---- the pieces of the draw ------------------------------------------------------------------------------------------------------------
@@ -260,7 +281,7 @@ def test_the_studio_tally_pools_a_pattern_over_the_characters():
 def test_until_three_readings_the_patterns_rotate_and_every_arm_is_equally_likely():
     t = bandit_test()
     d = draw_shares(t, BanditState(readings={"reginald": 2}), reg().seed, "reginald")
-    assert d.warmup and d.arms == ("false-premise", "understatement", "trend-label") and d.shares == (1 / 3,) * 3
+    assert d.warmup and d.arms == ("false-premise", "understatement", "when-relatable", "trend-label") and d.shares == (1 / 4,) * 4
     assert not draw_shares(t, BanditState(readings={"reginald": 3}), reg().seed, "reginald").warmup
 
 
@@ -287,10 +308,10 @@ def test_a_winning_pattern_draws_more_but_never_above_the_ceiling_before_30_tall
 
 
 def test_every_arm_keeps_at_least_its_floor_whatever_the_data_say():
-    for arms, slug in ((3, "reginald"), (4, "franz")):
-        patterns = bandit_test().arms[slug]
+    for arms, slug, moment in ((3, "reginald", False), (4, "franz", True)):  # Reginald with no moment name: trend-label is out
+        patterns = learn.arms_of(bandit_test(), slug, moment=moment)
         by_char = {(slug, patterns[0]): Counts(30, 0), **{(slug, p): Counts(0, 12) for p in patterns[1:]}}
-        d = draw_shares(bandit_test(), BanditState(by_character=by_char, readings={slug: 50}), reg().seed, slug)
+        d = draw_shares(bandit_test(), BanditState(by_character=by_char, readings={slug: 50}), reg().seed, slug, moment=moment)
         assert len(d.arms) == arms and min(d.shares) >= (0.15 if arms == 3 else 0.12) - EPS and abs(sum(d.shares) - 1) < EPS
 
 
@@ -319,15 +340,16 @@ def choose(w_or_store, slug="reginald", patterns=("understatement", "false-premi
 def test_the_warm_up_rotates_in_the_registry_order_and_the_candidate_of_the_drawn_pattern_goes_on_screen():
     w = World()
     first = choose(w)
-    # Reginald's arms are false-premise, understatement, trend-label; the first place draws false-premise: the 2nd candidate
-    assert (first.pattern, first.index, first.hook, first.warmup) == ("false-premise", 1, "Breakfast is at eight.", True)
-    assert first.order == ("false-premise", "understatement", "trend-label")
+    # Reginald's arms are false-premise, understatement, when-relatable, trend-label; the first place draws false-premise: the 2nd
+    # candidate (no candidate is when-relatable, so the owner's lead has nothing to put first)
+    assert (first.pattern, first.index, first.hook, first.warmup, first.lead) == ("false-premise", 1, "Breakfast is at eight.", True, False)
+    assert first.order == ("false-premise", "understatement", "when-relatable", "trend-label")
     w.post("reginald", None, features={"test_arms": {"hook": "false-premise"}})  # one clip carries a hook arm: the next place
     second = choose(w, pick="p2")
     assert (second.pattern, second.index) == ("understatement", 0) and second.order[0] == "understatement"
     w.post("reginald", None, features={"test_arms": {"hook": "understatement"}})
-    third = choose(w, pick="p3")  # trend-label is next but no candidate has it: the next of the rotation that has one
-    assert third.order == ("trend-label", "false-premise", "understatement") and third.pattern == "false-premise"
+    third = choose(w, pick="p3")  # when-relatable is next but no candidate has it: the next of the rotation that has one
+    assert third.order == ("when-relatable", "trend-label", "false-premise", "understatement") and third.pattern == "false-premise"
 
 
 def test_the_first_candidate_of_a_pattern_wins_when_two_carry_it():
@@ -370,26 +392,30 @@ def test_the_same_pick_and_data_always_give_the_same_choice():
 
 
 def test_over_many_picks_the_draw_follows_the_data_and_keeps_every_arm_alive():
-    """Reginald, past the warm-up: false-premise has won 8 of 8, understatement lost 6 of 6, trend-label has no data. The
-    candidates carry all three patterns, so the first of the order is the choice."""
+    """Reginald, past the warm-up: false-premise has won 8 of 8, understatement lost 6 of 6, when-relatable and trend-label have
+    no data. The candidates carry all four patterns, so the first of the order is the choice."""
     w = World()
     state = BanditState(
         by_character={("reginald", "false-premise"): Counts(8, 0), ("reginald", "understatement"): Counts(0, 6)}, readings={"reginald": 20},
     )
+    four = ["The household is unaware.", "Breakfast is at eight.", "When the Duchess rings twice.", "The shimmy, as ordered."]
     picks = Counter(
-        choose(w.store, pick=f"pick-{i}", patterns=("false-premise", "understatement", "trend-label"), state=state).pattern
+        choose(w.store, pick=f"pick-{i}", patterns=("false-premise", "understatement", "when-relatable", "trend-label"), hooks=four,
+               state=state, registry=reg_no_lead()).pattern
         for i in range(1200)
     )
     assert picks["false-premise"] > picks["trend-label"] > picks["understatement"]
+    assert picks["false-premise"] > picks["when-relatable"] > picks["understatement"]
     assert picks["false-premise"] / 1200 <= 0.6 + 0.04  # the ceiling (60 %: 14 tallied posts, under 30)
-    assert min(picks.values()) / 1200 >= 0.15 - 0.03  # the floor of 3 arms (15 %)
+    assert min(picks.values()) / 1200 >= 0.12 - 0.03  # the floor of 4 arms (12 %)
 
 
 def test_with_no_data_after_the_warm_up_the_patterns_come_out_about_equally():
     w = World()
     state = BanditState(readings={"franz": 9})
     picks = Counter(
-        choose(w.store, slug="franz", pick=f"pick-{i}", patterns=("ego-claim", "when-relatable", "myth-bust"), state=state).pattern
+        choose(w.store, slug="franz", pick=f"pick-{i}", patterns=("ego-claim", "when-relatable", "myth-bust"), state=state,
+               registry=reg_no_lead()).pattern
         for i in range(900)
     )
     assert set(picks) == {"ego-claim", "when-relatable", "myth-bust"} and all(abs(n / 900 - 1 / 3) < 0.05 for n in picks.values())
@@ -398,7 +424,63 @@ def test_with_no_data_after_the_warm_up_the_patterns_come_out_about_equally():
 def test_choice_as_dict_is_plain_json():
     c = choose(World())
     out = c.as_dict()
-    assert json.loads(json.dumps(out)) == out and set(out) == {"pattern", "index", "hook", "order", "warmup"}
+    assert json.loads(json.dumps(out)) == out and set(out) == {"pattern", "index", "hook", "order", "warmup", "lead"}
+
+
+WHEN_HOOKS = ["The household is unaware.", "When the Duchess rings twice.", "Kindly do not tell the Duchess."]
+WHEN_PATTERNS = ("understatement", "when-relatable", "false-premise")
+AFTER_LEAD = datetime(2026, 10, 17, 9, 0, tzinfo=LONDON)  # made after the owner's lead began (16 Oct 2026)
+
+
+def test_the_owners_lead_puts_when_relatable_first_for_the_next_two_clips_then_the_rotation_goes_on():
+    """Owner, 16 Oct 2026: Lenny's "When ..." hooks led the first 8 Reels, so the next 2 clips of Reginald (and of Franz) lead with
+    ``when-relatable`` when the check wrote one (registry ``lead``); then the draw goes on as before."""
+    w = World()
+    first = choose(w, patterns=WHEN_PATTERNS, hooks=WHEN_HOOKS)  # the rotation's first place is false-premise: the lead goes first
+    assert (first.pattern, first.hook, first.lead) == ("when-relatable", "When the Duchess rings twice.", True)
+    assert first.order == ("when-relatable", "false-premise", "understatement", "trend-label") and first.as_dict()["lead"] is True
+    w.post("reginald", None, features={"test_arms": {"hook": "when-relatable"}}, created=AFTER_LEAD)
+    second = choose(w, patterns=WHEN_PATTERNS, hooks=WHEN_HOOKS, pick="p2")
+    assert (second.pattern, second.lead) == ("when-relatable", True)
+    w.post("reginald", None, features={"test_arms": {"hook": "when-relatable"}}, created=AFTER_LEAD)
+    w.post("reginald", None, features={"test_arms": {"hook": "understatement"}}, created=AFTER_LEAD)
+    fourth = choose(w, patterns=WHEN_PATTERNS, hooks=WHEN_HOOKS, pick="p4")  # 2 of 2 used: the rotation's 4th place (trend-label)
+    assert not fourth.lead and fourth.order[0] == "trend-label" and fourth.pattern == "false-premise"
+    assert lead_of(w.store, bandit_test(), "reginald").left == 0
+
+
+def test_a_dropped_clip_or_one_made_before_the_lead_began_does_not_use_up_its_places():
+    w = World()
+    w.post("reginald", None, features={"test_arms": {"hook": "when-relatable"}}, created=datetime(2026, 10, 15, 9, 0, tzinfo=LONDON))
+    for state in ("dropped", "rejected"):
+        w.store.add_clip(Clip(character_slug="reginald", mode="dropin", state=state, features={"test_arms": {"hook": "when-relatable"}},
+                              created_at=AFTER_LEAD))
+    w.post("reginald", None, features={"test_arms": {"hook": "understatement"}}, created=AFTER_LEAD)  # another arm: not the lead's
+    lead = lead_of(w.store, bandit_test(), "reginald")
+    assert (lead.arm, lead.clips, lead.since.isoformat(), lead.used, lead.left) == ("when-relatable", 2, "2026-10-16", 0, 2)
+    assert lead_of(w.store, bandit_test(), "lenny") is None  # no lead for Lenny
+    assert lead_of(w.store, reg_no_lead().test("B"), "reginald") is None
+
+
+def test_the_lead_needs_a_candidate_of_its_arm(experiments_on):
+    """A clip checked before Reginald had the arm has no "When ..." hook: the draw is as before, and the lead keeps its places."""
+    w = World()
+    c = choose(w, patterns=("understatement", "false-premise", "understatement"))
+    assert not c.lead and c.pattern == "false-premise"
+    assert lead_of(w.store, bandit_test(), "reginald").left == 2
+
+
+def test_franzs_next_two_clips_go_out_with_his_when_hook(experiments_on):
+    store = World().store
+    seen = []
+    for _ in range(3):
+        pick = add_pick(store, slug="franz", look=FOUR_LOOK)
+        f = store.get_clip(made(store, pick).id).features
+        bandit = drop.drop_of(store.get_favorite(pick.id))["make"]["bandit"]
+        seen.append((f["test_arms"]["hook"], f["hook_text"], f["hook_by"], bandit["lead"]))
+    when = ("when-relatable", "When the hallway is your runway.", "bandit", True)
+    assert seen[:2] == [when, when]
+    assert seen[2] == ("myth-bust", "They said a dog cannot do this.", "bandit", False)  # the rotation's 3rd place
 
 
 # ---- studio learn arms -------------------------------------------------------------------------------------------------------------------
@@ -420,10 +502,12 @@ def test_the_arms_report_shows_wins_losses_and_the_draw_for_every_character():
     assert (arms["understatement"]["wins"], arms["understatement"]["losses"], arms["understatement"]["uses"]) == (1, 1, 2)
     assert arms["false-premise"]["wins"] == 1 and arms["trend-label"]["uses"] == 0
     assert arms["understatement"]["tally"] == {"wins": 1, "losses": 1, "basis": "studio"}  # 2 uses of 3: the studio-wide tally (the same here)
-    assert abs(sum(a["draw"] for a in r["arms"]) - 1) < 0.001 and all(a["draw"] >= 0.15 - 0.001 for a in r["arms"])
+    assert abs(sum(a["draw"] for a in r["arms"]) - 1) < 0.001 and all(a["draw"] >= 0.12 - 0.001 for a in r["arms"])  # 4 arms
     assert arms["trend-label"]["needs_moment_name"] and arms["trend-label"]["draw_without_moment_name"] is None
     assert arms["understatement"]["draw_without_moment_name"] is not None
-    assert r["ceiling"] == {"share": 0.6, "applies": True, "until_tallied": 30} and r["floor"] == 0.15
+    assert r["ceiling"] == {"share": 0.6, "applies": True, "until_tallied": 30} and r["floor"] == 0.12
+    assert r["lead"] == {"arm": "when-relatable", "clips": 2, "from": "2026-10-16", "used": 0, "left": 2}  # owner 16 Oct 2026
+    assert next(c for c in report["characters"] if c["character"] == "lenny")["lead"] is None
     franz = next(c for c in report["characters"] if c["character"] == "franz")
     assert franz["mode"] == "rotation" and all(a["draw"] == pytest.approx(0.25) for a in franz["arms"])  # no readings yet: warm-up
 
@@ -534,7 +618,7 @@ FOUR_LOOK = {
 }
 
 
-def test_with_one_hook_per_arm_every_arm_has_a_candidate_and_the_fourth_hook_is_tagged_four(experiments_on):
+def test_with_one_hook_per_arm_every_arm_has_a_candidate_and_the_fourth_hook_is_tagged_four(no_lead):
     """Franz has four arms; the check now writes four hooks. The warm-up rotation puts each on screen in turn, no clip falls back to
     the check's first hook, and the fourth hook is ``hook_index`` 4 (a range of 0-3 would have refused the clip)."""
     store = World().store

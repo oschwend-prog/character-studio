@@ -32,7 +32,8 @@ character's checked drops (ready, being made or made, ``drop.checked_scores``: s
 ``is_explore``; the pool is given by the caller and holds the clip itself).
 The owner still ticks what is made; the terminal's suggestions (``terminal/src/lib/ranking.ts``) offer one such clip in every 4.
 
-**Test B** is the hook bandit (``studio.learn``); this module only validates its entry (arms per character, floor, ceiling).
+**Test B** is the hook bandit (``studio.learn``); this module only validates its entry (arms per character, floor, ceiling, and
+the optional ``lead``: one of the character's arms that goes first for his next ``clips`` clips made from the day ``from``).
 """
 
 from __future__ import annotations
@@ -172,6 +173,18 @@ def _bandit(where: str, raw: Mapping[str, Any]) -> dict[str, tuple[str, ...]]:
     needing = raw.get("needs_moment_name", [])
     if not isinstance(needing, list) or any(p not in HOOK_PATTERNS for p in needing):
         raise _bad(f"{where}.needs_moment_name", "must be a list of hook patterns")
+    lead = raw.get("lead", {})
+    if not isinstance(lead, Mapping):
+        raise _bad(f"{where}.lead", 'must map a character to {"arm": pattern, "clips": N, "from": "YYYY-MM-DD"}')
+    for slug, rule in lead.items():
+        if not isinstance(rule, Mapping) or rule.get("arm") not in out.get(slug, ()):
+            raise _bad(f"{where}.lead.{slug}.arm", "must be one of the character's arms")
+        if not _positive_int(rule.get("clips")):
+            raise _bad(f"{where}.lead.{slug}.clips", f"must be a whole number of 1 or more, got {rule.get('clips')!r:.40}")
+        try:
+            date.fromisoformat(str(rule.get("from")))
+        except ValueError:
+            raise _bad(f"{where}.lead.{slug}.from", f"must be a date (YYYY-MM-DD), got {rule.get('from')!r:.30}") from None
     return out
 
 

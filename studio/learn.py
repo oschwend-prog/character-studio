@@ -4,7 +4,7 @@
 ``drop.hook_arms_for``; a character with no arms gets 3 free hooks), each labelled with one of the 7 hook patterns
 (``drop.deconstruct.hook_patterns``). At Make it, ``choose_hook`` draws a pattern among the character's arms
 (``config/experiments.json`` test B: Franz ``ego-claim``, ``when-relatable``, ``myth-bust``, ``trend-label``; Reginald
-``false-premise``, ``understatement``, ``trend-label``; Lenny ``mid-deal``, ``when-relatable``, ``ego-claim``, ``trend-label``) and the
+``false-premise``, ``understatement``, ``when-relatable``, ``trend-label``; Lenny ``mid-deal``, ``when-relatable``, ``ego-claim``, ``trend-label``) and the
 clip goes out with the candidate of the drawn pattern (``hook_by`` ``bandit``, ``features['test_arms']['hook']`` = the pattern). If
 no candidate carries the drawn pattern, the next one of the draw's order that has a candidate is used; if none of the arms has one,
 or the owner chose the hook in his Adjust (``hook_by`` ``owner``: he always wins), the clip keeps the check's first hook (``studio``)
@@ -34,6 +34,11 @@ rests on (the first snapshot of the window, which never moves).
    listed count's share is used.
 5. *The order.* The shares are sampled without replacement by a generator seeded from the registry seed, the character and the pick, so
    the same pick and data always give the same order; the first arm with a candidate wins.
+6. *The owner's lead* (registry ``lead``, optional; owner 16 Oct 2026: "When …" first for Franz and Reginald). The lead's arm is
+   moved to the front of the order (warm-up or Thompson) until ``clips`` of the character's clips made from ``from`` carry it
+   (``lead_of``; a failed, rejected or dropped clip gives its place back), and only for a clip that has a candidate of that arm.
+   The clip is a bandit draw like any other (``hook_by`` ``bandit``, tallied): an arm's win rate is the share of its own posts
+   that beat the median, whichever way the arm was chosen; ``drop['make']['bandit']['lead']`` records it.
 
 The floor and the ceiling are on the draws. Since the check writes one hook per arm, a draw finds a candidate and the shares of
 the posts that go out are the draw's. (A clip checked before that has 3 free hooks, so its draw may fall through to the next arm of
@@ -51,7 +56,7 @@ from collections import Counter
 from functools import lru_cache
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Any
 
 import typer
@@ -61,7 +66,7 @@ from studio.cli_support import emit, fail, open_store
 from studio.config import LONDON, now_london
 from studio.experiments import Experiment, Registry
 from studio.metrics import post_reads
-from studio.models import HOOK_PATTERNS, Platform
+from studio.models import HOOK_PATTERNS, ClipState, Platform
 from studio.store import Store
 
 WIN_X = 1.0  # a win: x72 above this (the post beat the median 72-hour views of the account's last 15)
@@ -69,6 +74,8 @@ WIN_X = 1.0  # a win: x72 above this (the post beat the median 72-hour views of 
 # check's first hook, no arm had a candidate: Gemini's habit, not a draw; controller 12 Oct, before data) and not "owner" (plan rail 4).
 TALLIED_BY = ("bandit",)
 THOMPSON_DRAWS = 4000  # simulated rounds behind ``thompson_shares``
+# A clip in one of these states never reaches a post: it does not use up a place of the registry's ``lead`` (``lead_of``).
+LEAD_GIVES_BACK = frozenset({ClipState.gen_failed, ClipState.qa_failed, ClipState.rejected, ClipState.dropped})
 EPS = 1e-9
 
 
@@ -254,6 +261,35 @@ def arms_of(test: Experiment, slug: str, *, moment: bool = True) -> tuple[str, .
     return tuple(a for a in arms if moment or a not in gated)
 
 
+@dataclass(frozen=True)
+class Lead:
+    """The registry's ``lead`` for a character: ``arm`` goes first in his draws until ``clips`` of his clips made from ``since``
+    (London day) carry it; ``used`` counts them (a failed, rejected or dropped clip gives its place back)."""
+
+    arm: str
+    clips: int
+    since: date
+    used: int
+
+    @property
+    def left(self) -> int:
+        return max(self.clips - self.used, 0)
+
+
+def lead_of(store: Store, test: Experiment, slug: str) -> Lead | None:
+    """The character's lead (see ``Lead``), or ``None`` when the registry gives him none."""
+    rule = (test.params.get("lead") or {}).get(slug)
+    if not isinstance(rule, Mapping):
+        return None
+    since = date.fromisoformat(str(rule["from"]))
+    used = sum(
+        1 for clip in store.list_clips(character_slug=slug)
+        if isinstance(arms := clip.features.get("test_arms"), Mapping) and arms.get(str(test.key)) == rule["arm"]
+        and clip.state not in LEAD_GIVES_BACK and clip.created_at is not None and clip.created_at.astimezone(LONDON).date() >= since
+    )
+    return Lead(arm=str(rule["arm"]), clips=int(rule["clips"]), since=since, used=used)
+
+
 def draw_shares(test: Experiment, state: BanditState, seed: str, slug: str, *, moment: bool = True) -> Draw:
     """The shares of the character's next draw (see the module doc): equal shares in the warm-up, else Thompson sampling with the
     ceiling and the floor. Needs no pick: the same data always give the same shares."""
@@ -285,9 +321,13 @@ class Choice:
     hook: str
     order: tuple[str, ...]  # the draw's order of the eligible arms (the first with a candidate won)
     warmup: bool
+    lead: bool = False  # the registry's lead put its arm first in the order
 
     def as_dict(self) -> dict[str, Any]:
-        return {"pattern": self.pattern, "index": self.index, "hook": self.hook, "order": list(self.order), "warmup": self.warmup}
+        return {
+            "pattern": self.pattern, "index": self.index, "hook": self.hook, "order": list(self.order), "warmup": self.warmup,
+            "lead": self.lead,
+        }
 
 
 def choose_hook(
@@ -314,9 +354,13 @@ def choose_hook(
     else:
         rng = random.Random(f"{registry.seed}|bandit|{slug}|{pick_id}")
         order = tuple(sample_order(draw.arms, draw.shares, rng))
+    lead = lead_of(store, test, slug)
+    led = lead is not None and lead.left > 0 and lead.arm in order and lead.arm in candidates
+    if led:  # the owner's lead (registry ``lead``): its arm first while it has places left and the clip has its candidate
+        order = (lead.arm, *(a for a in order if a != lead.arm))
     pattern = next(a for a in order if a in candidates)
     index = candidates[pattern]
-    return Choice(pattern=pattern, index=index, hook=hooks[index], order=order, warmup=draw.warmup)
+    return Choice(pattern=pattern, index=index, hook=hooks[index], order=order, warmup=draw.warmup, lead=led)
 
 
 # ---- studio learn arms -------------------------------------------------------------------------------------------------------------
@@ -336,10 +380,14 @@ def arms_report(store: Store, registry: Registry, now: datetime, *, character: s
         gated = set(test.params.get("needs_moment_name") or [])
         without = draw_shares(test, state, registry.seed, slug, moment=False) if gated & set(arms[slug]) else None
         share_without = dict(zip(without.arms, without.shares, strict=True)) if without else {}
+        lead = lead_of(store, test, slug)
         rows.append(
             {
                 "character": slug,
                 "mode": "rotation" if full.warmup else "thompson",
+                "lead": None if lead is None else {
+                    "arm": lead.arm, "clips": lead.clips, "from": lead.since.isoformat(), "used": lead.used, "left": lead.left,
+                },
                 "readings": state.readings.get(slug, 0),
                 "readings_needed": int(test.params["warmup_priors"]),
                 "tallied": state.tallied(slug),

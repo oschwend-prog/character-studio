@@ -110,7 +110,7 @@ def test_the_hook_arms_are_the_plans_fits_column():
     arms = load_experiments(REPO_REGISTRY).test("B").arms
     assert arms == {
         "franz": ("ego-claim", "when-relatable", "myth-bust", "trend-label"),
-        "reginald": ("false-premise", "understatement", "trend-label"),
+        "reginald": ("false-premise", "understatement", "when-relatable", "trend-label"),  # when-relatable: owner 16 Oct 2026
         "lenny": ("mid-deal", "when-relatable", "ego-claim", "trend-label"),
     }
     assert all(p in HOOK_PATTERNS for patterns in arms.values() for p in patterns)
@@ -164,7 +164,7 @@ def test_the_conftest_registry_has_every_test_off():
         ("tests.B.arms.franz", ["ego-claim", "shouting"], r"tests\.B\.arms\.franz.*shouting.*no hook pattern"),
         ("tests.B.arms.lenny", ["mid-deal", "ego-claim", "myth-bust", "trend-label", "false-premise"], r"tests\.B\.floor.*5 arms"),
         ("tests.B.floor", {"3": 0.15}, r"tests\.B\.floor.*4 arms"),
-        ("tests.B.floor", {"3": 0.5, "4": 0.12}, r"tests\.B\.floor.*3 arms of 0.5"),  # more than every post
+        ("tests.B.floor", {"3": 0.15, "4": 0.3}, r"tests\.B\.floor.*4 arms of 0.3"),  # more than every post
         ("tests.B.floor", {}, r"tests\.B\.floor"),
         ("tests.B.ceiling", 0, r"tests\.B\.ceiling"),
         ("tests.B.ceiling", 1.5, r"tests\.B\.ceiling"),
@@ -172,6 +172,10 @@ def test_the_conftest_registry_has_every_test_off():
         ("tests.B.ceiling_until_tallied", "30", r"tests\.B\.ceiling_until_tallied"),
         ("tests.B.pool_min_uses", ..., r"tests\.B\.pool_min_uses"),
         ("tests.B.needs_moment_name", ["nonsense"], r"tests\.B\.needs_moment_name"),
+        ("tests.B.lead", ["franz"], r"tests\.B\.lead"),
+        ("tests.B.lead.franz", {"arm": "mid-deal", "clips": 2, "from": "2026-10-16"}, r"tests\.B\.lead\.franz\.arm"),  # not his arm
+        ("tests.B.lead.franz", {"arm": "when-relatable", "clips": 0, "from": "2026-10-16"}, r"tests\.B\.lead\.franz\.clips"),
+        ("tests.B.lead.franz", {"arm": "when-relatable", "clips": 2, "from": "soon"}, r"tests\.B\.lead\.franz\.from"),
         ("tests.F.key", "trial", "two tests write the same key"),
         ("tests.G.key", "word_pop", "two tests write the same key"),
         ("tests.G.key", ..., r"tests\.G\.key"),

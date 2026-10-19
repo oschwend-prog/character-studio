@@ -171,7 +171,8 @@ pick (`proposal.drop.score`), not on the clip [E: system-review §B1].
 - **Why it is free:** the hook costs 0 credits to vary, and Gemini already writes 3 hooks per clip [E: `gemini.py:472`].
 - **Arms per character** (the "Fits" column of hit-patterns §4.3):
   - Franz: `ego-claim`, `when-relatable`, `myth-bust`, `trend-label`
-  - Reginald: `false-premise`, `understatement`, `trend-label`
+  - Reginald: `false-premise`, `understatement`, `when-relatable` (added by the owner 16 Oct 2026), `trend-label`
+  - **Owner lead (16 Oct 2026, after the first 8 Reels, where Lenny's "When ..." hooks led):** `when-relatable` goes first for the next 2 clips of Franz and of Reginald (registry `lead`, `studio/learn.py` `lead_of`). Those clips are bandit draws like any other and are tallied: an arm's win rate is the share of its own posts that win, whichever way the arm was chosen.
   - Lenny: `mid-deal`, `when-relatable`, `ego-claim`, `trend-label`
   - `trend-label` is available only when the clip has a moment name; otherwise the draw is among the others.
   - Change needed: Gemini writes one hook per arm (3-4, not always 3) and labels each. Built 12 Oct (task 19): the check asks for one hook for each of the character's arms in the same single call (`gemini.HookArms`); `trend-label`'s slot carries another pattern for a clip with no moment name; a character with no arms keeps 3 free hooks. The first answer must carry every arm (one retry names a gap); the retry is held to the shape alone, so an arm still missing has no candidate and the check ends ready (the draw falls through).
@@ -189,7 +190,7 @@ pick (`proposal.drop.score`), not on the clip [E: system-review §B1].
 - **Pre-registered switch to skip rate:** when Task 9 gives a skip rate for at least 90 % of the last 2 weeks' posts, a second tally starts with win = skip rate below the account's median of its last 15 posts. Skip rate grades the hook more directly than views [I]. The first tally is kept for reference.
 - **Arms change only by PR:** retire an arm after at least 10 tallied uses with 20 % wins or fewer and a median `outlier_x` of 0.7 or less (the format kill line); add an arm only from outside evidence (a research doc).
 - **The binding bar is separate:** a pattern is "proven" at 2 or more hits in its last 10 uses [E: `review.py:85`; `channel-strategy.md:52`]. The verdict is the code's and is reported as it is.
-- **What 6 weeks can show:** about 6-8 tallied uses per arm per character, enough to see only a gross gap (1 win in 7 against 5 in 7). Shared arms pooled across characters (`trend-label` for all three; `ego-claim` and `when-relatable` for Franz and Lenny) get 12-20 uses. Expect a near-even split at week 6 and a real tilt around weeks 12-14 [I].
+- **What 6 weeks can show:** about 6-8 tallied uses per arm per character, enough to see only a gross gap (1 win in 7 against 5 in 7). Shared arms pooled across characters (`trend-label` for all three; `ego-claim` for Franz and Lenny, `when-relatable` for all three since 16 Oct) get 12-20 uses. Expect a near-even split at week 6 and a real tilt around weeks 12-14 [I].
 
 ### 3.4 Test C: Trial Reels against normal Reels on new accounts
 
