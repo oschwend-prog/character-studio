@@ -3945,3 +3945,37 @@ def test_the_credits_refusal_never_resets_a_drop_a_by_hand_make_took_meanwhile(w
     (clip,) = store.list_clips()
     assert clip.state is ClipState.generating
     assert [e.kind for e in store.ledger_month(NOW.strftime("%Y-%m"))] == ["reserve"]  # the reservation is kept for the hand render
+
+
+# ---- collab posts (studio.collab, owner 2026-10-24): the make writes the week's partner ---------------------------------------------
+
+
+def test_the_make_writes_the_weeks_collaborator_on_his_first_clip_and_not_on_the_next(world, portrait, monkeypatch):
+    from studio import collab
+    from studio.models import Account, Platform
+
+    store, storage = world
+    store.add_character(Character(slug="biscuit", name="Biscuit", status="live", bodies=[Body.biped, Body.quadruped]))
+    store.add_account(Account(character_slug="biscuit", platform=Platform.instagram, handle="biscuit.moves", postiz_integration_id="pz-b"))
+    rule = collab.CollabRule(on=True, order=("reginald", "biscuit"), since=collab.week_of(NOW))
+    monkeypatch.setattr(collab, "load_collabs", lambda *a, **k: rule)
+    first = drop._new_or_current_clip(store, store.get_favorite(ready_drop(store, storage, portrait)), NOW)
+    assert first.features["collab"] == ["biscuit.moves"]
+    assert first.features["collab_auto"] == {"week": collab.week_of(NOW).isoformat(), "partner": "biscuit"}
+    again = drop._new_or_current_clip(store, store.get_favorite(ready_drop(store, storage, portrait)), NOW)
+    assert "collab" not in again.features  # one a week
+
+
+def test_a_broken_collab_rule_stops_the_make_before_a_clip_exists(world, portrait, monkeypatch):
+    from studio import collab
+
+    store, storage = world
+    pid = ready_drop(store, storage, portrait)
+
+    def broken(*a, **k):
+        raise ValueError("config/scan.json reach.collabs.on must be true or false, got 'yes'")
+
+    monkeypatch.setattr(collab, "load_collabs", broken)
+    with pytest.raises(ValueError, match="reach.collabs.on"):
+        drop._new_or_current_clip(store, store.get_favorite(pid), NOW)
+    assert store.list_clips() == []

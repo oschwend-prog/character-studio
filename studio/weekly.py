@@ -886,6 +886,7 @@ class PostFact:
     outlier_x: float | None = None
     hook: str | None = None
     metrics: Mapping[str, float] | None = None
+    collab: bool = False  # an Instagram Reel whose clip names a collaborator (``studio.collab``): two audiences, marked in line 1
 
     @property
     def available_at(self) -> datetime:
@@ -895,7 +896,9 @@ class PostFact:
 def post_facts(store: Store) -> dict[str, list[PostFact]]:
     """``{character: [PostFact]}`` for every posted post of every account, oldest first."""
     reads = {r.post_id: r for r in post_reads(store)}
-    hooks = {c.id: c.hook for c in store.list_clips()}
+    clips_by_id = {c.id: c for c in store.list_clips()}
+    hooks = {k: c.hook for k, c in clips_by_id.items()}
+    collabs = {k for k, c in clips_by_id.items() if isinstance(names := c.features.get("collab"), list) and names}
     out: dict[str, list[PostFact]] = {}
     for account in store.accounts():
         for post in store.list_posts(account_id=account.id, status=PostStatus.posted):
@@ -907,6 +910,7 @@ def post_facts(store: Store) -> dict[str, list[PostFact]]:
                     post_id=post.id, clip_id=post.clip_id, platform=account.platform.value, posted_at=posted_at(post),
                     peak_views=max(views) if views else None, outlier_x=read.outlier_x if read else None,
                     hook=hooks.get(post.clip_id), metrics=post_metric_values(snaps),
+                    collab=account.platform is Platform.instagram and post.clip_id in collabs,
                 )
             )
     for facts in out.values():
@@ -962,16 +966,35 @@ def result_line(week: WeekWindow, facts: Sequence[PostFact]) -> str:
     else:
         last = f"{prev:.1f} n {kp}" if prev is not None else "none yet"
         parts.append(f"median outlier_x {med:.1f} (n {k}; last week {last})")
-        hits = sum(1 for f in facts if f.platform == INSTAGRAM and f.outlier_x is not None and f.available_at <= week.end and f.outlier_x >= review.HIT_X)
-        parts.append(f"{_s(hits, 'hit')} of {k} measured")
+        hit = [f for f in facts if f.platform == INSTAGRAM and f.outlier_x is not None and f.available_at <= week.end and f.outlier_x >= review.HIT_X]
+        shared = sum(1 for f in hit if f.collab)
+        parts.append(f"{_s(len(hit), 'hit')} of {k} measured" + (f" ({shared} collab)" if shared else ""))
     seen = [f for f in mine if f.peak_views is not None]
     if seen:
         best = max(seen, key=lambda f: (f.peak_views, f.post_id))
         x = f" ({best.outlier_x:.1f}x)" if best.outlier_x is not None else ""
-        parts.append(f"best {_quote(best.hook, 'a clip without a hook')} {best.peak_views:,} views{x}")
+        parts.append(f"best {_quote(best.hook, 'a clip without a hook')} {best.peak_views:,} views{x}" + (" (collab)" if best.collab else ""))
     else:
         parts.append("best: none yet (no views read this week)" if mine else "best: no post this week")
+    if collab := collab_text(mine):
+        parts.append(collab)
     return " · ".join(parts)
+
+
+def collab_text(mine: Sequence[PostFact]) -> str | None:
+    """The week's collab Reels beside its solo Instagram Reels (``studio.collab``): ``collabs 1 of 3 (median 130 views v solo
+    115)``, the medians over the posts with a views reading (``none yet`` without one); None in a week without a collab."""
+    ig = [f for f in mine if f.platform == INSTAGRAM]
+    shared = [f for f in ig if f.collab]
+    if not shared:
+        return None
+
+    def median(fs: Sequence[PostFact]) -> str:
+        views = [f.peak_views for f in fs if f.peak_views is not None]
+        return f"{statistics.median(views):,.0f}" if views else "none yet"
+
+    solo = [f for f in ig if not f.collab]
+    return f"collabs {len(shared)} of {len(ig)} (median {median(shared)} views v solo {median(solo) if solo else 'no solo Reel'})"
 
 
 def _floor_note(entry: Mapping[str, Any] | None, word: str = "floor") -> str:

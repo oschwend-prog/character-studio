@@ -34,3 +34,10 @@ Owner creates the accounts (Claude cannot create accounts). Everything else belo
 
 ## Crossover
 Biscuit is the house dog at Reginald's stately home. Crossover clips (both characters in one video) post to both accounts and cross-tag — the cheapest follower transfer between the two.
+
+## Collab posts (owner 2026-10-24)
+Each character's first Reel of the week goes out with one of the others as Instagram collaborator (`studio/collab.py`, switch `reach.collabs` in `config/scan.json`, from Mon 26 Oct). The partners rotate weekly: week A Franz with Reginald, Reginald with Lenny, Lenny with Franz; week B the reverse. So each profile gets 2 collab Reels a week.
+- **Your step:** the partner's Instagram account receives a collab invite (a notification) when the Reel posts. Accept it in that character's Instagram app. Until then the Reel shows only on the author's profile; nothing breaks if one is missed.
+- **Change or remove** a partner before the post: `bin/studio clip set <clip> --collab <handle>` or `--no-collab`.
+- A collab Reel is never a Trial Reel (Instagram's rule), and TikTok copies go out solo.
+- **If Instagram refuses a collab Reel** (`studio health` lists the post as failed; collabs were first sent live from 26 Oct): `bin/studio clip set <clip> --no-collab`, then `bin/studio publish resolve <post> --retry` posts it solo.

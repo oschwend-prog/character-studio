@@ -237,7 +237,7 @@ from typing import Annotated, Any, NoReturn
 
 import typer
 
-from studio import budget, clips, experiments, fetch, gemini, learn, seed, sources
+from studio import budget, clips, collab, experiments, fetch, gemini, learn, seed, sources
 from studio.budget import BudgetRefused
 from studio.captions import compose_content, with_series_tag
 from studio.cli_support import EXIT_USAGE, emit, fail, open_storage, open_store, text_option
@@ -2147,6 +2147,7 @@ def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part:
         if clip is not None:
             return clip
     registry = experiments.load_experiments()  # a broken registry stops the make here, before anything is reserved or paid
+    rule = collab.load_collabs()  # so does a broken reach.collabs block (config/scan.json)
     look = drop.get("deconstruct") or {}
     state = None
     if registry.is_active("B", now) and not owner_chose_hook(drop):
@@ -2175,6 +2176,8 @@ def _new_or_current_clip(store: Store, pick: Favorite, now: datetime, swap_part:
         eff = effective(drop, swap_part=swap_part)
         kind = next_engagement(store, pick.character_slug)
         features = _features(pick, drop, eff, kind, version_index(store, pick), test_arms=arms, explore_pick=explore)
+        # his first Reel of the week takes a collaborator (studio.collab), under the same lock: two makes never both take the week
+        features = {**features, **collab.collab_at_make(store, pick.character_slug, now, rule)}
         clip = clips.new_clip(store, pick.character_slug, None, Mode.dropin, features)
         pick = _record_make(store, pick, now, clip_id=clip.id, attempt=0, **extra)
     mark_favorite(store, pick.id, "queued", clip_id=clip.id)

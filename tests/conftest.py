@@ -49,6 +49,25 @@ def _no_experiments(monkeypatch, _experiments_off_file):
     monkeypatch.setattr(experiments, "EXPERIMENTS_PATH", _experiments_off_file)
 
 
+@pytest.fixture(scope="session")
+def _collabs_off_file(tmp_path_factory) -> Path:
+    """A config/scan.json whose ``reach.collabs`` is off, in a temp file."""
+    import json
+
+    path = tmp_path_factory.mktemp("collabs") / "scan.json"
+    path.write_text(json.dumps({"reach": {"collabs": {"on": False, "order": ["franz", "reginald"], "from": "2026-10-26"}}}), encoding="utf-8")
+    return path
+
+
+@pytest.fixture(autouse=True)
+def _no_collabs(monkeypatch, _collabs_off_file):
+    """No test makes a collab Reel unless it says so (``studio.collab``: the repo's rule is on from 26 Oct 2026): every make reads a
+    rule that is off, so a clip is made exactly as before. A test that needs it passes its own ``CollabRule`` or file."""
+    from studio import collab
+
+    monkeypatch.setattr(collab, "SCAN_PATH", _collabs_off_file)
+
+
 @pytest.fixture
 def experiments_on(monkeypatch):
     """The repo's own test registry (config/experiments.json: A, B and C on from 12 Oct 2026) for the test that asks."""

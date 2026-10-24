@@ -752,8 +752,15 @@ def set_command(
     first_comment_file: Annotated[
         Path | None, typer.Option("--first-comment-file", help="The first comment from a file (use for free text).")
     ] = None,
+    collab: Annotated[
+        str | None,
+        typer.Option("--collab", help="The Reel's collaborator: another live character's Instagram handle (replaces the studio's)."),
+    ] = None,
+    no_collab: Annotated[bool, typer.Option("--no-collab", help="No collaborator on this Reel (the week's collab stays used).")] = False,
 ) -> None:
     """Set a clip's state and/or fields; the state only moves along the allowed transitions."""
+    if collab is not None and no_collab:
+        fail("--collab and --no-collab: pass one of them")
     hook = text_option(hook, hook_file, "hook")
     caption = text_option(caption, caption_file, "caption")
     qa = text_option(qa, qa_file, "qa")
@@ -779,7 +786,7 @@ def set_command(
     except ValueError as e:
         fail(str(e))
     fields = {k: v for k, v in fields.items() if v is not None}
-    if state is None and source_id is None and not fields and first_comment is None:
+    if state is None and source_id is None and not fields and first_comment is None and collab is None and not no_collab:
         fail("nothing to set: pass --state, --source-id and/or at least one field")
     store = open_store()
     try:
@@ -807,6 +814,10 @@ def set_command(
                 c = set_fields(store, id, **fields)
             if first_comment is not None:
                 c = set_first_comment(store, id, first_comment)
+            if collab is not None or no_collab:
+                from studio.collab import set_collab  # local: studio.collab imports the learning loop, which (through the publisher) imports this module
+
+                c = set_collab(store, id, None if no_collab else collab)
     except KeyError:
         fail(f"unknown clip {id}")
     except IllegalTransition as e:

@@ -27,6 +27,12 @@
       "franz.unimpressed": false,
       "reginald.thebutler": false,
       "lennygold.agent": false
+    },
+    "collabs": {
+      "_doc": "Collab posts (owner 2026-10-24; studio/collab.py reads this, studio drop writes it at make): each character's first Reel of a London week (Mon-Sun) carries one of the others as Instagram collaborator (features.collab; a failed, rejected or dropped clip gives the week back). `order` is the ring: in the week `from` (a Monday, week A) each takes the next one (Franz with Reginald, Reginald with Lenny, Lenny with Franz), the week after the one after that (the reverse), and so on. Only a live partner with a Postiz Instagram integration. The owner accepts each invite in the partner's Instagram app; `clip set --collab HANDLE` / `--no-collab` changes or removes it before the post. `on` false: no collabs.",
+      "on": true,
+      "order": ["franz", "reginald", "lenny"],
+      "from": "2026-10-26"
     }
   },
   "hits": {

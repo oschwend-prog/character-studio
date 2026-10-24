@@ -1005,6 +1005,20 @@ def test_a_long_hook_is_cut_and_a_missing_one_is_named():
     assert "a clip without a hook" in weekly.result_line(WEEK, [fact(1, MON, views=10)])
 
 
+def test_the_result_line_shows_the_collab_reels_beside_the_solo_ones_and_marks_a_collab_best_post_and_hit():
+    import dataclasses
+
+    shared = dataclasses.replace(fact(1, MON, views=900, hook="Reginald disapproves."), collab=True)
+    solo = [fact(2, MON + D, views=100), fact(3, MON + 2 * D, views=300), fact(4, MON + 2 * D, views=50, platform="tiktok")]
+    line = weekly.result_line(WEEK, [shared, *solo])
+    assert "best “Reginald disapproves.” 900 views (collab)" in line
+    assert "collabs 1 of 3 (median 900 views v solo 200)" in line  # Instagram Reels only: the TikTok copy is never a collab
+    assert "collab" not in weekly.result_line(WEEK, solo)  # a week without one reads exactly as before
+    older = [fact(10 + i, MON - 21 * D + i * D, x=1.0) for i in range(3)]
+    hit = dataclasses.replace(fact(20, MON - 10 * D, x=4.0), collab=True)
+    assert "1 hit of 4 measured (1 collab)" in weekly.result_line(WEEK, [*older, hit, *solo])
+
+
 def test_the_audience_line_shows_follows_reach_and_the_guard_each_with_its_comparison_or_why_it_is_missing():
     partial = weekly.audience_line(follows=None, follows_n=0, follows_floor=None, reach=97.0, reach_prev=None, reach_n=1, guard=None)
     assert "followers: none yet (no follower count in the cloud yet)" in partial  # some data: every figure keeps its own phrase

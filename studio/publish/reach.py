@@ -16,7 +16,9 @@
    no Story video ("no labelled story video").
 3. **The series tag** is NOT added here: it is written into the clip's own hashtags when the clip is made (``studio.drop`` at
    Make it, ``clip set``; ``captions.with_series_tag``), so the text the owner previews is the text that goes out.
-4. **Collaborators** (Instagram only): only from ``features['collab']``, a list of our OTHER characters' Instagram handles.
+4. **Collaborators** (Instagram only): only from ``features['collab']``, a list of our OTHER characters' Instagram handles
+   (written at make by ``studio.collab``: each character's first Reel of the week, the partner rotating weekly; the owner's
+   ``clip set --collab`` / ``--no-collab`` changes it).
    Each is matched (case and ``@`` aside) against our own Instagram account rows and posted as that row's handle: a name that
    is not the Instagram account of another character who is ``live`` and has a Postiz integration is dropped
    (``PostPlan.collab_dropped``), never invented, never the character himself; at most ``MAX_COLLABORATORS`` (3, Instagram's
