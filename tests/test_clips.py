@@ -542,7 +542,7 @@ def test_the_learning_tags_are_the_plans():
     assert v["score_bucket"] == ("none", "under_50", "50_64", "65_79", "80_up") and v["part"] == ("cameo", "featured", "star")
     assert v["series"] == ("sausage_vs_trend", "household_unaware", "on_hold", "classics", "halloween_countdown", "none")
     assert v["source_kind"] == ("owner_saved", "auto_filed", "own_footage", "recreate")
-    assert v["hook_by"] == ("studio", "owner", "bandit")
+    assert v["hook_by"] == ("studio", "owner", "bandit", "variant")  # variant: a repost's new hook (studio.variant)
     assert v["hook_entrance"] == ("none", "fade_rise", "slam", "word_pop")  # a kit's entrance (seed.STYLE_ENTRANCES)
 
 

@@ -1045,6 +1045,8 @@ def next_engagement(store: Store, slug: str, clip_id: str | None = None) -> str:
     """The engagement line's kind for the character's next post: the one after the kind of its latest clip that has one."""
     latest = None
     for c in store.list_clips(character_slug=slug):
+        if "variant_of" in c.features:  # a repost (studio.variant) keeps its original's line: it takes no turn of the rotation
+            continue
         if c.id != clip_id and c.features.get("engagement_kind") in ENGAGEMENT_ORDER:
             latest = c.features["engagement_kind"]
     if latest is None:
@@ -2494,20 +2496,34 @@ def _quality(
     return None
 
 
+def master_spec(
+    *, slug: str, ref: Mapping[str, Any], gen: Path, hook: str, out: Path, clip_id: str | None, test_arms: Any,
+    preset: str = MASTER_PRESET,
+) -> MasterSpec:
+    """The ``MasterSpec`` of a Drop-in master (owner 2026-10-05): the generation ``gen`` as the dance AND as the sound (music
+    ``original``), no close-up, ``hook`` in two lines of the character's pill for its first ``HOOK_ON_SCREEN_S`` seconds, in his
+    kit (``ref['style']``: refs.json is the authority) and with the edits of tests G and H that ``test_arms`` (a clip's
+    ``features['test_arms']``) asks for, ``None`` when it carries neither. ``_master`` and ``studio.variant`` build it so."""
+    duration = probe(gen, loudness=False).duration_s
+    return MasterSpec(
+        dance=gen, closeup=None, closeup_center=tuple(ref.get("closeup_center") or (0, 0)),
+        blue_eye_xy=tuple(ref.get("blue_eye_xy") or (0, 0)), hook1=[], hook2=hook_lines(hook),
+        hook2_until_s=max(1.0, min(HOOK_ON_SCREEN_S, duration - 1.0)), audio=gen, audio_offset_s=0.0,
+        out=out, preset=preset, clip_id=clip_id, music=MUSIC,
+        character=slug, style=ref.get("style"),  # his kit: pill, entrance, hook edit, tone
+        edits=edits_from_arms(test_arms),  # tests G and H: the clip's two coins, None when it carries neither
+    )
+
+
 def _master(store: Store, storage: Storage, pick: Favorite, clip: Clip, ref: Mapping[str, Any], gen: Path, now: datetime,
             work: Path, preset: str) -> Outcome | None:
     drop = drop_of(pick)
     eff = effective(drop)
     look = drop.get("deconstruct") or {}
     hook = eff["hook"] or (drop.get("hooks") or [""])[0]
-    duration = probe(gen, loudness=False).duration_s
-    spec = MasterSpec(
-        dance=gen, closeup=None, closeup_center=tuple(ref.get("closeup_center") or (0, 0)),
-        blue_eye_xy=tuple(ref.get("blue_eye_xy") or (0, 0)), hook1=[], hook2=hook_lines(hook),
-        hook2_until_s=max(1.0, min(HOOK_ON_SCREEN_S, duration - 1.0)), audio=gen, audio_offset_s=0.0,
-        out=work / "master.mp4", preset=preset, clip_id=clip.id, music=MUSIC,
-        character=pick.character_slug, style=ref.get("style"),  # his kit: pill, entrance, hook edit, tone (refs.json is the authority)
-        edits=edits_from_arms(clip.features.get("test_arms")),  # tests G and H: the clip's two coins, None when it carries neither
+    spec = master_spec(
+        slug=pick.character_slug, ref=ref, gen=gen, hook=hook, out=work / "master.mp4", clip_id=clip.id,
+        test_arms=clip.features.get("test_arms"), preset=preset,
     )
     source = _source(store, clip.source_id) if clip.source_id else None
     if (problem := audio_problem(gen, gen, clip, source, pick.proposal.get("owner_music"))) is not None:
@@ -2839,7 +2855,8 @@ def explore_turn(store: Store, slug: str, now: datetime, registry: experiments.R
     began = datetime.combine(registry.start, time(0, 0), tzinfo=LONDON)
     mine = sorted(
         (c for c in store.list_clips(character_slug=slug)
-         if c.state is not S.dropped and c.created_at is not None and c.created_at >= began and isinstance(c.features.get("explore_pick"), bool)),
+         if c.state is not S.dropped and c.created_at is not None and c.created_at >= began and isinstance(c.features.get("explore_pick"), bool)
+         and "variant_of" not in c.features),  # a repost (studio.variant) is no new draw: it takes no place in the rhythm
         key=lambda c: (c.created_at, c.id),
     )  # fmt: skip
     since = 0

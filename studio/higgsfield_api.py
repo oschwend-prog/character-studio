@@ -57,6 +57,7 @@ from urllib.parse import urlsplit
 import httpx
 
 API_ROOT = "https://api.higgsfield.ai"
+HIGGSFIELD_CDN_HOSTS = ("d8j0ntlcm91z4.cloudfront.net",)  # where Higgsfield serves generations and our character images from
 OBJECT_SWAP_PATH = "/higgsfield/genjutsu/object-swap/v1.0"
 BALANCE_PATH = "/user/credits"  # UNVERIFIED (see the module doc): the free read of what the account still holds
 BALANCE_FIELDS = ("credits", "balance", "credit_balance", "available_credits", "available")  # the names parse_balance accepts
@@ -346,28 +347,54 @@ class HiggsfieldClient:
     def download(self, url: str, dest: Path | str) -> Path:
         """Fetch the output video (``video.url``: Higgsfield's own https URL, no key sent) to ``dest``; a failed download leaves
         no file. ``HiggsfieldError`` for a failure or a file over 500 MB."""
-        _https(url, "the output URL")
-        dest = Path(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        tmp = dest.with_name(f".{dest.name}.part")
-        try:
-            with self._client.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT) as response:
-                if not response.is_success:
-                    response.read()
-                    raise HiggsfieldError(f"the output download answered HTTP {response.status_code}", response.status_code)
-                size = 0
-                with tmp.open("wb") as out:
-                    for chunk in response.iter_bytes(1024 * 1024):
-                        size += len(chunk)
-                        if size > OUTPUT_MAX_BYTES:
-                            raise HiggsfieldError(f"the output is over {OUTPUT_MAX_BYTES // (1024 * 1024)} MB")
-                        out.write(chunk)
-            os.replace(tmp, dest)
-        except httpx.HTTPError as e:
-            raise HiggsfieldError(f"the output download failed ({type(e).__name__})") from None
-        finally:
-            tmp.unlink(missing_ok=True)
-        return dest
+        return _fetch_output(self._client, url, dest)
+
+
+def _fetch_output(client: httpx.Client, url: str, dest: Path | str) -> Path:
+    """Stream ``url`` to ``dest`` through ``client`` (no key is sent; ``HiggsfieldClient.download`` and ``download_output``)."""
+    _https(url, "the output URL")
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(f".{dest.name}.part")
+    try:
+        with client.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT) as response:
+            if not response.is_success:
+                response.read()
+                raise HiggsfieldError(f"the output download answered HTTP {response.status_code}", response.status_code)
+            size = 0
+            with tmp.open("wb") as out:
+                for chunk in response.iter_bytes(1024 * 1024):
+                    size += len(chunk)
+                    if size > OUTPUT_MAX_BYTES:
+                        raise HiggsfieldError(f"the output is over {OUTPUT_MAX_BYTES // (1024 * 1024)} MB")
+                    out.write(chunk)
+        os.replace(tmp, dest)
+    except httpx.HTTPError as e:
+        raise HiggsfieldError(f"the output download failed ({type(e).__name__})") from None
+    finally:
+        tmp.unlink(missing_ok=True)
+    return dest
+
+
+def is_higgsfield_url(url: Any) -> bool:
+    """Is ``url`` an https URL on a Higgsfield-hosted domain: ``higgsfield.ai`` and its subdomains, or the CDN distribution its
+    generations and our character images are served from (``HIGGSFIELD_CDN_HOSTS``)? Nothing else is ever downloaded as an output."""
+    try:
+        parts = urlsplit(_https(url, "the output URL"))
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower()
+    return host == "higgsfield.ai" or host.endswith(".higgsfield.ai") or host in HIGGSFIELD_CDN_HOSTS
+
+
+def download_output(url: str, dest: Path | str, *, transport: httpx.BaseTransport | None = None) -> Path:
+    """Fetch an output video of Higgsfield to ``dest`` with no API key (the URL carries its own access; ``studio clip variant``
+    downloads the generation of a clip that was posted days ago). ``ValueError`` for a URL that is not Higgsfield-hosted
+    (``is_higgsfield_url``), ``HiggsfieldError`` as ``HiggsfieldClient.download``. ``transport`` is for tests."""
+    if not is_higgsfield_url(url):
+        raise ValueError(f"only a Higgsfield-hosted https URL is downloaded, got {str(url)[:80]!r}")
+    with httpx.Client(transport=transport, timeout=_TIMEOUT, follow_redirects=False) as client:
+        return _fetch_output(client, url, dest)
 
 
 def parse_status(data: Mapping[str, Any]) -> RequestStatus:

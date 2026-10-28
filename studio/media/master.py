@@ -813,6 +813,12 @@ def _kit(spec: MasterSpec) -> dict[str, Any]:
     return {}
 
 
+def hook_fits(spec: MasterSpec) -> bool:
+    """Does the spec's hook (``hook2``, the line the pill shows) fit the caption pill of its style kit in the lines the pill is built
+    for (``overlays.pill_fits``)? ``ValueError`` for a hook with nothing drawable in it or a kit that is not valid."""
+    return overlays.pill_fits(spec.hook2, overlays.pill_style(_kit(spec).get("pill")))
+
+
 def _stepped(pngs: Sequence[Path], times: Sequence[float], end: float | None) -> list[Overlay]:
     """``pngs[i]`` from ``times[i]`` to ``times[i + 1]`` (half-open), the last from ``times[-1]`` to ``end``; empty steps dropped."""
     steps = [dataclasses.replace(_boxed(p, a, b), half_open=True) for p, a, b in zip(pngs, times, times[1:]) if b > a]

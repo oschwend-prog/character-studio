@@ -100,6 +100,10 @@ post; the owner pins it. ``set_first_comment`` / ``clip set --first-comment-file
 (one line, 1-300 characters; the clip's JSON field, no new column), the terminal shows it next to the post text with a Copy
 button (v_queue and v_tracker, migration 0010).
 
+**Variants** (``studio clip variant ORIGINAL --hook-file H [--gen FILE]``, ``studio.variant``, owner 2026-10-28): a posted clip is
+posted again as a clip of its own: the same generated dance video, mastered with a NEW hook (so a new cover), no credits. The new
+clip carries ``features['variant_of']``; one live variant per original; it is in no test (``test_arms`` ``{}``, no ``drop`` flag).
+
 CLI (``studio clip ...``) prints JSON on stdout; exit 2 for anything the caller must fix
 (unknown id, illegal transition, missing tags, bad value). ``clip set --state`` goes through
 ``transition``, so the table cannot be bypassed from the command line either. ``clip set --caption`` /
@@ -124,7 +128,7 @@ from typing import Annotated, Any
 import typer
 
 from studio.captions import caption_length, compose_content, with_series_tag
-from studio.cli_support import emit, fail, open_store, parse_when, text_option
+from studio.cli_support import emit, fail, open_storage, open_store, parse_when, text_option
 from studio.config import now_london
 from studio.models import HOOK_PATTERNS, MUSIC_ARMS, Clip, ClipState, Mode, Post, PostStatus
 from studio.planning import accounts_for_clip, family_days, free_slot, taken_days
@@ -165,7 +169,7 @@ REQUIRED_FEATURES = frozenset(
 LEARN_FEATURES = frozenset(
     {
         "hook_index",  # which of the check's hooks is on screen: 1-3, or 1-4 with a hook per bandit arm (1 = the first, the default); 0 = none
-        "hook_by",  # who chose the hook: studio, owner (his Adjust changed it), bandit (test B, later)
+        "hook_by",  # who chose the hook: studio, owner (his Adjust changed it), bandit (test B, later), variant (a repost's new line)
         "caption_line1",
         "first_comment_kind",
         "trend_stage",
@@ -203,7 +207,7 @@ LEARN_VALUES: dict[str, tuple[Any, ...]] = {
     "format_id": ("swap_trend", "swap_classic", "swap_other", "recreate", "own_footage"),
     # the 7 patterns; "owner" = the owner's own line (none of the check's hooks), "none" = a hook nobody labelled
     "hook_pattern": (*HOOK_PATTERNS, "owner", "none"),
-    "hook_by": ("studio", "owner", "bandit"),
+    "hook_by": ("studio", "owner", "bandit", "variant"),  # variant: studio.variant, a repost's new hook (never tallied by the bandit)
     "caption_line1": ("label-first", "joke-first"),
     "first_comment_kind": ("vote", "question", "none"),
     "trend_stage": ("rising", "peak", "fading", "classic", "none"),
@@ -880,3 +884,40 @@ def schedule_command(
     except ValueError as e:
         fail(str(e))
     emit({"clip": _clip_json(clip), "posts": posts})
+
+
+@app.command("variant")
+def variant_command(
+    original: Annotated[str, typer.Argument(help="Id of the POSTED clip to post again with a new hook.")],
+    hook_file: Annotated[
+        Path, typer.Option("--hook-file", help="The new on-screen hook, one line, from a file (it is the new cover).")
+    ],
+    gen: Annotated[
+        Path | None,
+        typer.Option(
+            "--gen",
+            help="The generated dance video (before any overlay). Default: renders/<original>/gen.mp4, else the Higgsfield "
+            "output recorded on the original's drop.",
+        ),
+    ] = None,
+) -> None:
+    """Make a variant of a posted clip: its generation again, a new hook on the pill, a new clip (mastered, credits 0).
+
+    Refused (exit 2, nothing made) for a clip that is not posted, an empty / too long / unchanged hook, a clip that already
+    has a live variant, or no generation to master from. The variant is then scheduled like any clip (``clip schedule``).
+    """
+    from studio import variant  # local: it imports studio.drop and the master, which this module is imported before
+
+    hook = text_option(None, hook_file, "hook")
+    store = open_store()
+    storage = open_storage()
+    try:
+        result = variant.make_variant(store, storage, original, hook or "", gen=gen)
+    except KeyError:
+        fail(f"unknown clip {original}")
+    except variant.VariantRefused as e:
+        fail(str(e))
+    except variant.VariantFailed as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1) from None
+    emit(result)

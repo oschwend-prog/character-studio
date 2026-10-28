@@ -423,6 +423,28 @@ def _lean_and_tilt(img: Image.Image, shear: float, tilt_deg: float) -> Image.Ima
     return img.convert("RGBA")
 
 
+def _pill_layout(lines: list[str], style: PillStyle) -> tuple[int, ImageFont.FreeTypeFont, list[str]]:
+    """The font size, the font and the wrapped lines ``pill_png`` draws ``lines`` with: the text joined and re-wrapped to
+    ``PILL_MAX_LINES`` lines of ``PILL_MAX_TEXT_W`` px, the font shrinking from ``PILL_SIZE`` to ``PILL_MIN_SIZE`` first (past that
+    the block keeps its lines, however many). ``ValueError`` for no text."""
+    words = " ".join(_clean(lines)).split()
+    if style.case == "upper":
+        words = [word.upper() for word in words]
+    size = PILL_SIZE
+    while True:
+        fnt = _pill_font(size, style)
+        wrapped = _wrap(words, fnt, PILL_MAX_TEXT_W, style.tracking)
+        if len(wrapped) <= PILL_MAX_LINES or size <= PILL_MIN_SIZE:
+            return size, fnt, wrapped
+        size -= 2
+
+
+def pill_fits(lines: list[str], style: PillStyle = DEFAULT_PILL) -> bool:
+    """Does ``pill_png`` draw ``lines`` in at most ``PILL_MAX_LINES`` lines (at ``PILL_MIN_SIZE`` or larger)? A longer hook is drawn
+    in more lines than the pill is designed for. ``ValueError`` for no text."""
+    return len(_pill_layout(lines, style)[2]) <= PILL_MAX_LINES
+
+
 def pill_png(lines: list[str], out: str | Path, y: int = PILL_Y, style: PillStyle = DEFAULT_PILL) -> Path:
     """The studio pill: a full-frame transparent PNG with the text in a rounded pill, the two ODD EYES dots in front.
 
@@ -433,16 +455,7 @@ def pill_png(lines: list[str], out: str | Path, y: int = PILL_Y, style: PillStyl
     placed by what it covers: that whole shape stays between ``SAFE_TOP`` and ``SAFE_BOTTOM``.
     Raises ``ValueError`` for no text.
     """
-    words = " ".join(_clean(lines)).split()
-    if style.case == "upper":
-        words = [word.upper() for word in words]
-    size = PILL_SIZE
-    while True:
-        fnt = _pill_font(size, style)
-        wrapped = _wrap(words, fnt, PILL_MAX_TEXT_W, style.tracking)
-        if len(wrapped) <= PILL_MAX_LINES or size <= PILL_MIN_SIZE:
-            break
-        size -= 2
+    size, fnt, wrapped = _pill_layout(lines, style)
     pitch = round(size * 1.26)
     text_w = max(_text_w(line, fnt, style.tracking) for line in wrapped)
     w, h = round(PILL_TEXT_X + text_w + PILL_PAD_X), pitch * len(wrapped) + 2 * PILL_PAD_Y
