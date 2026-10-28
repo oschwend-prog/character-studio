@@ -14,6 +14,7 @@ from studio.models import (
     Account,
     Character,
     Clip,
+    Favorite,
     LedgerEntry,
     Mode,
     Platform,
@@ -250,6 +251,218 @@ def test_a_zero_cap_is_not_a_percentage_problem():
     assert check(store, NOW) == []
 
 
+# ---- paid services out of credits (owner 2026-10-28) ----------------------------------------------
+
+
+def pull_line(store: MemoryStore, *, ago: timedelta, stopped: str | None = "out_of_credits", calls: int = 0) -> None:
+    """The ``hits`` run ``studio.hits.record_pull`` logs for a pull that started ``ago`` before NOW."""
+    at = NOW - ago
+    status = "error" if stopped == "out_of_credits" else "ok"
+    pull = {"day": at.astimezone(LONDON).date().isoformat(), "calls": calls, "credits": calls, "kept": 0, "stopped": stopped,
+            "errors": 1 if stopped else 0, "error": "ScrapeCreatorsError: HTTP 402" if stopped else None}  # fmt: skip
+    store.add_run(Run(kind="hits", status=status, started_at=at, finished_at=at, details={"pull": pull}))
+
+
+def test_health_flags_scrapecreators_out_of_credits_since_the_first_pull_it_stopped_on():
+    store = fresh()
+    pull_line(store, ago=timedelta(days=4), stopped=None, calls=25)  # it worked until then
+    pull_line(store, ago=timedelta(days=3))
+    pull_line(store, ago=timedelta(days=2))
+    pull_line(store, ago=timedelta(hours=6))
+    (problem,) = check(store, NOW)
+    assert problem.startswith("ScrapeCreators out of credits since 2026-10-04: no hits pulled")
+    assert "Top up at scrapecreators.com" in problem and "workflow run studio-hits.yml" in problem  # the one-line fix
+
+
+def test_a_later_pull_that_works_clears_scrapecreators_and_a_new_stop_starts_a_new_since():
+    store = fresh()
+    pull_line(store, ago=timedelta(days=3))
+    pull_line(store, ago=timedelta(days=2), stopped=None, calls=25)  # topped up
+    assert check(store, NOW) == []
+    pull_line(store, ago=timedelta(days=1))  # out again
+    (problem,) = check(store, NOW)
+    assert "since 2026-10-06" in problem
+
+
+def test_a_pull_that_stopped_part_way_says_how_far_it_got():
+    store = fresh()
+    pull_line(store, ago=timedelta(hours=6), calls=3)
+    (problem,) = check(store, NOW)
+    assert "the last pull stopped after 3 calls" in problem and "no hits pulled" not in problem
+    pull_line(store, ago=timedelta(hours=5), calls=1)
+    (problem,) = check(store, NOW)
+    assert "stopped after 1 call." in problem
+
+
+def test_scrapecreators_is_no_problem_for_the_other_stops_the_other_lines_and_the_other_runs():
+    store = fresh()
+    pull_line(store, ago=timedelta(hours=6), stopped="cap", calls=25)  # the day's credit cap: normal
+    pull_line(store, ago=timedelta(hours=5), stopped=None)
+    store.add_run(Run(kind="hits", status="ok", started_at=NOW, details={"lunar": {"day": "2026-10-07", "calls": 4}}))  # LunarCrush bookkeeping
+    store.add_run(Run(kind="hits", status="ok", started_at=NOW, details={"pull": "odd"}))
+    store.add_run(Run(kind="daily", status="ok", started_at=NOW, details={"pull": {"stopped": "out_of_credits"}}))  # not the hits job's
+    assert check(store, NOW) == []
+    assert check(MemoryStore(), NOW) == []  # nothing logged yet (before the first pull this was recorded): no problem
+
+
+def test_scrapecreators_reads_the_latest_pull_whatever_order_the_lines_were_written_in():
+    store = fresh()
+    pull_line(store, ago=timedelta(hours=6))  # written first, but newer than the working one
+    pull_line(store, ago=timedelta(hours=30), stopped=None, calls=25)
+    (problem,) = check(store, NOW)
+    assert "since 2026-10-07" in problem
+    pull_line(store, ago=timedelta(hours=1), stopped=None, calls=25)
+    assert check(store, NOW) == []
+
+
+def hf_drop(store: MemoryStore, state: str, *, ago: timedelta | None = None, **over) -> Favorite:
+    """A dropped video; ``ago`` is how long before NOW the refusal stamp (``credits_refused_at``) was written, if any."""
+    d = {"state": state, "kind": "file", "at": (NOW - timedelta(hours=1)).isoformat(), "reason": None, **over}
+    if ago is not None:
+        d["credits_refused_at"] = (NOW - ago).isoformat()
+    return store.add_favorite(Favorite(
+        url=f"owner-drop:{len(store.list_favorites())}", platform="drop", origin="owner", character_slug="biscuit", status="approved",
+        proposal={"drop": d},
+    ))  # fmt: skip
+
+
+def accepted(store: MemoryStore, *, ago: timedelta, state: str = "made", request_id: str | None = "req-1") -> Favorite:
+    """A make Higgsfield took: its submit was ``ago`` before NOW and it carries the request id Higgsfield answered with."""
+    make = {"submitted_at": (NOW - ago).isoformat(), "request_id": request_id, "idempotency_key": "k"}
+    return hf_drop(store, state, make=make)
+
+
+def test_health_flags_the_higgsfield_api_wallet_empty_from_the_studios_refused_makes():
+    store = fresh()
+    hf_drop(store, "ready", ago=timedelta(hours=30))  # 06 Oct 06:00 London
+    hf_drop(store, "ready", ago=timedelta(hours=2))
+    (problem,) = check(store, NOW)
+    assert problem.startswith("Higgsfield API wallet empty: 2 makes refused since 2026-10-06 06:00 (nothing was charged)")
+    assert "into the API wallet, not the app wallet" in problem and "open.higgsfield.ai" in problem  # the one-line fix
+    hf_drop(store, "ready", ago=timedelta(hours=3))
+    (problem,) = check(store, NOW)
+    assert "3 makes refused since 2026-10-06 06:00" in problem  # one problem for the service, not one per drop
+
+
+def test_one_refused_make_is_singular():
+    store = fresh()
+    hf_drop(store, "ready", ago=timedelta(hours=2))
+    (problem,) = check(store, NOW)
+    assert "1 make refused since 2026-10-07 10:00" in problem
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        'Higgsfield refused the job: Higgsfield refused the submit: HTTP 403: {"detail": "not_enough_credits"}',
+        'Higgsfield refused the job: Higgsfield refused the submit: HTTP 403: {"detail": "Insufficient credits"}',
+        "Higgsfield refused the job: Higgsfield refused the submit: HTTP 403: {}",  # the status alone, as the terminal reads it
+    ],
+)
+def test_the_owners_make_that_failed_for_credits_counts_with_its_own_time(reason):
+    store = fresh()
+    hf_drop(store, "failed", reason=reason, at=(NOW - timedelta(hours=5)).isoformat())
+    (problem,) = check(store, NOW)
+    assert "1 make refused since 2026-10-07 07:00" in problem
+
+
+def test_a_failed_make_for_another_reason_is_not_a_wallet_problem():
+    store = fresh()
+    hf_drop(store, "failed", reason="Higgsfield refused the job: Higgsfield refused the submit: HTTP 400: bad image")
+    hf_drop(store, "failed", reason="the frame check found a leftover person")
+    hf_drop(store, "failed", reason="Higgsfield output download: HTTP 403")  # a signed link, not the wallet
+    hf_drop(store, "ready", reason="Higgsfield said not enough credits at Wed 07 Oct 06:00")  # the card's line, with no stamp: not evidence
+    assert check(store, NOW) == []
+
+
+def test_a_make_higgsfield_accepted_after_the_refusals_clears_the_problem():
+    store = fresh()
+    hf_drop(store, "ready", ago=timedelta(hours=10))
+    hf_drop(store, "failed", reason="Higgsfield refused the job: HTTP 403: not_enough_credits", at=(NOW - timedelta(hours=9)).isoformat())
+    assert len(check(store, NOW)) == 1
+    accepted(store, ago=timedelta(hours=8), state="making")  # the owner topped up and a submit went through
+    assert check(store, NOW) == []
+    hf_drop(store, "ready", ago=timedelta(hours=2))  # ... and it ran dry again later
+    (problem,) = check(store, NOW)
+    assert "1 make refused since 2026-10-07 10:00" in problem
+
+
+def test_a_stale_stamp_on_a_drop_that_was_made_since_is_not_counted():
+    """``credits_refused_at`` stays on a drop after it is made (the drop dict is merged): it is old news once a submit followed it."""
+    store = fresh()
+    hf_drop(store, "made", ago=timedelta(hours=20), make={"submitted_at": (NOW - timedelta(hours=10)).isoformat(), "request_id": "req-1"})
+    assert check(store, NOW) == []
+
+
+def test_a_make_by_hand_does_not_show_the_api_wallet_is_full():
+    """The owner's by-hand makes go through the MCP (the app wallet): they carry no Higgsfield API request id and prove nothing."""
+    store = fresh()
+    hf_drop(store, "ready", ago=timedelta(hours=10))
+    accepted(store, ago=timedelta(hours=2), request_id=None)
+    accepted(store, ago=timedelta(hours=2), request_id="")
+    hf_drop(store, "failed", make={"submitted_at": (NOW - timedelta(hours=2)).isoformat(), "request_id": "req-9"})  # not making/made
+    (problem,) = check(store, NOW)
+    assert "1 make refused" in problem
+
+
+def test_a_refusal_is_news_for_48_hours():
+    assert health.HF_REFUSAL_WINDOW == timedelta(hours=48)
+    store = fresh()
+    hf_drop(store, "ready", ago=health.HF_REFUSAL_WINDOW)
+    assert len(check(store, NOW)) == 1  # exactly 48 h: still counted
+    quiet = fresh()
+    hf_drop(quiet, "ready", ago=health.HF_REFUSAL_WINDOW + timedelta(minutes=1))
+    assert check(quiet, NOW) == []  # the newest refusal is older than that: nothing has been asked since, say nothing
+    hf_drop(quiet, "ready", ago=timedelta(hours=1))
+    (problem,) = check(quiet, NOW)
+    assert "2 makes refused since 2026-10-05" in problem  # the old one still dates the start once there is a new one
+
+
+def test_stamps_that_are_no_time_and_favorites_that_are_not_drops_are_ignored():
+    store = fresh()
+    hf_drop(store, "ready", credits_refused_at="yesterday")
+    hf_drop(store, "ready", credits_refused_at="2026-10-07T10:00:00")  # no offset: not guessed
+    hf_drop(store, "ready", credits_refused_at=12345)
+    store.add_favorite(Favorite(url="https://example.test/a", platform="tiktok", proposal={"credits_refused_at": NOW.isoformat()}))
+    store.add_favorite(Favorite(url="https://example.test/b", platform="tiktok", proposal={"drop": "odd"}))
+    store.add_favorite(Favorite(url="https://example.test/c", platform="tiktok", proposal={"drop": {"state": "making", "make": "odd"}}))
+    assert check(store, NOW) == []
+
+
+def test_the_health_check_reads_what_the_drop_code_really_writes_for_a_credits_refusal():
+    """Not a hand-made dict: ``drop._refused_for_credits`` (the studio's make) and ``drop._give_up`` (the owner's Make it)."""
+    from studio import drop
+    from studio.higgsfield_api import HiggsfieldError
+
+    refusal = HiggsfieldError('Higgsfield refused the submit: HTTP 403: {"detail": "Insufficient credits"}', 403)
+    store = fresh()
+    studio, owner = (
+        store.add_favorite(Favorite(
+            url=f"owner-drop:{who}", platform="drop", origin="owner", character_slug="biscuit", status="approved",
+            proposal={"make_requested": {"at": NOW.isoformat(), "by": who}, "drop": {"state": "making", "make": {"idempotency_key": "k"}}},
+        ))  # fmt: skip
+        for who in ("studio", "owner")
+    )
+    clip = store.add_clip(Clip(character_slug="biscuit", mode=Mode.recreate))
+    drop._refused_for_credits(store, studio, clip, NOW - timedelta(hours=3), refusal)
+    (problem,) = check(store, NOW)
+    assert "1 make refused since 2026-10-07 09:00" in problem
+    drop._give_up(store, owner, clip, NOW - timedelta(hours=2), f"Higgsfield refused the job: {refusal}")
+    (problem,) = check(store, NOW)
+    assert "2 makes refused since 2026-10-07 09:00" in problem
+
+
+def test_each_service_out_of_credits_is_its_own_problem_after_the_budget():
+    store = fresh()
+    spend(store, 6000)
+    pull_line(store, ago=timedelta(hours=6))
+    hf_drop(store, "ready", ago=timedelta(hours=2))
+    problems = check(store, NOW)
+    assert [("credits committed" in p, "ScrapeCreators" in p, "Higgsfield" in p) for p in problems] == [
+        (True, False, False), (False, True, False), (False, False, True),
+    ]
+
+
 def test_problems_come_in_a_stable_order_and_check_refuses_a_naive_now():
     store = bare()
     spend(store, 6000)
@@ -293,6 +506,19 @@ def test_cli_health_prints_the_problems_and_exits_1(cli_store, monkeypatch):
     assert r.exit_code == 1
     out = json.loads(r.stdout)
     assert out["ok"] is False and len(out["problems"]) == 1 and "needs_check" in out["problems"][0]
+
+
+def test_cli_health_exits_1_naming_each_service_out_of_credits(cli_store, monkeypatch):
+    """The two silent failures of 11-28 Oct: every job green, health ok. Now `studio health` is red with one line per service."""
+    monkeypatch.setattr(health, "now_london", lambda: NOW)
+    pull_line(cli_store, ago=timedelta(hours=6))
+    hf_drop(cli_store, "ready", ago=timedelta(hours=2))
+    r = run("health")
+    assert r.exit_code == 1
+    out = json.loads(r.stdout)
+    assert out["ok"] is False and len(out["problems"]) == 2
+    assert out["problems"][0].startswith("ScrapeCreators out of credits since 2026-10-07: no hits pulled")
+    assert out["problems"][1].startswith("Higgsfield API wallet empty: 1 make refused since 2026-10-07 10:00")
 
 
 def test_cli_health_does_not_require_a_daily_run_by_default(monkeypatch):

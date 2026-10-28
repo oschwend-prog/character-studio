@@ -72,7 +72,9 @@ class RunKind(StrEnum):
     weekly = "weekly"
     publish = "publish"
     metrics = "metrics"
-    hits = "hits"  # the cloud hits job's line (studio.hits.record_lunar_calls): the LunarCrush calls it made on a London day
+    # The cloud hits job's lines: studio.hits.record_pull (every pull's outcome, details.pull, which studio health reads for a ScrapeCreators
+    # account out of credits) and studio.hits.record_lunar_calls (details.lunar: the LunarCrush calls it made on a London day).
+    hits = "hits"
     # One row per London day (studio.metrics.pull_accounts, owner 2026-10-15): each live account's figures from Postiz (Stories
     # included). Only Reach is per day: details {"day": "YYYY-MM-DD", "accounts": {handle: {reach}}}. Views, likes, comments, shares,
     # saves and replies are Instagram's ONE total over the last 7 days, kept on the row of the day they were read:

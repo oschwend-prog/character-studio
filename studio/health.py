@@ -2,7 +2,7 @@
 
 ``check(store, now)`` returns the problems, one human sentence each; no problem, no output. A failing
 scheduled workflow emails the owner through GitHub's own notifications, so ``studio health`` just exits 1
-with the problems printed. The four checks, in this order:
+with the problems printed. The checks, in this order:
 
 1. **The daily run (only with ``--daily-run``).** Off by default since 12 Oct 2026: the owner turned the Mac's
    daily run off and the cloud jobs (hits, drop sweep, publish, metrics) do the work, so requiring a daily run
@@ -25,6 +25,17 @@ with the problems printed. The four checks, in this order:
 3. **The budget.** Credits committed this London month (settled + still reserved, ``budget.committed``)
    at or past ``CAP_WARN_PCT`` (80 %) of ``Settings.monthly_cap_credits``. Exact integer arithmetic, no
    rounding: 4,800 of 6,000 is a problem, 4,799 is not. A cap of 0 has no percentage and is not flagged.
+4. **ScrapeCreators credits** (owner 2026-10-28). The cloud hits job answers an account out of credits (HTTP 402) with a warning and a
+   green run, so nobody noticed it pulling nothing for two weeks. Every pull logs a ``hits`` run (``studio.hits.record_pull``,
+   ``details.pull.stopped``); the problem is there while the latest logged pull stopped ``out_of_credits`` (since the first of the
+   unbroken run of such pulls). Any later pull that does not stop that way clears it: topping up and running the job once is the fix.
+5. **Higgsfield API wallet** (same day). A make the wallet cannot pay is refused with HTTP 403 at submit and the job stays green: the
+   studio's own make leaves ``drop.credits_refused_at`` on a ready drop, the owner's Make it a failed drop whose reason says
+   ``not_enough_credits``. The problem is there while such a refusal is newer than the last submit Higgsfield accepted (a ``making`` or
+   ``made`` drop with a ``make.request_id``; a by-hand make through the MCP uses the app wallet and proves nothing) and the newest is
+   no more than ``HF_REFUSAL_WINDOW`` (48 h: auto-make asks again every 12 h, but nothing is asked over a weekend) old. N counts drops
+   (a drop refused again only moves its stamp). The ledger's reserve-then-release pair is not read: a release follows every other
+   refused or failed submit too.
 
 ``studio run log --kind daily|weekly|publish|metrics --status ok|budget_stop|error [--summary TEXT |
 --summary-file PATH] [--details-file PATH] [--started-at ISO] [--finished-at ISO | --open]`` appends one
@@ -49,6 +60,8 @@ CLI output is JSON on stdout. Exit codes: ``health`` 0 healthy, 1 problems, 2 ca
 from __future__ import annotations
 
 import json
+import re
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any
@@ -65,6 +78,10 @@ DAILY_MAX_AGE = timedelta(hours=26)
 STORY_STALE_AFTER = timedelta(minutes=30)  # like a post's claim (studio.publish.base.STALE_AFTER)
 STORY_CHECK_WINDOW = timedelta(hours=24)  # a Story lives 24 hours: after that there is nothing on Instagram to check
 CAP_WARN_PCT = 80
+HF_REFUSAL_WINDOW = timedelta(hours=48)  # a Higgsfield "not enough credits" is news this long (the studio probes again every 12 h)
+_NO_CREDITS = re.compile(  # Higgsfield's words in a failed drop's reason (studio.drop._give_up: "Higgsfield refused the job: ...HTTP 403...")
+    r"not[ _]enough[ _]credits|insufficient[ _]credits|refused the job.*HTTP 403", re.IGNORECASE
+)
 _ERROR_CHARS = 300
 
 
@@ -149,6 +166,74 @@ def _budget_problem(store: Store, now: datetime) -> str | None:
     return None
 
 
+def _aware(raw: Any) -> datetime | None:
+    """An ISO time with an offset, else None (a stored stamp that is no time is ignored, not guessed)."""
+    if not isinstance(raw, str):
+        return None
+    try:
+        at = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return at if at.tzinfo is not None else None
+
+
+def _scrapecreators_problem(store: Store) -> str | None:
+    """The hits job's latest logged pull stopped ``out_of_credits`` (see the module doc, check 4): since the first pull of the unbroken
+    run of such pulls. No logged pull, or a latest one that did not stop that way, is no problem."""
+    pulls = sorted(
+        ((r, r.details["pull"]) for r in store.list_runs(kind=RunKind.hits) if isinstance(r.details.get("pull"), Mapping)),
+        key=lambda rp: rp[0].started_at,
+    )
+    streak: list[tuple[Run, Mapping[str, Any]]] = []
+    for run, pull in reversed(pulls):
+        if pull.get("stopped") != "out_of_credits":
+            break
+        streak.append((run, pull))
+    if not streak:
+        return None
+    first_run, first = streak[-1]
+    day = first["day"] if isinstance(first.get("day"), str) else _local(first_run.started_at)[:10]
+    calls = streak[0][1].get("calls")
+    what = (
+        f"the last pull stopped after {calls} call{'s' if calls != 1 else ''}"
+        if isinstance(calls, int) and not isinstance(calls, bool) and calls > 0
+        else "no hits pulled"
+    )
+    return (
+        f"ScrapeCreators out of credits since {day}: {what}. Top up at scrapecreators.com; the next pull "
+        "(05:30 UTC daily, or `gh workflow run studio-hits.yml`) clears this"
+    )
+
+
+def _higgsfield_problem(store: Store, now: datetime) -> str | None:
+    """Higgsfield refused makes for want of credits and has taken none since (see the module doc, check 5)."""
+    refused: list[datetime] = []
+    took: datetime | None = None  # when Higgsfield last accepted a submit
+    for fav in store.list_favorites():
+        drop = fav.proposal.get("drop") if isinstance(fav.proposal, Mapping) else None
+        if not isinstance(drop, Mapping):
+            continue
+        make = drop.get("make")
+        if drop.get("state") in ("making", "made") and isinstance(make, Mapping) and make.get("request_id"):
+            sent = _aware(make.get("submitted_at"))
+            if sent is not None and (took is None or sent > took):
+                took = sent
+        stamps = [_aware(drop.get("credits_refused_at"))]  # the studio's make, put back to ready
+        if drop.get("state") == "failed" and _NO_CREDITS.search(str(drop.get("reason") or "")):
+            stamps.append(_aware(drop.get("at")))  # the owner's Make it
+        known = [t for t in stamps if t is not None]
+        if known:
+            refused.append(max(known))
+    live = [t for t in refused if took is None or t > took]
+    if not live or now - max(live) > HF_REFUSAL_WINDOW:
+        return None
+    n = len(live)
+    return (
+        f"Higgsfield API wallet empty: {n} make{'s' if n != 1 else ''} refused since {_local(min(live))} (nothing was charged). "
+        "Top up at open.higgsfield.ai > Billing, into the API wallet, not the app wallet; the studio asks again by itself"
+    )
+
+
 def check(store: Store, now: datetime, *, daily_run: bool = False) -> list[str]:
     """The problems found at ``now`` (aware), empty when all is well. Read-only.
 
@@ -161,6 +246,8 @@ def check(store: Store, now: datetime, *, daily_run: bool = False) -> list[str]:
         *_post_problems(store),
         *_story_problems(store, now),
         _budget_problem(store, now),
+        _scrapecreators_problem(store),
+        _higgsfield_problem(store, now),
     ]
     return [p for p in found if p is not None]
 
@@ -177,7 +264,7 @@ def health_command(
         ),
     ] = False,
 ) -> None:
-    """Check failed posts, stuck Stories and the budget (and with --daily-run the daily run); exit 1 with the problems when any is found."""
+    """Check failed posts, stuck Stories, the budget and paid services out of credits (and with --daily-run the daily run); exit 1 with the problems when any is found."""
     problems = check(open_store(), now_london(), daily_run=daily_run)
     emit({"ok": not problems, "problems": problems})
     if problems:

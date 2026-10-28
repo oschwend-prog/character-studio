@@ -88,7 +88,8 @@ filing costs only a free check). The checks are made lazily, in rank order, for 
 check of every candidate; the learning tags carry ``trend_stage`` instead, and the weekly review judges it). The readings are not
 stored on the hit (no column, no migration): they live on the drop and in the run's JSON (``trend``).
 
-An account out of credits (HTTP 402) stops the pull (``stopped: "out_of_credits"``).
+An account out of credits (HTTP 402) stops the pull (``stopped: "out_of_credits"``). The job still exits green, so every pull logs its
+outcome as a ``hits`` run (``record_pull``, ``details.pull``) and ``studio health`` reports an account whose latest pull stopped that way.
 
 CLI: ``studio hits pull [--dry-run] [--no-file]`` prints ``{"calls", "credits", "day_credits", "kept", "updated", "skipped":
 {reason: n}, "stopped": "cap" | null, "errors": [...], "filed": [{"hit_id", "pick_id", "character", "provisional"}], "braked",
@@ -859,6 +860,25 @@ def record_lunar_calls(store: Store, now: datetime, gate: lunar.TrendGate) -> No
     ))  # fmt: skip
 
 
+def record_pull(store: Store, now: datetime, out: Mapping[str, Any]) -> None:
+    """Log this pull's outcome as one ``hits`` run, so ``studio health`` can see a ScrapeCreators account that ran out of credits
+    (the job itself exits green on purpose: the owner's top-up, not a broken job). ``details.pull``: ``day`` (London), ``calls``
+    that answered, ``credits``, ``kept``, ``stopped`` (``out_of_credits``, ``cap`` or null), ``errors`` (how many calls failed) and
+    ``error`` (the first one's words, 200 characters at most). Status: ``error`` when the account is out of credits or not one call
+    worked, ``budget_stop`` on the day's credit cap, else ``ok``. It carries no ``lunar`` key, so ``lunar_calls_today`` ignores it."""
+    stopped, errors = out.get("stopped"), list(out.get("errors") or [])
+    if stopped == "out_of_credits" or (not out["calls"] and errors):
+        status, said = RunStatus.error, "ScrapeCreators is out of credits" if stopped == "out_of_credits" else "no call worked"
+    else:
+        status, said = (RunStatus.budget_stop if stopped == "cap" else RunStatus.ok), f"{out['calls']} calls, {out['kept']} new hits"
+    first = " ".join(str(errors[0].get("error", "")).split())[:200] if errors else None
+    store.add_run(Run(
+        kind=RunKind.hits, status=status, started_at=now, finished_at=now, summary=f"Pull: {said}",
+        details={"pull": {"day": london_day(now).isoformat(), "calls": out["calls"], "credits": out["credits"], "kept": out["kept"],
+                          "stopped": stopped, "errors": len(errors), "error": first}},
+    ))  # fmt: skip
+
+
 def trend_as_of(now: datetime) -> date:
     """The latest full day of a trend's series: yesterday in London (``lunar.trend_curve`` reads a series that stopped earlier as
     days of nothing posted)."""
@@ -1013,6 +1033,10 @@ def pull_command(
         return
     now = now_london()
     out = pull(store, client, scan, now)
+    try:
+        record_pull(store, now, out)  # what `studio health` reads: an account out of credits is a green run on purpose
+    except Exception as e:  # noqa: BLE001 - bookkeeping: the pull stands without its line
+        log.warning("the outcome of this pull could not be logged (%s)", type(e).__name__)
     filing: dict[str, Any] = {"filed": [], "braked": False, "waiting": None, "max_waiting": cfg["auto_file_max_waiting"],
                               "skipped_dead": 0, "dismissed": [], "trend": None}  # fmt: skip
     if file:

@@ -498,6 +498,84 @@ def test_cli_pull_out_of_credits_is_a_warning_not_a_red_run(cli_store, monkeypat
     assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 1
 
 
+def pulls(store):
+    """The ``hits`` runs that are a pull's outcome (``details.pull``), oldest first."""
+    return [r for r in store.list_runs(kind="hits") if "pull" in r.details]
+
+
+def test_a_pull_out_of_credits_leaves_a_line_for_studio_health_though_the_run_is_green(cli_store, monkeypatch):
+    """ScrapeCreators answered HTTP 402 from about 11 Oct and nothing recorded it: the job exits 0 on purpose (a warning, not a red run),
+    so the outcome is logged as a ``hits`` run that ``studio health`` reads (``health._scrapecreators_problem``)."""
+    api = FakeAPI()
+    api.answer(TT_TREND, 402)
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    r = CliRunner().invoke(app, ["hits", "pull"])
+    assert r.exit_code == 0, r.output
+    (line,) = pulls(cli_store)
+    assert line.status.value == "error" and line.summary == "Pull: ScrapeCreators is out of credits"
+    assert line.started_at == NOW and line.finished_at == NOW
+    pull = line.details["pull"]
+    assert (pull["day"], pull["calls"], pull["credits"], pull["kept"], pull["stopped"], pull["errors"]) == ("2026-10-08", 0, 0, 0, "out_of_credits", 1)
+    assert "402" in pull["error"]
+    assert "lunar" not in line.details and hits.lunar_calls_today(cli_store, NOW.date()) == 0  # not a LunarCrush line
+
+
+def test_every_pull_logs_its_outcome_and_a_healthy_one_is_ok(cli_store, monkeypatch):
+    api = FakeAPI()
+    api.answer(TT_SEARCH, page(TT_SEARCH, [tt_item(1, views=2_000_000, followers=20_000)]))
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    r = CliRunner().invoke(app, ["hits", "pull"])
+    assert r.exit_code == 0, r.output
+    (line,) = pulls(cli_store)
+    assert line.status.value == "ok" and line.summary == "Pull: 25 calls, 1 new hits"
+    pull = line.details["pull"]
+    assert (pull["calls"], pull["kept"], pull["stopped"], pull["errors"], pull["error"]) == (25, 1, None, 0, None)
+    assert pull["credits"] == json.loads(r.stdout)["credits"]
+
+
+def test_a_refused_key_logs_an_error_line_without_the_credits_reason(cli_store, monkeypatch):
+    api = FakeAPI()
+    api.answer(TT_TREND, 401)
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 1  # still a red run
+    (line,) = pulls(cli_store)
+    assert line.status.value == "error" and line.summary == "Pull: no call worked" and line.details["pull"]["stopped"] is None
+
+
+def test_record_pull_reads_the_outcome_of_a_pull_not_the_pull_itself():
+    store = roster_store()
+    base = {"calls": 3, "credits": 3, "kept": 2, "updated": 0, "skipped": {}, "errors": []}
+    hits.record_pull(store, NOW, {**base, "stopped": "cap"})  # the day's credit cap: a normal stop
+    hits.record_pull(store, NOW, {**base, "stopped": "out_of_credits", "errors": [{"call": "x", "error": "  HTTP 402:\n" + "z" * 400}]})
+    hits.record_pull(store, NOW, {**base, "calls": 0, "stopped": None, "errors": [{"call": "x", "error": "HTTP 500"}]})
+    cap, mid_run, none_worked = pulls(store)
+    assert (cap.status.value, cap.details["pull"]["stopped"]) == ("budget_stop", "cap")
+    assert mid_run.status.value == "error" and mid_run.details["pull"]["calls"] == 3  # out of credits part-way through the run
+    assert mid_run.details["pull"]["error"].startswith("HTTP 402: zzz") and len(mid_run.details["pull"]["error"]) == 200
+    assert none_worked.status.value == "error" and none_worked.details["pull"]["stopped"] is None
+    assert hits.lunar_calls_today(store, NOW.date()) == 0
+
+
+def test_a_dry_run_and_a_run_without_the_key_log_nothing(cli_store, monkeypatch):
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: pytest.fail("no client in a dry run")))
+    assert CliRunner().invoke(app, ["hits", "pull", "--dry-run"]).exit_code == 0
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: None))
+    assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 0
+    assert cli_store.list_runs(kind="hits") == []
+
+
+def test_a_pull_whose_line_cannot_be_written_still_stands(cli_store, monkeypatch, caplog):
+    api = FakeAPI()
+    api.answer(TT_SEARCH, page(TT_SEARCH, [tt_item(1, views=2_000_000, followers=20_000)]))
+    monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
+    monkeypatch.setattr(hits, "record_pull", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("database is down")))
+    with caplog.at_level(logging.WARNING, logger="studio.hits"):
+        r = CliRunner().invoke(app, ["hits", "pull"])
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.stdout)["kept"] == 1 and len(cli_store.list_hits()) == 1
+    assert "could not be logged" in caplog.text and "database is down" not in caplog.text
+
+
 def test_cli_pull_dry_run_prints_the_plan_and_calls_nothing(cli_store, monkeypatch):
     monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: pytest.fail("no client in a dry run")))
     r = CliRunner().invoke(app, ["hits", "pull", "--dry-run"])
@@ -1127,6 +1205,11 @@ def lunar_run(store, day: date, calls: int, **over):
     ))  # fmt: skip
 
 
+def lunar_lines(store):
+    """The ``hits`` runs that carry LunarCrush calls (every pull also logs its outcome as one: ``details.pull``)."""
+    return [r for r in store.list_runs(kind="hits") if "lunar" in r.details]
+
+
 def test_the_lunar_calls_of_a_london_day_are_counted_from_the_runs_the_pull_logs():
     store = roster_store()
     today = NOW.date()
@@ -1164,7 +1247,7 @@ def test_a_pull_that_asked_lunarcrush_logs_its_calls_for_the_day(cli_store, monk
     api.answer(TT_SEARCH, page(TT_SEARCH, [item]))
     monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
     assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 0
-    (logged,) = cli_store.list_runs(kind="hits")
+    (logged,) = lunar_lines(cli_store)
     assert logged.status.value == "ok" and logged.summary == "LunarCrush: 1 call on 2026-10-08"
     assert logged.details["lunar"] == {"day": "2026-10-08", "calls": 1, "keys": 1, "stages": {}}
     assert hits.lunar_calls_today(cli_store, NOW.date()) == 1
@@ -1175,7 +1258,7 @@ def test_a_pull_with_the_gate_off_or_no_call_made_logs_no_line(cli_store, monkey
     api.answer(TT_SEARCH, page(TT_SEARCH, [tt_item(1, views=2_000_000, followers=20_000)]))
     monkeypatch.setattr(ScrapeCreators, "from_env", classmethod(lambda cls, env=None, **kw: api.client()))
     assert CliRunner().invoke(app, ["hits", "pull"]).exit_code == 0  # no LUNARCRUSH_API_KEY: the gate is off
-    assert cli_store.list_runs(kind="hits") == []
+    assert lunar_lines(cli_store) == []
 
 
 def test_cli_pull_without_the_scrapecreators_key_reports_the_new_fields_too(cli_store, monkeypatch):

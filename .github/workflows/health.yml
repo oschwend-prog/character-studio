@@ -1,5 +1,6 @@
 # The watchdog, every 3 hours (`studio health`): exits 1, so GitHub emails the owner, when a post is
-# `failed` or `needs_check`, a Story is stuck, or the month's committed credits reached 80 % of the cap.
+# `failed` or `needs_check`, a Story is stuck, the month's committed credits reached 80 % of the cap, or a paid
+# service ran out of credits (ScrapeCreators: the hits job's logged pull; Higgsfield: refused makes), one line each.
 # It does NOT require a daily run (the owner turned the Mac's daily run off on 12 Oct 2026; the cloud jobs do
 # the work). When the Mac's daily run is on again, change the last step to `uv run studio health --daily-run`
 # to also flag "no daily run finished in the last 26 h".
