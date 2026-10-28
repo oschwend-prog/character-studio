@@ -3,6 +3,7 @@
 // card's keep). Numbers that Postgres
 // returns as numeric/bigint may arrive as strings over PostgREST; `num()` in data.ts normalises them.
 import type { AccountDay } from './accountday';
+import type { CommentDay } from './comments';
 
 export type Platform = 'tiktok' | 'instagram';
 export type PostStatus = 'scheduled' | 'posting' | 'posted' | 'failed' | 'needs_check';
@@ -685,6 +686,9 @@ export interface Snapshot {
    * the reach per day and, on the row of the day it was read, Instagram's 7-day window totals (views, likes, comments, replies).
    * Absent or empty before the first reading. Read by the character page's "Account per day" block (lib/accountday.ts). */
   accountDaily?: AccountDay[];
+  /** The comments the daily run drafted for the owner to post by hand (runs of kind comment_drafts, `studio engage save`; one per London
+   * day), oldest day first. Absent or empty before the first. Read by Today's "Comments to post today" card (lib/comments.ts). */
+  commentDrafts?: CommentDay[];
   /** The posting days and slot per character (`studio.settings.cadence`); empty when none is set. */
   cadence: Record<string, CadenceEntry>;
   /** The new hits of the last 14 days, best first (v_hits, migration 0016): the general lane's top 10 and each live character's top

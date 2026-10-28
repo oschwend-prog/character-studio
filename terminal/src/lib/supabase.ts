@@ -12,6 +12,8 @@
 // "Account per day" (owner 2026-10-15): the accounts' figures, one `account_daily` row of studio.runs per London day (`studio metrics
 // accounts`, no migration): reach per day in details.accounts, Instagram's 7-day window totals in details.window on the day they were
 // read. The newest 30 days, read once more for the character page's block.
+// "Comments to post today" (owner 2026-10-28): the comments the daily run drafted for the owner to post by hand, one `comment_drafts`
+// row of studio.runs per London day (`studio engage save`, no migration); the newest few rows, Today shows the current London day's.
 // The one other write is the owner's own clip for a Drop-in: an upload into bucket `sources` under owner/ (policy of 0008).
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { isOwnerMediaPath } from './clipcard';
@@ -19,6 +21,7 @@ import { HOT_LIMIT, WORTH_LIMIT, hitFromRow, hitLaneSlugs, mergeHitLanes } from 
 import { orderRoster } from './roster';
 import { checkClipBasics, ownerClipPath } from './rules';
 import { parseAccountDays } from './accountday';
+import { parseCommentDays } from './comments';
 import { LIBRARY_LOAD_LIMIT } from './totals';
 import { parseWeekly } from './weekly';
 import type { Backend, CadenceEntry, ChangeKind, ClipFile, DecideExtras, DropAdjust, Hit, HitStatus, Snapshot } from './types';
@@ -129,7 +132,7 @@ export class LiveBackend implements Backend {
 
   private async loadOnce(): Promise<Snapshot> {
     const sb = this.sb;
-    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings, hits, weekly, accountDaily] = await Promise.all([
+    const [channels, queue, library, budget, health, picks, history, characters, runs, tracker, viewsDaily, settings, hits, weekly, accountDaily, commentDrafts] = await Promise.all([
       sb.from('v_channels').select('*'),
       sb.from('v_queue').select('*').order('created_at'),
       sb.from('v_library').select('*').order('created_at', { ascending: false }).limit(LIBRARY_LOAD_LIMIT),
@@ -153,8 +156,10 @@ export class LiveBackend implements Backend {
       sb.from('runs').select('id,kind,started_at,finished_at,status,summary,details').eq('kind', 'weekly').order('started_at', { ascending: false }).limit(5),
       // "Account per day": one row per London day (its started_at is noon London of that day), newest first
       sb.from('runs').select('details').eq('kind', 'account_daily').order('started_at', { ascending: false }).limit(30),
+      // "Comments to post today": one row per London day, newest first; Today picks the current day's
+      sb.from('runs').select('details').eq('kind', 'comment_drafts').order('started_at', { ascending: false }).limit(3),
     ]);
-    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings, weekly, accountDaily]) fail(r.error);
+    for (const r of [channels, queue, library, budget, health, picks, history, characters, runs, settings, weekly, accountDaily, commentDrafts]) fail(r.error);
     if (!isMissingRelation(tracker.error)) fail(tracker.error);
     if (!isMissingRelation(viewsDaily.error)) fail(viewsDaily.error);
     if (!isMissingRelation(hits.error)) fail(hits.error);
@@ -185,6 +190,7 @@ export class LiveBackend implements Backend {
       weekly: (weekly.data ?? []).find((r) => parseWeekly(r) != null) ?? null,
       // oldest first, so a stray second row of one day is read after the first
       accountDaily: parseAccountDays([...(accountDaily.data ?? [])].reverse()),
+      commentDrafts: parseCommentDays([...(commentDrafts.data ?? [])].reverse()),
       tracker: (tracker.error ? [] : tracker.data ?? []).map((r) =>
         normalise(r, ['views', 'outlier_x', 'velocity', 'credits_spent', 'latest_views']),
       ),

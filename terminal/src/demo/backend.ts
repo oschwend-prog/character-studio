@@ -13,6 +13,7 @@ import { orderRoster } from '../lib/roster';
 import { hitLaneSlugs, hitsByLane, offeredHits } from '../lib/hits';
 import { weekLabel } from '../lib/weekly';
 import type { AccountDay } from '../lib/accountday';
+import type { CommentDay } from '../lib/comments';
 import type {
   Backend, Budget, CadenceEntry, Channel, ChangeKind, Character, CharacterTraits, ClipAnalysis, ClipFile, ClipState, DecideExtras, DropAdjust, DropCard, DropScore, Engagement, HealthRow, Hit, HitStatus, LibraryClip, OwnerMusic,
   Pick, PickHistory, Platform, PostStatus, QueueClip, RunRow, Snapshot, SourceCandidate, Tier, TrackerRow, ViewsDay,
@@ -972,6 +973,21 @@ export class DemoBackend implements Backend {
     return days;
   }
 
+  /** The day's comment drafts (`studio engage save`, runs of kind comment_drafts), SYNTHETIC: two for each live character on made-up
+   * accounts (the post links are placeholders), in his voice, so Today's "Comments to post today" card has something to show. */
+  private commentDrafts(now: number): CommentDay[] {
+    const post = (n: number) => `https://www.instagram.com/reel/DEMO${n}/`;
+    const drafts: CommentDay['drafts'] = [
+      { character: 'franz', handle: '@demo.dachshund.daily', postUrl: post(1), comment: 'Sausage-approved! That landing deserves a tiny disco. 🐾' },
+      { character: 'franz', handle: '@demo.zoomies.club', postUrl: post(2), comment: 'Short legs, big ego, and I would still lose this race. Respect! 🧢' },
+      { character: 'reginald', handle: '@demo.butler.life', postUrl: post(3), comment: 'One notes the technique. The household need not be told.' },
+      { character: 'reginald', handle: '@demo.tea.time', postUrl: post(4), comment: 'A remarkable performance. Reginald will be taking notes, discreetly.' },
+      { character: 'lenny', handle: '@demo.office.comedy', postUrl: post(5), comment: 'THIS IS A DEAL. Call my assistant. My assistant is busy. 💼' },
+      { character: 'lenny', handle: '@demo.sales.floor', postUrl: post(6), comment: 'Strong close. I would have closed it at noon, but strong.' },
+    ];
+    return [{ day: londonDayKey(now), drafts: drafts.filter((d) => active(d.character)) }];
+  }
+
   // ---- Backend ------------------------------------------------------------------------------------
 
   /** The demo's cloud jobs, worked out lazily from the time (so tests drive them with the clock): a check requested over 2 s ago
@@ -1211,7 +1227,7 @@ export class DemoBackend implements Backend {
     const viewsDaily = this.viewsDaily(now);
     return {
       channels, queue, library, budget, health, picks, history, characters, runs: this.runs.map((r) => ({ ...r })), tracker,
-      viewsDaily, accountDaily: this.accountDaily(now, viewsDaily), cadence, loadedAt: now, weekly: this.weeklyRun(now),
+      viewsDaily, accountDaily: this.accountDaily(now, viewsDaily), commentDrafts: this.commentDrafts(now), cadence, loadedAt: now, weekly: this.weeklyRun(now),
       // v_hits as the live loader asks it: the general lane's top 10 and each live character's top 5, best first, no status column
       hits: hitsByLane(offeredHits(this.hits, now), hitLaneSlugs(characters)).map(({ status: _s, ...h }) => {
         void _s;

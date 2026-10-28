@@ -79,6 +79,10 @@ class RunKind(StrEnum):
     # details["window"] = {"days": 7, "read_at": ISO, "accounts": {handle: {views, likes, ...}}}. Updated in place on every changed
     # read. Health and the weekly review ignore it; the terminal's "Account per day" block reads it.
     account_daily = "account_daily"
+    # One row per London day (studio.engage, owner 2026-10-28): the comments the daily run drafted for the owner to post BY HAND from the
+    # characters' accounts. details {"day": "YYYY-MM-DD", "drafts": [{character, handle, post_url, comment}]}, updated in place.
+    # Health and the weekly review ignore it; the terminal's Today card "Comments to post today" reads it.
+    comment_drafts = "comment_drafts"
 
 
 class RunStatus(StrEnum):

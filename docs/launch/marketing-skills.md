@@ -10,6 +10,7 @@ Which of the installed skills the studio uses, where, and when. The automation r
 | `humanizer` | daily run, captions | keeps the caption natural |
 | `last30days` | weekly review, step 4, only with a ScrapeCreators key and its cookie-free setup | what people say per niche (owner 2026-10-07: cloud scraping is fine, never the Mac's browser or cookies) |
 | social-data tools (`keyword_posts`, `topic_posts`, `keyword_time_series`, `post`) | weekly review, step 4 | the week's top TikTok and Instagram posts per niche ("clips to save" for the owner) and mentions of our characters. Replaces vidIQ for finding hits (owner 2026-10-07) |
+| `bin/studio engage` + `humanizer` + `creator_posts` / `keyword_posts` | daily run, step 2b (owner 2026-10-28) | about 5 in-character comments a day per live Instagram character on big accounts in his niche, drafted for the owner to post BY HAND from the character's account (Today's "Comments to post today"); we never reply ourselves. `creator_posts` returned only "Limited data mode" when tried (2026-10-28), so the post comes from `keyword_posts`, else the hit's own link |
 | `social-media-monitor` (method) | weekly review, step 4 | sentiment, recurring questions, offence flags |
 | `online-reputation-management` | weekly review, step 4, only on a flag | a reply plan for the owner; we never reply ourselves |
 

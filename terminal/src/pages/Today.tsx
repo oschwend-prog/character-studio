@@ -1,11 +1,12 @@
 // Today: the daily dashboard (terminal v2, owner 2026-10-07; v3 2026-10-07). First the studio at a glance (every live character's
 // clips, views, next post, runway and test status), then Make these (each character's best ready clips, ranked, with the
 // tick-and-make bar), then Approve these (the finished videos waiting for his OK), then tonight's departures with the one lit
-// plate (Approve all), the last posts of every live character, what is left of the month's credits and, only when something is
-// wrong, the alerts. Every action is one or two taps from here. "This week" (Task 16) is the latest weekly review: low on the page, because
+// plate (Approve all), "Comments to post today" (only when the daily run drafted some: the owner posts them by hand, owner 2026-10-28),
+// the last posts of every live character, what is left of the month's credits and, only when something is wrong, the alerts. Every action is one or two taps from here. "This week" (Task 16) is the latest weekly review: low on the page, because
 // it changes on Mondays and asks for nothing but a look (a pull request to merge is its one action).
 import { AlertTriangle, ArrowRight, CircleCheck, OctagonAlert } from 'lucide-react';
 import { useMemo } from 'react';
+import { CommentDrafts } from '../components/CommentDrafts';
 import { DropThumb } from '../components/DropsTable';
 import { Glance } from '../components/Glance';
 import { MakeBar, useTicks } from '../components/MakeBar';
@@ -124,6 +125,8 @@ export function Today() {
               </div>
             </div>
           )}
+
+          <CommentDrafts now={now} />
         </div>
 
         <div className="stack">
