@@ -5,18 +5,24 @@
 character's own account (about 10 minutes). **We never reply ourselves**: nothing here, and nothing in the skill that calls it,
 posts, likes, follows or sends anything. The drafts are text in the database and a card on the terminal's Today page.
 
-**Targets** (``engage targets``). The accounts come from ``studio.hits`` (the cloud hits job): rows of platform ``instagram`` with
-that character's ``character_slug`` and a ``creator_handle``, one per distinct handle (case and a leading ``@`` do not matter). The
-order is the handle's followers, highest first (the largest number any of its hits carries). **Instagram's search gives no follower
-count** (verified 2026-10-28: all 42 stored Instagram hits have ``followers`` null), so the handles that tie on it, which today is
-all of them, are ordered by their best hit's score (``studio.hits.hit_score``: likes, freshness), then by handle, so the same day
-always gives the same list. A handle drafted for that character on any of the 7 days BEFORE today is skipped, so an account is not
-commented on again within a week. Today's own drafts do not count: a second run on the same day picks the same targets and its
-``save`` replaces the first. The ``url`` and ``caption`` of each target come from the handle's best-known hit (highest score, then
-newest).
+**Targets** (``engage targets``). Two sources, merged: the stored hits first, then the curated list. The **hits** are
+``studio.hits`` rows (the cloud hits job) of platform ``instagram`` with that character's ``character_slug`` and a
+``creator_handle``, one per distinct handle (case and a leading ``@`` do not matter). Their order is the handle's followers, highest
+first (the largest number any of its hits carries). **Instagram's search gives no follower count** (verified 2026-10-28: all 42
+stored Instagram hits have ``followers`` null), so the handles that tie on it, which today is all of them, are ordered by their best
+hit's score (``studio.hits.hit_score``: likes, freshness), then by handle, so the same day always gives the same list. The ``url``
+and ``caption`` of a hit target come from the handle's best-known hit (highest score, then newest). The **curated list**
+(``config/engage.json``, owner 2026-10-28: the hits job ran dry and Franz had 4 handles) follows in the file's order: real Instagram
+creators per character, each with a one-line note on why it fits. A curated target has ``followers``, ``url`` and ``caption`` null
+(the daily run looks its post up); a handle that is in both lists is a hit target only. ``load_curated`` validates the file (a
+character that is not in ``characters/``, a handle with ``@``, a space or any character Instagram does not allow, a duplicate, a
+missing note: refused with every problem listed, and ``engage targets`` exits 2); an absent file is an empty list. A handle drafted
+for that character on any of the 7 days BEFORE today is skipped, whichever list it comes from, so an account is not commented on
+again within a week. Today's own drafts do not count: a second run on the same day picks the same targets and its ``save`` replaces
+the first.
 
 **Drafts** (``engage save FILE``). ``{"drafts": [{"character", "handle", "post_url", "comment"}]}``, written by the skill from
-``creator_posts`` / ``keyword_posts`` (the post the comment reacts to) or the hit's url. The whole file is refused (exit 2, nothing
+``keyword_posts`` (the post the comment reacts to), the hit's url or, for a curated account with no post found, its profile link. The whole file is refused (exit 2, nothing
 written, every problem listed) when a character is not live, a handle or ``post_url`` is not usable, a comment is empty or longer
 than 200 characters, carries a link, a hashtag or one of OUR accounts' handles (with or without ``@``), or promotes anything
 ("follow", "check my page", "link in bio", ...). That is the mechanical part of the rules; the voice and kindness are the skill's.
@@ -33,6 +39,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Annotated, Any
@@ -45,11 +52,16 @@ from studio.config import LONDON, now_london
 from studio.models import Platform, Run, RunKind, RunStatus
 from studio.store import Store
 
+ROOT = Path(__file__).resolve().parents[1]
+ENGAGE_PATH = ROOT / "config" / "engage.json"  # read at call time: tests point it elsewhere (conftest)
+CHARACTERS_DIR = ROOT / "characters"
+
 DEFAULT_TARGETS = 5  # targets per character per day
 SKIP_DAYS = 7  # a handle drafted on any of the 7 days before today is not a target again
 MAX_COMMENT_CHARS = 200
 DRAFT_FIELDS = ("character", "handle", "post_url", "comment")
 
+_INSTAGRAM_HANDLE = re.compile(r"[A-Za-z0-9._]{1,30}")  # what Instagram allows in a username
 _LINK = re.compile(
     r"(?i)(?:https?://|www\.|\b[a-z0-9-]+\.(?:com|net|org|io|co|uk|me|ly|app|tv|gg|xyz|link|bio|shop|store|page|site|online|info|dev)\b)"
 )
@@ -98,8 +110,83 @@ def drafted_recently(store: Store, character: str, today: date) -> set[str]:
     return out
 
 
-def pick_targets(store: Store, character: str, n: int = DEFAULT_TARGETS, *, today: date) -> list[dict[str, Any]]:
-    """Today's target accounts for ``character``: ``[{handle, followers, url, caption}]``, at most ``n`` (see the module docstring)."""
+def handle_problem(handle: Any) -> str | None:
+    """Why ``handle`` cannot be in ``config/engage.json`` (``None`` = fine): a bare Instagram username, no ``@``, no spaces."""
+    if not isinstance(handle, str) or not handle:
+        return "handle is missing or empty"
+    if "@" in handle:
+        return f"handle {handle!r} must be written without @ (as {handle.replace('@', '').strip()!r})"
+    if any(c.isspace() for c in handle):
+        return f"handle {handle!r} must not contain spaces"
+    if not _INSTAGRAM_HANDLE.fullmatch(handle):
+        return f"handle {handle!r} is not an Instagram username (letters, digits, . and _ only, 1 to 30 characters)"
+    return None
+
+
+def load_curated(path: Path | str | None = None, characters_dir: Path | str | None = None) -> dict[str, list[dict[str, str]]]:
+    """The curated target list ``{character: [{"handle", "note"}, ...]}`` in the file's order, from ``config/engage.json`` (an
+    absent file: ``{}``; keys starting with ``_``, like ``_doc``, are comments). ``ValueError`` listing every problem for a file that
+    is not JSON, a character that is not in ``characters/``, a handle with ``@``, a space or any character Instagram does not allow,
+    a duplicate handle for one character (case does not matter), a missing note, an unknown key or a list that is not one of
+    objects."""
+    where = Path(path or ENGAGE_PATH)
+    try:
+        raw = json.loads(where.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:  # ValueError: invalid JSON and UnicodeDecodeError
+        raise ValueError(f"config/engage.json: cannot read it: {getattr(e, 'strerror', None) or e}") from None
+    if not isinstance(raw, Mapping):
+        raise ValueError(f'config/engage.json must be an object {{"franz": [{{"handle", "note"}}, ...], ...}}, got {type(raw).__name__}')
+    known = {p.parent.name for p in Path(characters_dir or CHARACTERS_DIR).glob("*/refs.json")}
+    problems: list[str] = []
+    curated: dict[str, list[dict[str, str]]] = {}
+    for slug, entries in raw.items():
+        if slug.startswith("_"):
+            continue
+        if slug not in known:
+            problems.append(f"{slug!r} is not a character (known: {', '.join(sorted(known))})")
+            continue
+        if not isinstance(entries, list):
+            problems.append(f'{slug}: must be a list of {{"handle", "note"}} objects')
+            continue
+        first: dict[str, int] = {}  # handle key -> the number of its first entry
+        clean: list[dict[str, str]] = []
+        for i, entry in enumerate(entries, start=1):
+            label = f"{slug} #{i}"
+            if not isinstance(entry, Mapping):
+                problems.append(f'{label}: must be an object {{"handle", "note"}}')
+                continue
+            if extra := sorted(str(k) for k in entry if k not in ("handle", "note")):
+                problems.append(f"{label}: unknown key {', '.join(extra)} (only handle and note)")
+            handle, note = entry.get("handle"), entry.get("note")
+            ok = True
+            if found := handle_problem(handle):
+                problems.append(f"{label}: {found}")
+                ok = False
+            elif (key := _key(handle)) in first:
+                problems.append(f"{label}: {handle!r} is a duplicate of {slug} #{first[key]}")
+                ok = False
+            else:
+                first[key] = i
+            if not isinstance(note, str) or not note.strip():
+                problems.append(f"{label}: note is missing (one line on why the account fits)")
+                ok = False
+            if ok:
+                clean.append({"handle": handle, "note": note.strip()})
+        curated[slug] = clean
+    if problems:
+        raise ValueError("config/engage.json: " + "; ".join(problems))
+    return curated
+
+
+def pick_targets(
+    store: Store, character: str, n: int = DEFAULT_TARGETS, *, today: date, curated: dict[str, list[dict[str, str]]] | None = None
+) -> list[dict[str, Any]]:
+    """Today's target accounts for ``character``: ``[{handle, followers, url, caption}]``, at most ``n``: the stored hits first, then
+    the curated list (see the module docstring). ``curated`` defaults to ``load_curated()`` (``ValueError`` for a broken file)."""
+    if curated is None:
+        curated = load_curated()
     skip = drafted_recently(store, character, today)
     by_handle: dict[str, list[Any]] = {}
     for hit in store.list_hits(character_slug=character):
@@ -112,7 +199,13 @@ def pick_targets(store: Store, character: str, n: int = DEFAULT_TARGETS, *, toda
         followers = max((h.followers for h in rows if h.followers), default=None)
         target = {"handle": best.creator_handle, "followers": followers, "url": best.url, "caption": best.caption}
         ranked.append(((followers is None, -(followers or 0), -best.score, key), target))
-    return [t for _, t in sorted(ranked, key=lambda x: x[0])[:n]]
+    targets = [t for _, t in sorted(ranked, key=lambda x: x[0])]
+    taken = set(by_handle) | skip  # a hit is not listed twice, and a handle drafted this week is not listed at all
+    for entry in curated.get(character, []):
+        if (key := _key(entry["handle"])) not in taken:
+            taken.add(key)
+            targets.append({"handle": f"@{entry['handle']}", "followers": None, "url": None, "caption": None})
+    return targets[:n]
 
 
 def draft_problems(draft: Any, live: set[str], own: set[str]) -> list[str]:
@@ -216,12 +309,17 @@ def targets_command(
     character: Annotated[str, typer.Option("--character", help="A live character's slug (franz, reginald, lenny).")],
     n: Annotated[int, typer.Option("-n", "--n", min=1, help="At most this many accounts.")] = DEFAULT_TARGETS,
 ) -> None:
-    """Today's target Instagram accounts for CHARACTER, from the stored hits (see the module docstring): a JSON list of
-    {handle, followers, url, caption}, followers null when Instagram gave none. Accounts drafted for him in the last 7 days are left out."""
+    """Today's target Instagram accounts for CHARACTER: the stored hits first, then the curated list in config/engage.json (see the
+    module docstring). A JSON list of {handle, followers, url, caption}: followers is null when Instagram gave none, and url and
+    caption are null for a curated account. Accounts drafted for him in the last 7 days are left out. Exit 2 for a character that is
+    not live or a config/engage.json that is broken."""
     store = open_store()
     if character not in live_characters(store):
         fail(f"character {character!r} is not live")
-    emit(pick_targets(store, character, n, today=now_london().astimezone(LONDON).date()))
+    try:
+        emit(pick_targets(store, character, n, today=now_london().astimezone(LONDON).date()))
+    except ValueError as e:
+        fail(str(e))
 
 
 @app.command("save")

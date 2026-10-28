@@ -68,6 +68,16 @@ def _no_collabs(monkeypatch, _collabs_off_file):
     monkeypatch.setattr(collab, "SCAN_PATH", _collabs_off_file)
 
 
+@pytest.fixture(autouse=True)
+def _no_curated_targets(monkeypatch, tmp_path):
+    """The comment-draft targets come from the stored hits only unless a test says otherwise (``studio.engage``: the repo's
+    ``config/engage.json`` adds curated accounts): the path points at a file that is not there (= no curated list). A test that needs
+    a list writes its own file and points ``engage.ENGAGE_PATH`` at it."""
+    from studio import engage
+
+    monkeypatch.setattr(engage, "ENGAGE_PATH", tmp_path / "no-engage.json")
+
+
 @pytest.fixture
 def experiments_on(monkeypatch):
     """The repo's own test registry (config/experiments.json: A, B and C on from 12 Oct 2026) for the test that asks."""

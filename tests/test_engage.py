@@ -1,4 +1,5 @@
-"""``studio engage``: the daily comment drafts (targets from the stored hits, the drafts the daily run saves, the day's list).
+"""``studio engage``: the daily comment drafts (targets from the stored hits and the curated list, the drafts the daily run saves,
+the day's list).
 
 Everything runs on ``MemoryStore``. The owner posts the comments by hand: nothing here posts, so there is no network to fake.
 """
@@ -154,6 +155,190 @@ def test_no_hits_is_an_empty_list_not_an_error(store):
     assert r.exit_code == 0 and json.loads(r.output) == []
 
 
+# ---- curated targets (config/engage.json) --------------------------------------------------------
+
+REAL_CONFIG = Path(__file__).resolve().parents[1] / "config" / "engage.json"
+
+
+def entry(handle: str, note: str = "posts dachshund Reels") -> dict[str, str]:
+    return {"handle": handle, "note": note}
+
+
+def curated(monkeypatch, tmp_path: Path, config: dict | str, name: str = "engage.json") -> Path:
+    """Write ``config`` (a dict, or raw text) and point ``engage.ENGAGE_PATH`` at it."""
+    f = tmp_path / name
+    f.write_text(config if isinstance(config, str) else json.dumps(config), encoding="utf-8")
+    monkeypatch.setattr(engage, "ENGAGE_PATH", f)
+    return f
+
+
+def handles(character: str = "franz", *args: str) -> list[str]:
+    r = run("targets", "--character", character, *args)
+    assert r.exit_code == 0, r.output
+    return [t["handle"] for t in json.loads(r.output)]
+
+
+def test_with_no_hits_the_curated_list_fills_the_targets_in_file_order_with_null_followers_url_and_caption(store, monkeypatch, tmp_path):
+    curated(monkeypatch, tmp_path, {"franz": [entry("zed.dach"), entry("Alpha_Dach"), entry("mid")]})
+    r = run("targets", "--character", "franz")
+    assert r.exit_code == 0, r.output
+    assert json.loads(r.output) == [
+        {"handle": "@zed.dach", "followers": None, "url": None, "caption": None},
+        {"handle": "@Alpha_Dach", "followers": None, "url": None, "caption": None},
+        {"handle": "@mid", "followers": None, "url": None, "caption": None},
+    ]  # fmt: skip
+
+
+def test_hits_come_first_then_the_curated_list_and_n_limits_the_merged_list(store, monkeypatch, tmp_path):
+    hit(store, 1, "@hit_low", score=10)
+    hit(store, 2, "@hit_high", score=90)
+    curated(monkeypatch, tmp_path, {"franz": [entry("cur_a"), entry("cur_b"), entry("cur_c")]})
+    assert handles() == ["@hit_high", "@hit_low", "@cur_a", "@cur_b", "@cur_c"]
+    assert handles("franz", "--n", "3") == ["@hit_high", "@hit_low", "@cur_a"]
+    assert handles("franz", "-n", "1") == ["@hit_high"]
+    out = json.loads(run("targets", "--character", "franz").output)
+    assert out[0]["url"] == "https://www.instagram.com/reel/Hit2/" and out[0]["caption"] == "caption 2"  # a hit keeps its url and caption
+    assert out[2]["url"] is None and out[2]["caption"] is None and out[2]["followers"] is None
+
+
+def test_a_handle_in_both_lists_is_listed_once_as_the_hit_whatever_its_case_or_at_sign(store, monkeypatch, tmp_path):
+    hit(store, 1, "@Both_One", score=40, caption="from the hits")
+    hit(store, 2, "@hit_only", score=30)
+    curated(monkeypatch, tmp_path, {"franz": [entry("both_one"), entry("cur_only")]})
+    out = json.loads(run("targets", "--character", "franz").output)
+    assert [t["handle"] for t in out] == ["@Both_One", "@hit_only", "@cur_only"]
+    assert out[0]["caption"] == "from the hits"
+
+
+def test_the_curated_list_is_per_character_and_other_platforms_hits_do_not_matter(store, monkeypatch, tmp_path):
+    hit(store, 1, "@tiktok_one", platform="tiktok")
+    curated(monkeypatch, tmp_path, {"franz": [entry("f1")], "reginald": [entry("r1"), entry("r2")]})
+    assert handles("franz") == ["@f1"]
+    assert handles("reginald") == ["@r1", "@r2"]
+    assert handles("lenny") == []  # no entry for him: an empty list, not an error
+
+
+def test_a_curated_handle_drafted_in_the_last_seven_days_is_skipped_like_a_hit(store, monkeypatch, tmp_path):
+    hit(store, 1, "@hit_week", score=90)
+    hit(store, 2, "@hit_free", score=80)
+    curated(monkeypatch, tmp_path, {"franz": [entry("cur_monday"), entry("cur_seven"), entry("cur_eight"), entry("cur_new"), entry("cur_other")]})
+    day_row(store, "2026-10-26", [draft("@Cur_Monday"), draft("@hit_week")])
+    day_row(store, "2026-10-21", [draft("@cur_seven")])  # 7 days before today: still inside the week
+    day_row(store, "2026-10-20", [draft("@cur_eight")])  # 8 days before: free again
+    assert handles() == ["@hit_free", "@cur_eight", "@cur_new", "@cur_other"]
+
+
+def test_a_draft_for_another_character_does_not_hide_a_curated_handle(store, monkeypatch, tmp_path):
+    curated(monkeypatch, tmp_path, {"franz": [entry("shared_one")], "reginald": [entry("shared_one")]})
+    day_row(store, "2026-10-27", [draft("@shared_one", character="reginald")])
+    assert handles("franz") == ["@shared_one"]
+    assert handles("reginald") == []
+
+
+def test_todays_own_drafts_do_not_hide_curated_targets_so_a_rerun_is_the_same_list(store, monkeypatch, tmp_path):
+    curated(monkeypatch, tmp_path, {"franz": [entry("a"), entry("b")]})
+    first = run("targets", "--character", "franz").output
+    day_row(store, DAY, [draft("@a"), draft("@b")])
+    assert run("targets", "--character", "franz").output == first
+
+
+def test_saving_five_curated_drafts_moves_the_next_days_targets_on_to_the_next_five(store, monkeypatch, tmp_path):
+    names = [f"acct{i:02d}" for i in range(12)]
+    curated(monkeypatch, tmp_path, {"franz": [entry(h) for h in names]})
+    today = handles()
+    assert today == [f"@{h}" for h in names[:5]]
+    day_row(store, DAY, [draft(h) for h in today])
+    monkeypatch.setattr(engage, "now_london", lambda: NOW + timedelta(days=1))
+    assert handles() == [f"@{h}" for h in names[5:10]]
+    day_row(store, "2026-10-29", [draft(f"@{h}") for h in names[5:10]])
+    monkeypatch.setattr(engage, "now_london", lambda: NOW + timedelta(days=2))
+    assert handles() == [f"@{h}" for h in names[10:]]
+
+
+def test_an_absent_curated_file_is_no_curated_list_and_the_hits_still_work(store, monkeypatch, tmp_path):
+    hit(store, 1, "@only_hit")
+    monkeypatch.setattr(engage, "ENGAGE_PATH", tmp_path / "nowhere.json")
+    assert handles() == ["@only_hit"]
+    assert engage.load_curated(tmp_path / "nowhere.json") == {}
+
+
+def test_doc_and_underscore_keys_are_comments_and_a_note_is_trimmed(store, monkeypatch, tmp_path):
+    curated(monkeypatch, tmp_path, {"_doc": "free text", "_later": [1, 2], "franz": [entry("a", "  trimmed note  ")], "lenny": []})
+    assert engage.load_curated() == {"franz": [{"handle": "a", "note": "trimmed note"}], "lenny": []}
+    assert handles() == ["@a"]
+
+
+@pytest.mark.parametrize(
+    ("config", "why"),
+    [
+        ({"nobody": [entry("a")]}, "'nobody' is not a character"),
+        ({"franz": [entry("a")], "franzz": [entry("b")]}, "'franzz' is not a character"),
+        ({"franz": [entry("@godiva")]}, "must be written without @"),
+        ({"franz": [entry("god@iva")]}, "must be written without @"),
+        ({"franz": [entry("godiva the dachshund")]}, "must not contain spaces"),
+        ({"franz": [entry(" godiva")]}, "must not contain spaces"),
+        ({"franz": [entry("")]}, "handle is missing or empty"),
+        ({"franz": [{"note": "no handle"}]}, "handle is missing or empty"),
+        ({"franz": [entry(12345)]}, "handle is missing or empty"),
+        ({"franz": [entry("godiva/dachshund")]}, "is not an Instagram username"),
+        ({"franz": [entry("a" * 31)]}, "is not an Instagram username"),
+        ({"franz": [entry("Godiva"), entry("godiva")]}, "a duplicate of franz #1"),
+        ({"franz": [entry("godiva"), entry("other"), entry("GODIVA")]}, "a duplicate of franz #1"),
+        ({"franz": [{"handle": "godiva"}]}, "note is missing"),
+        ({"franz": [{"handle": "godiva", "note": "  "}]}, "note is missing"),
+        ({"franz": [{"handle": "godiva", "note": "x", "followers": 5}]}, "unknown key followers"),
+        ({"franz": ["godiva"]}, "must be an object"),
+        ({"franz": {"handle": "godiva"}}, "must be a list"),
+        (["franz"], "must be an object"),
+        ("{not json", "cannot read it"),
+    ],
+)
+def test_a_bad_curated_file_is_refused_with_exit_2_and_a_clear_message(store, monkeypatch, tmp_path, config, why):
+    hit(store, 1, "@a_hit")  # the hits alone are fine: the broken file still stops the list
+    curated(monkeypatch, tmp_path, config)
+    r = run("targets", "--character", "franz")
+    assert r.exit_code == 2 and "config/engage.json" in r.output and why in r.output, r.output
+    with pytest.raises(ValueError, match="config/engage.json"):
+        engage.load_curated()
+
+
+def test_the_same_handle_for_two_characters_is_not_a_duplicate(store, monkeypatch, tmp_path):
+    curated(monkeypatch, tmp_path, {"franz": [entry("shared")], "reginald": [entry("Shared")]})
+    assert handles("franz") == ["@shared"] and handles("reginald") == ["@Shared"]
+
+
+def test_every_problem_in_the_file_is_listed_at_once_and_names_the_entry(store, monkeypatch, tmp_path):
+    curated(monkeypatch, tmp_path, {"nobody": [], "franz": [entry("ok"), entry("@bad"), entry("two words"), entry("OK")], "lenny": [{"handle": "x"}]})
+    r = run("targets", "--character", "franz")
+    assert r.exit_code == 2
+    for part in ("'nobody' is not a character", "franz #2", "without @", "franz #3", "spaces", "franz #4", "duplicate of franz #1", "lenny #1", "note is missing"):
+        assert part in r.output, part
+
+
+def test_a_broken_curated_file_does_not_stop_save_or_show(store, monkeypatch, tmp_path):
+    curated(monkeypatch, tmp_path, {"nobody": []})
+    assert save(tmp_path, draft()).exit_code == 0
+    assert run("show").exit_code == 0
+
+
+def test_the_repos_curated_list_is_valid_and_wide_enough_for_every_live_character():
+    config = engage.load_curated(REAL_CONFIG)
+    assert set(config) == {"franz", "reginald", "lenny"}
+    for slug, entries in config.items():
+        keys = [engage._key(e["handle"]) for e in entries]
+        assert 12 <= len(entries) <= 20, (slug, len(entries))
+        assert len(set(keys)) == len(keys), slug
+        assert all(e["note"] for e in entries), slug
+    raw = json.loads(REAL_CONFIG.read_text(encoding="utf-8"))
+    assert isinstance(raw["_doc"], str) and raw["_doc"]
+
+
+def test_none_of_our_own_accounts_is_in_the_curated_list(store):
+    own = {engage._key(a.handle) for a in store.accounts()}
+    config = engage.load_curated(REAL_CONFIG)
+    assert not [e["handle"] for entries in config.values() for e in entries if engage._key(e["handle"]) in own]
+
+
 # ---- save ----------------------------------------------------------------------------------------
 
 
@@ -223,6 +408,12 @@ def test_save_refuses_a_bad_comment_with_exit_2_and_writes_nothing(store, tmp_pa
 
 def test_a_normal_comment_with_punctuation_emoji_and_a_mention_of_someone_else_is_fine(store, tmp_path):
     assert save(tmp_path, draft(comment="Not me crying at 'the pause' again, @godivathedachshund you did it again. Nice one!! 🐾")).exit_code == 0
+
+
+def test_a_profile_link_is_a_fine_post_url_for_a_curated_account(store, tmp_path):
+    r = save(tmp_path, draft("@darcy_the_dach", post_url="https://www.instagram.com/darcy_the_dach/"))
+    assert r.exit_code == 0, r.output
+    assert rows(store)[0].details["drafts"][0]["post_url"] == "https://www.instagram.com/darcy_the_dach/"
 
 
 def test_save_refuses_a_character_that_is_not_live_or_unknown(store, tmp_path):
