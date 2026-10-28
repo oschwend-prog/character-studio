@@ -30,6 +30,16 @@
 - **Lenny Gold:** the agent.
 - **The Borat-type:** to design and name.
 - **The Singer:** stays a later concept.
+- **Oma Hilde "The Ibiza Queen" (draft, owner 2026-10-28):** a flamboyant Ibiza nightlife queen (platinum bouffant, black
+  cat-eye sunglasses, leopard and gold, a champagne flute as a prop), arrives like she owns the island: the joke is her absolute
+  confidence, never her age, her body or her nationality. ODD EYES like every character: her right eye ice-blue, her left amber,
+  shown by the Slow Look (sunglasses lowered) inside the clip, never as an ending. Like for like: she replaces an adult woman
+  (glamorous or older women dancing, DJ booths, beach clubs, yachts). **Draft, not live:** `characters/hilde/` (bible, `refs.json`
+  with status `designing` and a placeholder master, `social.md`), board 01 of the owner's pack as the canon look
+  (`assets/characters/hilde/`), no Higgsfield asset and no account yet; the master needs credits the owner OKs first. The studio
+  dropped from the pack: the brand bags (Dior, Chanel, a monogram), cigar and cigarette, the middle finger, the bikini, mesh and
+  plunging looks and the "sex-positive" framing; and the German accent and "Ach, komm!" as a gag (no nationality jokes).
+  Her bible lists every change.
 - **The DJ (owner, 2026-10-06): next new character, to design.** Confident, does the SAME signature moves to whatever music he
   plays, instantly recognisable, an exaggerated take on how DJs dress now (oversized heavyweight tee, baggy cargos, chunky
   sneakers, tinted sunglasses at night, headphones parked round the neck as the badge of the trade). Like for like: he
@@ -100,6 +110,7 @@ Smaller differences, no decision needed (both are kept):
 | **Lenny Gold** | B | Manic Hollywood super-agent | Complete; first full clip done | §3.1 |
 | **Franz** | B | Aristocratic mini dachshund, permanently unimpressed | Look complete, voice in test | §3.2 |
 | **Borat-type** | B | Clueless correspondent from an **invented country** (C7 decided) | To design and name | §3.3 |
+| **Oma Hilde "The Ibiza Queen"** | Owner pack | Glamorous, unbothered Ibiza party queen; the Slow Look; ODD EYES | **Draft** (owner 2026-10-28): bible, `refs.json` (`designing`) and account kit written; no master or accounts yet | [characters/hilde/bible.md](../characters/hilde/bible.md), `refs.json`, `social.md` |
 
 ---
 

@@ -1,0 +1,120 @@
+{
+  "_doc": "Identity-lock references for Oma Hilde, \"The Ibiza Queen\" (DRAFT, owner 2026-10-28; same structure as characters/lenny/refs.json, see characters/hilde/bible.md). status is `designing`, the studio's word for a draft: studio/seed.py accepts designing | live | paused only, and the daily run skips anything but live. NO Higgsfield assets exist yet: her master, turnaround sheet and close-up need paid credits that the owner OKs one generation at a time (price first). The seed REQUIRES a non-empty string for the master of every body, so masters.biped holds the placeholder PENDING-master-not-a-job-id until the canon master is made: replace it with the job id then, and add sheets, closeup and reference_urls (master_biped, sheet_biped, closeup) the same day. Until then no code may treat it as a job id: she is not live. The canon LOOK is board 01 of the owner's pack (assets/characters/hilde/canon-board.jpg), with ODD EYES (owner 2026-10-06, the studio signature) in place of the pack's bright blue eyes: her RIGHT eye ice-blue (the viewer's left), her LEFT eye amber. No soul_id, element_id or voice_id: none made or chosen. closeup_center / blue_eye_xy stay null (masters end on the dance: no eye close-up). No style kit yet: the owner picks the caption pill, entrance, hook edit, tone and series tag (a proposal sits in the bible's Brand section), and a character without style masters exactly as before. accounts: planned handles only; the owner creates the accounts (social.md), then handle and postiz_integration_id go here, status goes to live and the file is re-seeded.",
+  "slug": "hilde",
+  "name": "Oma Hilde",
+  "status": "designing",
+  "bodies": [
+    "biped"
+  ],
+  "masters": {
+    "biped": "PENDING-master-not-a-job-id",
+    "quadruped": null
+  },
+  "closeup": null,
+  "closeup_center": null,
+  "blue_eye_xy": null,
+  "avatar": "assets/characters/hilde/avatar.png",
+  "swap": {
+    "noun": "Ibiza party queen",
+    "stars": [
+      "person"
+    ]
+  },
+  "swap_performance": "same moves, all Hilde: chin up, one slow look over the sunglasses, big theatrical arms, a sudden burst of energy on the drop, the champagne flute raised on the beat",
+  "swap_part": "star",
+  "traits": {
+    "energy": "regal and unbothered: strolls in chin-up like she owns the island, then bursts into surprising, theatrical dancing on the drop",
+    "comedy": "the Ibiza queen takes every ridiculous moment completely seriously: one slow look over her sunglasses, absolute confidence, never drunk, never sorry",
+    "best_formats": [
+      "walk-in at the beach club",
+      "the DJ owes me: she takes over the booth",
+      "savage dating advice in one line",
+      "yacht-deck dance, champagne raised",
+      "outfit reveal and bling-check",
+      "when the beat drops and she arrives"
+    ],
+    "settings": [
+      "Ibiza beach club at golden hour",
+      "yacht deck in full sun",
+      "DJ booth at a club",
+      "white villa terrace",
+      "marina promenade",
+      "sunset terrace with a sea view"
+    ],
+    "moves": [
+      "the Slow Look: sunglasses lowered, odd eyes shown",
+      "chin-up red-carpet strut, one hand on the hip",
+      "finger-point at the lens",
+      "champagne flute raised on the beat",
+      "sudden burst of big theatrical dancing on the drop",
+      "unimpressed wave-off"
+    ],
+    "props": [
+      {
+        "name": "cat-eye sunglasses",
+        "job": "the signature reveal: lowered slowly over one red fingertip to show the odd eyes"
+      },
+      {
+        "name": "champagne flute",
+        "job": "the toast to the lens on the beat; never drunk, always composed"
+      },
+      {
+        "name": "jewelled tiara",
+        "job": "the crown on for galas, entrances and queen formats"
+      },
+      {
+        "name": "gold hoops and chunky chains",
+        "job": "swing on every beat: the sparkle at thumbnail size and the bling-check format"
+      },
+      {
+        "name": "leopard faux-fur coat",
+        "job": "the entrance flourish, shrugged off on the drop"
+      },
+      {
+        "name": "black handbag, no logo",
+        "job": "the deadpan hand-off and the travel and outfit formats"
+      },
+      {
+        "name": "gold platform heels",
+        "job": "walk-in and outfit-reveal formats: height and gold in a full-body shot"
+      },
+      {
+        "name": "gold fan",
+        "job": "the dismissal flick: fans away a bad take"
+      },
+      {
+        "name": "over-ear headphones",
+        "job": "DJ-booth formats: she takes over the decks"
+      },
+      {
+        "name": "wide-brim straw hat",
+        "job": "beach-club and day-look formats"
+      }
+    ],
+    "music": "the clip's original sound for a Drop-in; a sunset Balearic lounge-house bed (115-122 BPM) as her own; the trend's in-app sound",
+    "never": [
+      "a real person's likeness or voice, or naming a real person, club or DJ",
+      "brand names or logos on screen (no Dior, no Chanel, no monograms)",
+      "smoking, cigars or vapes; the middle finger or any rude gesture",
+      "drunk, slurring, swaying or sloppy: the flute is a prop",
+      "sexualised content: no bikini, lingerie mesh or plunging necklines",
+      "age, nationality or accent as the joke (the joke is her confidence)"
+    ]
+  },
+  "accounts": [
+    {
+      "platform": "tiktok",
+      "handle": null,
+      "planned_handle": "@omahilde.ibiza",
+      "postiz_integration_id": null,
+      "dropin_share": 1.0
+    },
+    {
+      "platform": "instagram",
+      "handle": null,
+      "planned_handle": "omahilde.ibiza",
+      "postiz_integration_id": null,
+      "dropin_share": 1.0
+    }
+  ]
+}

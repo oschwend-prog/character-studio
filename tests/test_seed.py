@@ -356,7 +356,7 @@ def test_seed_writes_stars(tmp_path):
     shipped = MemoryStore()
     seed.seed_characters(shipped, seed.DEFAULT_CHARACTERS_DIR)
     stars = {c.slug: c.setup["stars"] for c in shipped.characters()}
-    assert stars == {"biscuit": ["dog", "animal"], "franz": ["dog", "person"], "lenny": ["person"], "reginald": ["person"]}
+    assert stars == {"biscuit": ["dog", "animal"], "franz": ["dog", "person"], "hilde": ["person"], "lenny": ["person"], "reginald": ["person"]}
 
 
 def test_the_swap_part_and_performance_line_load():
@@ -501,8 +501,10 @@ def test_an_empty_characters_folder_is_an_error(tmp_path):
 
 def test_the_shipped_refs_files_load_and_match_the_brief():
     loaded = {r["slug"]: r for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
-    # the roster of 2026-10-06: Franz and Lenny Gold joined (designing, no accounts yet); Biscuit is retired but kept
-    assert sorted(loaded) == ["biscuit", "franz", "lenny", "reginald"]
+    # the roster of 2026-10-06: Franz and Lenny Gold joined (designing, no accounts yet); Biscuit is retired but kept;
+    # Oma Hilde joined as a draft on 2026-10-28 (status designing, a placeholder master, planned handles only)
+    assert sorted(loaded) == ["biscuit", "franz", "hilde", "lenny", "reginald"]
+    assert loaded["hilde"]["status"] == "designing" and all(a["handle"] is None for a in loaded["hilde"]["accounts"])
     b, r = loaded["biscuit"], loaded["reginald"]
     assert b["masters"] == BISCUIT["masters"] and b["closeup"] == BISCUIT["closeup"]
     assert (b["closeup_center"], b["blue_eye_xy"], b["bodies"]) == ([584, 738], [251, 559], ["biped", "quadruped"])
@@ -524,7 +526,7 @@ def test_the_shipped_refs_files_load_and_match_the_brief():
 
 
 def test_the_shipped_refs_carry_the_character_sheets_the_owner_made():
-    by = {r["slug"]: r["sheets"] for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
+    by = {r["slug"]: r.get("sheets") for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}  # the draft Hilde has no sheet yet
     assert by["biscuit"] == SHEETS
     assert by["reginald"] == {"biped": "44af3625-5f3e-47c4-bf62-f723cf8fbe24"}  # the canon turnaround, 2026-10-06
 
@@ -543,7 +545,7 @@ def test_the_shipped_refs_keep_the_real_live_accounts():
 
 def test_the_shipped_refs_carry_a_traits_card_that_fits_the_bible():
     loaded = {r["slug"]: r["traits"] for r in seed.load_refs(seed.DEFAULT_CHARACTERS_DIR)}
-    assert sorted(loaded) == ["biscuit", "franz", "lenny", "reginald"]
+    assert sorted(loaded) == ["biscuit", "franz", "hilde", "lenny", "reginald"]
     for slug, t in loaded.items():
         assert set(t) == set(seed.TRAIT_TEXT_KEYS) | set(seed.TRAIT_LIST_KEYS), slug
         for key in seed.TRAIT_LIST_KEYS:
@@ -571,7 +573,7 @@ def test_seeding_the_shipped_refs_creates_the_roster_and_exactly_the_accounts_th
     with_handle = {(r["slug"], a["platform"]) for r in refs_ for a in r["accounts"] if a["handle"]}
     store = MemoryStore()
     report = seed.seed_characters(store, seed.DEFAULT_CHARACTERS_DIR)
-    assert [c.slug for c in store.characters()] == ["biscuit", "franz", "lenny", "reginald"]
+    assert [c.slug for c in store.characters()] == ["biscuit", "franz", "hilde", "lenny", "reginald"]
     assert {(a.character_slug, a.platform.value) for a in store.accounts()} == with_handle
     total = sum(len(r["accounts"]) for r in refs_)
     assert len(store.accounts()) + len(report.skipped) == total  # every account is either seeded or reported as not there yet
