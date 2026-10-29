@@ -360,6 +360,218 @@
    ]
   },
   {
+   "slug": "hilde",
+   "name": "Oma Hilde",
+   "status": "designing",
+   "concept": "the Ibiza party queen. She arrives like she owns the island, takes every ridiculous moment completely seriously, and somehow she does own it. Fearless, dry, theatrical, glamorous.",
+   "edition": "Ibiza",
+   "images": {
+    "spec": null,
+    "turnaround": null,
+    "avatar": "/artists/hilde/avatar.png",
+    "turnaround_url": null,
+    "master_url": null
+   },
+   "look": [
+    {
+     "text": "**Hair:** an enormous sculpted platinum-blonde bouffant with abundant curls; the silhouette is the core identifier (tall, round, voluminous, every curl placed)."
+    },
+    {
+     "text": "**Face:** a photorealistic older woman with visible natural age lines and skin texture, expressive arched brows, defined cheekbones, bold smoky eye makeup (soft grey-navy shadow, a sharp wing), glossy scarlet-coral lipstick `#D4202A`, a mischievous smirk. Never plastic, never smoothed, never a generic elegant grandmother."
+    },
+    {
+     "text": "**Eyes:** ODD EYES: her right eye (viewer's left) a pale natural ice-blue `#8FD3FF`, her left eye (viewer's right) a warm natural amber `#FFB040`; natural iris texture, muted catchlights, never glowing. In a 3/4 view or a profile facing the viewer's right, the near eye is her right one (ice-blue)."
+    },
+    {
+     "text": "**Sunglasses:** oversized black cat-eye frames with gold stud and small rhinestone trim, no logo on the temples. Worn most of the time; lowered for the reveal."
+    },
+    {
+     "text": "**Jewellery:** huge gold hoop earrings, layered chunky gold chains, gold bracelets, big cocktail rings (red and purple stones), long glossy red nails. No brand marks on any piece."
+    },
+    {
+     "text": "**Body:** upright, chin raised, shoulders back; confident, theatrical posture. Never frail, never hunched, never sexualised."
+    },
+    {
+     "text": "**Outfit (default look, board 01):** a fitted leopard-print blouse (closed at the neck) and leopard-print trousers, a dramatic leopard-print faux-fur coat, a wide gold belt with a plain buckle, metallic gold platform heels. Full detail in \"Wardrobe\"."
+    },
+    {
+     "text": "**Hands:** long red nails, gold rings; sometimes a champagne flute or a black handbag. Five fingers, believable anatomy."
+    },
+    {
+     "text": "**World:** wherever the clip is (a Drop-in keeps the source's setting); her own stills: a sunlit Ibiza terrace or a soft pale studio seamless."
+    }
+   ],
+   "wardrobe": {
+    "signature": [
+     {
+      "text": "**Coat:** a dramatic full-length leopard-print faux fur, deep tan and black rosettes, wide shawl collar, worn open or draped on the shoulders."
+     },
+     {
+      "text": "**Top and trousers:** a fitted leopard-print silk blouse, buttoned high at the neck, and slim leopard-print trousers (the board's catsuit reads as one piece: keep the neckline closed)."
+     },
+     {
+      "text": "**Belt:** a wide gold belt with a plain round gold buckle, no logo."
+     },
+     {
+      "text": "**Shoes:** metallic gold platform heels, chunky, high."
+     },
+     {
+      "text": "**Jewellery and sunglasses:** as in the Look lock."
+     }
+    ],
+    "capsule": [
+     {
+      "text": "**Gold sequin diva (DJ booth).** A gold sequin long-sleeve jumpsuit with a closed neckline, over-ear headphones round the neck, the gold chains."
+     },
+     {
+      "text": "**Pink fur (yacht party).** A hot-pink feathered coat over the leopard blouse and trousers."
+     },
+     {
+      "text": "**White luxury (yacht club).** A cream tailored trouser suit with a white silk shirt, the gold belt, the cat-eye sunglasses, a flute."
+     },
+     {
+      "text": "**Black party (techno night).** A black cropped leather jacket over a black silk blouse and black trousers, gold chains. (The board's mesh version is dropped.)"
+     },
+     {
+      "text": "**Day look (beach club).** A bright printed silk kaftan over a white linen top and trousers, a wide-brim straw hat, the sunglasses."
+     },
+     {
+      "text": "**Airport (stylish travel).** The leopard coat, a plain black handbag, a black carry-on, the sunglasses."
+     }
+    ]
+   },
+   "motion": [
+    {
+     "text": "**Default walk:** a slow, chin-up red-carpet strut, hips first, one hand on the hip, the other holding the flute or the handbag; she never hurries and never looks down."
+    },
+    {
+     "text": "**Posture at rest:** chin raised, one eyebrow up, a half-smile; one hand on the hip, the other pointing at the lens."
+    },
+    {
+     "text": "**How she dances:** composed first (the VIP pose), then a sudden burst: big theatrical arms, shoulders and hips, a finger-point at the lens, the flute raised on the beat, a flick of the fan; then back to the pose as if nothing happened. Surprising energy, always in control. Funny and glamorous, never a stumble."
+    },
+    {
+     "text": "**Performance line** (refs.json `swap_performance`; add it to every swap prompt): \"same moves, all Hilde: chin up, one slow look over the sunglasses, big theatrical arms, a sudden burst of energy on the drop, the champagne flute raised on the beat\"."
+    },
+    {
+     "text": "**Her part:** **star** by default (refs.json `swap_part`): her hook in the first second, every beat hers. Choose Star in Adjust until the code reads `swap_part` (same note as Franz)."
+    },
+    {
+     "text": "**When provoked** (a bad take, a lazy beat, someone in her spot): the Slow Look, one eyebrow, an unimpressed wave-off."
+    },
+    {
+     "text": "**What she can't do:** hurry, look timid, stumble, sway or slur (she is never drunk), apologise, or look defeated. Nothing that needs acrobatics (no splits, no floor drops, no cartwheels): arms, shoulders, hips and attitude."
+    }
+   ],
+   "signature_move": {
+    "text": "**The Slow Look:** she lowers the cat-eye sunglasses with one red fingertip, looks over the top for a beat (the odd eyes show), and raises one eyebrow. It is the pack's \"one slow look over her sunglasses\" with the studio signature inside it. It is a gesture inside the clip, **not an ending**: masters end on the dance, with no eye close-up, glint or sting (`CLAUDE.md`, owner 2026-10-05); put it before the drop or on a pause or head turn the source clip already has.",
+    "notes": [
+     {
+      "text": "Object swap keeps the clip's own moves, so the Slow Look shows only where the clip has a pause or a head turn; a separate tag would be a 1-2 s image-to-video from a still, at extra cost: decide before adding (section 4b of `docs/AI_INFLUENCERS.md`)."
+     },
+     {
+      "text": "Alternative: the champagne toast to the lens on the beat."
+     }
+    ]
+   },
+   "catchphrase": {
+    "line": "More champagne, less drama.",
+    "text": "**\"More champagne, less drama.\"** Use it in a joke line or a first comment, not in every post.",
+    "notes": [
+     {
+      "text": "The pack's lead line, kept for the intro and the pinned comment: \"I was partying in Ibiza before your mother met your father.\" (her claim to the island; age is never the punchline of a post)."
+     },
+     {
+      "text": "Second line: \"Oh please. I taught that DJ everything he knows.\""
+     }
+    ]
+   },
+   "voice": {
+    "preset": null,
+    "voice_id": null,
+    "sample_url": null,
+    "items": []
+   },
+   "gadgets": [
+    {
+     "name": "Cat-eye sunglasses (black, gold studs)",
+     "status": "board 01",
+     "job": "The signature reveal: lowered slowly to show the odd eyes"
+    },
+    {
+     "name": "Champagne flute",
+     "status": "board 01",
+     "job": "The toast to the lens on the beat (a prop, never drunk)"
+    },
+    {
+     "name": "Jewelled tiara",
+     "status": "board 01",
+     "job": "The crown for galas, entrances and queen formats"
+    },
+    {
+     "name": "Gold hoops, chunky chains, rings",
+     "status": "board 01",
+     "job": "They swing on every beat: sparkle at thumbnail size, the bling-check"
+    },
+    {
+     "name": "Leopard faux-fur coat",
+     "status": "board 01",
+     "job": "The entrance flourish, shrugged off on the drop"
+    },
+    {
+     "name": "Black handbag (no logo)",
+     "status": "board 01",
+     "job": "The deadpan hand-off; travel and outfit formats"
+    },
+    {
+     "name": "Gold platform heels",
+     "status": "board 01",
+     "job": "Walk-in and outfit-reveal formats"
+    },
+    {
+     "name": "Over-ear headphones",
+     "status": "board 01",
+     "job": "DJ-booth formats: she takes over the decks"
+    },
+    {
+     "name": "Wide-brim straw hat",
+     "status": "board 01",
+     "job": "Beach-club and day-look formats"
+    },
+    {
+     "name": "Gold fan",
+     "status": "idea",
+     "job": "The dismissal flick; fans away a bad take"
+    },
+    {
+     "name": "Second flute",
+     "status": "idea",
+     "job": "Two toasts: \"one for me, one for the DJ\""
+    }
+   ],
+   "swap": {
+    "text": "Like for like: **Hilde replaces an adult woman** (refs.json `swap`: noun \"Ibiza party queen\", stars `person`). Best fit: one adult woman, glamorous or older, dancing, posing, strutting or toasting; a woman at a DJ booth, on a beach-club lounger or a yacht deck, in a static full-body shot. A viral clip qualifies when it has no watermark and no burned-in text, and nothing sexualised in it (crowds in swimwear in the background are fine; a sexualised star or scene is rejected). Never replaces a child, a dog or another animal; the star we replace must be an adult.",
+    "noun": "Ibiza party queen",
+    "stars": [
+     "person"
+    ]
+   },
+   "accounts": [
+    {
+     "platform": "instagram",
+     "handle": null,
+     "planned": "omahilde.ibiza",
+     "connected": false
+    },
+    {
+     "platform": "tiktok",
+     "handle": null,
+     "planned": "@omahilde.ibiza",
+     "connected": false
+    }
+   ]
+  },
+  {
    "slug": "lenny",
    "name": "Lenny Gold",
    "status": "live",
