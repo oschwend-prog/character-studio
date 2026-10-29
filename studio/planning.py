@@ -210,6 +210,7 @@ def upcoming_slot(
 # A post in one of these statuses holds (or already used) its account's slot on its London day.
 TAKEN_STATUSES = (PostStatus.scheduled, PostStatus.posting, PostStatus.posted, PostStatus.needs_check)
 FREE_SLOT_LOOKAHEAD_DAYS = 56  # eight weeks of cadence days to look through
+DAILY_CAP = 2  # posts per account per London day: the publisher defers a third (studio.publish.base), a cross-post at --at refuses it
 
 
 def taken_days(
@@ -229,6 +230,14 @@ def taken_days(
             if post.status in TAKEN_STATUSES and post.clip_id != exclude_clip_id:
                 days.add((post.claimed_at or post.scheduled_for).astimezone(LONDON).date())
     return days
+
+
+def posts_on_day(store: Store, account_id: str, day: date) -> int:
+    """How many posts of ``account_id`` hold (or used) a slot on the London ``day``: ``TAKEN_STATUSES``, dated like ``taken_days``."""
+    return sum(
+        1 for post in store.list_posts(account_id=account_id)
+        if post.status in TAKEN_STATUSES and (post.claimed_at or post.scheduled_for).astimezone(LONDON).date() == day
+    )  # fmt: skip
 
 
 FAMILY_GAP_DAYS = 14  # terminal v3: the posts of one clip's family (a drop and its versions) are at least 14 days apart

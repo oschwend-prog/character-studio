@@ -8,14 +8,15 @@ in the CLI could move them. After looking at the platform, the owner picks exact
   recorded, the error cleared) and, when it was the clip's last unsettled post, the clip moves to
   ``posted`` too (the next publish run would reconcile it anyway).
 * ``--retry [--at ISO]``: it is not live, send it again. Only from ``needs_check`` / ``failed``, and only
-  while the clip is still ``scheduled``. The post goes back to ``scheduled`` (attempts 0, error and
+  while the clip is still ``scheduled`` or ``posted`` (a cross-post's clip is ``posted``, and stays so). The post goes back to ``scheduled`` (attempts 0, error and
   claim cleared) at ``--at`` (no offset = London) or its old time, so the next publish run (every 15 minutes in the evening window, else within 3 hours) publishes it.
 * ``--drop --reason-file F``: forget it. The never-posted row is deleted (refused when it has a platform
   id or any metrics snapshot: it was live). A clip left with no posts at all moves ``scheduled ->
   rejected`` with the reason; a clip with other posts stays as it is. ``--drop`` also takes a
   ``scheduled`` post whose clip is no longer ``scheduled`` (an orphan of a rejected / dropped clip that
   the publisher would only refuse; ``studio.clips.transition`` now deletes those itself): the row goes,
-  the clip is already final and stays as it is.
+  the clip is already final and stays as it is. That is also how a cross-post (``studio clip crosspost``) that is still
+  ``scheduled`` is called off: its clip is ``posted``, it stays so, the row goes.
 
 Only ``needs_check`` and ``failed`` posts can be resolved (``--drop`` also the orphan above): a
 ``scheduled`` one of a ``scheduled`` clip is not stuck, a ``posting`` one is in flight (it turns
@@ -30,13 +31,15 @@ from typing import Any
 
 from studio.clips import transition
 from studio.models import ClipState, Post, PostStatus
+from studio.publish.base import PUBLISHABLE_CLIP_STATES
 from studio.store import Store, require_aware
 
 RESOLVABLE = (PostStatus.needs_check, PostStatus.failed)
 
 
 def _orphan(store: Store, post: Post) -> bool:
-    """A ``scheduled`` post whose clip is no longer ``scheduled``: the publisher would refuse it."""
+    """A ``scheduled`` post whose clip is no longer ``scheduled``: one of a rejected / dropped clip (the publisher would refuse it) or a
+    cross-post still waiting for its slot (its clip is ``posted``): ``--drop`` takes both."""
     clip = store.get_clip(post.clip_id)
     return post.status is PostStatus.scheduled and (clip is None or clip.state is not ClipState.scheduled)
 
@@ -86,10 +89,10 @@ def resolve_retry(store: Store, post_id: str, at: datetime | None = None) -> dic
     with store.transaction():
         post = _stuck_post(store, post_id)
         clip = store.get_clip(post.clip_id)
-        if clip is None or clip.state is not ClipState.scheduled:
+        if clip is None or clip.state not in PUBLISHABLE_CLIP_STATES:
             state = clip.state.value if clip else "missing"
             raise ValueError(
-                f"clip {post.clip_id} is {state}, not scheduled: the publisher would refuse the post"
+                f"clip {post.clip_id} is {state}, not scheduled or posted: the publisher would refuse the post"
             )
         post = store.update_post(
             post.id, status=PostStatus.scheduled, claimed_at=None, attempts=0, error=None,

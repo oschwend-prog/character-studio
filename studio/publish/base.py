@@ -17,8 +17,9 @@
    (one runner per post), earliest first.
 3. **Per post**, one at a time:
 
-   * the clip must still be ``scheduled`` (a rejected or dropped clip is never published; the post
-     fails at once with the reason and no attempt is spent);
+   * the clip must still be ``scheduled``, or ``posted`` (a **cross-post**: ``clips.crosspost_clip`` adds a post of a clip that is
+     already out on another account; the clip stays ``posted``, only the post's own outcome is recorded). A rejected or dropped
+     clip is never published; the post fails at once with the reason and no attempt is spent;
    * **a silent master never goes out on autopilot.** A clip with ``features.music == "in_app"`` carries a
      silent track (the owner adds the song in the Instagram app); a post of it to an account in ``auto`` mode
      would be posted with no sound, so it fails at once like the case above, with a reason that says so (the
@@ -46,8 +47,9 @@
      ``needs_check`` like any other, never a resend;
    * success: the post is ``posted`` with the platform id and URL; the clip's learning tags ``first_comment_posted`` and
      ``trial_reel`` are written (``clips.set_publish_tags``: an Instagram Reel writes both, a TikTok post only the ones the clip
-     does not carry yet, so it never undoes its Reel's); an Instagram Reel is followed by its **Story** (below); and the clip
-     moves to ``posted`` (through ``clips.transition``) once **all** its posts are ``posted``;
+     does not carry yet, so it never undoes its Reel's; a TikTok cross-post of a ``posted`` clip writes none); an Instagram Reel
+     is followed by its **Story** (below); and a ``scheduled`` clip moves to ``posted`` (through ``clips.transition``) once
+     **all** its posts are ``posted`` (a ``posted`` clip, a cross-post's, is not touched);
    * an exception: ``attempts + 1``, back to ``scheduled`` with ``claimed_at = None`` while
      ``attempts < 3``, else ``failed``; the error text is kept (500 characters);
    * ``UncertainPublish``: the platform may have accepted the post, so it goes to ``needs_check`` at
@@ -102,19 +104,21 @@ from typing import Any, Protocol, runtime_checkable
 from studio.clips import set_publish_tags, transition
 from studio.config import LONDON
 from studio.models import Account, Clip, ClipState, Platform, Post, PostStatus
-from studio.planning import family_days, free_slot, taken_days
+from studio.planning import DAILY_CAP, family_days, free_slot, taken_days
 from studio.publish.reach import NO_REACH, PostPlan, Reach, ReachConfig, load_reach, plan_post
 from studio.storage import Storage
 from studio.store import Store, require_aware
 
 MASTER_BUCKET = "clips"
 MAX_ATTEMPTS = 3
-DAILY_CAP = 2
 STALE_AFTER = timedelta(minutes=30)
 _ERROR_CHARS = 500
 
 # What happens to a due post (see ``_decide``).
 PUBLISH, DEFER, REFUSE = "publish", "defer", "refuse"
+# The clip states a due post may go out in: ``scheduled`` (the normal case) and ``posted`` (a cross-post, ``clips.crosspost_clip``:
+# the clip is already out on another account and stays ``posted``, only the post's own outcome is recorded).
+PUBLISHABLE_CLIP_STATES = (ClipState.scheduled, ClipState.posted)
 
 
 class UncertainPublish(Exception):
@@ -226,8 +230,8 @@ def _decide(account: Account | None, clip: Clip | None, posted_today: int) -> tu
         return REFUSE, "unknown account"
     if clip is None:
         return REFUSE, "unknown clip"
-    if clip.state is not ClipState.scheduled:
-        return REFUSE, f"clip is {clip.state.value}, not scheduled: never published"
+    if clip.state not in PUBLISHABLE_CLIP_STATES:
+        return REFUSE, f"clip is {clip.state.value}, not scheduled or posted: never published"
     if account.mode == "auto" and clip.features.get("music") == "in_app":
         return REFUSE, (
             f"silent master: the clip's music is in_app (the song is added by hand in the app), but "
@@ -385,7 +389,7 @@ def _publish_one(
     _record_reach(store, clip, account, plan, out, trial_refused=result.trial_refused)
     if account.platform is Platform.instagram:
         out["stories"].append(_follow_with_story(store, storage, publisher, post, clip, account, plan, now))
-    if _all_posted(store, clip.id):
+    if clip.state is ClipState.scheduled and _all_posted(store, clip.id):  # a cross-post's clip is posted already: it stays as it is
         transition(store, clip.id, ClipState.posted)
         out["clips_posted"].append(clip.id)
 
@@ -396,6 +400,8 @@ def _record_reach(
     """The publisher's learning tags on the clip (see the module docstring), and the reason a refused Trial Reel went out as a
     normal one; a lost write is reported, the post stays posted."""
     reel = account.platform is Platform.instagram
+    if not reel and clip.state is ClipState.posted:
+        return  # a TikTok cross-post of a clip that is out already: its Reel recorded the tags (or never had them), this post adds none
     tags = {"first_comment_posted": reel and plan.reach.first_comment is not None, "trial_reel": reel and plan.reach.trial_reel}
     try:
         set_publish_tags(store, clip.id, tags, only_missing=not reel, trial_refused=trial_refused)

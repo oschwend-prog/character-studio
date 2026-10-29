@@ -5,7 +5,8 @@
 
 1. **The first comment** (``Reach.first_comment``): the clip's ``features['first_comment']`` (the two-option vote,
    ``clips.set_first_comment``), sent with an **Instagram** Reel as the post's second content; Postiz posts it as the Reel's first
-   comment and the owner pins it. Postiz has no comment for TikTok, so a TikTok post carries none. A first comment that is not
+   comment and the owner pins it. Postiz has no comment for TikTok, so a TikTok post carries none (this holds for a cross-post
+   too, ``clips.crosspost_clip``: a posted clip's TikTok post goes out with its hashtags and nothing else of this pack). A first comment that is not
    one line of 1-300 characters (``clips.validate_first_comment``; ``clip set`` never writes one) is left out, never a failed Reel.
 2. **The Story**: an Instagram Reel is followed by a Story (``PostPlan.story``) of the clip's **labelled Story video**
    (``features['story_path']``: the master with the AI label burned in, ``master.render_story``; a Story shows no caption, so

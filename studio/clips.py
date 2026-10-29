@@ -100,6 +100,21 @@ post; the owner pins it. ``set_first_comment`` / ``clip set --first-comment-file
 (one line, 1-300 characters; the clip's JSON field, no new column), the terminal shows it next to the post text with a Copy
 button (v_queue and v_tracker, migration 0010).
 
+**Cross-posting** (``studio clip crosspost CLIP --platform tiktok [--at ISO]``, ``crosspost_clip``, owner 2026-10-29): a clip that is
+``posted`` on one platform (Instagram) goes out once more, as ONE new ``scheduled`` post on the character's account on another
+platform (his new TikTok, where the clip is new). It is the only way a post is added to a ``posted`` clip, and the clip **stays
+``posted``**: its state never moves, not when the post is added, not when it goes out (``studio.publish.base`` accepts a ``posted``
+clip and records only the post's own outcome), not when Postiz reports it failed (``studio.publish.confirm`` skips ``unpost_clip`` for
+a cross-post, which ``features['crosspost']`` marks: ``{platform: {post_id, at}}``, a record, not a lock). It is refused (``ValueError``,
+exit 2, nothing written) for a clip that is not ``posted``, a variant (``features['variant_of']``: only an original is cross-posted),
+a character with no connected account on the platform (a handle and a Postiz integration id), a clip that already has a post on that
+account (whatever its status: a stuck one is ``studio publish resolve``'s), an account in ``approval`` mode (the Autopilot switch of the
+channel panel: a cross-post is nobody's approval) and a clip with no master file. The time is ``--at`` (taken as given, but refused on a
+London day on which the account already holds ``planning.DAILY_CAP`` posts) or the **free slot** of ``clip schedule``
+(``planning.free_slot``: the character's first cadence slot on a day the account has no post, and none within 13 days of a post of
+another clip of the same family). The Instagram-only extras (first comment, collaborators, Trial Reel, the Story, the daily re-share)
+belong to an Instagram Reel and never reach a TikTok post (``studio.publish.reach.plan_post``).
+
 **Variants** (``studio clip variant ORIGINAL --hook-file H [--gen FILE]``, ``studio.variant``, owner 2026-10-28): a posted clip is
 posted again as a clip of its own: the same generated dance video, mastered with a NEW hook (so a new cover), no credits. The new
 clip carries ``features['variant_of']``; one live variant per original; it is in no test (``test_arms`` ``{}``, no ``drop`` flag).
@@ -129,9 +144,9 @@ import typer
 
 from studio.captions import caption_length, compose_content, with_series_tag
 from studio.cli_support import emit, fail, open_storage, open_store, parse_when, text_option
-from studio.config import now_london
-from studio.models import HOOK_PATTERNS, MUSIC_ARMS, Clip, ClipState, Mode, Post, PostStatus
-from studio.planning import accounts_for_clip, family_days, free_slot, taken_days
+from studio.config import LONDON, now_london
+from studio.models import HOOK_PATTERNS, MUSIC_ARMS, Clip, ClipState, Mode, Platform, Post, PostStatus
+from studio.planning import DAILY_CAP, accounts_for_clip, family_days, free_slot, posts_on_day, taken_days
 from studio.store import DuplicatePost, Store, require_aware
 
 S = ClipState
@@ -672,6 +687,90 @@ def schedule_clip(
         return transition(store, clip.id, S.scheduled), posts
 
 
+CROSSPOST_KEY = "crosspost"  # features[...]: {platform: {"post_id", "at"}}, written by crosspost_clip
+
+
+def is_crosspost(clip: Clip, post: Post) -> bool:
+    """Is ``post`` a cross-post of ``clip`` (``crosspost_clip`` recorded it)? Its clip was ``posted`` before the post existed, so
+    nothing that happens to the post may move the clip (``studio.publish.confirm`` does not reopen it)."""
+    marker = clip.features.get(CROSSPOST_KEY)
+    return isinstance(marker, Mapping) and any(isinstance(v, Mapping) and v.get("post_id") == post.id for v in marker.values())
+
+
+def crosspost_clip(
+    store: Store,
+    clip_id: str,
+    platform: Platform | str,
+    *,
+    at: datetime | None = None,
+    now: datetime | None = None,
+) -> tuple[Clip, Post]:
+    """Add ONE ``scheduled`` post of a ``posted`` clip on the character's account on ``platform``; the clip stays ``posted``.
+
+    Returns the clip (with its ``crosspost`` record) and the new post. See the module docstring for the refusals and the time.
+    ``KeyError`` for an unknown clip; ``ValueError`` (nothing written) for every refusal, a naive ``at`` and a character with no
+    slot or free day when no ``at`` is given.
+    """
+    platform = Platform(platform)
+    if at is not None:
+        require_aware(at, "crosspost_clip(at)")
+    now = now_london() if now is None else now
+    with store.transaction():  # all of it or none of it
+        clip = store.get_clip(clip_id)
+        if clip is None:
+            raise KeyError(clip_id)
+        if clip.state is not S.posted:
+            raise ValueError(
+                f"clip {clip_id} is {clip.state.value}: only a posted clip is cross-posted "
+                "(one that is not out yet goes out through `clip schedule`)"
+            )
+        original = clip.features.get("variant_of")
+        if original not in (None, ""):
+            raise ValueError(f"clip {clip_id} is a variant of {original}: only an original is cross-posted")
+        slug = clip.character_slug
+        account = next(
+            (a for a in store.accounts(slug) if a.platform is platform and a.handle and a.postiz_integration_id), None
+        )
+        if account is None:
+            raise ValueError(
+                f"no connected {platform.value} account for {slug!r}: it needs a handle and a Postiz integration id "
+                f"(connect it in Postiz, put both in characters/{slug}/refs.json, then run seed)"
+            )
+        existing = next((p for p in store.list_posts(clip_id=clip.id) if p.account_id == account.id), None)
+        if existing is not None:
+            stuck = existing.status in (PostStatus.failed, PostStatus.needs_check)
+            raise ValueError(
+                f"clip {clip_id} already has a post on {account.handle} ({existing.status.value}, post {existing.id}): "
+                "one post per clip and account" + (f"; settle it with `studio publish resolve {existing.id}`" if stuck else "")
+            )
+        if account.mode != "auto":
+            raise ValueError(
+                f"{account.handle} is in approval mode: a cross-post goes out on autopilot, so switch the account to autopilot "
+                "(Autopilot in the channel panel of the Characters page), then ask again"
+            )
+        if not clip.master_path:  # the publisher would fail it three times
+            raise ValueError(f"clip {clip_id} has no master file: nothing to post")
+        if at is None:
+            when = free_slot(
+                slug, now, store.get_settings().cadence,
+                taken_days(store, [account.id]) | family_days(store, clip.id),
+            )  # fmt: skip
+        else:
+            when = at
+            day = when.astimezone(LONDON).date()
+            if posts_on_day(store, account.id, day) >= DAILY_CAP:
+                raise ValueError(
+                    f"{account.handle} already has {DAILY_CAP} posts on {day.isoformat()} (London): pick another time"
+                )
+        try:
+            post = store.add_post(Post(clip_id=clip.id, account_id=account.id, scheduled_for=when))
+        except DuplicatePost:  # another runner won the (clip, account) slot
+            raise ValueError(f"clip {clip_id} already has a post on {account.handle}: one post per clip and account") from None
+        record = clip.features.get(CROSSPOST_KEY)
+        marker = {**(record if isinstance(record, Mapping) else {}), platform.value: {"post_id": post.id, "at": now.isoformat()}}
+        return store.update_clip(clip.id, features={**clip.features, CROSSPOST_KEY: marker}), post
+
+
 # ---- CLI -----------------------------------------------------------------------------------
 
 app = typer.Typer(
@@ -884,6 +983,37 @@ def schedule_command(
     except ValueError as e:
         fail(str(e))
     emit({"clip": _clip_json(clip), "posts": posts})
+
+
+@app.command("crosspost")
+def crosspost_command(
+    id: Annotated[str, typer.Argument(help="Id of the POSTED clip to post on another platform.")],
+    platform: Annotated[
+        Platform, typer.Option("--platform", help="Platform of the character's account to post on: tiktok or instagram.")
+    ],
+    at: Annotated[
+        str | None,
+        typer.Option(
+            help="ISO 8601 post time (no offset = London); default: the character's first cadence slot on a day the "
+            "account has no post."
+        ),
+    ] = None,
+) -> None:
+    """Post an already posted clip once more, on the character's account on another platform (e.g. Instagram -> TikTok).
+
+    Creates ONE scheduled post; the clip stays posted. Refused (exit 2, nothing written) for a clip that is not posted or is a
+    variant, a character with no connected account on the platform, a clip that already has a post on that account, or an
+    account in approval mode. The publisher (`studio publish due`) sends it at its time, at most 2 per account per London day.
+    """
+    when = parse_when(at, "--at") if at is not None else None
+    store = open_store()
+    try:
+        clip, post = crosspost_clip(store, id, platform, at=when)
+    except KeyError:
+        fail(f"unknown clip {id}")
+    except ValueError as e:
+        fail(str(e))
+    emit({"clip": _clip_json(clip), "post": post})
 
 
 @app.command("variant")

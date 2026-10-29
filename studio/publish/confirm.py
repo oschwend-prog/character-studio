@@ -21,7 +21,10 @@ judged by Postiz's ``state``:
   stays in the error line), and **when no other post of the clip is live** the clip goes back from ``posted`` to ``scheduled``
   (``clips.unpost_clip``, the one exception to "``posted`` is final", used by this step only), so the existing
   ``studio publish resolve <post> --retry`` (which wants a ``scheduled`` clip) can send the post again. ``--drop`` works too. A post
-  with a snapshot stays as it is, id included, and its clip stays ``posted``: it was live once, so a human decides.
+  with a snapshot stays as it is, id included, and its clip stays ``posted``: it was live once, so a human decides. **A cross-post**
+  (``studio clip crosspost``: ``clips.is_crosspost``, the clip's ``features['crosspost']``) fails the same way, id cleared, but its
+  clip was ``posted`` before the post existed and never moves: it is not reopened, whatever its other posts look like
+  (``resolve --retry`` takes a ``posted`` clip too).
 * any other state (``QUEUE``, ...) or the post missing from Postiz's list: nothing is written; a later run asks again. A post whose
   Postiz id is missing for MORE than 24 hours after its slot (``MISSING_AFTER``) becomes ``needs_check`` with a clear error (it may be
   live; deleted in Postiz, or posted from a Postiz we cannot see): ``studio health`` lists it and a human settles it with
@@ -47,7 +50,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
-from studio.clips import IllegalTransition, unpost_clip
+from studio.clips import IllegalTransition, is_crosspost, unpost_clip
 from studio.models import ClipState, Post, PostStatus
 from studio.store import Store, require_aware
 
@@ -145,7 +148,7 @@ def _fail(store: Store, post: Post, entry: dict[str, Any], platform: str, out: d
         )  # fmt: skip
         reopened = False
         clip = store.get_clip(post.clip_id) if never_live else None
-        if clip is not None and clip.state is ClipState.posted:
+        if clip is not None and clip.state is ClipState.posted and not is_crosspost(clip, post):  # a cross-post never moves its clip
             try:
                 unpost_clip(store, clip.id)
                 reopened = True
