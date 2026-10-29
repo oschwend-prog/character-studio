@@ -2629,10 +2629,10 @@ def test_the_dry_run_names_why_a_story_would_be_skipped(tmp_path):
     assert "in_app" in row["reach"]["story"]
 
 
-def test_the_committed_reach_config_has_trial_reels_on_stories_on_and_every_key_a_real_handle():
+def test_the_committed_reach_config_has_trial_reels_off_stories_on_and_every_key_a_real_handle():
     cfg = load_reach()  # also checks that each trial_reels key is an Instagram handle of the roster (finding 8)
-    # the owner switched Trial Reels on for all three 2026-10-28 (9 Reels, ~130-view median, almost no non-follower reach)
-    assert cfg.trial_reels == {"franz.unimpressed": True, "reginald.thebutler": True, "lennygold.agent": True}
+    # on 2026-10-28 (owner), off 2026-10-29: Instagram failed all three accounts' first Trial Reels ("doesn't support")
+    assert cfg.trial_reels == {"franz.unimpressed": False, "reginald.thebutler": False, "lennygold.agent": False}
     assert cfg.stories is True  # the owner switched Stories on 2026-10-14 after seeing the first labelled Story
     scan = json.loads((Path(base.__file__).resolve().parents[2] / "config" / "scan.json").read_text())
     assert "never switched on by the build" in scan["reach"]["_doc"]
